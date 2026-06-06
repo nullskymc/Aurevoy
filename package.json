@@ -1,0 +1,27 @@
+{
+  "name": "aurevoy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Aurevoy — 让每个人都拥有属于自己的 AI Agent。通用个人 AI Agent 桌面产品。",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run build:shared && concurrently -n agent,desktop -c blue,green \"npm:dev:agent\" \"npm:dev:desktop\"",
+    "dev:agent": "npm run dev -w @aurevoy/agent",
+    "dev:desktop": "npm run tauri:dev -w @aurevoy/desktop",
+    "build": "npm run build -w @aurevoy/shared && npm run build -w @aurevoy/agent && npm run build -w @aurevoy/desktop",
+    "build:shared": "npm run build -w @aurevoy/shared",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "clean": "rimraf \"packages/*/dist\" \"apps/*/dist\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

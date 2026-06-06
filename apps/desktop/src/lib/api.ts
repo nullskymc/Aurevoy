@@ -1,0 +1,64 @@
+import {
+  AGENT_DEFAULT_BASE_URL,
+  type AgentEvent,
+  type CreateTaskResponse,
+  type HealthResponse,
+  type Task,
+  type ToolDescriptor,
+} from '@aurevoy/shared';
+
+/** Agent 引擎地址（可通过 Vite 环境变量覆盖） */
+const BASE_URL =
+  (import.meta.env.VITE_AGENT_BASE_URL as string | undefined) ??
+  AGENT_DEFAULT_BASE_URL;
+
+export async function checkHealth(): Promise<HealthResponse> {
+  const res = await fetch(`${BASE_URL}/api/health`);
+  if (!res.ok) throw new Error(`health check failed: ${res.status}`);
+  return res.json();
+}
+
+export async function createTask(goal: string): Promise<CreateTaskResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ goal }),
+  });
+  if (!res.ok) throw new Error(`create task failed: ${res.status}`);
+  return res.json();
+}
+
+export async function listTasks(): Promise<Task[]> {
+  const res = await fetch(`${BASE_URL}/api/tasks`);
+  if (!res.ok) throw new Error(`list tasks failed: ${res.status}`);
+  return res.json();
+}
+
+export async function listTools(): Promise<ToolDescriptor[]> {
+  const res = await fetch(`${BASE_URL}/api/tools`);
+  if (!res.ok) throw new Error(`list tools failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * 订阅某个任务的 SSE 事件流。
+ * 返回一个 EventSource，调用方可在不需要时 close()。
+ */
+export function streamTask(
+  taskId: string,
+  onEvent: (event: AgentEvent) => void,
+  onError?: (err: Event) => void,
+): EventSource {
+  const es = new EventSource(`${BASE_URL}/api/tasks/${taskId}/stream`);
+  es.onmessage = (e) => {
+    try {
+      onEvent(JSON.parse(e.data) as AgentEvent);
+    } catch {
+      // 忽略心跳/非 JSON 行
+    }
+  };
+  es.onerror = (e) => {
+    onError?.(e);
+  };
+  return es;
+}

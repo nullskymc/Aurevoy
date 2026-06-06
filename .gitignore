@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Tauri / Rust
+apps/desktop/src-tauri/target/
+target/
+
+# Local data & secrets
+*.sqlite
+*.sqlite-journal
+*.db
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
