@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AgentEvent,
   HealthResponse,
@@ -8,10 +8,11 @@ import type {
   ToolDescriptor,
 } from "@aurevoy/shared";
 import { checkHealth, createTask, listTasks, listTools, streamTask } from "./lib/api";
+import { Composer } from "./components/Composer";
+import { Conversation } from "./components/Conversation";
 import { InspectorPanel } from "./components/InspectorPanel";
-import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
-import { TaskWorkspace } from "./components/TaskWorkspace";
+import { StatusPill } from "./components/StatusPill";
 import type { FeedItem } from "./components/AgentEventFeed";
 import "./App.css";
 
@@ -36,7 +37,7 @@ function App() {
   const [events, setEvents] = useState<FeedItem[]>([]);
   const [goal, setGoal] = useState("");
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [online, setOnline] = useState<boolean | null>(null);
   const [output, setOutput] = useState("");
   const [plan, setPlan] = useState<PlanStep[]>([]);
@@ -61,9 +62,6 @@ function App() {
       setOnline(true);
       setTasks(nextTasks);
       setTools(nextTools);
-      if (!currentTask && nextTasks[0]) {
-        applyTaskSnapshot(nextTasks[0]);
-      }
     } catch {
       setHealth(null);
       setOnline(false);
@@ -75,7 +73,7 @@ function App() {
     setStatus(task.status);
     setPlan(task.plan);
     setOutput(getAssistantOutput(task));
-    setGoal(task.goal);
+    setGoal("");
     setEvents([]);
   }
 
@@ -174,12 +172,12 @@ function App() {
     setOutput("");
     setPlan([]);
     setStatus("pending");
+    setGoal("");
     esRef.current?.close();
 
     try {
       const { task } = await createTask(trimmed);
       setCurrentTask(task);
-      setGoal(trimmed);
       updateTaskList(task);
       esRef.current = streamTask(task.id, handleEvent, () => {
         setBusy(false);
@@ -192,15 +190,21 @@ function App() {
     }
   }
 
-  function handleSubmit(event: FormEvent): void {
-    event.preventDefault();
-    void startGoal(goal);
-  }
-
   function handleSelectTask(task: Task): void {
     esRef.current?.close();
     setBusy(false);
     applyTaskSnapshot(task);
+  }
+
+  function handleNewTask(): void {
+    esRef.current?.close();
+    setBusy(false);
+    setCurrentTask(null);
+    setStatus(null);
+    setPlan([]);
+    setOutput("");
+    setEvents([]);
+    setGoal("");
   }
 
   function handleRetry(): void {
@@ -213,39 +217,98 @@ function App() {
     setBusy(false);
   }
 
+  const showConversation = currentTask !== null;
+
   return (
     <div className="app-shell">
       <TaskHistorySidebar
         activeTaskId={currentTask?.id}
         tasks={tasks}
+        onNewTask={handleNewTask}
         onSelectTask={handleSelectTask}
+        onOpenInspector={() => setInspectorOpen(true)}
       />
 
-      <div className="main-column">
-        <TaskWorkspace
-          busy={busy}
-          goal={goal}
-          online={online}
-          output={output}
-          plan={plan}
-          status={status}
-          task={currentTask}
-          onGoalChange={setGoal}
-          onRetry={handleRetry}
-          onStopStream={handleStopStream}
-          onSubmit={handleSubmit}
-          onUseSuggestion={setGoal}
-        />
-        <SettingsPanel health={health} tools={tools} />
-      </div>
+      <main className="main">
+        <header className="topbar">
+          {showConversation ? (
+            <>
+              <StatusPill status={status} />
+              <div className="topbar-actions">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={handleRetry}
+                  disabled={!currentTask}
+                >
+                  重试
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={handleStopStream}
+                  disabled={!busy}
+                >
+                  停止
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => setInspectorOpen(true)}
+                >
+                  运行详情
+                </button>
+              </div>
+            </>
+          ) : (
+            <span />
+          )}
+        </header>
+
+        {showConversation ? (
+          <>
+            <div className="main-scroll">
+              <Conversation
+                task={currentTask}
+                status={status}
+                plan={plan}
+                output={output}
+                busy={busy}
+              />
+            </div>
+            <div className="composer-dock">
+              <Composer
+                value={goal}
+                busy={busy}
+                online={online}
+                variant="docked"
+                onChange={setGoal}
+                onSubmit={() => void startGoal(goal)}
+              />
+            </div>
+          </>
+        ) : (
+          <div className="hero">
+            <h1 className="hero-title">我们应该在 Aurevoy 中构建什么？</h1>
+            <Composer
+              value={goal}
+              busy={busy}
+              online={online}
+              variant="hero"
+              onChange={setGoal}
+              onSubmit={() => void startGoal(goal)}
+            />
+          </div>
+        )}
+      </main>
 
       <InspectorPanel
+        open={inspectorOpen}
         events={events}
         health={health}
-        isCollapsed={inspectorCollapsed}
         task={currentTask}
         tools={tools}
-        onToggleCollapsed={() => setInspectorCollapsed((previous) => !previous)}
+        onClose={() => setInspectorOpen(false)}
       />
     </div>
   );

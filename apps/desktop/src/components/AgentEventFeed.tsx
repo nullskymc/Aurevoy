@@ -68,16 +68,13 @@ export function AgentEventFeed({ events }: AgentEventFeedProps) {
 
   return (
     <section className="inspector-section" aria-labelledby="event-title">
-      <div className="section-heading compact">
-        <div>
-          <p className="eyebrow">Stream</p>
-          <h2 id="event-title">事件流</h2>
-        </div>
-        <span className="section-count">{events.length}</span>
+      <div className="inspector-label-row">
+        <p className="inspector-label" id="event-title">事件流</p>
+        <span className="inspector-count">{events.length}</span>
       </div>
 
       {visibleEvents.length === 0 ? (
-        <div className="empty-state">暂无运行事件</div>
+        <p className="inspector-empty">暂无运行事件</p>
       ) : (
         <div className="event-feed">
           {visibleEvents.map((item) => (
