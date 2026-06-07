@@ -26,7 +26,7 @@
 
 ## M1 — 真实智能（下一步）
 
-- [x] 接入真实 LLM Provider（OpenAI 兼容，覆盖 OpenAI/DeepSeek/Ollama 等），保留 Mock 作回退
+- [x] 接入真实 LLM Provider（OpenAI 兼容，覆盖 OpenAI/DeepSeek/Ollama 等）；已移除 Mock，未配置即明确报错
 - [~] Provider 配置与 Key 管理（`.env` 已落地；设置界面与多 Provider 运行时切换待做）
 - [ ] 真正的 Agent 循环：**规划 → 选择动作 → 执行 → 观察 → 反思** 的迭代，由 LLM 驱动
 - [ ] 工具调用闭环：把 `ToolRegistry` 暴露给 LLM（function calling），emit `tool_call`/`tool_result`

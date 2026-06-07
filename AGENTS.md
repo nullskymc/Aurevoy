@@ -21,7 +21,7 @@ apps/desktop  (Tauri 2.0 + React + TS)   ──HTTP + SSE──▶  apps/agent (
                                                                   │
                                               ┌───────────────────┼───────────────────┐
                                           LLM Provider        Tool Registry        SQLite
-                                          (现 Mock)            (MCP 接入点预留)      (本地存储)
+                                          (OpenAI 兼容)        (MCP 接入点预留)      (本地存储)
 packages/shared (TS 类型)  ← 前后端共享契约，跨进程数据结构唯一来源
 ```
 
@@ -69,6 +69,7 @@ npm run build:shared   # 仅构建共享类型（改完 shared 必做）
 
 ## 6. 当前进度与下一步
 
-- ✅ Monorepo 骨架、前后端通信、SSE 流式、SQLite、Mock 引擎全链路跑通。
-- ⏳ 待接入：真实 LLM Provider、真实 Agent 规划/反思循环、MCP 工具、前端任务历史与多轮对话。
+- ✅ Monorepo 骨架、前后端通信、SSE 流式、SQLite、全链路跑通。
+- ✅ 真实 LLM Provider（OpenAI 兼容，`.env` 配置，未配置即报错）；前端对话式界面重做。
+- ⏳ 待接入：真实 Agent 规划/反思循环、工具调用闭环（function calling）、MCP 工具、多轮对话。
 - 详细任务拆解见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。

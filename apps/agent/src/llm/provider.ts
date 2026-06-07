@@ -19,29 +19,10 @@ export interface LLMProvider {
   stream(messages: Message[]): AsyncIterable<LLMChunk>;
 }
 
-/** Aurevoy 的默认系统提示，给真实模型一个产品人格。 */
+/** Aurevoy 的默认系统提示，给模型一个产品人格。 */
 const DEFAULT_SYSTEM_PROMPT =
   '你是 Aurevoy，一个面向个人用户的通用 AI Agent。你理解用户目标、拆解任务并推动其完成。' +
   '回答应清晰、可执行，并在合适时给出下一步建议。使用用户所用的语言作答。';
-
-/**
- * Mock Provider —— 无需任何 API Key 即可运行整条链路，用于开发期验证
- * "创建任务 → 规划 → 流式输出 → 完成" 的端到端流程。
- */
-export class MockProvider implements LLMProvider {
-  readonly name = 'mock';
-
-  async *stream(messages: Message[]): AsyncIterable<LLMChunk> {
-    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-    const goal = lastUser?.content ?? '任务';
-    const reply = `（Mock 引擎）我已理解你的目标：「${goal}」。这是一个占位回复，接入真实 LLM Provider 后这里会变成真正的推理与执行结果。`;
-    for (const ch of reply) {
-      await delay(15);
-      yield { delta: ch, done: false };
-    }
-    yield { delta: '', done: true };
-  }
-}
 
 interface OpenAIProviderOptions {
   apiKey: string;
@@ -137,35 +118,59 @@ function toOpenAIRole(role: MessageRole): 'system' | 'user' | 'assistant' {
   return 'user';
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** 当前支持的 Provider 类型。后续接入新厂商时在此扩展。 */
+const SUPPORTED_PROVIDERS = ['openai', 'openai-compatible'] as const;
+
+/**
+ * 校验 LLM 配置；缺失或不支持时抛出清晰错误。
+ * 不在此静默回退到占位实现——未配置必须显式失败，避免污染真实结果。
+ */
+function assertConfigured(): void {
+  const { provider, apiKey } = config.llm;
+  if (!SUPPORTED_PROVIDERS.includes(provider as (typeof SUPPORTED_PROVIDERS)[number])) {
+    throw new Error(
+      `未支持的 LLM Provider: "${provider}"。请在项目根目录 .env 设置 ` +
+        `AUREVOY_LLM_PROVIDER=openai（兼容 OpenAI/DeepSeek/Ollama 等）。`,
+    );
+  }
+  if (!apiKey) {
+    throw new Error(
+      '未配置 LLM API Key。请在项目根目录 .env 设置 AUREVOY_LLM_API_KEY ' +
+        '（以及 AUREVOY_LLM_BASE_URL / AUREVOY_LLM_MODEL）。参考 .env.example。',
+    );
+  }
+}
+
+/** 是否已正确配置 LLM（不抛错，供 health 等只读场景使用）。 */
+export function isLLMConfigured(): boolean {
+  try {
+    assertConfigured();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 返回用于展示的 Provider 名（不抛错）。
+ * 未配置时返回 'unconfigured'，供 `/api/health` 安全使用。
+ */
+export function getProviderName(): string {
+  return isLLMConfigured() ? `openai:${config.llm.model}` : 'unconfigured';
 }
 
 let cachedProvider: LLMProvider | null = null;
 
 /**
  * 按配置返回 LLM Provider（进程内缓存，环境在启动时固定）。
- *
- * - provider=openai 且配置了 apiKey → OpenAI 兼容 Provider；
- * - 其余情况（含缺少 Key）→ 回退 Mock，保证链路始终可用。
+ * 未配置时**抛出错误**——由调用方（Agent 循环）捕获并通过 error 事件上报。
  */
 export function getProvider(): LLMProvider {
   if (cachedProvider) return cachedProvider;
 
-  const { provider, apiKey, baseUrl, model, temperature } = config.llm;
+  assertConfigured();
 
-  if (provider === 'openai' || provider === 'openai-compatible') {
-    if (!apiKey) {
-      console.warn(
-        '[Aurevoy] 已选择 openai provider 但缺少 AUREVOY_LLM_API_KEY，回退到 Mock。',
-      );
-      cachedProvider = new MockProvider();
-    } else {
-      cachedProvider = new OpenAICompatibleProvider({ apiKey, baseUrl, model, temperature });
-    }
-  } else {
-    cachedProvider = new MockProvider();
-  }
-
+  const { apiKey, baseUrl, model, temperature } = config.llm;
+  cachedProvider = new OpenAICompatibleProvider({ apiKey, baseUrl, model, temperature });
   return cachedProvider;
 }

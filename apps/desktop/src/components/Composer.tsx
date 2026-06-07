@@ -51,7 +51,7 @@ export function Composer({
             </button>
             <button type="button" className="composer-chip" title="Provider">
               <GearIcon />
-              <span>{provider ?? "未连接"}</span>
+              <span>{provider ? (provider === "unconfigured" ? "未配置 LLM" : provider) : "未连接"}</span>
             </button>
           </div>
 

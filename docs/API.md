@@ -13,10 +13,10 @@
 健康检查 / 前端探测引擎是否在线。
 ```json
 // 200 → HealthResponse
-{ "status": "ok", "version": "0.1.0", "uptimeMs": 1442, "provider": "mock" }
+{ "status": "ok", "version": "0.1.0", "uptimeMs": 1442, "provider": "openai:gpt-4o-mini" }
 ```
-- `provider`：当前生效的 LLM Provider 名。Mock 为 `"mock"`；OpenAI 兼容为 `"openai:<model>"`，
-  如 `"openai:gpt-4o-mini"`。前端据此在输入框展示当前模型来源。
+- `provider`：当前生效的 LLM Provider 名，形如 `"openai:<model>"`（如 `"openai:gpt-4o-mini"`）。
+  未配置 API Key 时为 `"unconfigured"`。前端据此在输入框展示当前模型来源。
 
 ### GET `/api/tools`
 列出已注册工具（调试 / 前端展示）。
@@ -71,7 +71,7 @@
 
 `TaskStatus`：`pending | planning | running | paused | completed | failed | cancelled`
 
-### 典型事件序列（当前 Mock 实现）
+### 典型事件序列（真实 LLM 流式）
 ```
 status(planning) → plan → status(running) → token × N → message → done(completed)
 ```
@@ -118,14 +118,15 @@ interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: st
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `AUREVOY_LLM_PROVIDER` | `mock` | `mock` 或 `openai`（OpenAI 兼容协议） |
-| `AUREVOY_LLM_API_KEY` | 空 | API Key；缺失时**自动回退 Mock** |
+| `AUREVOY_LLM_PROVIDER` | `openai` | OpenAI 兼容协议（后续可扩展其它厂商） |
+| `AUREVOY_LLM_API_KEY` | 空 | API Key，**必填**；缺失时执行任务会明确报错 |
 | `AUREVOY_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容端点基础地址（不含 `/chat/completions`） |
 | `AUREVOY_LLM_MODEL` | `gpt-4o-mini` | 模型名 |
 | `AUREVOY_LLM_TEMPERATURE` | `0.7` | 采样温度 |
 
 - `openai` 走标准 Chat Completions 流式协议（`stream: true`，SSE），
   兼容 OpenAI / DeepSeek / Moonshot / 本地 Ollama(`/v1`) / vLLM / LM Studio 等。
-- 缺少 Key 或 provider=mock 时回退 Mock，保证链路始终可用。
+- 未配置 API Key 或 provider 不支持时，执行任务会通过 `error` 事件明确报错，
+  **不再有占位/Mock 回退**，避免污染真实结果。
 - 当前生效的 Provider 名通过 `GET /api/health` 的 `provider` 字段暴露给前端。
 - **密钥安全**：Key 只走环境变量，禁止硬编码或提交。

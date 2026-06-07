@@ -11,10 +11,10 @@ export const config = {
     .split(',')
     .map((s) => s.trim()),
 
-  /** LLM Provider 配置。provider=mock 或缺少 apiKey 时回退到 Mock。 */
+  /** LLM Provider 配置。未配置 apiKey 时引擎会在执行任务时明确报错（不再回退占位实现）。 */
   llm: {
-    /** 'mock' | 'openai'（openai 为 OpenAI 兼容协议，支持 OpenAI/DeepSeek/Ollama 等） */
-    provider: (process.env.AUREVOY_LLM_PROVIDER ?? 'mock').toLowerCase(),
+    /** 'openai'（OpenAI 兼容协议，支持 OpenAI/DeepSeek/Ollama 等） */
+    provider: (process.env.AUREVOY_LLM_PROVIDER ?? 'openai').toLowerCase(),
     apiKey: process.env.AUREVOY_LLM_API_KEY ?? '',
     /** OpenAI 兼容端点的基础地址，不含 /chat/completions */
     baseUrl: process.env.AUREVOY_LLM_BASE_URL ?? 'https://api.openai.com/v1',

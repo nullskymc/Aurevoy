@@ -10,7 +10,7 @@
 2. **契约集中**：所有跨进程数据结构定义在 `packages/shared`，前后端共用，杜绝类型漂移。
 3. **能力可插拔**：LLM Provider、工具（Tool/MCP）、存储都在抽象接口之后，
    Agent 主循环不感知具体实现。
-4. **开箱即用**：默认 Mock LLM Provider，无需任何 API Key 即可跑通完整链路。
+4. **可插拔 Provider**：LLM 走 OpenAI 兼容协议（OpenAI/DeepSeek/Ollama 等），通过 `.env` 配置；未配置即明确报错。
 5. **本地优先**：数据默认存本地 SQLite；引擎只监听 `127.0.0.1`，不对外暴露。
 
 ## 2. 顶层结构
@@ -42,7 +42,7 @@ Aurevoy/  (npm workspaces monorepo)
 │   agent/loop.ts  ──emit──▶  agent/events.ts (TaskEventBus)        │
 │        │                          │ subscribe                     │
 │        │                          └──▶ SSE 推送回前端              │
-│        ├──▶ llm/provider.ts   (LLMProvider：Mock / 未来真实模型)   │
+│        ├──▶ llm/provider.ts   (LLMProvider：OpenAI 兼容 / 未来更多)  │
 │        ├──▶ tools/registry.ts (ToolRegistry：内置工具 / 未来 MCP)  │
 │        └──▶ store/db.ts       (SQLite 持久化)                     │
 └───────────────────────────────────────────────────────────────────┘
@@ -70,7 +70,7 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/server.ts` | HTTP 路由 + SSE 端点（见 `docs/API.md`） |
 | `src/agent/loop.ts` | **Agent 主循环**：`createTask` 建任务、`runTask` 执行（规划→流式→收尾） |
 | `src/agent/events.ts` | `TaskEventBus`：按 `taskId` 发布/订阅 `AgentEvent`，桥接执行与 SSE |
-| `src/llm/provider.ts` | `LLMProvider` 抽象 + `MockProvider`；`getProvider()` 按配置选择实现 |
+| `src/llm/provider.ts` | `LLMProvider` 抽象 + `OpenAICompatibleProvider`；`getProvider()` 按配置返回，未配置即报错 |
 | `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；MCP 接入点 |
 | `src/store/db.ts` | SQLite 持久化（`taskStore`：save/get/list） |
 
