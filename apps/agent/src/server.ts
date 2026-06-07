@@ -7,7 +7,7 @@ import type {
   HealthResponse,
 } from '@aurevoy/shared';
 import { config } from './config.js';
-import { createTask, runTask } from './agent/loop.js';
+import { createTask, runTask, cancelTask } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
 import { taskStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
@@ -59,6 +59,15 @@ export async function buildServer() {
       streamUrl: `/api/tasks/${task.id}/stream`,
     };
     return reply.code(201).send(body);
+  });
+
+  // 取消一个进行中的任务
+  app.post<{ Params: { id: string } }>('/api/tasks/:id/cancel', async (req, reply) => {
+    const task = taskStore.get(req.params.id);
+    if (!task) return reply.code(404).send({ error: 'task not found' });
+    const cancelled = cancelTask(req.params.id);
+    // 任务可能已结束（无活跃句柄）；此时返回当前状态即可
+    return reply.send({ taskId: req.params.id, cancelling: cancelled, status: task.status });
   });
 
   // SSE 事件流：订阅某个任务的实时输出

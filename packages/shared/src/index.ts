@@ -26,12 +26,29 @@ export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 // 领域模型
 // ============================================================
 
+/** assistant 消息携带的一次工具调用请求（OpenAI tool_calls 格式） */
+export interface MessageToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    /** 入参，原始 JSON 字符串（累积完成后再 JSON.parse） */
+    arguments: string;
+  };
+}
+
 /** 一条对话消息 */
 export interface Message {
   id: string;
   role: MessageRole;
   content: string;
   createdAt: string; // ISO 8601
+  /** 仅 role='assistant'：本轮模型请求的工具调用 */
+  toolCalls?: MessageToolCall[];
+  /** 仅 role='tool'：该结果关联的 tool_call id */
+  toolCallId?: string;
+  /** DeepSeek 思考模式的 reasoning_content 透传；多轮须原样回传，否则 API 报 400 */
+  reasoningContent?: string;
 }
 
 /** 计划中的一个步骤 */

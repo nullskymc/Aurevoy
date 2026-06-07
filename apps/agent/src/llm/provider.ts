@@ -1,28 +1,55 @@
-import type { Message, MessageRole } from '@aurevoy/shared';
+import type { Message, MessageRole, ToolDescriptor } from '@aurevoy/shared';
 import { config } from '../config.js';
+import { ToolCallAccumulator, type AccumulatedToolCall } from '../agent/tool-call-accumulator.js';
 
-/** LLM 流式输出的增量片段 */
-export interface LLMChunk {
-  delta: string;
+export type { AccumulatedToolCall };
+
+/** finish_reason 归一化取值 */
+export type LLMFinishReason = 'stop' | 'tool_calls' | 'length' | 'content_filter';
+
+/**
+ * 流式响应的单个 chunk —— 可能是文本 delta、reasoning delta，也可能是 tool_calls 累积。
+ */
+export interface LLMStreamChunk {
+  /** 文本增量 */
+  textDelta?: string;
+  /** DeepSeek reasoning_content 增量（仅本次新增，非全量累积） */
+  reasoningContentDelta?: string;
+  /** 本轮是否结束 */
   done: boolean;
+  /** finish_reason，仅 done=true 时有值 */
+  finishReason?: LLMFinishReason;
+  /** 累积中的 tool_calls 快照；done=true 时为完整结果 */
+  toolCallsSnapshot?: AccumulatedToolCall[];
+}
+
+export interface LLMStreamOptions {
+  /** 可用工具列表（OpenAI tools 由本层转换） */
+  tools?: ToolDescriptor[];
+  /** 工具选择策略 */
+  toolChoice?: 'auto' | 'none' | 'required';
+  /** 取消信号 */
+  signal?: AbortSignal;
+  /** 覆盖采样温度 */
+  temperature?: number;
 }
 
 /**
  * LLM Provider 抽象。
  *
- * 接入 OpenAI / Anthropic / 本地模型时，只需实现此接口并在
- * `getProvider()` 中按配置返回对应实现，Agent 循环无需改动。
+ * 接入新厂商时实现此接口并在 `getProvider()` 中按配置返回，Agent 循环无需改动。
  */
 export interface LLMProvider {
   readonly name: string;
-  /** 以流式方式生成回复 */
-  stream(messages: Message[]): AsyncIterable<LLMChunk>;
+  /** 流式生成回复，支持工具调用 */
+  stream(messages: Message[], options?: LLMStreamOptions): AsyncIterable<LLMStreamChunk>;
 }
 
 /** Aurevoy 的默认系统提示，给模型一个产品人格。 */
 const DEFAULT_SYSTEM_PROMPT =
   '你是 Aurevoy，一个面向个人用户的通用 AI Agent。你理解用户目标、拆解任务并推动其完成。' +
-  '回答应清晰、可执行，并在合适时给出下一步建议。使用用户所用的语言作答。';
+  '当需要实时信息或执行操作时，调用提供给你的工具；信息足够时直接给出清晰、可执行的最终回答。' +
+  '使用用户所用的语言作答。';
 
 interface OpenAIProviderOptions {
   apiKey: string;
@@ -33,28 +60,42 @@ interface OpenAIProviderOptions {
   systemPrompt?: string;
 }
 
+/** 上游 OpenAI 兼容消息格式 */
+interface OpenAIChatMessage {
+  role: string;
+  content: string | null;
+  tool_calls?: unknown;
+  tool_call_id?: string;
+  reasoning_content?: string;
+}
+
 /**
  * OpenAI 兼容的流式 Provider。
  *
- * 通过原生 fetch 调用 `/chat/completions` 并解析 SSE 流。
- * 凡是兼容 OpenAI Chat Completions 协议的服务都可用：
- * OpenAI、DeepSeek、Moonshot、本地 Ollama（/v1）、vLLM、LM Studio 等。
+ * 通过原生 fetch 调用 `/chat/completions` 并解析 SSE 流，支持 function calling。
+ * 兼容 OpenAI、DeepSeek、Moonshot、Ollama（/v1）、vLLM、LM Studio 等。
  */
 export class OpenAICompatibleProvider implements LLMProvider {
   readonly name: string;
+  /** 是否为 Ollama 端点（流式 tool_calls 不稳定，带 tools 时改用非流式） */
+  private readonly isOllama: boolean;
 
   constructor(private readonly opts: OpenAIProviderOptions) {
     this.name = `openai:${opts.model}`;
+    const bu = opts.baseUrl.toLowerCase();
+    this.isOllama = bu.includes('ollama') || bu.includes(':11434');
   }
 
-  async *stream(messages: Message[]): AsyncIterable<LLMChunk> {
+  async *stream(messages: Message[], options?: LLMStreamOptions): AsyncIterable<LLMStreamChunk> {
     const url = `${this.opts.baseUrl.replace(/\/$/, '')}/chat/completions`;
-    const payloadMessages = [
+    const tools = options?.tools?.length ? toOpenAITools(options.tools) : undefined;
+    const payloadMessages: OpenAIChatMessage[] = [
       { role: 'system', content: this.opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT },
-      ...messages
-        .filter((m) => m.role !== 'tool')
-        .map((m) => ({ role: toOpenAIRole(m.role), content: m.content })),
+      ...messages.map(toOpenAIMessage),
     ];
+
+    // Ollama 带 tools 时关闭 streaming（其流式 tool_calls 不稳定）
+    const useStream = !(this.isOllama && tools);
 
     const res = await fetch(url, {
       method: 'POST',
@@ -64,58 +105,185 @@ export class OpenAICompatibleProvider implements LLMProvider {
       },
       body: JSON.stringify({
         model: this.opts.model,
-        temperature: this.opts.temperature,
-        stream: true,
+        temperature: options?.temperature ?? this.opts.temperature,
+        stream: useStream,
         messages: payloadMessages,
+        ...(tools ? { tools, tool_choice: options?.toolChoice ?? 'auto' } : {}),
       }),
+      signal: options?.signal,
     });
 
     if (!res.ok || !res.body) {
       const detail = await res.text().catch(() => '');
-      throw new Error(`LLM 请求失败 (${res.status}): ${detail.slice(0, 300)}`);
+      const err = new Error(`LLM 请求失败 (${res.status}): ${detail.slice(0, 300)}`) as Error & {
+        status?: number;
+      };
+      err.status = res.status;
+      throw err;
     }
 
-    const reader = res.body.getReader();
+    if (!useStream) {
+      yield* this.parseNonStream(res);
+      return;
+    }
+    yield* this.parseStream(res, options?.signal);
+  }
+
+  /** 解析 SSE 流式响应 */
+  private async *parseStream(
+    res: Response,
+    signal?: AbortSignal,
+  ): AsyncIterable<LLMStreamChunk> {
+    const accumulator = new ToolCallAccumulator();
+    const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let finishReason: string | null = null;
 
     while (true) {
+      if (signal?.aborted) {
+        await reader.cancel().catch(() => {});
+        throw new DOMException('The operation was aborted.', 'AbortError');
+      }
       const { value, done } = await reader.read();
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      // 最后一段可能是不完整的行，留到下一轮
-      buffer = lines.pop() ?? '';
+      buffer = lines.pop() ?? ''; // 最后一段可能不完整，留到下轮
 
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed.startsWith('data:')) continue;
         const data = trimmed.slice('data:'.length).trim();
-        if (data === '[DONE]') {
-          yield { delta: '', done: true };
-          return;
-        }
+        if (data === '[DONE]') continue;
+
+        let json: any;
         try {
-          const json = JSON.parse(data) as {
-            choices?: Array<{ delta?: { content?: string } }>;
-          };
-          const delta = json.choices?.[0]?.delta?.content;
-          if (delta) yield { delta, done: false };
+          json = JSON.parse(data);
         } catch {
-          // 跨 chunk 截断的 JSON，忽略本行（下一轮 buffer 会补全）
+          continue; // 跨 chunk 截断，忽略本行
         }
+
+        const choice = json.choices?.[0];
+        if (!choice) continue;
+        const delta = choice.delta ?? {};
+
+        let reasoningDelta: string | undefined;
+        if (delta.reasoning_content) reasoningDelta = delta.reasoning_content as string;
+
+        if (Array.isArray(delta.tool_calls)) {
+          accumulator.process(delta.tool_calls);
+        }
+
+        if (delta.content || reasoningDelta) {
+          yield {
+            textDelta: delta.content ?? undefined,
+            reasoningContentDelta: reasoningDelta,
+            done: false,
+            toolCallsSnapshot: accumulator.snapshot(),
+          };
+        }
+
+        if (choice.finish_reason) finishReason = choice.finish_reason;
       }
     }
 
-    yield { delta: '', done: true };
+    yield {
+      done: true,
+      finishReason: normalizeFinish(finishReason, accumulator.hasAny()),
+      toolCallsSnapshot: accumulator.snapshot(),
+    };
+  }
+
+  /** 解析非流式响应（Ollama 带 tools 时） */
+  private async *parseNonStream(res: Response): AsyncIterable<LLMStreamChunk> {
+    const json: any = await res.json();
+    const choice = json.choices?.[0];
+    const msg = choice?.message ?? {};
+    const accumulator = new ToolCallAccumulator();
+
+    if (Array.isArray(msg.tool_calls)) {
+      accumulator.process(
+        msg.tool_calls.map((tc: any, i: number) => ({
+          index: tc.index ?? i,
+          id: tc.id,
+          type: tc.type,
+          function: { name: tc.function?.name, arguments: tc.function?.arguments },
+        })),
+      );
+    }
+
+    if (msg.content) {
+      yield { textDelta: msg.content as string, done: false };
+    }
+    if (msg.reasoning_content) {
+      yield { reasoningContentDelta: msg.reasoning_content as string, done: false };
+    }
+
+    yield {
+      done: true,
+      finishReason: normalizeFinish(choice?.finish_reason ?? null, accumulator.hasAny()),
+      toolCallsSnapshot: accumulator.snapshot(),
+    };
   }
 }
 
-function toOpenAIRole(role: MessageRole): 'system' | 'user' | 'assistant' {
-  if (role === 'system') return 'system';
-  if (role === 'assistant') return 'assistant';
-  return 'user';
+/** 把 Aurevoy Message 转为 OpenAI 兼容消息格式 */
+function toOpenAIMessage(msg: Message): OpenAIChatMessage {
+  const out: OpenAIChatMessage = {
+    role: toOpenAIRole(msg.role),
+    content: msg.content,
+  };
+  // assistant 携带 tool_calls；OpenAI 要求此时 content 可为 null
+  if (msg.role === 'assistant' && msg.toolCalls?.length) {
+    out.tool_calls = msg.toolCalls;
+    if (!out.content) out.content = null;
+  }
+  // tool 结果消息需要 tool_call_id
+  if (msg.role === 'tool' && msg.toolCallId) {
+    out.tool_call_id = msg.toolCallId;
+  }
+  // DeepSeek reasoning_content 回传（思考模式多轮必需）
+  if (msg.reasoningContent) {
+    out.reasoning_content = msg.reasoningContent;
+  }
+  return out;
+}
+
+function toOpenAIRole(role: MessageRole): string {
+  switch (role) {
+    case 'user':
+      return 'user';
+    case 'assistant':
+      return 'assistant';
+    case 'system':
+      return 'system';
+    case 'tool':
+      return 'tool';
+    default:
+      return 'user';
+  }
+}
+
+/** 把工具描述转为 OpenAI tools 格式 */
+function toOpenAITools(descriptors: ToolDescriptor[]) {
+  return descriptors.map((d) => ({
+    type: 'function' as const,
+    function: {
+      name: d.name,
+      description: d.description,
+      parameters: d.inputSchema,
+    },
+  }));
+}
+
+const VALID_FINISH: readonly string[] = ['stop', 'tool_calls', 'length', 'content_filter'];
+
+function normalizeFinish(reason: string | null, hasToolCalls: boolean): LLMFinishReason {
+  if (reason && VALID_FINISH.includes(reason)) return reason as LLMFinishReason;
+  // 某些提供商在非流式或降级时不给 finish_reason，用是否有 tool_calls 兜底
+  return hasToolCalls ? 'tool_calls' : 'stop';
 }
 
 /** 当前支持的 Provider 类型。后续接入新厂商时在此扩展。 */
@@ -167,9 +335,7 @@ let cachedProvider: LLMProvider | null = null;
  */
 export function getProvider(): LLMProvider {
   if (cachedProvider) return cachedProvider;
-
   assertConfigured();
-
   const { apiKey, baseUrl, model, temperature } = config.llm;
   cachedProvider = new OpenAICompatibleProvider({ apiKey, baseUrl, model, temperature });
   return cachedProvider;
