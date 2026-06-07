@@ -71,7 +71,8 @@ npm run build:shared   # 仅构建共享类型（改完 shared 必做）
 
 - ✅ Monorepo 骨架、前后端通信、SSE 流式、SQLite、全链路跑通。
 - ✅ 真实 LLM Provider（OpenAI 兼容，`.env` 配置，未配置即报错）；前端对话式界面重做。
-- ⏳ 下一步（M1）：**ReAct 工具调用循环**——已完成调研（`docs/research/agent-loop-findings.md`），
-  方案已写入 `docs/ROADMAP.md` M1（隐式计划 / 原生 fetch / DeepSeek `reasoning_content` 回传 /
-  Ollama 降级 / 防死循环 / 重试 / 取消 / 审批预留），待实现。
-- 之后：MCP 工具、记忆、多轮对话。详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。
+- ✅ M1：ReAct 工具调用循环（防死循环/重试/取消）+ 前端工具调用可视化。
+- ⏳ M2 进行中：已落地**内置工具**（文件读写/目录/HTTP 抓取，限定工作区）+
+  **工具风险模型与审批闭环**（`riskLevel` / `approval_request` / `POST …/approvals`，前端审批按钮）。
+  下一步：MCP TypeScript SDK 接入。
+- 之后：记忆、多轮对话、设置界面。详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。

@@ -75,12 +75,22 @@ export interface Task {
 // 工具层 (为 MCP 接入预留)
 // ============================================================
 
+/**
+ * 工具风险等级，决定执行前是否需要用户审批。
+ * - safe: 只读/无副作用，自动放行（如读时间、列目录）
+ * - caution: 有副作用或访问外部资源，执行前需用户确认（如网络抓取、读文件）
+ * - dangerous: 破坏性或高风险，执行前必须用户确认（如写文件、删除）
+ */
+export type ToolRiskLevel = 'safe' | 'caution' | 'dangerous';
+
 /** 工具的元信息描述 */
 export interface ToolDescriptor {
   name: string;
   description: string;
   /** JSON Schema 描述入参 */
   inputSchema: Record<string, unknown>;
+  /** 风险等级；缺省视为 'safe' */
+  riskLevel?: ToolRiskLevel;
 }
 
 /** 一次工具调用 */
@@ -115,6 +125,12 @@ export type AgentEvent =
   | { type: 'message'; taskId: string; message: Message } // 一条完整消息
   | { type: 'tool_call'; taskId: string; call: ToolCall }
   | { type: 'tool_result'; taskId: string; result: ToolResult }
+  | {
+      type: 'approval_request';
+      taskId: string;
+      call: ToolCall;
+      riskLevel: ToolRiskLevel;
+    } // 执行非 safe 工具前请求用户确认
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string };
 
@@ -140,6 +156,21 @@ export interface HealthResponse {
   uptimeMs: number;
   /** 当前生效的 LLM Provider 名（如 'openai:gpt-4o-mini'；未配置时为 'unconfigured'） */
   provider: string;
+}
+
+/** POST /api/tasks/:id/approvals — 对一次工具调用做出审批决策 */
+export interface ApprovalDecisionRequest {
+  /** 关联的 tool_call id（即 approval_request 事件里的 call.id） */
+  callId: string;
+  /** true=批准执行，false=拒绝 */
+  approved: boolean;
+}
+
+export interface ApprovalDecisionResponse {
+  taskId: string;
+  callId: string;
+  /** 决策是否被成功投递到等待中的循环（false 表示无对应待审批项） */
+  delivered: boolean;
 }
 
 // ============================================================

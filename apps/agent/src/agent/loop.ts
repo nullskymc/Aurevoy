@@ -12,9 +12,14 @@ const MAX_ITERATIONS = 20;
 const DUPLICATE_CALL_LIMIT = 3;
 /** 单轮最多并行工具调用数 */
 const MAX_TOOL_CALLS_PER_TURN = 10;
+/** 等待用户审批的超时（毫秒）；超时视为拒绝，避免任务永久挂起 */
+const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** 进行中任务的取消句柄 */
 const activeAbortControllers = new Map<string, AbortController>();
+
+/** 等待中的工具审批：taskId → (callId → 决策回调) */
+const pendingApprovals = new Map<string, Map<string, (approved: boolean) => void>>();
 
 /** 取消一个进行中的任务（hard cancel：中断 fetch 流） */
 export function cancelTask(taskId: string): boolean {
@@ -22,6 +27,45 @@ export function cancelTask(taskId: string): boolean {
   if (!ac) return false;
   ac.abort();
   return true;
+}
+
+/** 投递一次工具审批决策（由 server 的审批端点调用）。返回是否命中等待中的请求。 */
+export function resolveApproval(taskId: string, callId: string, approved: boolean): boolean {
+  const resolve = pendingApprovals.get(taskId)?.get(callId);
+  if (!resolve) return false;
+  resolve(approved);
+  return true;
+}
+
+/** 等待用户对某次工具调用的审批；超时或任务取消视为拒绝。 */
+function waitForApproval(taskId: string, callId: string, signal: AbortSignal): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      const map = pendingApprovals.get(taskId);
+      map?.delete(callId);
+      if (map && map.size === 0) pendingApprovals.delete(taskId);
+    };
+    const finish = (approved: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(approved);
+    };
+    const onAbort = () => finish(false);
+    const timer = setTimeout(() => finish(false), APPROVAL_TIMEOUT_MS);
+
+    if (signal.aborted) return finish(false);
+    signal.addEventListener('abort', onAbort, { once: true });
+    let map = pendingApprovals.get(taskId);
+    if (!map) {
+      map = new Map();
+      pendingApprovals.set(taskId, map);
+    }
+    map.set(callId, finish);
+  });
 }
 
 /** 创建一个新任务并持久化（尚未开始执行） */
@@ -177,6 +221,26 @@ export async function runTask(task: Task): Promise<void> {
 
         const call = { id: tc.id, toolName: name, args };
         taskEvents.publish({ type: 'tool_call', taskId: task.id, call });
+
+        // 风险门：非 safe 工具执行前请求用户审批
+        const risk = toolRegistry.riskLevelOf(name);
+        if (risk !== 'safe') {
+          taskEvents.publish({ type: 'approval_request', taskId: task.id, call, riskLevel: risk });
+          updateStep(`等待确认：${name}`, 'running');
+          const approved = await waitForApproval(task.id, tc.id, abortController.signal);
+          if (abortController.signal.aborted) return finishCancelled(task, touch);
+          if (!approved) {
+            const denied = { callId: tc.id, ok: false, error: '用户拒绝了该工具调用' };
+            taskEvents.publish({ type: 'tool_result', taskId: task.id, result: denied });
+            messages.push(
+              makeToolResult(tc.id, {
+                error: '用户拒绝执行该工具。请改用其他方式，或直接给出最终答案。',
+              }),
+            );
+            continue;
+          }
+          updateStep(`调用工具：${name}`, 'running');
+        }
 
         const result = await toolRegistry.invoke(call);
         taskEvents.publish({ type: 'tool_result', taskId: task.id, result });

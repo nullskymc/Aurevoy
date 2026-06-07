@@ -6,6 +6,11 @@ export const config = {
   port: Number(process.env.AUREVOY_PORT ?? AGENT_DEFAULT_PORT),
   /** SQLite 数据文件路径 */
   dbPath: process.env.AUREVOY_DB_PATH ?? './aurevoy.sqlite',
+  /**
+   * 工具工作区根目录。文件类工具的所有路径都被限制在此目录内（防目录穿越）。
+   * 默认当前工作目录下的 ./workspace。
+   */
+  workspaceDir: process.env.AUREVOY_WORKSPACE_DIR ?? './workspace',
   /** 允许的前端来源（开发期 Vite + 生产期 Tauri） */
   corsOrigins: (process.env.AUREVOY_CORS_ORIGINS ?? '*')
     .split(',')

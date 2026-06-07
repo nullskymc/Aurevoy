@@ -65,9 +65,12 @@
 ## M2 — 工具与操作（MCP）
 
 - [ ] 集成 MCP TypeScript SDK，启动期把 MCP server 工具注册进 `toolRegistry`
-- [ ] 内置基础工具：文件读写、HTTP 抓取、shell（带权限确认）
-- [ ] 工具权限模型：危险操作需用户确认（呼应桌面侧 Tauri capabilities）
-- [ ] 工具调用可视化（前端展示调用与结果）
+- [x] 内置基础工具：文件读写、目录列举、HTTP 抓取（路径限定工作区 `config.workspaceDir`，防目录穿越）
+      — `shell` 留待审批模型成熟后再加
+- [x] 工具权限模型：`ToolDescriptor.riskLevel`（safe/caution/dangerous）；
+      非 safe 工具执行前发 `approval_request` 事件并等待 `POST /api/tasks/:id/approvals` 决策
+      （超时/取消视为拒绝）
+- [x] 工具调用可视化（前端展示调用、参数、结果与审批按钮）
 
 ## M3 — 记忆与个性化
 

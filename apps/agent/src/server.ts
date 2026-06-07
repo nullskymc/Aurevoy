@@ -2,12 +2,14 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import type {
   AgentEvent,
+  ApprovalDecisionRequest,
+  ApprovalDecisionResponse,
   CreateTaskRequest,
   CreateTaskResponse,
   HealthResponse,
 } from '@aurevoy/shared';
 import { config } from './config.js';
-import { createTask, runTask, cancelTask } from './agent/loop.js';
+import { createTask, runTask, cancelTask, resolveApproval } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
 import { taskStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
@@ -69,6 +71,22 @@ export async function buildServer() {
     // 任务可能已结束（无活跃句柄）；此时返回当前状态即可
     return reply.send({ taskId: req.params.id, cancelling: cancelled, status: task.status });
   });
+
+  // 对一次工具调用做出审批决策（批准/拒绝）
+  app.post<{ Params: { id: string }; Body: ApprovalDecisionRequest }>(
+    '/api/tasks/:id/approvals',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      const { callId, approved } = req.body ?? {};
+      if (typeof callId !== 'string' || typeof approved !== 'boolean') {
+        return reply.code(400).send({ error: 'callId(string) 与 approved(boolean) 必填' });
+      }
+      const delivered = resolveApproval(req.params.id, callId, approved);
+      const body: ApprovalDecisionResponse = { taskId: req.params.id, callId, delivered };
+      return reply.send(body);
+    },
+  );
 
   // SSE 事件流：订阅某个任务的实时输出
   app.get<{ Params: { id: string } }>('/api/tasks/:id/stream', (req, reply) => {

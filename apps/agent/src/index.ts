@@ -1,6 +1,7 @@
 import './load-env.js';
 import { buildServer } from './server.js';
 import { config } from './config.js';
+import './tools/builtins.js'; // 副作用导入：注册内置工具（文件/网络）
 
 async function main() {
   const app = await buildServer();

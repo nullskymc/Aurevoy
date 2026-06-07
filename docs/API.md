@@ -52,6 +52,23 @@
 - 心跳：每 15s 发 `: ping\n\n`（注释行，前端应忽略）
 - 收到 `type:"done"` 后服务端主动关闭连接。
 
+### POST `/api/tasks/:id/cancel`
+取消进行中的任务（中断其 LLM 流）。返回 `{ taskId, cancelling, status }`；
+`cancelling=false` 表示无活跃句柄（任务可能已结束）。任务不存在 → `404`。
+
+### POST `/api/tasks/:id/approvals`
+对一次工具调用做出审批决策（响应 `approval_request` 事件）。
+```json
+// 请求体 ApprovalDecisionRequest
+{ "callId": "<approval_request 事件里的 call.id>", "approved": true }
+```
+```json
+// 200 → ApprovalDecisionResponse
+{ "taskId": "<id>", "callId": "<id>", "delivered": true }
+```
+- `delivered=false`：无对应的待审批项（已超时/已决策/不存在）。
+- 字段缺失或类型错误 → `400`；任务不存在 → `404`。
+
 ## 2. 事件契约：`AgentEvent`
 
 所有事件都带 `taskId`（用于多任务路由）。`type` 是判别字段：
@@ -65,6 +82,7 @@
 | `token` | `delta: string` | LLM 流式输出的增量片段 |
 | `message` | `message: Message` | 一条完整消息（通常是助手最终回复） |
 | `tool_call` | `call: ToolCall` | 发起一次工具调用 |
+| `approval_request` | `call: ToolCall`, `riskLevel` | 非 safe 工具执行前请求用户确认 |
 | `tool_result` | `result: ToolResult` | 工具返回结果 |
 | `done` | `status: TaskStatus` | 任务结束（completed/failed/cancelled） |
 | `error` | `message: string` | 执行出错 |
@@ -90,6 +108,16 @@ status(running)
 - 计划以隐式方式呈现：循环用工具调用轨迹更新 `plan`/`step_update`，不强制先规划。
 - 一轮可能有多个并行 `tool_call`（各带独立 `id`），对应多个 `tool_result`。
 - 取消时以 `status(cancelled)` + `done(cancelled)` 收尾。
+
+非 safe 工具（`caution`/`dangerous`，如 `http_fetch`/`write_file`）需审批：
+```
+… → tool_call → approval_request          (等待用户)
+  → [POST /api/tasks/:id/approvals]        (批准/拒绝)
+  → tool_result                            (批准→执行结果；拒绝→ok:false 错误回灌)
+  → token × N → message → done
+```
+工具的风险等级由 `ToolDescriptor.riskLevel`（`safe`|`caution`|`dangerous`，缺省 `safe`）声明，
+`safe` 工具自动放行；审批超时（5 分钟）或任务取消视为拒绝。
 
 ### 前端消费示例
 ```ts
@@ -121,7 +149,7 @@ interface Message  {
   reasoningContent?: string;       // DeepSeek 思考模式透传，多轮须回传，否则 400
 }
 interface MessageToolCall { id: string; type: 'function'; function: { name: string; arguments: string /* JSON 串 */ }; }
-interface ToolDescriptor { name: string; description: string; inputSchema: Record<string, unknown>; }
+interface ToolDescriptor { name: string; description: string; inputSchema: Record<string, unknown>; riskLevel?: 'safe'|'caution'|'dangerous'; }
 interface ToolCall   { id: string; toolName: string; args: Record<string, unknown>; }
 interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: string; }
 ```

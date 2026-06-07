@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 .pnp.*
+.qoder
 
 # Build outputs
 dist/
@@ -17,6 +18,8 @@ target/
 *.sqlite-shm
 *.sqlite-wal
 *.db
+# 工具工作区（文件类工具的运行时沙箱目录）
+/workspace/
 .env
 .env.*
 !.env.example
