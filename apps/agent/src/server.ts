@@ -11,6 +11,7 @@ import { createTask, runTask } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
 import { taskStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
+import { getProvider } from './llm/provider.js';
 
 const startedAt = Date.now();
 
@@ -21,7 +22,12 @@ export async function buildServer() {
 
   // 健康检查
   app.get('/api/health', async (): Promise<HealthResponse> => {
-    return { status: 'ok', version: '0.1.0', uptimeMs: Date.now() - startedAt };
+    return {
+      status: 'ok',
+      version: '0.1.0',
+      uptimeMs: Date.now() - startedAt,
+      provider: getProvider().name,
+    };
   });
 
   // 已注册工具列表（调试/前端展示用）

@@ -16,7 +16,7 @@ export function Composer({
   busy,
   online,
   variant = "hero",
-  provider = "Mock",
+  provider,
   onChange,
   onSubmit,
 }: ComposerProps) {
@@ -51,7 +51,7 @@ export function Composer({
             </button>
             <button type="button" className="composer-chip" title="Provider">
               <GearIcon />
-              <span>{provider}</span>
+              <span>{provider ?? "未连接"}</span>
             </button>
           </div>
 

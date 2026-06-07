@@ -121,6 +121,8 @@ export interface HealthResponse {
   status: 'ok';
   version: string;
   uptimeMs: number;
+  /** 当前生效的 LLM Provider 名（如 'mock'、'openai:gpt-4o-mini'） */
+  provider: string;
 }
 
 // ============================================================

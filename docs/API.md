@@ -13,8 +13,10 @@
 健康检查 / 前端探测引擎是否在线。
 ```json
 // 200 → HealthResponse
-{ "status": "ok", "version": "0.1.0", "uptimeMs": 1442 }
+{ "status": "ok", "version": "0.1.0", "uptimeMs": 1442, "provider": "mock" }
 ```
+- `provider`：当前生效的 LLM Provider 名。Mock 为 `"mock"`；OpenAI 兼容为 `"openai:<model>"`，
+  如 `"openai:gpt-4o-mini"`。前端据此在输入框展示当前模型来源。
 
 ### GET `/api/tools`
 列出已注册工具（调试 / 前端展示）。
@@ -108,3 +110,22 @@ interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: st
 - **新增事件类型**：在 `AgentEvent` 联合里加一个分支（必须含 `taskId`），前端 `switch` 默认忽略未知类型即可向后兼容。
 - **破坏性改动**：改字段语义/删字段时，前后端要同一次提交内联动，并 `npm run build:shared`。
 - **鉴权**：当前为本机单用户、无鉴权。若未来引擎需被其它客户端访问，必须先加鉴权（token/本地 socket 校验），不可裸暴露。
+
+## 5. LLM Provider 配置
+
+引擎通过环境变量选择 LLM Provider（开发期写在**项目根目录** `.env`，已 gitignore；
+模板见根目录 `.env.example`）。Provider 抽象在 `apps/agent/src/llm/provider.ts`。
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `AUREVOY_LLM_PROVIDER` | `mock` | `mock` 或 `openai`（OpenAI 兼容协议） |
+| `AUREVOY_LLM_API_KEY` | 空 | API Key；缺失时**自动回退 Mock** |
+| `AUREVOY_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容端点基础地址（不含 `/chat/completions`） |
+| `AUREVOY_LLM_MODEL` | `gpt-4o-mini` | 模型名 |
+| `AUREVOY_LLM_TEMPERATURE` | `0.7` | 采样温度 |
+
+- `openai` 走标准 Chat Completions 流式协议（`stream: true`，SSE），
+  兼容 OpenAI / DeepSeek / Moonshot / 本地 Ollama(`/v1`) / vLLM / LM Studio 等。
+- 缺少 Key 或 provider=mock 时回退 Mock，保证链路始终可用。
+- 当前生效的 Provider 名通过 `GET /api/health` 的 `provider` 字段暴露给前端。
+- **密钥安全**：Key 只走环境变量，禁止硬编码或提交。

@@ -282,6 +282,7 @@ function App() {
                 busy={busy}
                 online={online}
                 variant="docked"
+                provider={health?.provider}
                 onChange={setGoal}
                 onSubmit={() => void startGoal(goal)}
               />
@@ -295,6 +296,7 @@ function App() {
               busy={busy}
               online={online}
               variant="hero"
+              provider={health?.provider}
               onChange={setGoal}
               onSubmit={() => void startGoal(goal)}
             />
