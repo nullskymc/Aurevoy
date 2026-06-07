@@ -8,7 +8,15 @@ import type {
   TaskStatus,
   ToolDescriptor,
 } from "@aurevoy/shared";
-import { cancelTask, checkHealth, createTask, listTasks, listTools, streamTask } from "./lib/api";
+import {
+  approveToolCall,
+  cancelTask,
+  checkHealth,
+  createTask,
+  listTasks,
+  listTools,
+  streamTask,
+} from "./lib/api";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
 import { InspectorPanel } from "./components/InspectorPanel";
@@ -37,6 +45,21 @@ function deriveToolActivityFromEvents(events: FeedItem[]): ToolActivity[] {
         args: event.call.args,
         status: "running",
       });
+    } else if (event.type === "approval_request") {
+      const existing = byId.get(event.call.id);
+      if (existing) {
+        existing.status = "awaiting";
+        existing.riskLevel = event.riskLevel;
+      } else {
+        if (!byId.has(event.call.id)) order.push(event.call.id);
+        byId.set(event.call.id, {
+          id: event.call.id,
+          name: event.call.toolName,
+          args: event.call.args,
+          status: "awaiting",
+          riskLevel: event.riskLevel,
+        });
+      }
     } else if (event.type === "tool_result") {
       const existing = byId.get(event.result.callId);
       if (existing) {
@@ -108,6 +131,7 @@ function App() {
   const [status, setStatus] = useState<TaskStatus | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tools, setTools] = useState<ToolDescriptor[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -284,7 +308,22 @@ function App() {
     setBusy(false);
     // 通知后端中断任务的 LLM 流（fire-and-forget；失败不影响前端已停止）
     const taskId = currentTask?.id;
-    if (taskId) void cancelTask(taskId).catch(() => {});
+    if (taskId) {
+      void cancelTask(taskId).catch((err) => {
+        setNotice(`取消请求未送达后端：${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
+  }
+
+  function handleToolDecision(callId: string, approved: boolean): void {
+    const taskId = currentTask?.id;
+    if (!taskId) return;
+    setNotice(null);
+    void approveToolCall(taskId, callId, approved).catch((err) => {
+      setNotice(
+        `提交${approved ? "批准" : "拒绝"}失败：${err instanceof Error ? err.message : String(err)}。请重试。`,
+      );
+    });
   }
 
   const showConversation = currentTask !== null;
@@ -344,6 +383,15 @@ function App() {
           )}
         </header>
 
+        {notice && (
+          <div className="notice-banner" role="alert">
+            <span>{notice}</span>
+            <button type="button" className="notice-close" onClick={() => setNotice(null)} aria-label="关闭">
+              ✕
+            </button>
+          </div>
+        )}
+
         {showConversation ? (
           <>
             <div className="main-scroll">
@@ -354,6 +402,7 @@ function App() {
                 output={output}
                 busy={busy}
                 toolActivity={toolActivity}
+                onToolDecision={handleToolDecision}
               />
             </div>
             <div className="composer-dock">

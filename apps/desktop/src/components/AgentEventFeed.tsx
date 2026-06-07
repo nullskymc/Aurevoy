@@ -29,6 +29,8 @@ function getEventTitle(event: AgentEvent): string {
       return `调用工具：${event.call.toolName}`;
     case "tool_result":
       return event.result.ok ? "工具返回结果" : "工具调用失败";
+    case "approval_request":
+      return `等待确认：${event.call.toolName}`;
     case "done":
       return `任务${getStatusLabel(event.status)}`;
     case "error":
@@ -54,6 +56,8 @@ function getEventDetail(event: AgentEvent): string {
       return event.result.ok
         ? JSON.stringify(event.result.output ?? {}, null, 2)
         : event.result.error ?? "未知错误";
+    case "approval_request":
+      return `风险等级 ${event.riskLevel}\n${JSON.stringify(event.call.args, null, 2)}`;
     case "done":
       return event.status;
     case "error":

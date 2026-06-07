@@ -40,6 +40,20 @@ export async function cancelTask(taskId: string): Promise<void> {
   if (!res.ok) throw new Error(`cancel task failed: ${res.status}`);
 }
 
+/** 对一次工具调用做出审批决策（批准/拒绝） */
+export async function approveToolCall(
+  taskId: string,
+  callId: string,
+  approved: boolean,
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/approvals`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callId, approved }),
+  });
+  if (!res.ok) throw new Error(`approve tool call failed: ${res.status}`);
+}
+
 export async function listTools(): Promise<ToolDescriptor[]> {
   const res = await fetch(`${BASE_URL}/api/tools`);
   if (!res.ok) throw new Error(`list tools failed: ${res.status}`);
