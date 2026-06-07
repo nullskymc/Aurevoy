@@ -90,9 +90,33 @@ export function InspectorPanel({
               <p className="inspector-empty">暂无工具调用</p>
             ) : (
               <div className="call-list">
-                {toolEvents.map((item) => (
-                  <code key={item.id}>{item.event.type}</code>
-                ))}
+                {toolEvents.map((item) => {
+                  const event = item.event;
+                  if (event.type === "tool_call") {
+                    return (
+                      <div key={item.id} className="call-row" data-kind="call">
+                        <span className="call-row-icon" aria-hidden="true">
+                          →
+                        </span>
+                        <span className="call-row-name">{event.call.toolName}</span>
+                        <span className="call-row-tag">调用</span>
+                      </div>
+                    );
+                  }
+                  if (event.type === "tool_result") {
+                    const ok = event.result.ok;
+                    return (
+                      <div key={item.id} className="call-row" data-kind={ok ? "ok" : "error"}>
+                        <span className="call-row-icon" aria-hidden="true">
+                          {ok ? "✓" : "✕"}
+                        </span>
+                        <span className="call-row-name">{ok ? "返回结果" : "调用失败"}</span>
+                        <span className="call-row-tag">{ok ? "成功" : "失败"}</span>
+                      </div>
+                    );
+                  }
+                  return null;
+                })}
               </div>
             )}
           </section>

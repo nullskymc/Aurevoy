@@ -28,11 +28,12 @@
 
 - [x] 接入真实 LLM Provider（OpenAI 兼容，覆盖 OpenAI/DeepSeek/Ollama 等）；已移除 Mock，未配置即明确报错
 - [~] Provider 配置与 Key 管理（`.env` 已落地；设置界面与多 Provider 运行时切换待做）
-- [ ] **ReAct 工具调用循环（合并「真正的 Agent 循环」+「工具调用闭环」）**
+- [x] **ReAct 工具调用循环（合并「真正的 Agent 循环」+「工具调用闭环」）**
 
   > 调研结论见 [`research/agent-loop-findings.md`](./research/agent-loop-findings.md)。
   > 采用 tool-calling loop（模型每轮自主决定调工具或给最终答案，工具结果回灌再请求），
   > 而非 plan-then-execute；复用现有 SSE 契约，前端尽量零改动。
+  > ✅ 已实现并用真实 DeepSeek（deepseek-v4-flash）验证：工具闭环、并行/防死循环、取消均通过。
 
   关键设计决策（已定）：
   - **隐式计划**：不强制先规划，用工具调用轨迹映射现有 `plan`/`step_update`；显式规划留作后续可选增强。
@@ -45,21 +46,21 @@
   - **审批预留**：工具注册预留 `riskLevel`；`approval_request` 事件留到 M2 接 UI。
 
   有序子任务（来自调研报告附录 A）：
-  - [ ] `packages/shared`：`Message` 扩展 `toolCalls` / `toolCallId` / `reasoningContent`（+ `MessageToolCall` 类型）
-  - [ ] `agent/tool-call-accumulator.ts`：流式 tool_calls 累积器（按 `index` 跨 chunk 拼接，处理并行/截断）
-  - [ ] 扩展 `LLMProvider`：`LLMStreamOptions`（tools/toolChoice/signal 等）+ `LLMStreamChunk`
-  - [ ] 重写 `OpenAICompatibleProvider.stream()`：支持 tools 参数、tool_calls 累积、`reasoning_content` 透传
-        ⚠️ 同步移除 `.filter(m => m.role !== 'tool')`，补 `toOpenAIRole` 的 `'tool'` 分支
-  - [ ] `toOpenAIMessage()` 转换（处理 tool_calls / tool_call_id / reasoning_content）
-  - [ ] `withRetry()`：指数退避，AbortError/4xx 不重试
-  - [ ] 重写 `agent/loop.ts` `runTask()`：ReAct 循环 + 防死循环 + 重试 + 每轮持久化
-  - [ ] `AbortController` 取消支持与 `AbortError` 捕获
-  - [ ] Ollama 降级检测（带 tools 时 `stream:false`）
-  - [ ] 测试：单工具 → 并行工具 → 工具失败自我纠正 → 不支持 tools 降级 → 取消
-  - [ ] 前端补充 `tool_call` / `tool_result` 渲染（非阻塞，见 `UI_DESIGN.md`）
+  - [x] `packages/shared`：`Message` 扩展 `toolCalls` / `toolCallId` / `reasoningContent`（+ `MessageToolCall` 类型）
+  - [x] `agent/tool-call-accumulator.ts`：流式 tool_calls 累积器（按 `index` 跨 chunk 拼接，处理并行/截断）
+  - [x] 扩展 `LLMProvider`：`LLMStreamOptions`（tools/toolChoice/signal 等）+ `LLMStreamChunk`
+  - [x] 重写 `OpenAICompatibleProvider.stream()`：支持 tools 参数、tool_calls 累积、`reasoning_content` 透传
+        （已移除 `.filter(m => m.role !== 'tool')`，补 `toOpenAIRole` 的 `'tool'` 分支；含单轮超时）
+  - [x] `toOpenAIMessage()` 转换（处理 tool_calls / tool_call_id / reasoning_content）
+  - [x] `withRetry()`：指数退避，AbortError/4xx 不重试
+  - [x] 重写 `agent/loop.ts` `runTask()`：ReAct 循环 + 防死循环 + 重试 + 每轮持久化
+  - [x] `AbortController` 取消支持与 `AbortError` 捕获
+  - [x] Ollama 降级检测（带 tools 时 `stream:false`）
+  - [~] 测试：工具调用闭环 / 取消已冒烟通过；并行工具、降级、失败自我纠正待补自动化测试
+  - [x] 前端补充 `tool_call` / `tool_result` 渲染（对话流内联工具卡片 + 检查器列表，实时与历史任务均支持）
 
-- [ ] 任务控制对外接口：`POST /api/tasks/:id/cancel`（接循环内的 `AbortController`）、
-      `pause`/`resume`；对应请求/响应类型先定义在 `packages/shared`
+- [~] 任务控制对外接口：`POST /api/tasks/:id/cancel` 已实现并接入前端停止按钮；
+      `pause`/`resume` 及对应 `packages/shared` 类型待做
 
 ## M2 — 工具与操作（MCP）
 

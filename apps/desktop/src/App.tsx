@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type {
   AgentEvent,
   HealthResponse,
+  Message,
   PlanStep,
   Task,
   TaskStatus,
@@ -9,7 +10,7 @@ import type {
 } from "@aurevoy/shared";
 import { cancelTask, checkHealth, createTask, listTasks, listTools, streamTask } from "./lib/api";
 import { Composer } from "./components/Composer";
-import { Conversation } from "./components/Conversation";
+import { Conversation, type ToolActivity } from "./components/Conversation";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { StatusPill } from "./components/StatusPill";
@@ -18,9 +19,72 @@ import "./App.css";
 
 function getAssistantOutput(task: Task): string {
   return task.messages
-    .filter((message) => message.role === "assistant")
+    .filter((message) => message.role === "assistant" && message.content.trim().length > 0)
     .map((message) => message.content)
     .join("\n\n");
+}
+
+/** 从实时事件流派生工具调用活动（运行中使用） */
+function deriveToolActivityFromEvents(events: FeedItem[]): ToolActivity[] {
+  const byId = new Map<string, ToolActivity>();
+  const order: string[] = [];
+  for (const { event } of events) {
+    if (event.type === "tool_call") {
+      if (!byId.has(event.call.id)) order.push(event.call.id);
+      byId.set(event.call.id, {
+        id: event.call.id,
+        name: event.call.toolName,
+        args: event.call.args,
+        status: "running",
+      });
+    } else if (event.type === "tool_result") {
+      const existing = byId.get(event.result.callId);
+      if (existing) {
+        existing.status = event.result.ok ? "ok" : "error";
+        existing.output = event.result.output;
+        existing.error = event.result.error;
+      }
+    }
+  }
+  return order.map((id) => byId.get(id)!);
+}
+
+/** 从持久化的消息派生工具调用活动（重开历史任务使用） */
+function deriveToolActivityFromMessages(messages: Message[]): ToolActivity[] {
+  const list: ToolActivity[] = [];
+  const byId = new Map<string, ToolActivity>();
+  for (const message of messages) {
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      for (const tc of message.toolCalls) {
+        let args: unknown = {};
+        try {
+          args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
+        } catch {
+          args = tc.function.arguments;
+        }
+        const activity: ToolActivity = { id: tc.id, name: tc.function.name, args, status: "running" };
+        list.push(activity);
+        byId.set(tc.id, activity);
+      }
+    } else if (message.role === "tool" && message.toolCallId) {
+      const activity = byId.get(message.toolCallId);
+      if (!activity) continue;
+      let parsed: unknown = message.content;
+      try {
+        parsed = JSON.parse(message.content);
+      } catch {
+        /* 保留原文 */
+      }
+      if (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)) {
+        activity.status = "error";
+        activity.error = String((parsed as Record<string, unknown>).error);
+      } else {
+        activity.status = "ok";
+        activity.output = parsed;
+      }
+    }
+  }
+  return list;
 }
 
 function createFeedItem(event: AgentEvent): FeedItem {
@@ -225,6 +289,15 @@ function App() {
 
   const showConversation = currentTask !== null;
 
+  // 运行中优先用实时事件；否则（重开历史任务）从持久化消息派生
+  const liveToolActivity = deriveToolActivityFromEvents(events);
+  const toolActivity =
+    liveToolActivity.length > 0
+      ? liveToolActivity
+      : currentTask
+        ? deriveToolActivityFromMessages(currentTask.messages)
+        : [];
+
   return (
     <div className="app-shell">
       <TaskHistorySidebar
@@ -280,6 +353,7 @@ function App() {
                 plan={plan}
                 output={output}
                 busy={busy}
+                toolActivity={toolActivity}
               />
             </div>
             <div className="composer-dock">
