@@ -34,6 +34,12 @@ export async function listTasks(): Promise<Task[]> {
   return res.json();
 }
 
+/** 请求后端取消一个进行中的任务（中断其 LLM 流） */
+export async function cancelTask(taskId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/cancel`, { method: 'POST' });
+  if (!res.ok) throw new Error(`cancel task failed: ${res.status}`);
+}
+
 export async function listTools(): Promise<ToolDescriptor[]> {
   const res = await fetch(`${BASE_URL}/api/tools`);
   if (!res.ok) throw new Error(`list tools failed: ${res.status}`);

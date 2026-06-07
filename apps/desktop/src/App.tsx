@@ -7,7 +7,7 @@ import type {
   TaskStatus,
   ToolDescriptor,
 } from "@aurevoy/shared";
-import { checkHealth, createTask, listTasks, listTools, streamTask } from "./lib/api";
+import { cancelTask, checkHealth, createTask, listTasks, listTools, streamTask } from "./lib/api";
 import { Composer } from "./components/Composer";
 import { Conversation } from "./components/Conversation";
 import { InspectorPanel } from "./components/InspectorPanel";
@@ -62,9 +62,11 @@ function App() {
       setOnline(true);
       setTasks(nextTasks);
       setTools(nextTools);
-    } catch {
+    } catch (err) {
       setHealth(null);
-      setOnline(false);
+      // 仅网络层失败(fetch 抛 TypeError)才判定引擎离线；
+      // HTTP 4xx/5xx 说明引擎可达、只是返回了错误，不应误判为离线。
+      setOnline(err instanceof TypeError ? false : true);
     }
   }
 
@@ -186,7 +188,8 @@ function App() {
       setStatus("failed");
       setOutput(`无法连接 Agent 引擎：${err instanceof Error ? err.message : String(err)}`);
       setBusy(false);
-      setOnline(false);
+      // 仅网络层失败才标记离线；HTTP 错误不代表引擎离线
+      if (err instanceof TypeError) setOnline(false);
     }
   }
 
@@ -215,6 +218,9 @@ function App() {
   function handleStopStream(): void {
     esRef.current?.close();
     setBusy(false);
+    // 通知后端中断任务的 LLM 流（fire-and-forget；失败不影响前端已停止）
+    const taskId = currentTask?.id;
+    if (taskId) void cancelTask(taskId).catch(() => {});
   }
 
   const showConversation = currentTask !== null;
@@ -285,6 +291,7 @@ function App() {
                 provider={health?.provider}
                 onChange={setGoal}
                 onSubmit={() => void startGoal(goal)}
+                onStop={handleStopStream}
               />
             </div>
           </>
@@ -299,6 +306,7 @@ function App() {
               provider={health?.provider}
               onChange={setGoal}
               onSubmit={() => void startGoal(goal)}
+              onStop={handleStopStream}
             />
           </div>
         )}

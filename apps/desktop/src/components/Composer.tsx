@@ -9,6 +9,8 @@ interface ComposerProps {
   provider?: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  /** busy 时点击发送按钮触发停止/取消 */
+  onStop?: () => void;
 }
 
 export function Composer({
@@ -19,6 +21,7 @@ export function Composer({
   provider,
   onChange,
   onSubmit,
+  onStop,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const canSend = value.trim().length > 0 && !busy && online !== false;
@@ -63,10 +66,10 @@ export function Composer({
             <button
               type="button"
               className="composer-send"
-              disabled={!canSend}
-              onClick={onSubmit}
-              aria-label="发送"
-              title="发送 (Enter)"
+              disabled={busy ? !onStop : !canSend}
+              onClick={busy ? onStop : onSubmit}
+              aria-label={busy ? "停止" : "发送"}
+              title={busy ? "停止生成" : "发送 (Enter)"}
             >
               {busy ? <StopDot /> : <ArrowUpIcon />}
             </button>
