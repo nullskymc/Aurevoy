@@ -70,9 +70,4 @@ export class ToolCallAccumulator {
   hasAny(): boolean {
     return this.map.size > 0;
   }
-
-  /** 重置（新一轮循环时调用） */
-  reset(): void {
-    this.map.clear();
-  }
 }

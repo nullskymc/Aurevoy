@@ -198,7 +198,7 @@ export async function runTask(task: Task): Promise<void> {
     );
     messages.push(fallback);
     taskEvents.publish({ type: 'message', taskId: task.id, message: fallback });
-    finishCompleted(task, updateStep, touch);
+    return finishCompleted(task, updateStep, touch);
   } catch (err) {
     if ((err as { name?: string })?.name === 'AbortError') {
       return finishCancelled(task, touch);

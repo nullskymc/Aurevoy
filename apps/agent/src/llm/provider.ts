@@ -1,6 +1,6 @@
 import type { Message, MessageRole, ToolDescriptor } from '@aurevoy/shared';
 import { config } from '../config.js';
-import { ToolCallAccumulator, type AccumulatedToolCall } from '../agent/tool-call-accumulator.js';
+import { ToolCallAccumulator, type AccumulatedToolCall, type ToolCallDelta } from '../agent/tool-call-accumulator.js';
 
 export type { AccumulatedToolCall };
 
@@ -69,6 +69,32 @@ interface OpenAIChatMessage {
   reasoning_content?: string;
 }
 
+/** 上游响应中 assistant 消息（非流式） */
+interface OpenAIResponseMessage {
+  content?: string | null;
+  reasoning_content?: string | null;
+  tool_calls?: ToolCallDelta[];
+}
+
+/** 上游流式 delta */
+interface OpenAIDelta {
+  content?: string | null;
+  reasoning_content?: string | null;
+  tool_calls?: ToolCallDelta[];
+}
+
+/** 上游单个 choice（流式与非流式共用） */
+interface OpenAIChoice {
+  delta?: OpenAIDelta;
+  message?: OpenAIResponseMessage;
+  finish_reason?: string | null;
+}
+
+/** 上游 /chat/completions 响应载荷（流式单帧或非流式整体） */
+interface OpenAIPayload {
+  choices?: OpenAIChoice[];
+}
+
 /**
  * OpenAI 兼容的流式 Provider。
  *
@@ -97,6 +123,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
     // Ollama 带 tools 时关闭 streaming（其流式 tool_calls 不稳定）
     const useStream = !(this.isOllama && tools);
 
+    // 组合用户取消信号与单轮超时，防止半开连接导致任务永久挂起
+    const signal = combineSignal(options?.signal, config.llm.timeoutMs);
+
     const res = await fetch(url, {
       method: 'POST',
       headers: {
@@ -110,7 +139,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         messages: payloadMessages,
         ...(tools ? { tools, tool_choice: options?.toolChoice ?? 'auto' } : {}),
       }),
-      signal: options?.signal,
+      signal,
     });
 
     if (!res.ok || !res.body) {
@@ -126,13 +155,13 @@ export class OpenAICompatibleProvider implements LLMProvider {
       yield* this.parseNonStream(res);
       return;
     }
-    yield* this.parseStream(res, options?.signal);
+    yield* this.parseStream(res, signal);
   }
 
   /** 解析 SSE 流式响应 */
   private async *parseStream(
     res: Response,
-    signal?: AbortSignal,
+    signal: AbortSignal,
   ): AsyncIterable<LLMStreamChunk> {
     const accumulator = new ToolCallAccumulator();
     const reader = res.body!.getReader();
@@ -141,9 +170,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
     let finishReason: string | null = null;
 
     while (true) {
-      if (signal?.aborted) {
+      if (signal.aborted) {
         await reader.cancel().catch(() => {});
-        throw new DOMException('The operation was aborted.', 'AbortError');
+        // 传播取消/超时的真实原因（AbortError 或 TimeoutError）
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : new DOMException('The operation was aborted.', 'AbortError');
       }
       const { value, done } = await reader.read();
       if (done) break;
@@ -158,9 +190,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
         const data = trimmed.slice('data:'.length).trim();
         if (data === '[DONE]') continue;
 
-        let json: any;
+        let json: OpenAIPayload;
         try {
-          json = JSON.parse(data);
+          json = JSON.parse(data) as OpenAIPayload;
         } catch {
           continue; // 跨 chunk 截断，忽略本行
         }
@@ -169,8 +201,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         if (!choice) continue;
         const delta = choice.delta ?? {};
 
-        let reasoningDelta: string | undefined;
-        if (delta.reasoning_content) reasoningDelta = delta.reasoning_content as string;
+        const reasoningDelta = delta.reasoning_content ?? undefined;
 
         if (Array.isArray(delta.tool_calls)) {
           accumulator.process(delta.tool_calls);
@@ -179,7 +210,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         if (delta.content || reasoningDelta) {
           yield {
             textDelta: delta.content ?? undefined,
-            reasoningContentDelta: reasoningDelta,
+            reasoningContentDelta: reasoningDelta ?? undefined,
             done: false,
             toolCallsSnapshot: accumulator.snapshot(),
           };
@@ -198,14 +229,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
   /** 解析非流式响应（Ollama 带 tools 时） */
   private async *parseNonStream(res: Response): AsyncIterable<LLMStreamChunk> {
-    const json: any = await res.json();
+    const json = (await res.json()) as OpenAIPayload;
     const choice = json.choices?.[0];
     const msg = choice?.message ?? {};
     const accumulator = new ToolCallAccumulator();
 
     if (Array.isArray(msg.tool_calls)) {
       accumulator.process(
-        msg.tool_calls.map((tc: any, i: number) => ({
+        msg.tool_calls.map((tc, i) => ({
           index: tc.index ?? i,
           id: tc.id,
           type: tc.type,
@@ -215,10 +246,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
     }
 
     if (msg.content) {
-      yield { textDelta: msg.content as string, done: false };
+      yield { textDelta: msg.content, done: false };
     }
     if (msg.reasoning_content) {
-      yield { reasoningContentDelta: msg.reasoning_content as string, done: false };
+      yield { reasoningContentDelta: msg.reasoning_content, done: false };
     }
 
     yield {
@@ -276,6 +307,12 @@ function toOpenAITools(descriptors: ToolDescriptor[]) {
       parameters: d.inputSchema,
     },
   }));
+}
+
+/** 组合用户取消信号与单轮超时信号（任一触发即中断 fetch） */
+function combineSignal(external: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return external ? AbortSignal.any([external, timeout]) : timeout;
 }
 
 const VALID_FINISH: readonly string[] = ['stop', 'tool_calls', 'length', 'content_filter'];

@@ -19,6 +19,14 @@ export const config = {
     /** OpenAI 兼容端点的基础地址，不含 /chat/completions */
     baseUrl: process.env.AUREVOY_LLM_BASE_URL ?? 'https://api.openai.com/v1',
     model: process.env.AUREVOY_LLM_MODEL ?? 'gpt-4o-mini',
-    temperature: Number(process.env.AUREVOY_LLM_TEMPERATURE ?? '0.7'),
+    temperature: parseNumber(process.env.AUREVOY_LLM_TEMPERATURE, 0.7),
+    /** 单轮 LLM 调用超时（毫秒）；防止半开连接导致任务永久挂起 */
+    timeoutMs: parseNumber(process.env.AUREVOY_LLM_TIMEOUT_MS, 120000),
   },
 } as const;
+
+/** 解析数字环境变量，非法或缺失时回退默认值（避免 NaN 污染配置）。 */
+function parseNumber(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return raw != null && raw !== '' && !Number.isNaN(n) ? n : fallback;
+}
