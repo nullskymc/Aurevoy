@@ -28,10 +28,38 @@
 
 - [x] 接入真实 LLM Provider（OpenAI 兼容，覆盖 OpenAI/DeepSeek/Ollama 等）；已移除 Mock，未配置即明确报错
 - [~] Provider 配置与 Key 管理（`.env` 已落地；设置界面与多 Provider 运行时切换待做）
-- [ ] 真正的 Agent 循环：**规划 → 选择动作 → 执行 → 观察 → 反思** 的迭代，由 LLM 驱动
-- [ ] 工具调用闭环：把 `ToolRegistry` 暴露给 LLM（function calling），emit `tool_call`/`tool_result`
-- [ ] 流式与中断：支持取消任务（`cancelled`）、暂停/继续
-- [ ] 错误与重试策略
+- [ ] **ReAct 工具调用循环（合并「真正的 Agent 循环」+「工具调用闭环」）**
+
+  > 调研结论见 [`research/agent-loop-findings.md`](./research/agent-loop-findings.md)。
+  > 采用 tool-calling loop（模型每轮自主决定调工具或给最终答案，工具结果回灌再请求），
+  > 而非 plan-then-execute；复用现有 SSE 契约，前端尽量零改动。
+
+  关键设计决策（已定）：
+  - **隐式计划**：不强制先规划，用工具调用轨迹映射现有 `plan`/`step_update`；显式规划留作后续可选增强。
+  - **原生 fetch**：不引入 openai / Vercel AI / LangChain SDK，自行实现流式 tool_calls 累积（理由见 `TECH_STACK.md`）。
+  - **DeepSeek `reasoning_content` 必须回传**：`Message` 保留 `reasoningContent`，多轮回传时注入，否则 400。
+  - **Ollama 降级**：检测到 Ollama 时对带 tools 的请求关闭 streaming；模型不支持 tools 时退化为直接问答，不报错。
+  - **防死循环**：指纹去重（同工具+同参数上限 3 次）+ 单轮并行调用上限 + 最大轮次（20）兜底。
+  - **重试**：网络/429/5xx 指数退避重试；4xx/AbortError 不重试。
+  - **取消**：`AbortController` 贯穿 fetch，预留 soft/hard cancel。
+  - **审批预留**：工具注册预留 `riskLevel`；`approval_request` 事件留到 M2 接 UI。
+
+  有序子任务（来自调研报告附录 A）：
+  - [ ] `packages/shared`：`Message` 扩展 `toolCalls` / `toolCallId` / `reasoningContent`（+ `MessageToolCall` 类型）
+  - [ ] `agent/tool-call-accumulator.ts`：流式 tool_calls 累积器（按 `index` 跨 chunk 拼接，处理并行/截断）
+  - [ ] 扩展 `LLMProvider`：`LLMStreamOptions`（tools/toolChoice/signal 等）+ `LLMStreamChunk`
+  - [ ] 重写 `OpenAICompatibleProvider.stream()`：支持 tools 参数、tool_calls 累积、`reasoning_content` 透传
+        ⚠️ 同步移除 `.filter(m => m.role !== 'tool')`，补 `toOpenAIRole` 的 `'tool'` 分支
+  - [ ] `toOpenAIMessage()` 转换（处理 tool_calls / tool_call_id / reasoning_content）
+  - [ ] `withRetry()`：指数退避，AbortError/4xx 不重试
+  - [ ] 重写 `agent/loop.ts` `runTask()`：ReAct 循环 + 防死循环 + 重试 + 每轮持久化
+  - [ ] `AbortController` 取消支持与 `AbortError` 捕获
+  - [ ] Ollama 降级检测（带 tools 时 `stream:false`）
+  - [ ] 测试：单工具 → 并行工具 → 工具失败自我纠正 → 不支持 tools 降级 → 取消
+  - [ ] 前端补充 `tool_call` / `tool_result` 渲染（非阻塞，见 `UI_DESIGN.md`）
+
+- [ ] 任务控制对外接口：`POST /api/tasks/:id/cancel`（接循环内的 `AbortController`）、
+      `pause`/`resume`；对应请求/响应类型先定义在 `packages/shared`
 
 ## M2 — 工具与操作（MCP）
 

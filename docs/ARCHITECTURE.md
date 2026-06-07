@@ -40,11 +40,12 @@ Aurevoy/  (npm workspaces monorepo)
 │        │ createTask / runTask                                     │
 │        ▼                                                          │
 │   agent/loop.ts  ──emit──▶  agent/events.ts (TaskEventBus)        │
-│        │                          │ subscribe                     │
+│        │  ReAct 工具调用循环         │ subscribe                    │
 │        │                          └──▶ SSE 推送回前端              │
-│        ├──▶ llm/provider.ts   (LLMProvider：OpenAI 兼容 / 未来更多)  │
-│        ├──▶ tools/registry.ts (ToolRegistry：内置工具 / 未来 MCP)  │
-│        └──▶ store/db.ts       (SQLite 持久化)                     │
+│        ├──▶ llm/provider.ts            (LLMProvider：OpenAI 兼容)   │
+│        ├──▶ agent/tool-call-accumulator (流式 tool_calls 累积)     │
+│        ├──▶ tools/registry.ts          (ToolRegistry：内置 / MCP)  │
+│        └──▶ store/db.ts                (SQLite 持久化)             │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -68,10 +69,11 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/index.ts` | 进程入口，启动 Fastify |
 | `src/config.ts` | 运行时配置（host/port/dbPath/cors），全部可被环境变量覆盖 |
 | `src/server.ts` | HTTP 路由 + SSE 端点（见 `docs/API.md`） |
-| `src/agent/loop.ts` | **Agent 主循环**：`createTask` 建任务、`runTask` 执行（规划→流式→收尾） |
+| `src/agent/loop.ts` | **Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**（调 LLM → 有 tool_calls 则执行并回灌 → 直到最终答案）；含防死循环、重试、取消、每轮持久化 |
 | `src/agent/events.ts` | `TaskEventBus`：按 `taskId` 发布/订阅 `AgentEvent`，桥接执行与 SSE |
-| `src/llm/provider.ts` | `LLMProvider` 抽象 + `OpenAICompatibleProvider`；`getProvider()` 按配置返回，未配置即报错 |
-| `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；MCP 接入点 |
+| `src/agent/tool-call-accumulator.ts` | 流式 `tool_calls` 累积器：按 `index` 跨 chunk 拼接 `id`/`name`/`arguments`，处理并行调用与截断 |
+| `src/llm/provider.ts` | `LLMProvider` 抽象（`stream(messages, options)` 支持 tools/signal）+ `OpenAICompatibleProvider`；`getProvider()` 按配置返回，未配置即报错 |
+| `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；预留 `riskLevel`；MCP 接入点 |
 | `src/store/db.ts` | SQLite 持久化（`taskStore`：save/get/list） |
 
 ### 4.3 契约层 `packages/shared`
@@ -86,8 +88,10 @@ API 请求响应、运行时常量（默认地址端口）。
 2. `server.ts` 调 `createTask()` 建 `Task` 存库 → 立即 `201` 返回 `{task, streamUrl}`；
    同时 `void runTask(task)` 异步执行（不阻塞响应）。
 3. 前端拿到 `task.id` → `EventSource(streamUrl)` 订阅 SSE。
-4. `runTask` 依次 emit 事件到 `TaskEventBus`：
-   `status(planning)` → `plan` → `status(running)` → 多个 `token` → `message` → `done`。
+4. `runTask` 跑 **ReAct 工具调用循环**，逐步 emit 事件到 `TaskEventBus`：
+   `status(running)` →（每轮）流式 `token` →若模型请求工具则 `tool_call` → 执行 → `tool_result` →
+   把工具结果作为 `role:'tool'` 消息回灌、再请求 LLM →…直到模型给出最终答案 → `message` → `done`。
+   计划以隐式方式呈现：用工具调用轨迹更新 `plan`/`step_update`。
 5. `events.ts` 把事件序列化为 SSE（`data: {json}\n\n`）推给前端；前端按事件类型增量渲染。
 6. 收到 `done`，前端与后端各自关闭 SSE 连接。
 7. 任务全程通过 `taskStore.save()` 落库，可经 `GET /api/tasks` 回看。

@@ -53,6 +53,20 @@
 - Node 自带，零额外安装；当前包数量少，够用。
 - 包多了或构建变慢，再考虑 pnpm + turborepo。
 
+### 2.7 Agent 循环 / 工具调用：原生 fetch（而非 SDK）
+
+ReAct 工具调用循环不引入 `openai` SDK、Vercel AI SDK 或 LangChain.js，
+继续用原生 `fetch` + 手写 SSE 解析自行实现（调研依据见 `docs/research/agent-loop-findings.md`）：
+
+- **已在用且够用**：现有 `OpenAICompatibleProvider` 已基于原生 fetch 运行，只需扩展支持 `tools`。
+- **SSE 转发最直接**：需把上游 SSE 逐行解析后立刻转换为自有事件（`token`/`tool_call`/`tool_result`）推给前端；
+  SDK 会把原始流抽象掉，反而要在 SDK 抽象层与自有事件层之间多做一次转换。
+- **累积逻辑不复杂**：流式 `tool_calls` 累积器约 60 行（按 `index` 跨 chunk 拼接），不值得为此引入 34–67 kB 依赖。
+- **保留非标准字段**：DeepSeek 的 `reasoning_content` 须原样透传与回传，SDK 可能会剥离。
+- **零依赖原则**：符合本文「加依赖前自问」纪律。
+
+不选：`openai` SDK（抽象掉原始 SSE，自定义事件转发更繁）、Vercel AI SDK（依赖重、流协议为私有格式、与现有 SSE 契约不兼容）、LangChain.js（依赖与抽象过重）。
+
 ## 3. 依赖管理纪律
 
 - **锁版本**：优先精确或受控版本，避免无意的大版本跳跃。
@@ -63,7 +77,7 @@
 
 | 方向 | 候选 | 触发条件 |
 |---|---|---|
-| 真实 LLM | OpenAI / Anthropic / 本地(ollama) SDK | 进入"接真实模型"阶段 |
+| 真实 LLM | 原生 fetch（OpenAI 兼容）——**已采用，不引 SDK**（见 2.7） | ✅ 已落地 |
 | 工具协议 | `@modelcontextprotocol/sdk` | 接第一个 MCP server |
 | 向量检索/记忆 | sqlite-vec / LanceDB | 做长期记忆与 RAG |
 | 前端状态管理 | Zustand / Jotai | 状态复杂到 useState 撑不住 |

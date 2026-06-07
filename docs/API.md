@@ -71,10 +71,25 @@
 
 `TaskStatus`：`pending | planning | running | paused | completed | failed | cancelled`
 
-### 典型事件序列（真实 LLM 流式）
+### 典型事件序列
+
+无需工具（直接回答）：
 ```
-status(planning) → plan → status(running) → token × N → message → done(completed)
+status(running) → token × N → message → done(completed)
 ```
+
+ReAct 工具调用循环（含一次工具调用）：
+```
+status(running)
+  → token × N                       (模型本轮的文本/思考)
+  → tool_call                       (模型请求调用工具)
+  → tool_result                     (工具执行结果，回灌给模型)
+  → token × N                       (下一轮，带着工具结果)
+  → message → done(completed)
+```
+- 计划以隐式方式呈现：循环用工具调用轨迹更新 `plan`/`step_update`，不强制先规划。
+- 一轮可能有多个并行 `tool_call`（各带独立 `id`），对应多个 `tool_result`。
+- 取消时以 `status(cancelled)` + `done(cancelled)` 收尾。
 
 ### 前端消费示例
 ```ts
@@ -99,7 +114,13 @@ interface Task {
   createdAt: string; updatedAt: string;   // ISO 8601
 }
 interface PlanStep { id: string; description: string; status: TaskStatus; }
-interface Message  { id: string; role: 'user'|'assistant'|'system'|'tool'; content: string; createdAt: string; }
+interface Message  {
+  id: string; role: 'user'|'assistant'|'system'|'tool'; content: string; createdAt: string;
+  toolCalls?: MessageToolCall[];   // 仅 assistant：本轮请求的工具调用
+  toolCallId?: string;             // 仅 tool：关联的 tool_call id
+  reasoningContent?: string;       // DeepSeek 思考模式透传，多轮须回传，否则 400
+}
+interface MessageToolCall { id: string; type: 'function'; function: { name: string; arguments: string /* JSON 串 */ }; }
 interface ToolDescriptor { name: string; description: string; inputSchema: Record<string, unknown>; }
 interface ToolCall   { id: string; toolName: string; args: Record<string, unknown>; }
 interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: string; }
@@ -108,6 +129,8 @@ interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: st
 ## 4. 演进约定
 
 - **新增事件类型**：在 `AgentEvent` 联合里加一个分支（必须含 `taskId`），前端 `switch` 默认忽略未知类型即可向后兼容。
+- **预留事件 `approval_request`**：M2 引入危险工具审批时新增，载荷拟为 `{ call: ToolCall; riskLevel }`，
+  循环在执行 `caution`/`dangerous` 工具前 emit，等待用户授权后再继续（工具注册预留 `riskLevel`）。
 - **破坏性改动**：改字段语义/删字段时，前后端要同一次提交内联动，并 `npm run build:shared`。
 - **鉴权**：当前为本机单用户、无鉴权。若未来引擎需被其它客户端访问，必须先加鉴权（token/本地 socket 校验），不可裸暴露。
 
