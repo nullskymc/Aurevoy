@@ -4,13 +4,15 @@ import type {
   AgentEvent,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
+  ContinueTaskRequest,
+  ContinueTaskResponse,
   CreateTaskRequest,
   CreateTaskResponse,
   HealthResponse,
   TaskTraceListResponse,
 } from '@aurevoy/shared';
 import { config } from './config.js';
-import { createTask, runTask, cancelTask, resolveApproval } from './agent/loop.js';
+import { addUserTurn, createTask, runTask, cancelTask, isTaskRunning, resolveApproval } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
 import { taskStore, traceStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
@@ -74,6 +76,30 @@ export async function buildServer() {
     };
     return reply.code(201).send(body);
   });
+
+  // 多轮对话：在同一任务内追加一轮用户输入并继续执行（保留完整上下文）
+  app.post<{ Params: { id: string }; Body: ContinueTaskRequest }>(
+    '/api/tasks/:id/messages',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      if (isTaskRunning(req.params.id)) {
+        return reply.code(409).send({ error: '任务正在运行，请等待当前轮结束后再追问' });
+      }
+      const message = req.body?.message?.trim();
+      if (!message) return reply.code(400).send({ error: 'message is required' });
+
+      addUserTurn(task, message);
+      // 异步带完整历史重跑循环；前端通过同一 SSE 地址订阅这一轮
+      void runTask(task);
+
+      const body: ContinueTaskResponse = {
+        task,
+        streamUrl: `/api/tasks/${task.id}/stream`,
+      };
+      return reply.code(202).send(body);
+    },
+  );
 
   // 取消一个进行中的任务
   app.post<{ Params: { id: string } }>('/api/tasks/:id/cancel', async (req, reply) => {

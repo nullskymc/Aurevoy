@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { PlanStep, Task, TaskPhase, TaskStatus, ToolRiskLevel } from "@aurevoy/shared";
+import type { Message, PlanStep, Task, TaskPhase, TaskStatus, ToolRiskLevel } from "@aurevoy/shared";
 import { StatusPill } from "./StatusPill";
 import { getPhaseLabel, getStatusLabel } from "./status";
 
@@ -19,11 +19,67 @@ interface ConversationProps {
   status: TaskStatus | null;
   phase: TaskPhase | null;
   plan: PlanStep[];
+  /** 当前正在生成的这一轮的流式文本尾巴（仅运行中有值） */
   output: string;
   busy: boolean;
-  toolActivity: ToolActivity[];
+  /** 当前运行轮次的实时工具活动（来自事件流） */
+  liveToolActivity: ToolActivity[];
   /** 工具审批决策回调（批准/拒绝） */
   onToolDecision: (callId: string, approved: boolean) => void;
+}
+
+interface ToolResultInfo {
+  ok: boolean;
+  output?: unknown;
+  error?: string;
+}
+
+/** 扫描消息，建立 toolCallId → 工具结果 的映射 */
+function buildToolResultMap(messages: Message[]): Map<string, ToolResultInfo> {
+  const map = new Map<string, ToolResultInfo>();
+  for (const message of messages) {
+    if (message.role !== "tool" || !message.toolCallId) continue;
+    let parsed: unknown = message.content;
+    try {
+      parsed = JSON.parse(message.content);
+    } catch {
+      /* 保留原文 */
+    }
+    if (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)) {
+      map.set(message.toolCallId, {
+        ok: false,
+        error: String((parsed as Record<string, unknown>).error),
+      });
+    } else {
+      map.set(message.toolCallId, { ok: true, output: parsed });
+    }
+  }
+  return map;
+}
+
+/** 把一条 assistant 消息携带的 toolCalls 派生为工具活动卡片数据 */
+function toolActivitiesFromAssistant(
+  message: Message,
+  resultMap: Map<string, ToolResultInfo>,
+): ToolActivity[] {
+  if (!message.toolCalls?.length) return [];
+  return message.toolCalls.map((tc) => {
+    let args: unknown = {};
+    try {
+      args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
+    } catch {
+      args = tc.function.arguments;
+    }
+    const result = resultMap.get(tc.id);
+    return {
+      id: tc.id,
+      name: tc.function.name,
+      args,
+      status: result ? (result.ok ? "ok" : "error") : "running",
+      output: result?.output,
+      error: result?.error,
+    };
+  });
 }
 
 export function Conversation({
@@ -33,7 +89,7 @@ export function Conversation({
   plan,
   output,
   busy,
-  toolActivity,
+  liveToolActivity,
   onToolDecision,
 }: ConversationProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -41,64 +97,100 @@ export function Conversation({
   // 新内容到达时平滑滚动到底部
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [output, phase, plan, status, toolActivity]);
+  }, [output, phase, plan, status, liveToolActivity, task.messages.length]);
+
+  const messages = task.messages;
+  const resultMap = buildToolResultMap(messages);
+
+  // 运行中时：已结束的历史渲染到“最后一条用户消息”为止，
+  // 当前轮的产出（文本/工具）走实时 live 尾巴，避免与已提交消息重复。
+  let lastUserIndex = -1;
+  messages.forEach((message, index) => {
+    if (message.role === "user") lastUserIndex = index;
+  });
+  const historyEnd = busy ? lastUserIndex : messages.length - 1;
+  const historyMessages = messages.slice(0, historyEnd + 1);
 
   const hasOutput = output.trim().length > 0;
-  // 还没有任何可见产出（文本/工具）时显示思考态
-  const thinking = busy && !hasOutput && toolActivity.length === 0;
-  // 有产出但仍在忙（如工具执行后等待下一轮）时显示轻量"继续思考"指示
-  const stillWorking = busy && (hasOutput || toolActivity.length > 0);
+  const thinking = busy && !hasOutput && liveToolActivity.length === 0;
+  const stillWorking = busy && (hasOutput || liveToolActivity.length > 0);
 
   return (
     <div className="conversation">
       <div className="conversation-thread">
-        {/* 用户目标气泡 */}
-        <div className="msg msg-user">
-          <div className="msg-bubble">{task.goal}</div>
-        </div>
-
-        {/* Agent 回复 */}
-        <div className="msg msg-agent">
-          <div className="msg-avatar">A</div>
-          <div className="msg-body">
-            {plan.length > 0 && <PlanCard plan={plan} />}
-
-            {toolActivity.length > 0 && (
-              <ToolActivityList items={toolActivity} onDecision={onToolDecision} />
-            )}
-
-            {thinking ? (
-              <div className="agent-thinking">
-                <span className="dot" />
-                <span className="dot" />
-                <span className="dot" />
-                <span className="thinking-label">{getPhaseLabel(phase) || getStatusLabel(status)}…</span>
+        {historyMessages.map((message) => {
+          if (message.role === "user") {
+            return (
+              <div className="msg msg-user" key={message.id}>
+                <div className="msg-bubble">{message.content}</div>
               </div>
-            ) : (
-              hasOutput && (
-                <div className="agent-text">
-                  {output}
-                  {busy && <span className="stream-caret" aria-hidden="true" />}
+            );
+          }
+          if (message.role === "assistant") {
+            const tools = toolActivitiesFromAssistant(message, resultMap);
+            const hasText = message.content.trim().length > 0;
+            if (!hasText && tools.length === 0) return null;
+            return (
+              <div className="msg msg-agent" key={message.id}>
+                <div className="msg-avatar">A</div>
+                <div className="msg-body">
+                  {tools.length > 0 && (
+                    <ToolActivityList items={tools} onDecision={onToolDecision} />
+                  )}
+                  {hasText && <div className="agent-text">{message.content}</div>}
                 </div>
-              )
-            )}
-
-            {stillWorking && hasOutput && (
-              <div className="agent-thinking agent-thinking-inline">
-                <span className="dot" />
-                <span className="dot" />
-                <span className="dot" />
-                <span className="thinking-label">继续推进…</span>
               </div>
-            )}
+            );
+          }
+          return null;
+        })}
 
-            {!busy && (
-              <div className="msg-status">
-                <StatusPill status={status} phase={phase} />
-              </div>
-            )}
+        {/* 当前运行轮次的实时尾巴 */}
+        {busy && (
+          <div className="msg msg-agent">
+            <div className="msg-avatar">A</div>
+            <div className="msg-body">
+              {plan.length > 0 && <PlanCard plan={plan} />}
+
+              {liveToolActivity.length > 0 && (
+                <ToolActivityList items={liveToolActivity} onDecision={onToolDecision} />
+              )}
+
+              {thinking ? (
+                <div className="agent-thinking">
+                  <span className="dot" />
+                  <span className="dot" />
+                  <span className="dot" />
+                  <span className="thinking-label">
+                    {getPhaseLabel(phase) || getStatusLabel(status)}…
+                  </span>
+                </div>
+              ) : (
+                hasOutput && (
+                  <div className="agent-text">
+                    {output}
+                    <span className="stream-caret" aria-hidden="true" />
+                  </div>
+                )
+              )}
+
+              {stillWorking && hasOutput && (
+                <div className="agent-thinking agent-thinking-inline">
+                  <span className="dot" />
+                  <span className="dot" />
+                  <span className="dot" />
+                  <span className="thinking-label">继续推进…</span>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
+
+        {!busy && (
+          <div className="msg-status">
+            <StatusPill status={status} phase={phase} />
+          </div>
+        )}
 
         <div ref={bottomRef} />
       </div>

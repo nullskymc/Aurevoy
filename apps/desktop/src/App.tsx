@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type {
   AgentEvent,
   HealthResponse,
-  Message,
   PlanStep,
   Task,
   TaskPhase,
@@ -14,7 +13,9 @@ import {
   approveToolCall,
   cancelTask,
   checkHealth,
+  continueTask,
   createTask,
+  getTask,
   listTaskTraces,
   listTasks,
   listTools,
@@ -28,14 +29,7 @@ import { StatusPill } from "./components/StatusPill";
 import type { FeedItem } from "./components/AgentEventFeed";
 import "./App.css";
 
-function getAssistantOutput(task: Task): string {
-  return task.messages
-    .filter((message) => message.role === "assistant" && message.content.trim().length > 0)
-    .map((message) => message.content)
-    .join("\n\n");
-}
-
-/** 从实时事件流派生工具调用活动（运行中使用） */
+/** 从实时事件流派生工具调用活动（当前运行轮次使用） */
 function deriveToolActivityFromEvents(events: FeedItem[]): ToolActivity[] {
   const byId = new Map<string, ToolActivity>();
   const order: string[] = [];
@@ -73,44 +67,6 @@ function deriveToolActivityFromEvents(events: FeedItem[]): ToolActivity[] {
     }
   }
   return order.map((id) => byId.get(id)!);
-}
-
-/** 从持久化的消息派生工具调用活动（重开历史任务使用） */
-function deriveToolActivityFromMessages(messages: Message[]): ToolActivity[] {
-  const list: ToolActivity[] = [];
-  const byId = new Map<string, ToolActivity>();
-  for (const message of messages) {
-    if (message.role === "assistant" && message.toolCalls?.length) {
-      for (const tc of message.toolCalls) {
-        let args: unknown = {};
-        try {
-          args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-        } catch {
-          args = tc.function.arguments;
-        }
-        const activity: ToolActivity = { id: tc.id, name: tc.function.name, args, status: "running" };
-        list.push(activity);
-        byId.set(tc.id, activity);
-      }
-    } else if (message.role === "tool" && message.toolCallId) {
-      const activity = byId.get(message.toolCallId);
-      if (!activity) continue;
-      let parsed: unknown = message.content;
-      try {
-        parsed = JSON.parse(message.content);
-      } catch {
-        /* 保留原文 */
-      }
-      if (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)) {
-        activity.status = "error";
-        activity.error = String((parsed as Record<string, unknown>).error);
-      } else {
-        activity.status = "ok";
-        activity.output = parsed;
-      }
-    }
-  }
-  return list;
 }
 
 function createFeedItem(event: AgentEvent): FeedItem {
@@ -168,7 +124,7 @@ function App() {
     setStatus(task.status);
     setPhase(task.phase);
     setPlan(task.plan);
-    setOutput(getAssistantOutput(task));
+    setOutput("");
     setGoal("");
     setEvents([]);
     void refreshTaskTraces(task.id);
@@ -209,7 +165,7 @@ function App() {
         setStatus(event.task.status);
         setPhase(event.task.phase);
         setPlan(event.task.plan);
-        setOutput(getAssistantOutput(event.task));
+        setOutput("");
         setTraces([]);
         updateTaskList(event.task);
         break;
@@ -238,9 +194,6 @@ function App() {
         setOutput((previous) => previous + event.delta);
         break;
       case "message":
-        setOutput((previous) =>
-          event.message.role === "assistant" && !previous ? event.message.content : previous,
-        );
         setCurrentTask((previous) => {
           const previousMessages = previous?.messages ?? [];
           const hasMessage = previousMessages.some((message) => message.id === event.message.id);
@@ -278,6 +231,15 @@ function App() {
         esRef.current?.close();
         void refreshRuntime();
         void refreshTaskTraces(event.taskId);
+        // 工具结果等消息只持久化、不走 live message 事件，拉取完整快照补全本轮线程
+        void getTask(event.taskId)
+          .then((full) => {
+            setCurrentTask((previous) => (previous?.id === full.id ? full : previous));
+            updateTaskList(full);
+          })
+          .catch(() => {
+            /* 拉取失败不影响已显示的流式结果 */
+          });
         break;
       case "error":
         setStatus("failed");
@@ -329,6 +291,45 @@ function App() {
     applyTaskSnapshot(task);
   }
 
+  /** 在当前任务内追加一轮输入并继续（多轮对话）；保留后端完整上下文。 */
+  async function continueGoal(rawMessage: string): Promise<void> {
+    const trimmed = rawMessage.trim();
+    if (!trimmed || busy || !currentTask) return;
+
+    setBusy(true);
+    setEvents([]);
+    setTraces([]);
+    setOutput("");
+    setPlan([]);
+    setStatus("running");
+    setPhase("initializing");
+    setGoal("");
+    esRef.current?.close();
+
+    try {
+      const { task } = await continueTask(currentTask.id, trimmed);
+      setCurrentTask(task);
+      setPhase(task.phase);
+      updateTaskList(task);
+      esRef.current = streamTask(task.id, handleEvent, () => {
+        setBusy(false);
+      });
+    } catch (err) {
+      setBusy(false);
+      setNotice(`继续对话失败：${err instanceof Error ? err.message : String(err)}`);
+      if (err instanceof TypeError) setOnline(false);
+    }
+  }
+
+  /** 输入框提交分流：已有当前任务则续聊，否则新建任务。 */
+  function handleComposerSubmit(): void {
+    if (currentTask && !busy) {
+      void continueGoal(goal);
+    } else {
+      void startGoal(goal);
+    }
+  }
+
   function handleNewTask(): void {
     esRef.current?.close();
     setBusy(false);
@@ -372,14 +373,8 @@ function App() {
 
   const showConversation = currentTask !== null;
 
-  // 运行中优先用实时事件；否则（重开历史任务）从持久化消息派生
+  // 当前运行轮次的实时工具活动（来自事件流）；历史轮次由 Conversation 从消息派生
   const liveToolActivity = deriveToolActivityFromEvents(events);
-  const toolActivity =
-    liveToolActivity.length > 0
-      ? liveToolActivity
-      : currentTask
-        ? deriveToolActivityFromMessages(currentTask.messages)
-        : [];
 
   return (
     <div className="app-shell">
@@ -446,7 +441,7 @@ function App() {
                 plan={plan}
                 output={output}
                 busy={busy}
-                toolActivity={toolActivity}
+                liveToolActivity={liveToolActivity}
                 onToolDecision={handleToolDecision}
               />
             </div>
@@ -458,7 +453,7 @@ function App() {
                 variant="docked"
                 provider={health?.provider}
                 onChange={setGoal}
-                onSubmit={() => void startGoal(goal)}
+                onSubmit={handleComposerSubmit}
                 onStop={handleStopStream}
               />
             </div>
@@ -473,7 +468,7 @@ function App() {
               variant="hero"
               provider={health?.provider}
               onChange={setGoal}
-              onSubmit={() => void startGoal(goal)}
+              onSubmit={handleComposerSubmit}
               onStop={handleStopStream}
             />
           </div>

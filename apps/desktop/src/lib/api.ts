@@ -1,6 +1,7 @@
 import {
   AGENT_DEFAULT_BASE_URL,
   type AgentEvent,
+  type ContinueTaskResponse,
   type CreateTaskResponse,
   type HealthResponse,
   type Task,
@@ -33,6 +34,27 @@ export async function createTask(goal: string): Promise<CreateTaskResponse> {
 export async function listTasks(): Promise<Task[]> {
   const res = await fetch(`${BASE_URL}/api/tasks`);
   if (!res.ok) throw new Error(`list tasks failed: ${res.status}`);
+  return res.json();
+}
+
+/** 读取单个任务的完整快照（含工具结果等持久化消息） */
+export async function getTask(taskId: string): Promise<Task> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}`);
+  if (!res.ok) throw new Error(`get task failed: ${res.status}`);
+  return res.json();
+}
+
+/** 在同一任务内追加一轮用户输入并继续执行（多轮对话） */
+export async function continueTask(
+  taskId: string,
+  message: string,
+): Promise<ContinueTaskResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) throw new Error(`continue task failed: ${res.status}`);
   return res.json();
 }
 

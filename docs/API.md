@@ -51,6 +51,22 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 - `goal` 为空 → `400 {"error":"goal is required"}`
 - 返回后任务在后台执行，进度通过 `streamUrl` 的 SSE 推送。
 
+### POST `/api/tasks/:id/messages`
+在**同一任务内追加一轮用户输入并继续执行**（多轮对话）。后端保留该任务的完整
+消息历史作为上下文，重新进入 Agent 循环。
+```json
+// 请求体 ContinueTaskRequest
+{ "message": "再帮我把第二点展开说明" }
+```
+```json
+// 202 → ContinueTaskResponse
+{ "task": { /* Task（已含新追加的 user 消息） */ }, "streamUrl": "/api/tasks/<id>/stream" }
+```
+- 任务不存在 → `404 {"error":"task not found"}`
+- 任务正在运行 → `409 {"error":"任务正在运行，请等待当前轮结束后再追问"}`
+- `message` 为空 → `400 {"error":"message is required"}`
+- 续聊复用相同的 `streamUrl`；订阅后会先补发数据库快照（含历史消息）再推送本轮实时事件。
+
 ### GET `/api/tasks/:id/stream`  (SSE)
 订阅某任务的实时事件流。
 - 响应头：`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`Connection: keep-alive`

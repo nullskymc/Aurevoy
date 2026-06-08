@@ -245,6 +245,21 @@ export interface TaskTraceListResponse {
   traces: TaskTraceEntry[];
 }
 
+/**
+ * POST /api/tasks/:id/messages — 在同一任务内追加一轮用户输入并继续执行。
+ * 后端保留该任务的完整消息历史作为上下文重新进入 Agent 循环（多轮对话）。
+ */
+export interface ContinueTaskRequest {
+  /** 用户的后续追问/补充 */
+  message: string;
+}
+
+export interface ContinueTaskResponse {
+  task: Task;
+  /** SSE 事件流地址；前端用它订阅这一轮的实时输出（与首轮相同地址） */
+  streamUrl: string;
+}
+
 // ============================================================
 // 运行时常量
 // ============================================================

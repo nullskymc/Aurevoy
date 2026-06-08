@@ -38,6 +38,39 @@ export function cancelTask(taskId: string): boolean {
   return true;
 }
 
+/** 该任务当前是否有正在执行的循环（用于续聊并发守卫）。 */
+export function isTaskRunning(taskId: string): boolean {
+  return activeAbortControllers.has(taskId);
+}
+
+/**
+ * 在同一任务内追加一轮用户输入（多轮对话）。
+ *
+ * 仅追加 user 消息并持久化、广播；调用方随后再 `runTask(task)`，
+ * 循环会带着完整的历史 `task.messages` 作为上下文继续推进。
+ */
+export function addUserTurn(task: Task, content: string): Message {
+  const userMsg: Message = {
+    id: randomUUID(),
+    role: 'user',
+    content,
+    createdAt: new Date().toISOString(),
+  };
+  task.messages.push(userMsg);
+  // 复用任务时，从终态回到待运行；phase 进入 initializing
+  task.status = 'pending';
+  task.phase = 'initializing';
+  task.updatedAt = userMsg.createdAt;
+  taskStore.save(task);
+  taskEvents.publish({ type: 'message', taskId: task.id, message: userMsg });
+  writeTrace(task.id, 'phase', 'initializing', {
+    ok: true,
+    summary: '收到后续输入，继续任务',
+    data: { message: content },
+  });
+  return userMsg;
+}
+
 /** 投递一次工具审批决策（由 server 的审批端点调用）。返回是否命中等待中的请求。 */
 export function resolveApproval(taskId: string, callId: string, approved: boolean): boolean {
   const resolve = pendingApprovals.get(taskId)?.get(callId);
