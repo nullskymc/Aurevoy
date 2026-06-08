@@ -1,6 +1,7 @@
 # 开发约定 — CONVENTIONS
 
 > 写任何代码前先读本文。目标：让人类与智能体产出风格一致、可维护、跨平台安全的代码。
+> Aurevoy 以可交付产品为目标；不要用 Mock、占位 UI、静态数据或固定回复冒充真实能力。
 
 ## 1. 目录与命名
 
@@ -17,7 +18,9 @@ apps/
     agent/              Agent 循环与事件总线
     llm/                LLM Provider 抽象与实现
     tools/              工具与注册表
+    sandbox/            高风险执行器边界（命令/代码执行默认关闭）
     store/              持久化
+  scripts/              回归/冒烟脚本
 packages/shared/src/    跨进程类型（契约）
 ```
 
@@ -39,6 +42,12 @@ packages/shared/src/    跨进程类型（契约）
 - Agent 执行中向前端传递的一切，必须经 `taskEvents.publish(event)` → SSE，不要另开通道。
 - 错误处理：循环里 `try/catch`，失败时 emit `error` + `done(failed)`，不要让进程崩。
 - 长任务用 `void runTask(task)` 异步触发，HTTP 请求立即返回。
+- 禁止把 Mock LLM、固定工具结果或演示数据接入生产路径；测试替身只能放在测试代码或显式 smoke 脚本中。
+- 新增工具必须走 `toolRegistry.register()`，声明 `riskLevel` 和 `inputSchema`，并说明失败路径。
+- 新增高风险能力（写文件、网络、命令、系统操作）必须先接入审批和审计，再开放给 Agent。
+- Agent 状态变化要可持久化、可恢复；不要只维护内存变量或前端临时状态。
+- 轨迹日志写入 `traceStore`，不要只写 console；Provider 不支持 token/cost 时记录为 `null`。
+- 命令/代码执行必须经过 `sandbox/command-executor.ts` 的策略边界；默认关闭，不允许工具直接调用本机 shell。
 
 ## 4. 前端规范
 
@@ -83,12 +92,27 @@ export class OpenAIProvider implements LLMProvider {
 2. `npm run build:shared`。
 3. 前后端按编译错误同步更新。
 
+### 回归 M3 Agent runtime
+
+```bash
+npm run build
+npm run regression:m3
+```
+
+`regression:m3` 会启动真实 Fastify 后端、临时 OpenAI-compatible fixture、临时 MCP stdio server、
+临时 SQLite 和工作区，覆盖直接回答、读文件、写文件审批、HTTP 审批、MCP 工具、取消、
+目录穿越、symlink 越界、审批拒绝/超时、非法 URL、未配置 Key、迟到 SSE 和历史轨迹回看。
+
 ## 7. 提交前检查清单
 
 - [ ] `npm run typecheck` 通过
 - [ ] 改了 shared → 已 `npm run build:shared`
 - [ ] 改了后端 → 跑过冒烟（health / 建任务 / SSE）
 - [ ] 改了前端 → `npm run build -w @aurevoy/desktop` 通过
+- [ ] 改了 Agent loop / 工具 / 审批 / 存储 → 有可复现的轨迹或回归用例
+- [ ] 改了 Agent runtime / 工具 / 审批 / 安全边界 → `npm run regression:m3` 通过
+- [ ] 新增工具 → 已声明风险等级、审批行为、错误路径和输入 schema
+- [ ] 新增执行能力 → 已定义沙箱/权限边界、超时、输出上限和取消路径
 - [ ] 无硬编码秘钥；无平台专有路径/命令
 - [ ] 临时文件已清理
 

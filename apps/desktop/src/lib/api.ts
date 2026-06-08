@@ -4,6 +4,8 @@ import {
   type CreateTaskResponse,
   type HealthResponse,
   type Task,
+  type TaskTraceEntry,
+  type TaskTraceListResponse,
   type ToolDescriptor,
 } from '@aurevoy/shared';
 
@@ -32,6 +34,13 @@ export async function listTasks(): Promise<Task[]> {
   const res = await fetch(`${BASE_URL}/api/tasks`);
   if (!res.ok) throw new Error(`list tasks failed: ${res.status}`);
   return res.json();
+}
+
+export async function listTaskTraces(taskId: string): Promise<TaskTraceEntry[]> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/traces`);
+  if (!res.ok) throw new Error(`list task traces failed: ${res.status}`);
+  const body = (await res.json()) as TaskTraceListResponse;
+  return body.traces;
 }
 
 /** 请求后端取消一个进行中的任务（中断其 LLM 流） */

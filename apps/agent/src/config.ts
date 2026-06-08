@@ -41,6 +41,22 @@ export const config = {
     timeoutMs: parseNumber(process.env.AUREVOY_LLM_TIMEOUT_MS, 120000),
   },
 
+  agent: {
+    /** 等待用户审批的超时（毫秒）；测试可通过环境变量缩短。 */
+    approvalTimeoutMs: parseNumber(process.env.AUREVOY_APPROVAL_TIMEOUT_MS, 5 * 60 * 1000),
+  },
+
+  sandbox: {
+    /** 高风险命令/代码执行默认关闭；设置界面显式启用前不得开放给模型。 */
+    commandExecutionEnabled: process.env.AUREVOY_ENABLE_COMMAND_EXECUTION === 'true',
+    commandTimeoutMs: parseNumber(process.env.AUREVOY_COMMAND_TIMEOUT_MS, 30000),
+    commandOutputLimitBytes: parseNumber(process.env.AUREVOY_COMMAND_OUTPUT_LIMIT_BYTES, 64 * 1024),
+    commandEnvAllowlist: (process.env.AUREVOY_COMMAND_ENV_ALLOWLIST ?? 'PATH,HOME,TMPDIR')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
+  },
+
   /**
    * MCP server 配置。支持 JSON 数组、单个对象、对象映射，以及 Claude Desktop 风格：
    * {"mcpServers":{"name":{"command":"node","args":["server.js"]}}}

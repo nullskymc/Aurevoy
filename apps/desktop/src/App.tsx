@@ -5,7 +5,9 @@ import type {
   Message,
   PlanStep,
   Task,
+  TaskPhase,
   TaskStatus,
+  TaskTraceEntry,
   ToolDescriptor,
 } from "@aurevoy/shared";
 import {
@@ -13,6 +15,7 @@ import {
   cancelTask,
   checkHealth,
   createTask,
+  listTaskTraces,
   listTasks,
   listTools,
   streamTask,
@@ -127,9 +130,11 @@ function App() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [online, setOnline] = useState<boolean | null>(null);
   const [output, setOutput] = useState("");
+  const [phase, setPhase] = useState<TaskPhase | null>(null);
   const [plan, setPlan] = useState<PlanStep[]>([]);
   const [status, setStatus] = useState<TaskStatus | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [traces, setTraces] = useState<TaskTraceEntry[]>([]);
   const [tools, setTools] = useState<ToolDescriptor[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
@@ -161,10 +166,20 @@ function App() {
   function applyTaskSnapshot(task: Task): void {
     setCurrentTask(task);
     setStatus(task.status);
+    setPhase(task.phase);
     setPlan(task.plan);
     setOutput(getAssistantOutput(task));
     setGoal("");
     setEvents([]);
+    void refreshTaskTraces(task.id);
+  }
+
+  async function refreshTaskTraces(taskId: string): Promise<void> {
+    try {
+      setTraces(await listTaskTraces(taskId));
+    } catch (err) {
+      setNotice(`读取任务轨迹失败：${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   function updateTaskList(task: Task): void {
@@ -192,13 +207,19 @@ function App() {
       case "task_created":
         setCurrentTask(event.task);
         setStatus(event.task.status);
+        setPhase(event.task.phase);
         setPlan(event.task.plan);
         setOutput(getAssistantOutput(event.task));
+        setTraces([]);
         updateTaskList(event.task);
         break;
       case "status":
         setStatus(event.status);
         patchCurrentTask({ status: event.status });
+        break;
+      case "phase":
+        setPhase(event.phase);
+        patchCurrentTask({ phase: event.phase });
         break;
       case "plan":
         setPlan(event.plan);
@@ -237,18 +258,35 @@ function App() {
         break;
       case "done":
         setStatus(event.status);
+        setPhase(
+          event.status === "cancelled"
+            ? "cancelled"
+            : event.status === "failed"
+              ? "failed"
+              : "finalizing",
+        );
         setBusy(false);
-        patchCurrentTask({ status: event.status });
+        patchCurrentTask({
+          status: event.status,
+          phase:
+            event.status === "cancelled"
+              ? "cancelled"
+              : event.status === "failed"
+                ? "failed"
+                : "finalizing",
+        });
         esRef.current?.close();
         void refreshRuntime();
+        void refreshTaskTraces(event.taskId);
         break;
       case "error":
         setStatus("failed");
+        setPhase("failed");
         setOutput((previous) =>
           previous ? `${previous}\n\n[错误] ${event.message}` : `[错误] ${event.message}`,
         );
         setBusy(false);
-        patchCurrentTask({ status: "failed" });
+        patchCurrentTask({ status: "failed", phase: "failed" });
         break;
     }
   }
@@ -259,15 +297,19 @@ function App() {
 
     setBusy(true);
     setEvents([]);
+    setTraces([]);
     setOutput("");
     setPlan([]);
     setStatus("pending");
+    setPhase("initializing");
     setGoal("");
     esRef.current?.close();
 
     try {
       const { task } = await createTask(trimmed);
       setCurrentTask(task);
+      setPhase(task.phase);
+      setTraces([]);
       updateTaskList(task);
       esRef.current = streamTask(task.id, handleEvent, () => {
         setBusy(false);
@@ -292,9 +334,11 @@ function App() {
     setBusy(false);
     setCurrentTask(null);
     setStatus(null);
+    setPhase(null);
     setPlan([]);
     setOutput("");
     setEvents([]);
+    setTraces([]);
     setGoal("");
   }
 
@@ -351,7 +395,7 @@ function App() {
         <header className="topbar">
           {showConversation ? (
             <>
-              <StatusPill status={status} />
+              <StatusPill status={status} phase={phase} />
               <div className="topbar-actions">
                 <button
                   type="button"
@@ -398,6 +442,7 @@ function App() {
               <Conversation
                 task={currentTask}
                 status={status}
+                phase={phase}
                 plan={plan}
                 output={output}
                 busy={busy}
@@ -440,6 +485,8 @@ function App() {
         events={events}
         health={health}
         task={currentTask}
+        phase={phase}
+        traces={traces}
         tools={tools}
         onClose={() => setInspectorOpen(false)}
       />

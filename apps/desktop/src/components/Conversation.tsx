@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { PlanStep, Task, TaskStatus, ToolRiskLevel } from "@aurevoy/shared";
+import type { PlanStep, Task, TaskPhase, TaskStatus, ToolRiskLevel } from "@aurevoy/shared";
 import { StatusPill } from "./StatusPill";
-import { getStatusLabel } from "./status";
+import { getPhaseLabel, getStatusLabel } from "./status";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
 export interface ToolActivity {
@@ -17,6 +17,7 @@ export interface ToolActivity {
 interface ConversationProps {
   task: Task;
   status: TaskStatus | null;
+  phase: TaskPhase | null;
   plan: PlanStep[];
   output: string;
   busy: boolean;
@@ -28,6 +29,7 @@ interface ConversationProps {
 export function Conversation({
   task,
   status,
+  phase,
   plan,
   output,
   busy,
@@ -39,7 +41,7 @@ export function Conversation({
   // 新内容到达时平滑滚动到底部
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [output, plan, status, toolActivity]);
+  }, [output, phase, plan, status, toolActivity]);
 
   const hasOutput = output.trim().length > 0;
   // 还没有任何可见产出（文本/工具）时显示思考态
@@ -70,7 +72,7 @@ export function Conversation({
                 <span className="dot" />
                 <span className="dot" />
                 <span className="dot" />
-                <span className="thinking-label">{getStatusLabel(status)}…</span>
+                <span className="thinking-label">{getPhaseLabel(phase) || getStatusLabel(status)}…</span>
               </div>
             ) : (
               hasOutput && (
@@ -92,7 +94,7 @@ export function Conversation({
 
             {!busy && (
               <div className="msg-status">
-                <StatusPill status={status} />
+                <StatusPill status={status} phase={phase} />
               </div>
             )}
           </div>

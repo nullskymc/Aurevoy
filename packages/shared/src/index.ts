@@ -19,6 +19,16 @@ export type TaskStatus =
   | 'failed' // 失败
   | 'cancelled'; // 被用户取消
 
+/** Agent runtime 的细粒度执行阶段；用于诊断、回放和 UI 解释。 */
+export type TaskPhase =
+  | 'initializing'
+  | 'thinking'
+  | 'calling_tool'
+  | 'waiting_approval'
+  | 'finalizing'
+  | 'failed'
+  | 'cancelled';
+
 /** 对话消息的角色 */
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
@@ -64,6 +74,8 @@ export interface Task {
   /** 用户用自然语言表达的原始目标 */
   goal: string;
   status: TaskStatus;
+  /** 当前 runtime 阶段；已结束的历史任务保留最终阶段。 */
+  phase: TaskPhase | null;
   /** Agent 拆解出的计划步骤 */
   plan: PlanStep[];
   messages: Message[];
@@ -82,6 +94,59 @@ export interface Task {
  * - dangerous: 破坏性或高风险，执行前必须用户确认（如写文件、删除）
  */
 export type ToolRiskLevel = 'safe' | 'caution' | 'dangerous';
+
+/** 任务轨迹记录类型，用于审计、诊断和回放。 */
+export type TaskTraceKind =
+  | 'llm'
+  | 'tool_call'
+  | 'tool_result'
+  | 'approval'
+  | 'error'
+  | 'done'
+  | 'phase';
+
+/** 运行错误分类，帮助判断失败来自配置、模型、工具、权限、超时、取消或解析。 */
+export type TaskErrorCategory =
+  | 'configuration'
+  | 'model'
+  | 'tool'
+  | 'permission'
+  | 'timeout'
+  | 'cancelled'
+  | 'parse'
+  | 'unknown';
+
+/** Provider 可返回的 token 与成本信息；当前不支持时显式为 null。 */
+export interface TokenUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  estimatedCostUsd?: number;
+}
+
+/** 一条可持久回看的任务轨迹。 */
+export interface TaskTraceEntry {
+  id: string;
+  taskId: string;
+  kind: TaskTraceKind;
+  phase: TaskPhase | null;
+  iteration?: number;
+  callId?: string;
+  toolName?: string;
+  riskLevel?: ToolRiskLevel;
+  provider?: string;
+  model?: string;
+  finishReason?: string;
+  tokenUsage: TokenUsage | null;
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  ok?: boolean;
+  errorCategory?: TaskErrorCategory;
+  errorMessage?: string;
+  summary?: string;
+  data?: unknown;
+}
 
 /** 工具的元信息描述 */
 export interface ToolDescriptor {
@@ -119,6 +184,7 @@ export interface ToolResult {
 export type AgentEvent =
   | { type: 'task_created'; taskId: string; task: Task }
   | { type: 'status'; taskId: string; status: TaskStatus }
+  | { type: 'phase'; taskId: string; phase: TaskPhase; detail?: string }
   | { type: 'plan'; taskId: string; plan: PlanStep[] }
   | { type: 'step_update'; taskId: string; step: PlanStep }
   | { type: 'token'; taskId: string; delta: string } // LLM 流式 token
@@ -171,6 +237,12 @@ export interface ApprovalDecisionResponse {
   callId: string;
   /** 决策是否被成功投递到等待中的循环（false 表示无对应待审批项） */
   delivered: boolean;
+}
+
+/** GET /api/tasks/:id/traces — 任务轨迹回看 */
+export interface TaskTraceListResponse {
+  taskId: string;
+  traces: TaskTraceEntry[];
 }
 
 // ============================================================

@@ -1,10 +1,22 @@
 import { randomUUID } from 'node:crypto';
-import type { Task, PlanStep, Message, MessageToolCall } from '@aurevoy/shared';
+import type {
+  Message,
+  MessageToolCall,
+  PlanStep,
+  Task,
+  TaskErrorCategory,
+  TaskPhase,
+  TaskStatus,
+  TaskTraceEntry,
+  ToolCall,
+  ToolRiskLevel,
+} from '@aurevoy/shared';
 import { taskEvents } from './events.js';
-import { getProvider, type AccumulatedToolCall } from '../llm/provider.js';
+import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
 import { toolRegistry } from '../tools/registry.js';
 import { withRetry } from './retry.js';
-import { taskStore } from '../store/db.js';
+import { taskStore, traceStore } from '../store/db.js';
+import { config } from '../config.js';
 
 /** 单任务最大 LLM 调用轮次 */
 const MAX_ITERATIONS = 20;
@@ -12,9 +24,6 @@ const MAX_ITERATIONS = 20;
 const DUPLICATE_CALL_LIMIT = 3;
 /** 单轮最多并行工具调用数 */
 const MAX_TOOL_CALLS_PER_TURN = 10;
-/** 等待用户审批的超时（毫秒）；超时视为拒绝，避免任务永久挂起 */
-const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
-
 /** 进行中任务的取消句柄 */
 const activeAbortControllers = new Map<string, AbortController>();
 
@@ -55,7 +64,7 @@ function waitForApproval(taskId: string, callId: string, signal: AbortSignal): P
       resolve(approved);
     };
     const onAbort = () => finish(false);
-    const timer = setTimeout(() => finish(false), APPROVAL_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(false), config.agent.approvalTimeoutMs);
 
     if (signal.aborted) return finish(false);
     signal.addEventListener('abort', onAbort, { once: true });
@@ -81,12 +90,18 @@ export function createTask(goal: string): Task {
     id: randomUUID(),
     goal,
     status: 'pending',
+    phase: 'initializing',
     plan: [],
     messages: [userMsg],
     createdAt: now,
     updatedAt: now,
   };
   taskStore.save(task);
+  writeTrace(task.id, 'phase', 'initializing', {
+    ok: true,
+    summary: '任务已创建',
+    data: { goal },
+  });
   return task;
 }
 
@@ -112,7 +127,18 @@ export async function runTask(task: Task): Promise<void> {
   const updateStep = (description: string, status: PlanStep['status']) => {
     planStep.description = description;
     planStep.status = status;
+    touch();
     taskEvents.publish({ type: 'step_update', taskId: task.id, step: { ...planStep } });
+  };
+  const setRuntimePhase = (phase: TaskPhase, detail?: string, status?: TaskStatus) => {
+    if (status && task.status !== status) {
+      task.status = status;
+      taskEvents.publish({ type: 'status', taskId: task.id, status });
+    }
+    task.phase = phase;
+    touch();
+    writeTrace(task.id, 'phase', phase, { ok: true, summary: detail });
+    taskEvents.publish({ type: 'phase', taskId: task.id, phase, detail });
   };
 
   const messages = task.messages;
@@ -120,49 +146,74 @@ export async function runTask(task: Task): Promise<void> {
   const callFingerprints = new Map<string, number>();
 
   try {
-    task.status = 'running';
-    touch();
-    taskEvents.publish({ type: 'status', taskId: task.id, status: 'running' });
+    setRuntimePhase('initializing', '准备运行任务', 'running');
     taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
 
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-      if (abortController.signal.aborted) return finishCancelled(task, touch);
+      if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+      setRuntimePhase('thinking', `第 ${iteration + 1} 轮模型思考`, 'running');
 
       let textBuffer = '';
       let reasoningContent = '';
       let finishReason: string | undefined;
       let toolCalls: AccumulatedToolCall[] = [];
+      const llmStartedAt = Date.now();
 
       // ---------- 调用 LLM（带重试） ----------
-      await withRetry(
-        async () => {
-          // 重试时重置本轮累积
-          textBuffer = '';
-          reasoningContent = '';
-          finishReason = undefined;
-          toolCalls = [];
-          const stream = getProvider().stream(messages, {
-            tools: toolDescriptors.length > 0 ? toolDescriptors : undefined,
-            toolChoice: 'auto',
-            signal: abortController.signal,
-          });
-          for await (const chunk of stream) {
-            if (chunk.textDelta) {
-              textBuffer += chunk.textDelta;
-              taskEvents.publish({ type: 'token', taskId: task.id, delta: chunk.textDelta });
+      try {
+        await withRetry(
+          async () => {
+            // 重试时重置本轮累积
+            textBuffer = '';
+            reasoningContent = '';
+            finishReason = undefined;
+            toolCalls = [];
+            const stream = getProvider().stream(messages, {
+              tools: toolDescriptors.length > 0 ? toolDescriptors : undefined,
+              toolChoice: 'auto',
+              signal: abortController.signal,
+            });
+            for await (const chunk of stream) {
+              if (chunk.textDelta) {
+                textBuffer += chunk.textDelta;
+                taskEvents.publish({ type: 'token', taskId: task.id, delta: chunk.textDelta });
+              }
+              if (chunk.reasoningContentDelta) reasoningContent += chunk.reasoningContentDelta;
+              if (chunk.done) {
+                finishReason = chunk.finishReason;
+                toolCalls = chunk.toolCallsSnapshot ?? [];
+              }
             }
-            if (chunk.reasoningContentDelta) reasoningContent += chunk.reasoningContentDelta;
-            if (chunk.done) {
-              finishReason = chunk.finishReason;
-              toolCalls = chunk.toolCallsSnapshot ?? [];
-            }
-          }
-        },
-        abortController.signal,
-      );
+          },
+          abortController.signal,
+        );
+        writeTrace(task.id, 'llm', 'thinking', {
+          iteration: iteration + 1,
+          startedAtMs: llmStartedAt,
+          ok: true,
+          finishReason,
+          summary: finishReason === 'tool_calls' ? '模型请求工具调用' : '模型返回回复',
+          data: {
+            outputChars: textBuffer.length,
+            reasoningChars: reasoningContent.length,
+            toolCallCount: toolCalls.length,
+          },
+        });
+      } catch (err) {
+        writeTrace(task.id, 'llm', 'thinking', {
+          iteration: iteration + 1,
+          startedAtMs: llmStartedAt,
+          ok: false,
+          errorCategory: classifyError(err),
+          errorMessage: err instanceof Error ? err.message : String(err),
+          summary: '模型调用失败',
+        });
+        throw err;
+      }
 
       // ---------- 情况 A：输出被截断 ----------
       if (finishReason === 'length') {
+        setRuntimePhase('finalizing', '模型输出达到长度上限，整理已有内容', 'running');
         const msg = makeAssistant(
           textBuffer + '\n\n[提示：回复因达到长度上限被截断，可能不完整。]',
           reasoningContent,
@@ -174,6 +225,7 @@ export async function runTask(task: Task): Promise<void> {
 
       // ---------- 情况 B：模型直接给出最终回复 ----------
       if (finishReason !== 'tool_calls' || toolCalls.length === 0) {
+        setRuntimePhase('finalizing', '模型给出最终回复', 'running');
         const msg = makeAssistant(textBuffer, reasoningContent);
         messages.push(msg);
         taskEvents.publish({ type: 'message', taskId: task.id, message: msg });
@@ -193,6 +245,7 @@ export async function runTask(task: Task): Promise<void> {
       // 逐个执行工具并回填结果
       for (const tc of toolCalls) {
         const name = tc.function.name;
+        setRuntimePhase('calling_tool', `准备调用工具：${name}`, 'running');
         updateStep(`调用工具：${name}`, 'running');
 
         // 防死循环：指纹去重
@@ -220,30 +273,58 @@ export async function runTask(task: Task): Promise<void> {
         }
 
         const call = { id: tc.id, toolName: name, args };
+        const risk = toolRegistry.riskLevelOf(name);
         taskEvents.publish({ type: 'tool_call', taskId: task.id, call });
+        writeToolCallTrace(task.id, call, risk, iteration + 1);
 
         // 风险门：非 safe 工具执行前请求用户审批
-        const risk = toolRegistry.riskLevelOf(name);
         if (risk !== 'safe') {
           taskEvents.publish({ type: 'approval_request', taskId: task.id, call, riskLevel: risk });
-          updateStep(`等待确认：${name}`, 'running');
+          updateStep(`等待确认：${name}`, 'paused');
+          setRuntimePhase('waiting_approval', `等待确认：${name}`, 'paused');
           const approved = await waitForApproval(task.id, tc.id, abortController.signal);
-          if (abortController.signal.aborted) return finishCancelled(task, touch);
+          if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+          writeApprovalTrace(task.id, call, risk, approved, iteration + 1);
           if (!approved) {
             const denied = { callId: tc.id, ok: false, error: '用户拒绝了该工具调用' };
             taskEvents.publish({ type: 'tool_result', taskId: task.id, result: denied });
+            writeTrace(task.id, 'tool_result', 'waiting_approval', {
+              iteration: iteration + 1,
+              callId: tc.id,
+              toolName: name,
+              riskLevel: risk,
+              ok: false,
+              errorCategory: 'permission',
+              errorMessage: denied.error,
+              summary: `工具被拒绝：${name}`,
+            });
             messages.push(
               makeToolResult(tc.id, {
                 error: '用户拒绝执行该工具。请改用其他方式，或直接给出最终答案。',
               }),
             );
+            setRuntimePhase('thinking', `审批被拒绝：${name}`, 'running');
             continue;
           }
+          setRuntimePhase('calling_tool', `审批通过，调用工具：${name}`, 'running');
           updateStep(`调用工具：${name}`, 'running');
         }
 
+        const toolStartedAt = Date.now();
         const result = await toolRegistry.invoke(call);
         taskEvents.publish({ type: 'tool_result', taskId: task.id, result });
+        writeTrace(task.id, 'tool_result', 'calling_tool', {
+          iteration: iteration + 1,
+          startedAtMs: toolStartedAt,
+          callId: tc.id,
+          toolName: name,
+          riskLevel: risk,
+          ok: result.ok,
+          errorCategory: result.ok ? undefined : 'tool',
+          errorMessage: result.error,
+          summary: result.ok ? `工具成功：${name}` : `工具失败：${name}`,
+          data: result.ok ? { output: summarizePayload(result.output) } : undefined,
+        });
 
         messages.push(
           makeToolResult(tc.id, result.ok ? result.output : { error: result.error }),
@@ -252,10 +333,11 @@ export async function runTask(task: Task): Promise<void> {
 
       // 每轮结束持久化，保证崩溃可恢复
       touch();
-      if (abortController.signal.aborted) return finishCancelled(task, touch);
+      if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
     }
 
     // 超过最大轮次兜底
+    setRuntimePhase('finalizing', '达到最大推理轮次，整理已有信息', 'running');
     const fallback = makeAssistant(
       '已达到最大推理轮次，基于目前收集到的信息，这是我能给出的结果。',
       '',
@@ -265,12 +347,21 @@ export async function runTask(task: Task): Promise<void> {
     return finishCompleted(task, updateStep, touch);
   } catch (err) {
     if ((err as { name?: string })?.name === 'AbortError') {
-      return finishCancelled(task, touch);
+      return finishCancelled(task, updateStep, touch);
     }
     task.status = 'failed';
+    task.phase = 'failed';
     updateStep('任务失败', 'failed');
     touch();
     const message = err instanceof Error ? err.message : String(err);
+    writeTrace(task.id, 'error', 'failed', {
+      ok: false,
+      errorCategory: classifyError(err),
+      errorMessage: message,
+      summary: '任务失败',
+    });
+    taskEvents.publish({ type: 'status', taskId: task.id, status: 'failed' });
+    taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'failed', detail: message });
     taskEvents.publish({ type: 'error', taskId: task.id, message });
     taskEvents.publish({ type: 'done', taskId: task.id, status: 'failed' });
   } finally {
@@ -286,16 +377,141 @@ function finishCompleted(
   touch: () => void,
 ): void {
   task.status = 'completed';
+  task.phase = 'finalizing';
   updateStep('任务完成', 'completed');
   touch();
+  writeTrace(task.id, 'done', 'finalizing', { ok: true, summary: '任务完成' });
+  taskEvents.publish({ type: 'status', taskId: task.id, status: 'completed' });
+  taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'finalizing', detail: '任务完成' });
   taskEvents.publish({ type: 'done', taskId: task.id, status: 'completed' });
 }
 
-function finishCancelled(task: Task, touch: () => void): void {
+function finishCancelled(
+  task: Task,
+  updateStep: (d: string, s: PlanStep['status']) => void,
+  touch: () => void,
+): void {
   task.status = 'cancelled';
+  task.phase = 'cancelled';
+  updateStep('任务已取消', 'cancelled');
   touch();
+  writeTrace(task.id, 'done', 'cancelled', {
+    ok: false,
+    errorCategory: 'cancelled',
+    summary: '任务已取消',
+  });
   taskEvents.publish({ type: 'status', taskId: task.id, status: 'cancelled' });
+  taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'cancelled', detail: '用户取消任务' });
   taskEvents.publish({ type: 'done', taskId: task.id, status: 'cancelled' });
+}
+
+type TracePatch = Partial<
+  Pick<
+    TaskTraceEntry,
+    | 'iteration'
+    | 'callId'
+    | 'toolName'
+    | 'riskLevel'
+    | 'finishReason'
+    | 'ok'
+    | 'errorCategory'
+    | 'errorMessage'
+    | 'summary'
+    | 'data'
+  >
+> & {
+  startedAtMs?: number;
+};
+
+function writeTrace(
+  taskId: string,
+  kind: TaskTraceEntry['kind'],
+  phase: TaskPhase | null,
+  patch: TracePatch = {},
+): void {
+  const endedAtMs = Date.now();
+  const startedAtMs = patch.startedAtMs ?? endedAtMs;
+  traceStore.append({
+    id: randomUUID(),
+    taskId,
+    kind,
+    phase,
+    iteration: patch.iteration,
+    callId: patch.callId,
+    toolName: patch.toolName,
+    riskLevel: patch.riskLevel,
+    provider: getProviderName(),
+    model: config.llm.model,
+    finishReason: patch.finishReason,
+    tokenUsage: null,
+    startedAt: new Date(startedAtMs).toISOString(),
+    endedAt: new Date(endedAtMs).toISOString(),
+    durationMs: Math.max(0, endedAtMs - startedAtMs),
+    ok: patch.ok,
+    errorCategory: patch.errorCategory,
+    errorMessage: patch.errorMessage,
+    summary: patch.summary,
+    data: patch.data,
+  });
+}
+
+function writeToolCallTrace(
+  taskId: string,
+  call: ToolCall,
+  riskLevel: ToolRiskLevel,
+  iteration: number,
+): void {
+  writeTrace(taskId, 'tool_call', 'calling_tool', {
+    iteration,
+    callId: call.id,
+    toolName: call.toolName,
+    riskLevel,
+    ok: true,
+    summary: `请求工具：${call.toolName}`,
+    data: { args: summarizePayload(call.args) },
+  });
+}
+
+function writeApprovalTrace(
+  taskId: string,
+  call: ToolCall,
+  riskLevel: ToolRiskLevel,
+  approved: boolean,
+  iteration: number,
+): void {
+  writeTrace(taskId, 'approval', 'waiting_approval', {
+    iteration,
+    callId: call.id,
+    toolName: call.toolName,
+    riskLevel,
+    ok: approved,
+    errorCategory: approved ? undefined : 'permission',
+    errorMessage: approved ? undefined : '用户拒绝或审批超时',
+    summary: approved ? `审批通过：${call.toolName}` : `审批未通过：${call.toolName}`,
+  });
+}
+
+function classifyError(err: unknown): TaskErrorCategory {
+  const name = (err as { name?: string })?.name;
+  const status = (err as { status?: number })?.status;
+  const message = err instanceof Error ? err.message : String(err);
+  if (name === 'AbortError') return 'cancelled';
+  if (name === 'TimeoutError' || /timeout|timed out|超时/i.test(message)) return 'timeout';
+  if (/未配置|Provider|API Key|配置/i.test(message)) return 'configuration';
+  if (/JSON|parse|解析/i.test(message)) return 'parse';
+  if (typeof status === 'number') return status >= 400 && status < 500 ? 'configuration' : 'model';
+  if (/工具|tool/i.test(message)) return 'tool';
+  return 'unknown';
+}
+
+function summarizePayload(value: unknown): unknown {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (!text || text.length <= 1200) return value;
+  return {
+    truncated: true,
+    chars: text.length,
+    preview: text.slice(0, 1200),
+  };
 }
 
 function makeAssistant(content: string, reasoningContent: string): Message {

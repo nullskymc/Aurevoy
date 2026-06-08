@@ -13,6 +13,7 @@
     "dev:desktop": "npm run tauri:dev -w @aurevoy/desktop",
     "build": "npm run build -w @aurevoy/shared && npm run build -w @aurevoy/agent && npm run build -w @aurevoy/desktop",
     "build:shared": "npm run build -w @aurevoy/shared",
+    "regression:m3": "node scripts/m3-regression.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "clean": "rimraf \"packages/*/dist\" \"apps/*/dist\""
   },

@@ -21,6 +21,10 @@
 
 ## 2. 关键选型与理由
 
+本项目的选型目标是交付个人桌面 Agent 产品，而不是训练基座模型或搭建企业推理平台。
+因此 PyTorch、vLLM、KServe、Ray Serve 这类训练/Serving 栈不是当前主路径；
+Aurevoy 的重点是本地 runtime、工具协议、状态恢复、安全治理和用户体验。
+
 ### 2.1 桌面壳：Tauri（而非 Electron）
 - **更轻**：安装包 ~10MB 级、内存占用低（用系统 WebView，不自带 Chromium）。
   对"开箱即用"的消费级个人产品体验更友好。
@@ -67,6 +71,27 @@ ReAct 工具调用循环不引入 `openai` SDK、Vercel AI SDK 或 LangChain.js�
 
 不选：`openai` SDK（抽象掉原始 SSE，自定义事件转发更繁）、Vercel AI SDK（依赖重、流协议为私有格式、与现有 SSE 契约不兼容）、LangChain.js（依赖与抽象过重）。
 
+### 2.8 Agent Runtime：自研小核心 + 标准协议
+
+当前继续保留自研 TypeScript runtime，而不是立即迁移到 LangGraph / ADK / OpenAI Agents SDK：
+
+- **产品边界更小**：Aurevoy 是本地个人桌面应用，当前需要稳定的任务状态、SSE、SQLite、审批和 MCP，
+  自研小核心更容易控制打包体积、跨平台行为和错误路径。
+- **协议优先**：MCP、OpenAI-compatible API、HTTP/SSE、SQLite 轨迹记录比绑定某个编排框架更稳定。
+- **避免过早多 Agent**：近期目标是把单 Agent 的状态机、沙箱、评测和恢复做扎实。
+- **保留迁移可能**：当任务状态图复杂到现有 loop 难以维护时，再评估 LangGraph/ADK 这类显式图工作流。
+
+### 2.9 工程治理：第一等能力
+
+技术选择必须服务交付质量：
+
+- 能力必须真实接入；禁止 Mock、固定回复或静态 UI 冒充完成。
+- 新工具必须有风险等级、审批策略、失败路径和回归用例。
+- 新执行能力必须先定义沙箱边界，再暴露给模型。
+- 状态、轨迹、错误和审批要可持久化、可回看、可诊断。
+- M3 回归使用 `scripts/m3-regression.mjs` 启动真实后端、临时 OpenAI-compatible fixture、
+  临时 MCP stdio server 和临时 SQLite；测试替身只存在于回归脚本，不进入生产路径。
+
 ## 3. 依赖管理纪律
 
 - **锁版本**：优先精确或受控版本，避免无意的大版本跳跃。
@@ -79,6 +104,10 @@ ReAct 工具调用循环不引入 `openai` SDK、Vercel AI SDK 或 LangChain.js�
 |---|---|---|
 | 真实 LLM | 原生 fetch（OpenAI 兼容）——**已采用，不引 SDK**（见 2.7） | ✅ 已落地 |
 | 工具协议 | `@modelcontextprotocol/sdk` | ✅ 已接入 stdio client；未来扩展 Streamable HTTP / SSE |
+| 显式状态机/图工作流 | 自研状态机；必要时评估 LangGraph/ADK | Agent 阶段和恢复逻辑复杂到当前 loop 不可维护 |
+| 可观测性 | SQLite 轨迹日志；后续 OpenTelemetry | ✅ 已接入任务级轨迹；跨任务指标或外部面板时再扩展 |
+| 评测 | 脚本化 M3 回归；后续 Vitest/Playwright | ✅ `npm run regression:m3` 覆盖 Agent/安全/恢复最小集 |
+| 沙箱 | `sandbox/command-executor.ts`；后续独立进程/容器 | ✅ 已定义默认关闭边界；加 shell/代码执行时替换为隔离实现 |
 | 向量检索/记忆 | sqlite-vec / LanceDB | 做长期记忆与 RAG |
 | 前端状态管理 | Zustand / Jotai | 状态复杂到 useState 撑不住 |
 | 前端 UI 库 | shadcn/ui 等 | 需要成体系组件 |

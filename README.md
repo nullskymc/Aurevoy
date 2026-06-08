@@ -4,6 +4,9 @@
 
 Aurevoy 是一款面向个人用户的通用 AI Agent 桌面产品。它能理解目标、自主拆解任务、调用工具、执行操作，并持续推进直至完成。
 
+本项目按**可交付产品**建设，而不是技术原型。所有能力必须接入真实运行链路：
+模型、工具、审批、任务状态、持久化、错误恢复和用户可见反馈都要可验证；不使用 Mock 或占位行为冒充已完成功能。
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -52,6 +55,9 @@ npm run typecheck
 
 # 构建全部
 npm run build
+
+# M3 Agent runtime 回归（需先 build）
+npm run regression:m3
 ```
 
 ## 目录约定
@@ -59,6 +65,7 @@ npm run build
 - 新增工具放到 `apps/agent/src/tools/`，通过工具注册表暴露给 Agent 循环。
 - 前后端交互的数据结构统一定义在 `packages/shared/src/`，避免类型漂移。
 - MCP server 通过 `AUREVOY_MCP_SERVERS_JSON` 可选接入；启动时发现工具并注册到同一工具注册表。
+- Agent runtime 相关改动必须同步考虑工程治理：轨迹日志、权限/审批、沙箱边界、失败恢复和回归评测。
 
 ## 文档
 
@@ -69,4 +76,5 @@ npm run build
 - [`docs/TECH_STACK.md`](./docs/TECH_STACK.md) — 技术选型与取舍
 - [`docs/API.md`](./docs/API.md) — HTTP API 与 SSE 事件契约
 - [`docs/CONVENTIONS.md`](./docs/CONVENTIONS.md) — 代码规范与扩展指南
+- [`docs/ENGINEERING_GOVERNANCE.md`](./docs/ENGINEERING_GOVERNANCE.md) — 工程治理与交付门槛
 - [`docs/ROADMAP.md`](./docs/ROADMAP.md) — 分阶段规划

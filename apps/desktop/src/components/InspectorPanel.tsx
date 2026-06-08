@@ -1,12 +1,15 @@
-import type { HealthResponse, Task, ToolDescriptor } from "@aurevoy/shared";
+import type { HealthResponse, Task, TaskPhase, TaskTraceEntry, ToolDescriptor } from "@aurevoy/shared";
 import type { FeedItem } from "./AgentEventFeed";
 import { AgentEventFeed } from "./AgentEventFeed";
+import { getPhaseLabel } from "./status";
 
 interface InspectorPanelProps {
   open: boolean;
   events: FeedItem[];
   health: HealthResponse | null;
+  phase: TaskPhase | null;
   task: Task | null;
+  traces: TaskTraceEntry[];
   tools: ToolDescriptor[];
   onClose: () => void;
 }
@@ -15,7 +18,9 @@ export function InspectorPanel({
   open,
   events,
   health,
+  phase,
   task,
+  traces,
   tools,
   onClose,
 }: InspectorPanelProps) {
@@ -52,6 +57,10 @@ export function InspectorPanel({
                 <dd>{task?.messages.length ?? 0}</dd>
               </div>
               <div>
+                <dt>当前阶段</dt>
+                <dd>{getPhaseLabel(phase ?? task?.phase ?? null) || "未开始"}</dd>
+              </div>
+              <div>
                 <dt>引擎版本</dt>
                 <dd>{health ? health.version : "未连接"}</dd>
               </div>
@@ -60,6 +69,28 @@ export function InspectorPanel({
                 <dd>{health ? `${Math.round(health.uptimeMs / 1000)} 秒` : "未连接"}</dd>
               </div>
             </dl>
+          </section>
+
+          <section className="inspector-section">
+            <div className="inspector-label-row">
+              <p className="inspector-label">轨迹日志</p>
+              <span className="inspector-count">{traces.length}</span>
+            </div>
+            {traces.length === 0 ? (
+              <p className="inspector-empty">暂无持久轨迹</p>
+            ) : (
+              <div className="trace-list">
+                {traces.slice(-32).map((trace) => (
+                  <article key={trace.id} className="trace-item" data-kind={trace.kind}>
+                    <header>
+                      <strong>{getTraceTitle(trace)}</strong>
+                      <time>{new Date(trace.startedAt).toLocaleTimeString("zh-CN")}</time>
+                    </header>
+                    <p>{getTraceDetail(trace)}</p>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="inspector-section">
@@ -126,4 +157,34 @@ export function InspectorPanel({
       </aside>
     </>
   );
+}
+
+function getTraceTitle(trace: TaskTraceEntry): string {
+  const phase = getPhaseLabel(trace.phase);
+  const base =
+    trace.kind === "llm"
+      ? `模型轮次${trace.iteration ? ` #${trace.iteration}` : ""}`
+      : trace.kind === "tool_call"
+        ? `工具请求：${trace.toolName ?? "unknown"}`
+        : trace.kind === "tool_result"
+          ? `工具结果：${trace.toolName ?? "unknown"}`
+          : trace.kind === "approval"
+            ? `审批：${trace.toolName ?? "unknown"}`
+            : trace.kind === "done"
+              ? "任务结束"
+              : trace.kind === "error"
+                ? "错误"
+                : "阶段变化";
+  return phase ? `${base} · ${phase}` : base;
+}
+
+function getTraceDetail(trace: TaskTraceEntry): string {
+  const parts = [
+    trace.summary,
+    trace.ok === true ? "成功" : trace.ok === false ? "失败" : undefined,
+    trace.errorCategory ? `分类：${trace.errorCategory}` : undefined,
+    trace.durationMs != null ? `${trace.durationMs}ms` : undefined,
+    trace.tokenUsage == null && trace.kind === "llm" ? "token: 不可用" : undefined,
+  ].filter(Boolean);
+  return parts.join(" / ") || trace.kind;
 }

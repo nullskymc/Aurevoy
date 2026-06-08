@@ -1,5 +1,5 @@
 import type { AgentEvent } from "@aurevoy/shared";
-import { getStatusLabel } from "./status";
+import { getPhaseLabel, getStatusLabel } from "./status";
 
 export interface FeedItem {
   id: string;
@@ -17,6 +17,8 @@ function getEventTitle(event: AgentEvent): string {
       return "任务已创建";
     case "status":
       return getStatusLabel(event.status);
+    case "phase":
+      return getPhaseLabel(event.phase);
     case "plan":
       return "计划已生成";
     case "step_update":
@@ -42,6 +44,8 @@ function getEventDetail(event: AgentEvent): string {
   switch (event.type) {
     case "status":
       return event.status;
+    case "phase":
+      return event.detail ? `${event.phase}\n${event.detail}` : event.phase;
     case "plan":
       return `${event.plan.length} 个计划步骤`;
     case "step_update":

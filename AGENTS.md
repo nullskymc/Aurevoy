@@ -9,7 +9,8 @@ Aurevoy 是一款**面向个人用户的通用 AI Agent 桌面产品**。用户�
 Aurevoy 负责理解目标、拆解任务、调用工具、执行操作并持续推进直至完成。
 
 - 产品愿景与理念见 [`start.md`](./start.md)。
-- 当前阶段：**项目骨架已搭好并验证通过**，处于"接入真实能力"阶段。
+- 当前阶段：已完成真实 LLM、ReAct 工具循环、内置工具、审批闭环与 MCP 接入；
+  后续开发目标不是技术原型，而是**可交付、可恢复、可审计、可评测的个人 Agent 产品**。
 
 ## 2. 30 秒架构速览
 
@@ -21,7 +22,7 @@ apps/desktop  (Tauri 2.0 + React + TS)   ──HTTP + SSE──▶  apps/agent (
                                                                   │
                                               ┌───────────────────┼───────────────────┐
                                           LLM Provider        Tool Registry        SQLite
-                                          (OpenAI 兼容)        (MCP 接入点预留)      (本地存储)
+                                          (OpenAI 兼容)        (内置 + MCP)         (本地存储)
 packages/shared (TS 类型)  ← 前后端共享契约，跨进程数据结构唯一来源
 ```
 
@@ -37,6 +38,7 @@ packages/shared (TS 类型)  ← 前后端共享契约，跨进程数据结构�
 | [`docs/API.md`](./docs/API.md) | HTTP API + SSE 事件契约 | 改前后端接口 |
 | [`docs/UI_DESIGN.md`](./docs/UI_DESIGN.md) | 人机交互、信息架构、前端界面设计 | 改桌面 UI / 设计 Agent 工作台 |
 | [`docs/CONVENTIONS.md`](./docs/CONVENTIONS.md) | 代码规范、目录约定、扩展指南 | 写任何代码前 |
+| [`docs/ENGINEERING_GOVERNANCE.md`](./docs/ENGINEERING_GOVERNANCE.md) | 工程治理、可观测性、安全、评测与交付门槛 | 改 Agent runtime / 工具 / 存储 / 发布流程 |
 | [`docs/ROADMAP.md`](./docs/ROADMAP.md) | 分阶段规划与任务清单 | 决定"做什么" |
 
 ## 4. 给协作智能体的硬性规则
@@ -51,8 +53,13 @@ packages/shared (TS 类型)  ← 前后端共享契约，跨进程数据结构�
    在 `getProvider()` 里按配置返回。Agent 循环不感知具体厂商。
 5. **跨平台意识**：后端不要依赖 macOS 专有路径/命令；前端不要假设 Tauri 之外的运行环境。
    目标是 macOS → Windows 平滑扩展。
-6. **完成即验证**：任何改动后至少跑 `npm run typecheck`；动了后端跑冒烟测试；动了前端跑 `vite build`。
-7. **秘钥安全**：API Key 等只能走环境变量（`.env`，已 gitignore），禁止硬编码或提交。
+6. **不做假能力**：禁止用 Mock、占位回复、演示数据或“看起来能用”的前端状态冒充真实能力。
+   外部能力不可用时必须明确失败、降级或提示配置缺失，并留下可诊断信息。
+7. **完成即验证**：任何改动后至少跑 `npm run typecheck`；动了后端跑冒烟测试；动了前端跑 `vite build`。
+   影响 Agent 行为、工具、安全或存储的改动还要补充可复现的轨迹/用例。
+8. **秘钥安全**：API Key 等只能走环境变量（`.env`，已 gitignore），禁止硬编码或提交。
+9. **工程治理优先**：新增工具、执行器、记忆、设置或任务控制时，必须同步考虑日志、审批、
+   权限边界、失败恢复、回归评测与用户可解释性。
 
 ## 5. 常用命令
 
@@ -67,12 +74,15 @@ npm run build:shared   # 仅构建共享类型（改完 shared 必做）
 
 环境要求：Node >= 20、Rust (stable)、macOS Xcode CLT。详见 README。
 
-## 6. 当前进度与下一步
+## 6. 当前进度与交付方向
 
-- ✅ Monorepo 骨架、前后端通信、SSE 流式、SQLite、全链路跑通。
+- ✅ Monorepo、前后端通信、SSE 流式、SQLite、全链路跑通。
 - ✅ 真实 LLM Provider（OpenAI 兼容，`.env` 配置，未配置即报错）；前端对话式界面重做。
 - ✅ M1：ReAct 工具调用循环（防死循环/重试/取消）+ 前端工具调用可视化。
 - ✅ M2：已落地**内置工具**（文件读写/目录/HTTP 抓取，限定工作区）+
   **工具风险模型与审批闭环**（`riskLevel` / `approval_request` / `POST …/approvals`，前端审批按钮）+
   **MCP TypeScript SDK 接入**（启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers 并注册工具）。
-- 下一步：记忆、多轮对话、设置界面。详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。
+- ✅ M3：工程治理已落地：显式 runtime phase、SQLite 轨迹日志、运行详情轨迹回看、
+  `npm run regression:m3` 回归集、命令执行器沙箱边界（默认关闭）。
+- 当前重点：M4 记忆、多轮对话与任务恢复；任何记忆能力都必须可查看、可编辑、可删除、可解释来源。
+  详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md) 与 [`docs/ENGINEERING_GOVERNANCE.md`](./docs/ENGINEERING_GOVERNANCE.md)。

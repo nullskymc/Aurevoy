@@ -7,11 +7,12 @@ import type {
   CreateTaskRequest,
   CreateTaskResponse,
   HealthResponse,
+  TaskTraceListResponse,
 } from '@aurevoy/shared';
 import { config } from './config.js';
 import { createTask, runTask, cancelTask, resolveApproval } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
-import { taskStore } from './store/db.js';
+import { taskStore, traceStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
 import { getProviderName } from './llm/provider.js';
 
@@ -43,6 +44,17 @@ export async function buildServer() {
     const task = taskStore.get(req.params.id);
     if (!task) return reply.code(404).send({ error: 'task not found' });
     return task;
+  });
+
+  // 单个任务的持久轨迹
+  app.get<{ Params: { id: string } }>('/api/tasks/:id/traces', async (req, reply) => {
+    const task = taskStore.get(req.params.id);
+    if (!task) return reply.code(404).send({ error: 'task not found' });
+    const body: TaskTraceListResponse = {
+      taskId: req.params.id,
+      traces: traceStore.list(req.params.id),
+    };
+    return reply.send(body);
   });
 
   // 创建并启动任务
@@ -124,6 +136,9 @@ export async function buildServer() {
     // 新订阅者可能错过创建后的快速事件；先补发数据库快照，保证 UI 可恢复。
     send({ type: 'task_created', taskId: task.id, task });
     send({ type: 'status', taskId: task.id, status: task.status });
+    if (task.phase) {
+      send({ type: 'phase', taskId: task.id, phase: task.phase, detail: '数据库快照' });
+    }
     if (task.plan.length > 0) {
       send({ type: 'plan', taskId: task.id, plan: task.plan });
     }

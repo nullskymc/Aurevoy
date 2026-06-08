@@ -1,106 +1,141 @@
 # 路线图 — ROADMAP
 
-> 分阶段规划与任务清单。决定"接下来做什么"时读本文。每完成一项请勾选并更新状态。
+> 本路线图以“交付可用”为目标。完成一项能力的标准不是 UI 上有入口，
+> 也不是代码里留了字段，而是**真实链路跑通、失败路径明确、状态可恢复、用户可理解、验证可复现**。
 
 ## 阶段总览
 
 | 阶段 | 主题 | 状态 |
 |---|---|---|
-| M0 | 骨架与全链路打通 | ✅ 完成 |
-| M1 | 接入真实 LLM 与真正的 Agent 循环 | ⏳ 进行中/下一步 |
-| M2 | 工具能力（MCP）与本地操作 | ✅ 完成 |
-| M3 | 记忆与个性化 | ⏳ 待启动 |
-| M4 | 产品化：多轮对话、任务历史、设置 | ⏳ 待启动 |
-| M5 | 打包分发与 Windows 扩展 | ⏳ 待启动 |
+| M0 | 产品底座与全链路通信 | ✅ 完成 |
+| M1 | 真实 LLM 与单 Agent 工具循环 | ✅ 完成 |
+| M2 | 工具能力、审批闭环与 MCP | ✅ 完成 |
+| M3 | 工程治理：状态机、轨迹、评测、沙箱边界 | ✅ 完成 |
+| M4 | 记忆、多轮对话与任务恢复 | ⏳ 当前重点 |
+| M5 | 设置、分发、Windows 与交付质量 | ⏳ 待启动 |
 
 ---
 
-## M0 — 骨架（✅ 已完成）
+## M0 — 产品底座（✅ 已完成）
 
 - [x] npm workspaces monorepo（desktop / agent / shared）
 - [x] 前后端通信：HTTP + SSE，引擎监听 127.0.0.1:8787
 - [x] 共享类型契约 `@aurevoy/shared`
-- [x] Agent 引擎：Fastify + 事件总线 + Mock LLM + 工具注册表 + SQLite
-- [x] 前端：Tauri + React，任务输入与流式输出 UI
+- [x] Agent 引擎：Fastify + 事件总线 + 工具注册表 + SQLite
+- [x] 前端：Tauri + React，任务输入、流式输出、对话历史
 - [x] 全链路验证：typecheck、后端冒烟、前端构建、Tauri `cargo check`
 
-## M1 — 真实智能（下一步）
+交付要求：
+- 不再引入 Mock LLM 或固定回复。未配置真实 Provider 必须明确失败。
+- 前端展示的状态必须来自后端任务和事件流，不做假进度。
 
-- [x] 接入真实 LLM Provider（OpenAI 兼容，覆盖 OpenAI/DeepSeek/Ollama 等）；已移除 Mock，未配置即明确报错
-- [~] Provider 配置与 Key 管理（`.env` 已落地；设置界面与多 Provider 运行时切换待做）
-- [x] **ReAct 工具调用循环（合并「真正的 Agent 循环」+「工具调用闭环」）**
+## M1 — 真实 LLM 与单 Agent 工具循环（✅ 已完成）
 
-  > 调研结论见 [`research/agent-loop-findings.md`](./research/agent-loop-findings.md)。
-  > 采用 tool-calling loop（模型每轮自主决定调工具或给最终答案，工具结果回灌再请求），
-  > 而非 plan-then-execute；复用现有 SSE 契约，前端尽量零改动。
-  > ✅ 已实现并用真实 DeepSeek（deepseek-v4-flash）验证：工具闭环、并行/防死循环、取消均通过。
+- [x] 接入真实 LLM Provider（OpenAI 兼容，覆盖 OpenAI/DeepSeek/Ollama 等）；未配置 Key 明确报错
+- [x] ReAct 工具调用循环：模型自主决定调用工具或输出最终答案
+- [x] 流式 tool_calls 累积器：按 `index` 跨 chunk 拼接，处理并行/截断
+- [x] `LLMProvider` 支持 tools/toolChoice/signal
+- [x] OpenAI-compatible streaming：支持工具调用、`reasoning_content` 透传、单轮超时
+- [x] 指数退避重试；AbortError/4xx 不重试
+- [x] 防死循环：同工具+同参数重复调用限制、单轮工具调用上限、最大轮次
+- [x] 取消：`AbortController` 贯穿 fetch
+- [x] Ollama 降级：带 tools 时关闭 streaming；模型不支持 tools 时直接问答
+- [x] 前端展示 `tool_call` / `tool_result`
 
-  关键设计决策（已定）：
-  - **隐式计划**：不强制先规划，用工具调用轨迹映射现有 `plan`/`step_update`；显式规划留作后续可选增强。
-  - **原生 fetch**：不引入 openai / Vercel AI / LangChain SDK，自行实现流式 tool_calls 累积（理由见 `TECH_STACK.md`）。
-  - **DeepSeek `reasoning_content` 必须回传**：`Message` 保留 `reasoningContent`，多轮回传时注入，否则 400。
-  - **Ollama 降级**：检测到 Ollama 时对带 tools 的请求关闭 streaming；模型不支持 tools 时退化为直接问答，不报错。
-  - **防死循环**：指纹去重（同工具+同参数上限 3 次）+ 单轮并行调用上限 + 最大轮次（20）兜底。
-  - **重试**：网络/429/5xx 指数退避重试；4xx/AbortError 不重试。
-  - **取消**：`AbortController` 贯穿 fetch，预留 soft/hard cancel。
-  - **审批预留**：工具注册预留 `riskLevel`；`approval_request` 事件留到 M2 接 UI。
+未完的交付强化：
+- [ ] 自动化覆盖：并行工具、Ollama 降级、工具失败后自我修正、最大轮次兜底
+- [ ] Provider 运行时配置与 Key 管理进入真实设置界面
 
-  有序子任务（来自调研报告附录 A）：
-  - [x] `packages/shared`：`Message` 扩展 `toolCalls` / `toolCallId` / `reasoningContent`（+ `MessageToolCall` 类型）
-  - [x] `agent/tool-call-accumulator.ts`：流式 tool_calls 累积器（按 `index` 跨 chunk 拼接，处理并行/截断）
-  - [x] 扩展 `LLMProvider`：`LLMStreamOptions`（tools/toolChoice/signal 等）+ `LLMStreamChunk`
-  - [x] 重写 `OpenAICompatibleProvider.stream()`：支持 tools 参数、tool_calls 累积、`reasoning_content` 透传
-        （已移除 `.filter(m => m.role !== 'tool')`，补 `toOpenAIRole` 的 `'tool'` 分支；含单轮超时）
-  - [x] `toOpenAIMessage()` 转换（处理 tool_calls / tool_call_id / reasoning_content）
-  - [x] `withRetry()`：指数退避，AbortError/4xx 不重试
-  - [x] 重写 `agent/loop.ts` `runTask()`：ReAct 循环 + 防死循环 + 重试 + 每轮持久化
-  - [x] `AbortController` 取消支持与 `AbortError` 捕获
-  - [x] Ollama 降级检测（带 tools 时 `stream:false`）
-  - [~] 测试：工具调用闭环 / 取消已冒烟通过；并行工具、降级、失败自我纠正待补自动化测试
-  - [x] 前端补充 `tool_call` / `tool_result` 渲染（对话流内联工具卡片 + 检查器列表，实时与历史任务均支持）
+## M2 — 工具能力、审批闭环与 MCP（✅ 已完成）
 
-- [~] 任务控制对外接口：`POST /api/tasks/:id/cancel` 已实现并接入前端停止按钮；
-      `pause`/`resume` 及对应 `packages/shared` 类型待做
+- [x] 内置基础工具：文件读写、目录列举、HTTP 抓取
+- [x] 文件类工具限定 `config.workspaceDir`，并校验 symlink 真实路径
+- [x] 工具风险模型：`safe | caution | dangerous`
+- [x] 非 safe 工具执行前发 `approval_request`，等待 `POST /api/tasks/:id/approvals`
+- [x] 审批超时、拒绝、取消都进入明确工具结果
+- [x] 前端审批按钮和工具调用可视化
+- [x] MCP TypeScript SDK：启动期连接 stdio MCP servers，发现 tools 并注册进 `toolRegistry`
 
-## M2 — 工具与操作（MCP）
+交付要求：
+- 新工具必须声明风险等级和输入 JSON Schema。
+- 不允许绕过 `toolRegistry` 在 Agent loop 内直接执行工具逻辑。
+- 新 MCP transport 支持前，必须说明连接失败、重连和权限策略。
 
-- [x] 集成 MCP TypeScript SDK，启动期把 MCP server 工具注册进 `toolRegistry`
-- [x] 内置基础工具：文件读写、目录列举、HTTP 抓取（路径限定工作区 `config.workspaceDir`，防目录穿越）
-      — `shell` 留待审批模型成熟后再加
-- [x] 工具权限模型：`ToolDescriptor.riskLevel`（safe/caution/dangerous）；
-      非 safe 工具执行前发 `approval_request` 事件并等待 `POST /api/tasks/:id/approvals` 决策
-      （超时/取消视为拒绝）
-- [x] 工具调用可视化（前端展示调用、参数、结果与审批按钮）
+## M3 — 工程治理（✅ 已完成）
 
-## M3 — 记忆与个性化
+目标：把 Agent runtime 从“能执行”推进到“可诊断、可恢复、可评测、可安全控制”。
 
-- [ ] 持久记忆：用户偏好、习惯、长期事实
-- [ ] 向量检索（sqlite-vec / LanceDB）支撑 RAG 与相关记忆召回
-- [ ] 会话级短期记忆 vs 跨会话长期记忆的分层
+### M3.1 显式状态机
 
-## M4 — 产品化
+- [x] 将 `runTask()` 的隐式流程整理为显式阶段：initializing / thinking / calling_tool / waiting_approval / finalizing / failed / cancelled
+- [x] 在 `packages/shared` 中补充 `TaskPhase`、`Task.phase` 和 `phase` 事件，避免前后端各自猜状态
+- [x] `pause` / `resume` 不作为 UI 文案先行；当前只暴露真实的 cancel 与 approval 能力
 
-- [ ] 多轮对话（同一任务内继续追问/补充）
-- [x] 任务历史列表与详情回看（侧栏对话历史 + 选中回看，基于 `GET /api/tasks`）
-- [ ] 设置界面：模型、Key、工具开关、数据管理（侧栏入口已占位，功能待接）
-- [~] UI 打磨：计划/工具/思考过程的清晰呈现
-  - 已落地**对话优先界面重做**：两栏布局、居中空状态 hero、大圆角输入框、
-    对话流（用户气泡 / 内联可折叠计划卡片 / 流式输出 + 思考态）、运行详情抽屉。
-  - 设计文档 `docs/UI_DESIGN.md` 已同步改写为"对话优先 + 透明度可选"方向。
-  - 待补：Markdown 渲染、搜索/记忆/设置入口接入真实能力、多轮对话呈现。
+### M3.2 轨迹日志与审计
 
-## M5 — 分发与 Windows
+- [x] SQLite 增加任务轨迹记录：LLM 轮次、tool_call、tool_result、approval、error、done
+- [x] 每条轨迹记录 `taskId`、时间、阶段、耗时、成功/失败、错误分类
+- [x] 运行详情抽屉从事件流升级为可回看的轨迹视图
+- [x] Provider 支持时记录 token 用量和估算成本；不支持时明确为空
 
+### M3.3 评测与回归
+
+- [x] 增加最小 Agent 回归集：直接回答、读文件、写文件审批、HTTP 审批、MCP 工具发现、取消
+- [x] 增加安全回归：目录穿越、symlink 越界、审批拒绝、审批超时、非法 URL、未配置 Key
+- [x] 增加状态恢复回归：迟到 SSE 订阅、历史回看、失败任务回看
+- [x] 将回归命令写入 `CONVENTIONS.md` 和提交前检查清单
+
+### M3.4 沙箱边界
+
+- [x] 在加入 shell/代码执行前，先定义命令执行器接口、权限模型、超时、输出上限和环境变量 allowlist
+- [x] 高风险执行默认关闭，必须通过设置显式启用
+- [x] 命令执行优先使用隔离进程/容器，不直接暴露本机 shell
+
+完成标准：
+- 任意任务失败后，用户能看到原因；开发者能从轨迹定位到模型、工具、审批或配置层。
+- 任意高风险工具都有可审计的审批记录。
+- 行为改动能用固定用例回归，不靠手感判断。
+
+## M4 — 记忆、多轮对话与任务恢复（⏳ 待启动）
+
+目标：让 Aurevoy 能持续理解用户和任务上下文，但保持用户可控和来源可解释。
+
+- [ ] 多轮对话：同一任务内继续追问/补充，后端真实保留上下文
+- [ ] 会话级短期记忆：当前任务内的文件、工具结果、用户约束和中间结论
+- [ ] 长期记忆：用户偏好、常用目录、模型偏好、工作习惯
+- [ ] 记忆 CRUD：查看、编辑、删除、禁用；不能只写入不可见黑盒
+- [ ] 记忆来源：每条长期记忆记录来源任务、时间和置信度
+- [ ] 向量检索：评估 sqlite-vec / LanceDB，仅在需要语义召回时引入
+- [ ] 任务恢复：进程重启后能恢复未完成/失败任务的可解释状态
+
+完成标准：
+- 用户能知道 Aurevoy 记住了什么、为什么记住、如何删除。
+- 多轮不是简单拼接历史消息，而是有上下文压缩、来源和边界。
+
+## M5 — 设置、分发、Windows 与交付质量（⏳ 待启动）
+
+目标：把本地开发应用推进到普通用户可安装、可配置、可维护。
+
+- [ ] 设置界面：Provider、Base URL、Model、API Key、工作区目录、工具开关、MCP servers
+- [ ] 设置变更必须影响真实运行配置；不能只做静态表单
+- [ ] 工具管理：查看工具、风险等级、启用/禁用、MCP 连接状态
+- [ ] 数据管理：任务历史、轨迹日志、记忆、SQLite 文件位置、清理策略
 - [ ] macOS 打包、签名、自动更新
 - [ ] 引擎随桌面应用启动的进程管理（sidecar 或子进程托管）
 - [ ] Windows 适配：WebView2、原生模块重编、路径与权限
-- [ ] 跨平台 CI（mac + win 双平台构建与冒烟）
+- [ ] 跨平台 CI：macOS + Windows build/typecheck/冒烟
+
+完成标准：
+- 用户无需命令行即可配置 Provider 和工作区。
+- 应用启动、停止、升级和崩溃恢复路径明确。
+- 发布包不包含密钥、临时数据或开发数据库。
 
 ---
 
-## 给协作智能体的取任务建议
+## 取任务原则
 
-1. 一次只推进一个有边界的小目标，完成即按 `CONVENTIONS.md` 验证。
-2. 动 LLM/工具/存储能力时，保持抽象接口不变，新增实现而非改循环。
-3. 接口/类型有变动，先改 `shared` 再联动两端。
-4. 在本文勾选你完成的项，必要时拆出更细子任务。
+1. 一次只推进一个有边界的小目标，完成即按 `CONVENTIONS.md` 和 `ENGINEERING_GOVERNANCE.md` 验证。
+2. 所有功能必须真实接入后端链路；禁止用 Mock、占位 UI 或静态配置假装完成。
+3. 动 LLM/工具/存储/审批/任务状态时，保持抽象接口清晰，新增实现而不是把特例塞进循环。
+4. 接口/类型有变动，先改 `packages/shared`，再联动 agent 与 desktop。
+5. 多 Agent、后训练、复杂推理框架不是近期目标；先把单 Agent 的治理、记忆和恢复做扎实。

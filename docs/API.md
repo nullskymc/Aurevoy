@@ -34,6 +34,10 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 ### GET `/api/tasks/:id`
 任务详情。命中返回 `Task`；不存在返回 `404 {"error":"task not found"}`。
 
+### GET `/api/tasks/:id/traces`
+任务轨迹回看。命中返回 `TaskTraceListResponse`；不存在返回 `404 {"error":"task not found"}`。
+轨迹来自 SQLite `task_traces`，覆盖 LLM 轮次、工具、审批、错误、done 和阶段变化。
+
 ### POST `/api/tasks`
 创建并**立即异步启动**一个任务。
 ```json
@@ -79,6 +83,7 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 |---|---|---|
 | `task_created` | `task: Task` | 任务已创建 |
 | `status` | `status: TaskStatus` | 任务状态变化 |
+| `phase` | `phase: TaskPhase`, `detail?` | Agent runtime 细粒度阶段变化 |
 | `plan` | `plan: PlanStep[]` | 给出/更新完整计划 |
 | `step_update` | `step: PlanStep` | 单个计划步骤状态变化 |
 | `token` | `delta: string` | LLM 流式输出的增量片段 |
@@ -91,29 +96,37 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 
 `TaskStatus`：`pending | planning | running | paused | completed | failed | cancelled`
 
+`TaskPhase`：`initializing | thinking | calling_tool | waiting_approval | finalizing | failed | cancelled`
+
 ### 典型事件序列
 
 无需工具（直接回答）：
 ```
-status(running) → token × N → message → done(completed)
+status(running) → phase(initializing) → phase(thinking) → token × N
+  → phase(finalizing) → message → status(completed) → done(completed)
 ```
 
 ReAct 工具调用循环（含一次工具调用）：
 ```
 status(running)
+  → phase(thinking)
   → token × N                       (模型本轮的文本/思考)
+  → phase(calling_tool)
   → tool_call                       (模型请求调用工具)
   → tool_result                     (工具执行结果，回灌给模型)
+  → phase(thinking)
   → token × N                       (下一轮，带着工具结果)
-  → message → done(completed)
+  → phase(finalizing) → message → status(completed) → done(completed)
 ```
 - 计划以隐式方式呈现：循环用工具调用轨迹更新 `plan`/`step_update`，不强制先规划。
 - 一轮可能有多个并行 `tool_call`（各带独立 `id`），对应多个 `tool_result`。
 - 取消时以 `status(cancelled)` + `done(cancelled)` 收尾。
+- `phase` 是诊断和 UI 解释用的细粒度阶段，必须来自后端真实状态转换，不能由前端猜测。
 
 非 safe 工具（`caution`/`dangerous`，如 `http_fetch`/`write_file`）需审批：
 ```
 … → tool_call → approval_request          (等待用户)
+  → phase(waiting_approval)
   → [POST /api/tasks/:id/approvals]        (批准/拒绝)
   → tool_result                            (批准→执行结果；拒绝→ok:false 错误回灌)
   → token × N → message → done
@@ -139,7 +152,7 @@ const es = streamTask(task.id, (event) => {
 
 ```ts
 interface Task {
-  id: string; goal: string; status: TaskStatus;
+  id: string; goal: string; status: TaskStatus; phase: TaskPhase | null;
   plan: PlanStep[]; messages: Message[];
   createdAt: string; updatedAt: string;   // ISO 8601
 }
@@ -154,15 +167,23 @@ interface MessageToolCall { id: string; type: 'function'; function: { name: stri
 interface ToolDescriptor { name: string; description: string; inputSchema: Record<string, unknown>; riskLevel?: 'safe'|'caution'|'dangerous'; }
 interface ToolCall   { id: string; toolName: string; args: Record<string, unknown>; }
 interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: string; }
+interface TaskTraceEntry {
+  id: string; taskId: string; kind: 'llm'|'tool_call'|'tool_result'|'approval'|'error'|'done'|'phase';
+  phase: TaskPhase | null; iteration?: number; callId?: string; toolName?: string;
+  startedAt: string; endedAt?: string; durationMs?: number; ok?: boolean;
+  errorCategory?: 'configuration'|'model'|'tool'|'permission'|'timeout'|'cancelled'|'parse'|'unknown';
+  tokenUsage: TokenUsage | null;  // Provider 不支持时明确为 null
+}
 ```
 
 ## 4. 演进约定
 
 - **新增事件类型**：在 `AgentEvent` 联合里加一个分支（必须含 `taskId`），前端 `switch` 默认忽略未知类型即可向后兼容。
-- **预留事件 `approval_request`**：M2 引入危险工具审批时新增，载荷拟为 `{ call: ToolCall; riskLevel }`，
-  循环在执行 `caution`/`dangerous` 工具前 emit，等待用户授权后再继续（工具注册预留 `riskLevel`）。
+- **审批事件 `approval_request`**：非 safe 工具执行前必须发出该事件，载荷为 `{ call: ToolCall; riskLevel }`。
+  循环在执行 `caution`/`dangerous` 工具前等待用户授权；拒绝、超时或取消都必须回灌为明确的工具失败结果。
 - **破坏性改动**：改字段语义/删字段时，前后端要同一次提交内联动，并 `npm run build:shared`。
 - **鉴权**：当前为本机单用户、无鉴权。若未来引擎需被其它客户端访问，必须先加鉴权（token/本地 socket 校验），不可裸暴露。
+- **真实能力**：API 不提供 Mock 成功响应；配置缺失、工具不可用、模型失败等情况必须返回明确错误或事件。
 
 ## 5. LLM Provider 配置
 
@@ -176,6 +197,8 @@ interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: st
 | `AUREVOY_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容端点基础地址（不含 `/chat/completions`） |
 | `AUREVOY_LLM_MODEL` | `gpt-4o-mini` | 模型名 |
 | `AUREVOY_LLM_TEMPERATURE` | `0.7` | 采样温度 |
+| `AUREVOY_LLM_TIMEOUT_MS` | `120000` | 单轮 LLM 调用超时 |
+| `AUREVOY_APPROVAL_TIMEOUT_MS` | `300000` | 工具审批等待超时；超时按拒绝处理 |
 
 - `openai` 走标准 Chat Completions 流式协议（`stream: true`，SSE），
   兼容 OpenAI / DeepSeek / Moonshot / 本地 Ollama(`/v1`) / vLLM / LM Studio 等。
@@ -184,7 +207,18 @@ interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: st
 - 当前生效的 Provider 名通过 `GET /api/health` 的 `provider` 字段暴露给前端。
 - **密钥安全**：Key 只走环境变量，禁止硬编码或提交。
 
-## 6. MCP server 配置
+## 6. 沙箱 / 高风险执行配置
+
+命令/代码执行当前只定义边界，默认关闭，没有作为工具暴露给模型。
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `AUREVOY_ENABLE_COMMAND_EXECUTION` | `false` | 未来显式启用隔离命令执行器；当前默认拒绝 |
+| `AUREVOY_COMMAND_TIMEOUT_MS` | `30000` | 命令执行超时 |
+| `AUREVOY_COMMAND_OUTPUT_LIMIT_BYTES` | `65536` | stdout/stderr 输出上限 |
+| `AUREVOY_COMMAND_ENV_ALLOWLIST` | `PATH,HOME,TMPDIR` | 允许传入执行环境的变量名 |
+
+## 7. MCP server 配置
 
 `AUREVOY_MCP_SERVERS_JSON` 用 JSON 配置可选 MCP servers。当前支持 stdio transport，
 启动时连接 server，调用 `listTools()` 发现工具并注册到 Aurevoy 的 `ToolRegistry`；
@@ -194,9 +228,9 @@ interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: st
 ```json
 {
   "mcpServers": {
-    "demo": {
+    "localTools": {
       "command": "node",
-      "args": ["./mcp/demo-server.js"],
+      "args": ["./mcp/local-tools-server.js"],
       "riskLevel": "caution"
     }
   }

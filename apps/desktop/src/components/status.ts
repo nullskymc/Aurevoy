@@ -1,4 +1,4 @@
-import type { TaskStatus } from "@aurevoy/shared";
+import type { TaskPhase, TaskStatus } from "@aurevoy/shared";
 
 export function getStatusLabel(status: TaskStatus | null): string {
   switch (status) {
@@ -18,6 +18,27 @@ export function getStatusLabel(status: TaskStatus | null): string {
       return "已取消";
     default:
       return "未开始";
+  }
+}
+
+export function getPhaseLabel(phase: TaskPhase | null): string {
+  switch (phase) {
+    case "initializing":
+      return "初始化";
+    case "thinking":
+      return "模型思考";
+    case "calling_tool":
+      return "调用工具";
+    case "waiting_approval":
+      return "等待确认";
+    case "finalizing":
+      return "整理结果";
+    case "failed":
+      return "失败";
+    case "cancelled":
+      return "已取消";
+    default:
+      return "";
   }
 }
 
