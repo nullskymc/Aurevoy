@@ -13,6 +13,7 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
+import { buildContextWindow } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 import { withRetry } from './retry.js';
 import { taskStore, traceStore } from '../store/db.js';
@@ -192,6 +193,23 @@ export async function runTask(task: Task): Promise<void> {
       let toolCalls: AccumulatedToolCall[] = [];
       const llmStartedAt = Date.now();
 
+      // 会话级短期记忆：把完整历史压缩为本轮上下文窗口（非裸拼接）
+      const ctx = buildContextWindow(messages);
+      if (ctx.compressed) {
+        writeTrace(task.id, 'phase', 'thinking', {
+          iteration: iteration + 1,
+          ok: true,
+          summary: `上下文压缩：${ctx.totalMessages} 条历史，${ctx.originalChars}→${ctx.finalChars} 字符，压缩 ${ctx.compressedCount} 条`,
+          data: {
+            originalChars: ctx.originalChars,
+            finalChars: ctx.finalChars,
+            compressedCount: ctx.compressedCount,
+            totalMessages: ctx.totalMessages,
+            charBudget: config.agent.contextCharBudget,
+          },
+        });
+      }
+
       // ---------- 调用 LLM（带重试） ----------
       try {
         await withRetry(
@@ -201,7 +219,7 @@ export async function runTask(task: Task): Promise<void> {
             reasoningContent = '';
             finishReason = undefined;
             toolCalls = [];
-            const stream = getProvider().stream(messages, {
+            const stream = getProvider().stream(ctx.messages, {
               tools: toolDescriptors.length > 0 ? toolDescriptors : undefined,
               toolChoice: 'auto',
               signal: abortController.signal,

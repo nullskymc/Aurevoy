@@ -107,6 +107,10 @@ API 请求响应、运行时常量（默认地址端口）。
    把工具结果作为 `role:'tool'` 消息回灌、再请求 LLM →…直到模型给出最终答案 →
    `phase(finalizing)` → `message` → `status(completed|failed|cancelled)` → `done`。
    计划以隐式方式呈现：用工具调用轨迹更新 `plan`/`step_update`。
+   每轮请求 LLM 前，`agent/context.ts` 把完整历史压成**上下文窗口**（会话级短期记忆）：
+   用户约束与最近窗口逐字保留，超预算时就地压缩旧 assistant/tool 内容，压缩留轨迹。
+4b. **多轮对话**：任务结束后 `POST /api/tasks/:id/messages` 经 `addUserTurn()` 追加 user 轮次，
+   带完整历史重新进入同一循环；前端复用同一 `streamUrl` 订阅。
 5. `events.ts` 把事件序列化为 SSE（`data: {json}\n\n`）推给前端；前端按事件类型增量渲染。
 6. 收到 `done`，前端与后端各自关闭 SSE 连接。
 7. 任务状态通过 `taskStore.save()` 落库，可经 `GET /api/tasks` 回看。

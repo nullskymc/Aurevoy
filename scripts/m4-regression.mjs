@@ -21,6 +21,10 @@ process.env.AUREVOY_LLM_API_KEY = 'test-key';
 process.env.AUREVOY_LLM_BASE_URL = llmFixture.url;
 process.env.AUREVOY_LLM_MODEL = 'm4-fixture-model';
 process.env.AUREVOY_MCP_SERVERS_JSON = '';
+// 压缩测试：小预算 + 近窗口=1，强制旧 assistant 内容被压缩
+process.env.AUREVOY_CONTEXT_CHAR_BUDGET = '500';
+process.env.AUREVOY_RECENT_MESSAGE_WINDOW = '1';
+process.env.AUREVOY_COMPRESSED_MESSAGE_CHAR_CAP = '200';
 
 await import('../apps/agent/dist/tools/builtins.js');
 const { buildServer } = await import('../apps/agent/dist/server.js');
@@ -31,6 +35,7 @@ const baseUrl = `http://127.0.0.1:${app.server.address().port}`;
 
 try {
   await caseMultiTurnContext();
+  await caseContextCompression();
   await caseContinueNotFound();
   await caseContinueEmptyMessage();
   await caseContinueWhileRunning();
@@ -84,6 +89,48 @@ async function caseMultiTurnContext() {
   );
 }
 
+// M4.2 会话级短期记忆：历史超预算时压缩旧内容，保留用户约束与近窗口，且不破坏配对契约。
+async function caseContextCompression() {
+  const created = await postJson('/api/tasks', {
+    goal: 'M4_BIG 约束:KEEP-CHINESE 始终用中文回答',
+  });
+  await drainStream(created.task.id);
+  const afterTurn1 = await getJson(`/api/tasks/${created.task.id}`);
+  // 真实历史不被压缩：第一轮大 assistant 内容应原样持久化
+  const bigMsg = afterTurn1.messages.find((m) => m.role === 'assistant');
+  assert(bigMsg && bigMsg.content.length > 2000, '第一轮大内容未被真实持久化（历史应完整）');
+
+  await postJson(`/api/tasks/${created.task.id}/messages`, { message: 'M4_ASK 重复一下要求' });
+  await drainStream(created.task.id);
+
+  const afterTurn2 = await getJson(`/api/tasks/${created.task.id}`);
+  const lastAssistant = afterTurn2.messages[afterTurn2.messages.length - 1];
+  // fixture 回显它收到的（已压缩的）上下文情况
+  assert(
+    lastAssistant.content.includes('compressed=yes'),
+    `旧大内容未被压缩后再喂给模型，回复：${lastAssistant.content}`,
+  );
+  assert(
+    lastAssistant.content.includes('constraint=yes'),
+    `用户约束未在压缩后保留，回复：${lastAssistant.content}`,
+  );
+
+  // 真实历史仍完整：大内容仍原样保存，未被压缩污染
+  const bigStill = afterTurn2.messages.find(
+    (m) => m.role === 'assistant' && m.content.length > 2000,
+  );
+  assert(bigStill, '压缩不应修改持久化的真实历史');
+
+  // 压缩事件应留下可审计轨迹
+  const tracesBody = await getJson(`/api/tasks/${created.task.id}/traces`);
+  assert(
+    tracesBody.traces.some(
+      (t) => typeof t.summary === 'string' && t.summary.includes('上下文压缩'),
+    ),
+    '上下文压缩缺少可审计轨迹',
+  );
+}
+
 async function caseContinueNotFound() {
   const res = await rawPost('/api/tasks/does-not-exist/messages', { message: 'hi' });
   assert(res.status === 404, `不存在任务续聊应 404，实际 ${res.status}`);
@@ -128,7 +175,21 @@ async function startLlmFixture() {
     }
 
     let content;
-    if (joined.includes('M4_TURN2')) {
+    if (joined.includes('M4_ASK')) {
+      // 第二轮：校验旧的大 assistant 内容是否被压缩、用户约束是否逐字保留
+      const bigAssistant = messages.find(
+        (m) => m.role === 'assistant' && String(m.content).length > 0,
+      );
+      const wasCompressed =
+        !!bigAssistant &&
+        String(bigAssistant.content).length < 1000 &&
+        String(bigAssistant.content).includes('上下文压缩');
+      const constraintKept = messages.some((m) => String(m.content).includes('KEEP-CHINESE'));
+      content = `final: compressed=${wasCompressed ? 'yes' : 'no'} constraint=${constraintKept ? 'yes' : 'no'}`;
+    } else if (joined.includes('M4_BIG')) {
+      // 第一轮：产出一段大文本，撑高历史体积
+      content = 'BIGDATA ' + 'X'.repeat(3000);
+    } else if (joined.includes('M4_TURN2')) {
       // 回显收到的历史消息数与是否包含第一轮口令，证明上下文被回灌
       const hasSecret = messages.some((m) => String(m.content).includes('BLUE-42'));
       content = `final: history=${messages.length} secret=${hasSecret ? 'BLUE-42' : 'none'}`;

@@ -44,6 +44,15 @@ export const config = {
   agent: {
     /** 等待用户审批的超时（毫秒）；测试可通过环境变量缩短。 */
     approvalTimeoutMs: parseNumber(process.env.AUREVOY_APPROVAL_TIMEOUT_MS, 5 * 60 * 1000),
+    /**
+     * 会话级短期记忆的上下文字符预算（M4.2）。
+     * 单轮喂给 LLM 的历史消息总字符超过此值时触发确定性压缩，避免裸拼接撑爆上下文。
+     */
+    contextCharBudget: parseNumber(process.env.AUREVOY_CONTEXT_CHAR_BUDGET, 24000),
+    /** 压缩时保留逐字的最近消息条数（边界：近窗口逐字，旧内容压缩）。 */
+    recentMessageWindow: parseNumber(process.env.AUREVOY_RECENT_MESSAGE_WINDOW, 8),
+    /** 被压缩消息的单条内容字符上限（保留可读摘要，引用而非全文）。 */
+    compressedMessageCharCap: parseNumber(process.env.AUREVOY_COMPRESSED_MESSAGE_CHAR_CAP, 600),
   },
 
   sandbox: {
