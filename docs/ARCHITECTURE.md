@@ -82,6 +82,7 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；`riskLevelOf()` 查风险等级 |
 | `src/tools/builtins.ts` | 内置基础工具：`list_directory`/`read_file`/`write_file`/`http_fetch`；文件类路径限定 `config.workspaceDir` 内（防穿越） |
 | `src/tools/mcp.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到 `ToolRegistry` |
+| `src/runtime/settings.ts` | 运行设置服务：从 SQLite 加载/保存 Provider、工作区、工具边界、MCP 和清理策略；更新后影响真实 runtime |
 | `src/sandbox/command-executor.ts` | 命令/代码执行前置边界：策略、超时、输出上限、env allowlist；默认禁用，不暴露 shell |
 | `src/store/db.ts` | SQLite 持久化（`taskStore`：save/get/list；`traceStore`：append/list） |
 
@@ -129,6 +130,7 @@ API 请求响应、运行时常量（默认地址端口）。
 | 加轨迹日志/审计 | `store/` 新增结构化记录，`agent/` 在状态边界写入 | 前端临时数组、console-only 日志 |
 | 加沙箱/命令执行 | 新增执行器模块和权限策略，默认关闭高风险能力 | 直接在工具里调用本机 shell |
 | 加评测 | 新增可复现用例和脚本，覆盖工具/状态/安全路径 | 只靠手工试一次 |
+| 加运行设置 | `runtime/settings.ts` + `store/db.ts` + `packages/shared` API 类型 | 前端静态表单、只改 `.env.example` |
 | 改任务/事件结构 | 改 `packages/shared` 并 `build:shared` | 前后端各自重定义 |
 | 加界面 | `apps/desktop/src` | 后端业务逻辑 |
 | 换存储/加表 | `store/db.ts` | 其它模块直接访问 DB |

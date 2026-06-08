@@ -223,6 +223,8 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 - **停止**：调用 `POST /api/tasks/:id/cancel`；只有接口返回后才更新取消/停止状态。
 - **新对话**：清空当前对话状态，回到空状态 hero。
 - **审批**：对 `approval_request` 调用 `POST /api/tasks/:id/approvals`，并展示投递是否成功。
+- **设置**：打开设置抽屉，读取 `/api/settings`、`/api/tools`、`/api/mcp/status`、`/api/data`；
+  保存 Provider、工作区、工具启停、MCP 和清理策略时必须调用后端接口，不能只改前端状态。
 
 后续控制能力应按契约优先原则新增；没有后端真实行为前，不能在 UI 上提供可点击假入口：
 

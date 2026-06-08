@@ -5,17 +5,22 @@ import type {
   AgentEvent,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
+  CleanupDataRequest,
+  CleanupDataResponse,
   ContinueTaskRequest,
   ContinueTaskResponse,
   CreateMemoryRequest,
   CreateTaskRequest,
   CreateTaskResponse,
+  DataStatusResponse,
   HealthResponse,
   MemoryCategory,
   MemoryEntry,
   MemoryListResponse,
   ResumeTaskResponse,
   TaskTraceListResponse,
+  UpdateRuntimeSettingsRequest,
+  UpdateToolRequest,
   UpdateMemoryRequest,
 } from '@aurevoy/shared';
 import { config } from './config.js';
@@ -30,14 +35,23 @@ import {
   runTask,
 } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
-import { taskStore, traceStore, memoryStore } from './store/db.js';
+import { taskStore, traceStore, memoryStore, toolSettingsStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
 import { getProviderName } from './llm/provider.js';
+import { getMcpStatuses, reloadMcpTools } from './tools/mcp.js';
+import {
+  loadPersistedSettings,
+  readCleanupPolicyDays,
+  readRuntimeSettings,
+  updateRuntimeSettings,
+} from './runtime/settings.js';
 
 const startedAt = Date.now();
 
 export async function buildServer() {
   const app = Fastify({ logger: true });
+  loadPersistedSettings();
+  toolRegistry.applySettings(toolSettingsStore.list());
   const recoveredTasks = markInterruptedTasksAfterRestart();
   if (recoveredTasks.length > 0) {
     app.log.warn(`启动恢复：${recoveredTasks.length} 个未完成任务已标记为可恢复失败`);
@@ -56,7 +70,60 @@ export async function buildServer() {
   });
 
   // 已注册工具列表（调试/前端展示用）
-  app.get('/api/tools', async () => toolRegistry.list());
+  app.get('/api/tools', async () => toolRegistry.listAll());
+
+  app.patch<{ Params: { name: string }; Body: UpdateToolRequest }>(
+    '/api/tools/:name',
+    async (req, reply) => {
+      const enabled = req.body?.enabled;
+      if (typeof enabled !== 'boolean') {
+        return reply.code(400).send({ error: 'enabled(boolean) 必填' });
+      }
+      const updated = toolRegistry.setEnabled(req.params.name, enabled);
+      if (!updated) return reply.code(404).send({ error: 'tool not found' });
+      toolSettingsStore.setEnabled(req.params.name, enabled);
+      const tool = toolRegistry.listAll().find((item) => item.name === req.params.name);
+      return reply.send(tool);
+    },
+  );
+
+  app.get('/api/mcp/status', async () => {
+    return { servers: getMcpStatuses() };
+  });
+
+  app.get('/api/settings', async () => readRuntimeSettings());
+
+  app.patch<{ Body: UpdateRuntimeSettingsRequest }>('/api/settings', async (req, reply) => {
+    try {
+      const result = updateRuntimeSettings(req.body ?? {});
+      if (result.mcpChanged) {
+        await reloadMcpTools();
+        toolRegistry.applySettings(toolSettingsStore.list());
+      }
+      return reply.send(result.settings);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: message });
+    }
+  });
+
+  app.get('/api/data', async (): Promise<DataStatusResponse> => {
+    return {
+      dbPath: config.dbPath,
+      workspaceDir: config.workspaceDir,
+      cleanupPolicyDays: readCleanupPolicyDays(),
+      counts: {
+        tasks: taskStore.count(),
+        traces: traceStore.count(),
+        memories: memoryStore.count(),
+      },
+    };
+  });
+
+  app.post<{ Body: CleanupDataRequest }>('/api/data/cleanup', async (req): Promise<CleanupDataResponse> => {
+    const olderThanDays = req.body?.olderThanDays ?? readCleanupPolicyDays();
+    return taskStore.cleanupTerminal(olderThanDays);
+  });
 
   // 任务列表
   app.get('/api/tasks', async () => taskStore.list());

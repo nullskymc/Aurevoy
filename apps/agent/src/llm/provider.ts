@@ -377,3 +377,8 @@ export function getProvider(): LLMProvider {
   cachedProvider = new OpenAICompatibleProvider({ apiKey, baseUrl, model, temperature });
   return cachedProvider;
 }
+
+/** 设置界面更新 Provider 配置后清空缓存，下一轮任务会用最新运行时配置。 */
+export function resetProviderCache(): void {
+  cachedProvider = null;
+}

@@ -20,13 +20,26 @@ export interface Tool {
  */
 class ToolRegistry {
   private tools = new Map<string, Tool>();
+  private enabledByName = new Map<string, boolean>();
 
   register(tool: Tool): void {
-    this.tools.set(tool.descriptor.name, tool);
+    const descriptor: ToolDescriptor = {
+      ...tool.descriptor,
+      source: tool.descriptor.source ?? { type: 'builtin' },
+    };
+    this.tools.set(descriptor.name, { ...tool, descriptor });
+    if (!this.enabledByName.has(descriptor.name)) this.enabledByName.set(descriptor.name, true);
   }
 
   list(): ToolDescriptor[] {
-    return [...this.tools.values()].map((t) => t.descriptor);
+    return this.listAll().filter((tool) => tool.enabled !== false);
+  }
+
+  listAll(): ToolDescriptor[] {
+    return [...this.tools.values()].map((t) => ({
+      ...t.descriptor,
+      enabled: this.isEnabled(t.descriptor.name),
+    }));
   }
 
   /** 查询某工具的风险等级；未知工具或未声明时返回 'safe' */
@@ -34,10 +47,42 @@ class ToolRegistry {
     return this.tools.get(name)?.descriptor.riskLevel ?? 'safe';
   }
 
+  has(name: string): boolean {
+    return this.tools.has(name);
+  }
+
+  isEnabled(name: string): boolean {
+    return this.enabledByName.get(name) !== false;
+  }
+
+  setEnabled(name: string, enabled: boolean): boolean {
+    if (!this.tools.has(name)) return false;
+    this.enabledByName.set(name, enabled);
+    return true;
+  }
+
+  applySettings(settings: Map<string, boolean>): void {
+    for (const [name, enabled] of settings) {
+      if (this.tools.has(name)) this.enabledByName.set(name, enabled);
+    }
+  }
+
+  unregisterMcpTools(): void {
+    for (const [name, tool] of this.tools.entries()) {
+      if (tool.descriptor.source?.type === 'mcp') {
+        this.tools.delete(name);
+        this.enabledByName.delete(name);
+      }
+    }
+  }
+
   async invoke(call: ToolCall, context?: ToolContext): Promise<ToolResult> {
     const tool = this.tools.get(call.toolName);
     if (!tool) {
       return { callId: call.id, ok: false, error: `未知工具: ${call.toolName}` };
+    }
+    if (!this.isEnabled(call.toolName)) {
+      return { callId: call.id, ok: false, error: `工具已禁用: ${call.toolName}` };
     }
     try {
       const output = await tool.execute(call.args, context);

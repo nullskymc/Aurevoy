@@ -10,6 +10,7 @@ import { config } from '../config.js';
  */
 const db = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS tasks (
@@ -66,6 +67,19 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_memories_enabled
     ON memories(enabled, updated_at);
+
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    is_secret  INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS tool_settings (
+    name       TEXT PRIMARY KEY,
+    enabled    INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
 const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
@@ -192,6 +206,34 @@ export const taskStore = {
       .all() as TaskRow[];
     return rows.map(rowToTask);
   },
+
+  count(): number {
+    const row = db.prepare('SELECT COUNT(*) AS count FROM tasks').get() as { count: number };
+    return row.count;
+  },
+
+  cleanupTerminal(olderThanDays: number): { deletedTasks: number; deletedTraces: number } {
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+    const ids = db
+      .prepare(
+        `SELECT id FROM tasks
+         WHERE updated_at < ?
+           AND status IN ('completed', 'failed', 'cancelled')`,
+      )
+      .all(cutoff) as Array<{ id: string }>;
+    if (ids.length === 0) return { deletedTasks: 0, deletedTraces: 0 };
+
+    const deleteOne = db.transaction((taskIds: string[]) => {
+      let deletedTraces = 0;
+      let deletedTasks = 0;
+      for (const id of taskIds) {
+        deletedTraces += db.prepare('DELETE FROM task_traces WHERE task_id = ?').run(id).changes;
+        deletedTasks += db.prepare('DELETE FROM tasks WHERE id = ?').run(id).changes;
+      }
+      return { deletedTasks, deletedTraces };
+    });
+    return deleteOne(ids.map((row) => row.id));
+  },
 };
 
 export const traceStore = {
@@ -235,6 +277,11 @@ export const traceStore = {
       .prepare('SELECT * FROM task_traces WHERE task_id = ? ORDER BY started_at ASC')
       .all(taskId) as TaskTraceRow[];
     return rows.map(rowToTrace);
+  },
+
+  count(): number {
+    const row = db.prepare('SELECT COUNT(*) AS count FROM task_traces').get() as { count: number };
+    return row.count;
   },
 };
 
@@ -344,5 +391,67 @@ export const memoryStore = {
   delete(id: string): boolean {
     const info = db.prepare('DELETE FROM memories WHERE id = ?').run(id);
     return info.changes > 0;
+  },
+
+  count(): number {
+    const row = db.prepare('SELECT COUNT(*) AS count FROM memories').get() as { count: number };
+    return row.count;
+  },
+};
+
+export const settingsStore = {
+  get(key: string): string | undefined {
+    const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as
+      | { value: string }
+      | undefined;
+    return row?.value;
+  },
+
+  set(key: string, value: string, isSecret = false): void {
+    db.prepare(
+      `INSERT INTO app_settings (key, value, is_secret, updated_at)
+       VALUES (@key, @value, @isSecret, @updatedAt)
+       ON CONFLICT(key) DO UPDATE SET
+         value=excluded.value,
+         is_secret=excluded.is_secret,
+         updated_at=excluded.updated_at`,
+    ).run({
+      key,
+      value,
+      isSecret: isSecret ? 1 : 0,
+      updatedAt: new Date().toISOString(),
+    });
+  },
+
+  entries(): Record<string, string> {
+    const rows = db.prepare('SELECT key, value FROM app_settings').all() as Array<{
+      key: string;
+      value: string;
+    }>;
+    return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  },
+};
+
+export const toolSettingsStore = {
+  setEnabled(name: string, enabled: boolean): void {
+    db.prepare(
+      `INSERT INTO tool_settings (name, enabled, updated_at)
+       VALUES (@name, @enabled, @updatedAt)
+       ON CONFLICT(name) DO UPDATE SET
+         enabled=excluded.enabled,
+         updated_at=excluded.updated_at`,
+    ).run({
+      name,
+      enabled: enabled ? 1 : 0,
+      updatedAt: new Date().toISOString(),
+    });
+  },
+
+  list(): Map<string, boolean> {
+    const rows = db.prepare('SELECT name, enabled FROM tool_settings').all() as Array<{
+      name: string;
+      enabled: number;
+    }>;
+    return new Map(rows.map((row) => [row.name, row.enabled === 1]));
   },
 };

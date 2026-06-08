@@ -4,21 +4,28 @@ import type {
   HealthResponse,
   MemoryCategory,
   MemoryEntry,
+  McpServerStatus,
   PlanStep,
+  RuntimeSettings,
   Task,
   TaskPhase,
   TaskStatus,
   TaskTraceEntry,
   ToolDescriptor,
+  UpdateRuntimeSettingsRequest,
 } from "@aurevoy/shared";
 import {
   approveToolCall,
   cancelTask,
   checkHealth,
+  cleanupData,
   continueTask,
   createMemory,
   createTask,
   deleteMemory,
+  getDataStatus,
+  getMcpStatus,
+  getSettings,
   getTask,
   listMemories,
   listTaskTraces,
@@ -26,12 +33,15 @@ import {
   listTools,
   resumeTask,
   streamTask,
+  updateSettings,
+  updateTool,
   updateMemory,
 } from "./lib/api";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MemoryPanel } from "./components/MemoryPanel";
+import { SettingsPanel, type SettingsDraft } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { StatusPill } from "./components/StatusPill";
 import type { FeedItem } from "./components/AgentEventFeed";
@@ -93,7 +103,12 @@ function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
   const [memories, setMemories] = useState<MemoryEntry[]>([]);
+  const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
+  const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
+  const [dataStatus, setDataStatus] = useState<Awaited<ReturnType<typeof getDataStatus>> | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [output, setOutput] = useState("");
   const [phase, setPhase] = useState<TaskPhase | null>(null);
@@ -126,6 +141,23 @@ function App() {
       // 仅网络层失败(fetch 抛 TypeError)才判定引擎离线；
       // HTTP 4xx/5xx 说明引擎可达、只是返回了错误，不应误判为离线。
       setOnline(err instanceof TypeError ? false : true);
+    }
+  }
+
+  async function refreshSettings(): Promise<void> {
+    try {
+      const [settings, nextTools, mcp, data] = await Promise.all([
+        getSettings(),
+        listTools(),
+        getMcpStatus(),
+        getDataStatus(),
+      ]);
+      setRuntimeSettings(settings);
+      setTools(nextTools);
+      setMcpServers(mcp.servers);
+      setDataStatus(data);
+    } catch (err) {
+      setNotice(`读取设置失败：${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -422,6 +454,54 @@ function App() {
     void refreshMemories();
   }
 
+  function handleOpenSettings(): void {
+    setSettingsOpen(true);
+    void refreshSettings();
+  }
+
+  function handleSaveSettings(draft: SettingsDraft): void {
+    const body: UpdateRuntimeSettingsRequest = {
+      llm: {
+        provider: "openai",
+        baseUrl: draft.baseUrl,
+        model: draft.model,
+        temperature: draft.temperature,
+        timeoutMs: draft.timeoutMs,
+        ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+      },
+      workspaceDir: draft.workspaceDir,
+      commandExecutionEnabled: draft.commandExecutionEnabled,
+      mcpServersJson: draft.mcpServersJson,
+      cleanupPolicyDays: draft.cleanupPolicyDays,
+    };
+    setSettingsSaving(true);
+    void updateSettings(body)
+      .then((next) => {
+        setRuntimeSettings(next);
+        setNotice("设置已保存，并已应用到 Agent runtime");
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`保存设置失败：${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setSettingsSaving(false));
+  }
+
+  function handleToggleTool(name: string, enabled: boolean): void {
+    void updateTool(name, { enabled })
+      .then((updated) => {
+        setTools((prev) => prev.map((tool) => (tool.name === name ? updated : tool)));
+      })
+      .catch((err) => setNotice(`更新工具失败：${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  function handleCleanupData(olderThanDays: number): void {
+    void cleanupData(olderThanDays)
+      .then((result) => {
+        setNotice(`已清理 ${result.deletedTasks} 个任务、${result.deletedTraces} 条轨迹`);
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`清理数据失败：${err instanceof Error ? err.message : String(err)}`));
+  }
+
   function handleCreateMemory(content: string, category: MemoryCategory): void {
     void createMemory({ content, category })
       .then((created) => setMemories((prev) => [created, ...prev]))
@@ -506,6 +586,9 @@ function App() {
                 >
                   运行详情
                 </button>
+                <button type="button" className="ghost-btn" onClick={handleOpenSettings}>
+                  设置
+                </button>
               </div>
             </>
           ) : (
@@ -562,6 +645,9 @@ function App() {
               onSubmit={handleComposerSubmit}
               onStop={handleStopStream}
             />
+            <button type="button" className="ghost-btn" onClick={handleOpenSettings}>
+              设置
+            </button>
           </div>
         )}
       </main>
@@ -585,6 +671,20 @@ function App() {
         onToggle={handleToggleMemory}
         onEdit={handleEditMemory}
         onDelete={handleDeleteMemory}
+      />
+
+      <SettingsPanel
+        open={settingsOpen}
+        settings={runtimeSettings}
+        tools={tools}
+        mcpServers={mcpServers}
+        dataStatus={dataStatus}
+        saving={settingsSaving}
+        onClose={() => setSettingsOpen(false)}
+        onSave={handleSaveSettings}
+        onToggleTool={handleToggleTool}
+        onCleanup={handleCleanupData}
+        onRefresh={refreshSettings}
       />
     </div>
   );

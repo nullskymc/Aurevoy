@@ -6,7 +6,7 @@ import {
   type StdioServerParameters,
 } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { Tool as McpSdkTool } from '@modelcontextprotocol/sdk/types.js';
-import type { ToolDescriptor, ToolRiskLevel } from '@aurevoy/shared';
+import type { McpServerStatus, ToolDescriptor, ToolRiskLevel } from '@aurevoy/shared';
 import { config, type McpServerConfig } from '../config.js';
 import { toolRegistry } from './registry.js';
 
@@ -26,6 +26,7 @@ export interface McpInitSummary {
 }
 
 const connections: McpConnection[] = [];
+const statuses = new Map<string, McpServerStatus>();
 
 /**
  * 启动期连接已配置的 MCP servers，并把它们暴露的 tools 注册到统一 ToolRegistry。
@@ -33,10 +34,20 @@ const connections: McpConnection[] = [];
  */
 export async function initializeMcpTools(): Promise<McpInitSummary> {
   const enabledServers = config.mcpServers.filter((server) => server.enabled);
-  const usedNames = new Set(toolRegistry.list().map((tool) => tool.name));
+  const usedNames = new Set(toolRegistry.listAll().map((tool) => tool.name));
   let connectedServers = 0;
   let registeredTools = 0;
   let failedServers = 0;
+
+  statuses.clear();
+  for (const server of config.mcpServers) {
+    statuses.set(server.name, {
+      name: server.name,
+      enabled: server.enabled,
+      connected: false,
+      registeredTools: 0,
+    });
+  }
 
   for (const server of enabledServers) {
     try {
@@ -51,10 +62,24 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
         toolRegistry.register(toRegistryTool(server, client, tool, registeredName));
         registeredTools += 1;
       }
+      statuses.set(server.name, {
+        name: server.name,
+        enabled: true,
+        connected: true,
+        registeredTools: tools.length,
+      });
       console.info(`[MCP] 已连接 ${server.name}，注册 ${tools.length} 个工具`);
     } catch (err) {
       failedServers += 1;
-      console.warn(`[MCP] 连接 ${server.name} 失败：${formatError(err)}`);
+      const error = formatError(err);
+      statuses.set(server.name, {
+        name: server.name,
+        enabled: true,
+        connected: false,
+        registeredTools: 0,
+        error,
+      });
+      console.warn(`[MCP] 连接 ${server.name} 失败：${error}`);
     }
   }
 
@@ -69,6 +94,24 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
 export async function closeMcpTools(): Promise<void> {
   await Promise.allSettled(connections.map(({ client }) => client.close()));
   connections.length = 0;
+}
+
+export async function reloadMcpTools(): Promise<McpInitSummary> {
+  await closeMcpTools();
+  toolRegistry.unregisterMcpTools();
+  return initializeMcpTools();
+}
+
+export function getMcpStatuses(): McpServerStatus[] {
+  return config.mcpServers.map(
+    (server) =>
+      statuses.get(server.name) ?? {
+        name: server.name,
+        enabled: server.enabled,
+        connected: false,
+        registeredTools: 0,
+      },
+  );
 }
 
 async function connectStdioServer(server: McpServerConfig): Promise<Client> {
@@ -124,6 +167,7 @@ function toRegistryTool(
       `MCP tool "${mcpTool.name}" from server "${server.name}"`,
     inputSchema: mcpTool.inputSchema,
     riskLevel: inferRiskLevel(server, mcpTool),
+    source: { type: 'mcp', serverName: server.name, originalName: mcpTool.name },
   };
 
   return {

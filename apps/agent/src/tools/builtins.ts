@@ -15,28 +15,28 @@ import { memoryStore } from '../store/db.js';
  * - 跨平台：路径用 node:path 拼接，不硬编码分隔符。
  */
 
-const WORKSPACE_ROOT = resolve(config.workspaceDir);
 const MAX_READ_BYTES = 256 * 1024; // 单次读文件上限 256KB
 const MAX_FETCH_BYTES = 1024 * 1024; // 单次抓取上限 1MB
 const FETCH_TIMEOUT_MS = 20000;
 
 /** 把用户给的相对/绝对路径解析为工作区内的绝对路径；越界则抛错。 */
 function resolveInWorkspace(input: unknown): string {
+  const workspaceRoot = workspaceRootPath();
   if (typeof input !== 'string' || input.trim() === '') {
     throw new Error('path 必须是非空字符串');
   }
   // 绝对路径按原样解析，相对路径相对工作区根
-  const target = isAbsolute(input) ? resolve(input) : resolve(WORKSPACE_ROOT, input);
-  const rel = relative(WORKSPACE_ROOT, target);
+  const target = isAbsolute(input) ? resolve(input) : resolve(workspaceRoot, input);
+  const rel = relative(workspaceRoot, target);
   if (rel === '' ) return target; // 工作区根本身
   if (rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error(`路径越界：只允许访问工作区目录内 (${WORKSPACE_ROOT})`);
+    throw new Error(`路径越界：只允许访问工作区目录内 (${workspaceRoot})`);
   }
   return target;
 }
 
 async function ensureWorkspace(): Promise<void> {
-  await fs.mkdir(WORKSPACE_ROOT, { recursive: true });
+  await fs.mkdir(workspaceRootPath(), { recursive: true });
 }
 
 /** 解析路径的真实位置（跟随 symlink）；不存在时回退到最近的已存在祖先。 */
@@ -60,12 +60,17 @@ async function realpathOrNearest(p: string): Promise<string> {
  */
 async function assertRealPathInside(target: string): Promise<void> {
   await ensureWorkspace();
-  const realRoot = await fs.realpath(WORKSPACE_ROOT);
+  const workspaceRoot = workspaceRootPath();
+  const realRoot = await fs.realpath(workspaceRoot);
   const real = await realpathOrNearest(target);
   const rel = relative(realRoot, real);
   if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) {
-    throw new Error(`路径越界（符号链接指向工作区外）：只允许访问 ${WORKSPACE_ROOT} 内`);
+    throw new Error(`路径越界（符号链接指向工作区外）：只允许访问 ${workspaceRoot} 内`);
   }
+}
+
+function workspaceRootPath(): string {
+  return resolve(config.workspaceDir);
 }
 
 // ---- list_directory（safe）----
@@ -86,7 +91,7 @@ toolRegistry.register({
     await assertRealPathInside(dir);
     const entries = await fs.readdir(dir, { withFileTypes: true });
     return {
-      dir: relative(WORKSPACE_ROOT, dir) || '.',
+      dir: relative(workspaceRootPath(), dir) || '.',
       entries: entries.map((e) => ({
         name: e.name,
         type: e.isDirectory() ? 'directory' : 'file',
@@ -117,7 +122,7 @@ toolRegistry.register({
       throw new Error(`文件过大（${stat.size} 字节），上限 ${MAX_READ_BYTES} 字节`);
     }
     const content = await fs.readFile(file, 'utf8');
-    return { path: relative(WORKSPACE_ROOT, file), size: stat.size, content };
+    return { path: relative(workspaceRootPath(), file), size: stat.size, content };
   },
 });
 
@@ -144,7 +149,7 @@ toolRegistry.register({
     // 创建父目录后校验真实路径（含父目录中的 symlink）仍在工作区内
     await assertRealPathInside(file);
     await fs.writeFile(file, content, 'utf8');
-    return { path: relative(WORKSPACE_ROOT, file), bytesWritten: Buffer.byteLength(content) };
+    return { path: relative(workspaceRootPath(), file), bytesWritten: Buffer.byteLength(content) };
   },
 });
 

@@ -156,7 +156,15 @@ export interface ToolDescriptor {
   inputSchema: Record<string, unknown>;
   /** 风险等级；缺省视为 'safe' */
   riskLevel?: ToolRiskLevel;
+  /** 当前是否启用；禁用工具不会提供给模型，也不能被执行。 */
+  enabled?: boolean;
+  /** 工具来源，用于工具管理与 MCP 诊断。 */
+  source?: ToolSource;
 }
+
+export type ToolSource =
+  | { type: 'builtin' }
+  | { type: 'mcp'; serverName: string; originalName: string };
 
 /** 一次工具调用 */
 export interface ToolCall {
@@ -333,6 +341,83 @@ export interface UpdateMemoryRequest {
 /** GET /api/memories — 记忆列表 */
 export interface MemoryListResponse {
   memories: MemoryEntry[];
+}
+
+// ============================================================
+// M5 设置、工具管理与数据管理
+// ============================================================
+
+export interface RuntimeSettings {
+  llm: {
+    provider: 'openai';
+    baseUrl: string;
+    model: string;
+    temperature: number;
+    timeoutMs: number;
+    apiKeyConfigured: boolean;
+  };
+  workspaceDir: string;
+  commandExecutionEnabled: boolean;
+  mcpServersJson: string;
+  cleanupPolicyDays: number;
+  dbPath: string;
+}
+
+export interface UpdateRuntimeSettingsRequest {
+  llm?: Partial<{
+    provider: 'openai';
+    baseUrl: string;
+    model: string;
+    temperature: number;
+    timeoutMs: number;
+    /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
+    apiKey: string;
+  }>;
+  workspaceDir?: string;
+  commandExecutionEnabled?: boolean;
+  mcpServersJson?: string;
+  cleanupPolicyDays?: number;
+}
+
+export interface ToolListResponse {
+  tools: ToolDescriptor[];
+}
+
+export interface UpdateToolRequest {
+  enabled: boolean;
+}
+
+export interface McpServerStatus {
+  name: string;
+  enabled: boolean;
+  connected: boolean;
+  registeredTools: number;
+  error?: string;
+}
+
+export interface McpStatusResponse {
+  servers: McpServerStatus[];
+}
+
+export interface DataStatusResponse {
+  dbPath: string;
+  workspaceDir: string;
+  cleanupPolicyDays: number;
+  counts: {
+    tasks: number;
+    traces: number;
+    memories: number;
+  };
+}
+
+export interface CleanupDataRequest {
+  /** 清理多少天以前的终态任务；不填则使用当前设置里的 cleanupPolicyDays。 */
+  olderThanDays?: number;
+}
+
+export interface CleanupDataResponse {
+  deletedTasks: number;
+  deletedTraces: number;
 }
 
 // ============================================================

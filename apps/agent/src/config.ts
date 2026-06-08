@@ -71,15 +71,15 @@ export const config = {
    * {"mcpServers":{"name":{"command":"node","args":["server.js"]}}}
    */
   mcpServers: parseMcpServers(process.env.AUREVOY_MCP_SERVERS_JSON),
-} as const;
+};
 
 /** 解析数字环境变量，非法或缺失时回退默认值（避免 NaN 污染配置）。 */
-function parseNumber(raw: string | undefined, fallback: number): number {
+export function parseNumber(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
   return raw != null && raw !== '' && !Number.isNaN(n) ? n : fallback;
 }
 
-function parseMcpServers(raw: string | undefined): McpServerConfig[] {
+export function parseMcpServers(raw: string | undefined): McpServerConfig[] {
   if (!raw?.trim()) return [];
 
   let parsed: unknown;

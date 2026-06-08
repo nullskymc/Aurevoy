@@ -23,10 +23,27 @@
 ```json
 // 200 → ToolDescriptor[]
 [{ "name": "get_current_time", "description": "获取当前的 ISO 时间戳",
-   "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false } }]
+   "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+   "enabled": true, "source": { "type": "builtin" } }]
 ```
 MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名称格式为
 `mcp_<server>_<tool>`（非法字符会转为 `_`，超长名称会附加稳定 hash）。
+禁用工具仍会出现在列表中，但不会提供给模型，直接调用也会返回明确失败。
+
+### PATCH `/api/tools/:name`
+启用或停用一个工具。
+```json
+// 请求体 UpdateToolRequest
+{ "enabled": false }
+```
+命中返回更新后的 `ToolDescriptor`；工具不存在 → `404`；字段缺失 → `400`。
+
+### GET `/api/mcp/status`
+查看 MCP server 连接状态。
+```json
+// 200 → McpStatusResponse
+{ "servers": [{ "name": "localTools", "enabled": true, "connected": true, "registeredTools": 3 }] }
+```
 
 ### GET `/api/tasks`
 列出全部任务，按创建时间倒序。返回 `Task[]`。
@@ -119,6 +136,24 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 
 > Agent 侧通过内置 `remember` 工具写入记忆（`source.origin='agent'`，自动记录来源任务与目标），
 > 调用会留下工具轨迹可审计。删除/禁用始终由用户掌控（agent 无删除工具）。
+
+### 运行设置 `/api/settings`  (M5)
+设置来自 SQLite 持久化，启动时覆盖环境变量默认值；PATCH 后立即更新内存 runtime。
+响应不会回显 API Key，只返回 `apiKeyConfigured`。
+
+- `GET /api/settings` → `RuntimeSettings`
+- `PATCH /api/settings`（`UpdateRuntimeSettingsRequest`）→ `RuntimeSettings`
+
+可更新项：OpenAI 兼容 `baseUrl` / `model` / `temperature` / `timeoutMs` / `apiKey`、
+工作区目录、命令执行边界、MCP server JSON、数据清理保留天数。
+Provider 设置会清空 Provider 缓存，下一轮任务使用新配置；工作区目录会被文件工具实时读取；
+MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空工作区等返回 `400`。
+
+### 数据管理 `/api/data`  (M5)
+
+- `GET /api/data` → `DataStatusResponse`：返回 SQLite 路径、工作区目录、清理策略、任务/轨迹/记忆计数。
+- `POST /api/data/cleanup`（`CleanupDataRequest { olderThanDays? }`）→
+  `CleanupDataResponse`：删除指定天数以前的终态任务（completed/failed/cancelled）及其轨迹。
 
 ## 2. 事件契约：`AgentEvent`
 

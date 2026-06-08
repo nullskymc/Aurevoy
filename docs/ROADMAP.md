@@ -132,14 +132,22 @@
 
 目标：把本地开发应用推进到普通用户可安装、可配置、可维护。
 
-- [ ] 设置界面：Provider、Base URL、Model、API Key、工作区目录、工具开关、MCP servers
-- [ ] 设置变更必须影响真实运行配置；不能只做静态表单
-- [ ] 工具管理：查看工具、风险等级、启用/禁用、MCP 连接状态
-- [ ] 数据管理：任务历史、轨迹日志、记忆、SQLite 文件位置、清理策略
+- [x] 设置界面：Provider、Base URL、Model、API Key、工作区目录、工具开关、MCP servers
+      （`SettingsPanel` 调用 `/api/settings`、`/api/tools`、`/api/mcp/status`、`/api/data`；
+      API Key 不回显，只显示是否已配置）
+- [x] 设置变更必须影响真实运行配置；不能只做静态表单
+      （SQLite `app_settings` 持久化；PATCH 后更新内存 `config`、清空 Provider 缓存、
+      文件工具实时读取新工作区、MCP JSON 改动触发 MCP 工具重载；`npm run regression:m5` 覆盖）
+- [x] 工具管理：查看工具、风险等级、启用/禁用、MCP 连接状态
+      （工具启停写入 `tool_settings`；禁用工具不提供给模型且不可执行；MCP server 状态返回连接/失败原因）
+- [x] 数据管理：任务历史、轨迹日志、记忆、SQLite 文件位置、清理策略
+      （`GET /api/data` 返回路径与计数；`POST /api/data/cleanup` 清理保留期外终态任务和轨迹）
 - [ ] macOS 打包、签名、自动更新
 - [ ] 引擎随桌面应用启动的进程管理（sidecar 或子进程托管）
 - [ ] Windows 适配：WebView2、原生模块重编、路径与权限
-- [ ] 跨平台 CI：macOS + Windows build/typecheck/冒烟
+- [x] 跨平台 CI：macOS + Windows build/typecheck/冒烟
+      （`.github/workflows/ci.yml` 在 ubuntu/macos/windows 跑 `npm ci`、`npm run build`、
+      `npm run typecheck`、`regression:m3/m4/m5`）
 
 完成标准：
 - 用户无需命令行即可配置 Provider 和工作区。

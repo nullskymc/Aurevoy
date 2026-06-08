@@ -1,17 +1,24 @@
 import {
   AGENT_DEFAULT_BASE_URL,
   type AgentEvent,
+  type CleanupDataResponse,
   type ContinueTaskResponse,
   type CreateMemoryRequest,
   type CreateTaskResponse,
+  type DataStatusResponse,
   type HealthResponse,
   type MemoryEntry,
   type MemoryListResponse,
+  type McpStatusResponse,
   type ResumeTaskResponse,
+  type RuntimeSettings,
   type Task,
   type TaskTraceEntry,
   type TaskTraceListResponse,
+  type ToolListResponse,
   type ToolDescriptor,
+  type UpdateRuntimeSettingsRequest,
+  type UpdateToolRequest,
   type UpdateMemoryRequest,
 } from '@aurevoy/shared';
 
@@ -102,6 +109,60 @@ export async function approveToolCall(
 export async function listTools(): Promise<ToolDescriptor[]> {
   const res = await fetch(`${BASE_URL}/api/tools`);
   if (!res.ok) throw new Error(`list tools failed: ${res.status}`);
+  const body = (await res.json()) as ToolDescriptor[] | ToolListResponse;
+  return Array.isArray(body) ? body : body.tools;
+}
+
+export async function updateTool(
+  name: string,
+  body: UpdateToolRequest,
+): Promise<ToolDescriptor> {
+  const res = await fetch(`${BASE_URL}/api/tools/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`update tool failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getSettings(): Promise<RuntimeSettings> {
+  const res = await fetch(`${BASE_URL}/api/settings`);
+  if (!res.ok) throw new Error(`get settings failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateSettings(
+  body: UpdateRuntimeSettingsRequest,
+): Promise<RuntimeSettings> {
+  const res = await fetch(`${BASE_URL}/api/settings`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`update settings failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getMcpStatus(): Promise<McpStatusResponse> {
+  const res = await fetch(`${BASE_URL}/api/mcp/status`);
+  if (!res.ok) throw new Error(`get mcp status failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getDataStatus(): Promise<DataStatusResponse> {
+  const res = await fetch(`${BASE_URL}/api/data`);
+  if (!res.ok) throw new Error(`get data status failed: ${res.status}`);
+  return res.json();
+}
+
+export async function cleanupData(olderThanDays?: number): Promise<CleanupDataResponse> {
+  const res = await fetch(`${BASE_URL}/api/data/cleanup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(olderThanDays == null ? {} : { olderThanDays }),
+  });
+  if (!res.ok) throw new Error(`cleanup data failed: ${res.status}`);
   return res.json();
 }
 
