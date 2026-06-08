@@ -20,6 +20,10 @@ export function TaskHistorySidebar({
 }: TaskHistorySidebarProps) {
   return (
     <aside className="sidebar" aria-label="导航与对话历史">
+      <div className="sidebar-brand">
+        <img className="sidebar-brand-logo" src="/aurevoy-wordmark.svg" alt="Aurevoy" />
+      </div>
+
       <div className="sidebar-actions">
         <button type="button" className="sidebar-action primary" onClick={onNewTask}>
           <EditIcon />

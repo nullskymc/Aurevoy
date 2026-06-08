@@ -69,6 +69,20 @@ button:disabled {
   padding: 14px 10px 10px;
 }
 
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 4px 10px 12px;
+}
+
+.sidebar-brand-logo {
+  display: block;
+  width: 126px;
+  max-width: 100%;
+  height: auto;
+}
+
 .sidebar-actions {
   display: grid;
   gap: 1px;
@@ -1192,6 +1206,11 @@ button:disabled {
 
   .msg-avatar {
     color: #1c1c1e;
+  }
+
+  .sidebar-brand-logo {
+    filter: brightness(0) invert(1);
+    opacity: 0.92;
   }
 
   .composer-box {
