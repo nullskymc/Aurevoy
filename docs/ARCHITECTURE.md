@@ -73,8 +73,9 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/agent/events.ts` | `TaskEventBus`：按 `taskId` 发布/订阅 `AgentEvent`，桥接执行与 SSE |
 | `src/agent/tool-call-accumulator.ts` | 流式 `tool_calls` 累积器：按 `index` 跨 chunk 拼接 `id`/`name`/`arguments`，处理并行调用与截断 |
 | `src/llm/provider.ts` | `LLMProvider` 抽象（`stream(messages, options)` 支持 tools/signal）+ `OpenAICompatibleProvider`；`getProvider()` 按配置返回，未配置即报错 |
-| `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；`riskLevelOf()` 查风险等级；MCP 接入点 |
+| `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；`riskLevelOf()` 查风险等级 |
 | `src/tools/builtins.ts` | 内置基础工具：`list_directory`/`read_file`/`write_file`/`http_fetch`；文件类路径限定 `config.workspaceDir` 内（防穿越） |
+| `src/tools/mcp.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到 `ToolRegistry` |
 | `src/store/db.ts` | SQLite 持久化（`taskStore`：save/get/list） |
 
 ### 4.3 契约层 `packages/shared`
@@ -103,7 +104,7 @@ API 请求响应、运行时常量（默认地址端口）。
 |---|---|---|
 | 接真实大模型 | 在 `llm/provider.ts` 新增 `LLMProvider` 实现，改 `getProvider()` | Agent 循环、前端 |
 | 加一个工具 | 在 `tools/` 新建并 `toolRegistry.register()` | Agent 循环内联逻辑 |
-| 接 MCP server | 启动期把 MCP 工具注册进 `toolRegistry` | 工具调用协议 |
+| 接 MCP server | 配置 `AUREVOY_MCP_SERVERS_JSON`，或扩展 `tools/mcp.ts` 的 transport 支持 | 工具调用协议 / Agent 循环 |
 | 改任务/事件结构 | 改 `packages/shared` 并 `build:shared` | 前后端各自重定义 |
 | 加界面 | `apps/desktop/src` | 后端业务逻辑 |
 | 换存储/加表 | `store/db.ts` | 其它模块直接访问 DB |

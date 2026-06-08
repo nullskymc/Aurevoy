@@ -11,7 +11,7 @@ Aurevoy 是一款面向个人用户的通用 AI Agent 桌面产品。它能理�
 | 桌面壳 + UI（前端） | Tauri 2.0 + React + TypeScript + Vite |
 | Agent 引擎（后端） | Node.js + TypeScript + Fastify |
 | 前后端通信 | 本地 HTTP + SSE（流式任务输出） |
-| 工具层 | MCP (Model Context Protocol) — 预留接入 |
+| 工具层 | 内置工具 + MCP (Model Context Protocol) |
 | 本地存储 | SQLite |
 | Monorepo | npm workspaces |
 
@@ -58,6 +58,7 @@ npm run build
 
 - 新增工具放到 `apps/agent/src/tools/`，通过工具注册表暴露给 Agent 循环。
 - 前后端交互的数据结构统一定义在 `packages/shared/src/`，避免类型漂移。
+- MCP server 通过 `AUREVOY_MCP_SERVERS_JSON` 可选接入；启动时发现工具并注册到同一工具注册表。
 
 ## 文档
 

@@ -8,7 +8,7 @@
 |---|---|---|
 | M0 | 骨架与全链路打通 | ✅ 完成 |
 | M1 | 接入真实 LLM 与真正的 Agent 循环 | ⏳ 进行中/下一步 |
-| M2 | 工具能力（MCP）与本地操作 | ⏳ 待启动 |
+| M2 | 工具能力（MCP）与本地操作 | ✅ 完成 |
 | M3 | 记忆与个性化 | ⏳ 待启动 |
 | M4 | 产品化：多轮对话、任务历史、设置 | ⏳ 待启动 |
 | M5 | 打包分发与 Windows 扩展 | ⏳ 待启动 |
@@ -64,7 +64,7 @@
 
 ## M2 — 工具与操作（MCP）
 
-- [ ] 集成 MCP TypeScript SDK，启动期把 MCP server 工具注册进 `toolRegistry`
+- [x] 集成 MCP TypeScript SDK，启动期把 MCP server 工具注册进 `toolRegistry`
 - [x] 内置基础工具：文件读写、目录列举、HTTP 抓取（路径限定工作区 `config.workspaceDir`，防目录穿越）
       — `shell` 留待审批模型成熟后再加
 - [x] 工具权限模型：`ToolDescriptor.riskLevel`（safe/caution/dangerous）；

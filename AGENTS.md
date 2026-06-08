@@ -72,7 +72,7 @@ npm run build:shared   # 仅构建共享类型（改完 shared 必做）
 - ✅ Monorepo 骨架、前后端通信、SSE 流式、SQLite、全链路跑通。
 - ✅ 真实 LLM Provider（OpenAI 兼容，`.env` 配置，未配置即报错）；前端对话式界面重做。
 - ✅ M1：ReAct 工具调用循环（防死循环/重试/取消）+ 前端工具调用可视化。
-- ⏳ M2 进行中：已落地**内置工具**（文件读写/目录/HTTP 抓取，限定工作区）+
-  **工具风险模型与审批闭环**（`riskLevel` / `approval_request` / `POST …/approvals`，前端审批按钮）。
-  下一步：MCP TypeScript SDK 接入。
-- 之后：记忆、多轮对话、设置界面。详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。
+- ✅ M2：已落地**内置工具**（文件读写/目录/HTTP 抓取，限定工作区）+
+  **工具风险模型与审批闭环**（`riskLevel` / `approval_request` / `POST …/approvals`，前端审批按钮）+
+  **MCP TypeScript SDK 接入**（启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers 并注册工具）。
+- 下一步：记忆、多轮对话、设置界面。详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。

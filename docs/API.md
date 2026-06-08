@@ -25,6 +25,8 @@
 [{ "name": "get_current_time", "description": "获取当前的 ISO 时间戳",
    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false } }]
 ```
+MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名称格式为
+`mcp_<server>_<tool>`（非法字符会转为 `_`，超长名称会附加稳定 hash）。
 
 ### GET `/api/tasks`
 列出全部任务，按创建时间倒序。返回 `Task[]`。
@@ -181,3 +183,27 @@ interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: st
   **不再有占位/Mock 回退**，避免污染真实结果。
 - 当前生效的 Provider 名通过 `GET /api/health` 的 `provider` 字段暴露给前端。
 - **密钥安全**：Key 只走环境变量，禁止硬编码或提交。
+
+## 6. MCP server 配置
+
+`AUREVOY_MCP_SERVERS_JSON` 用 JSON 配置可选 MCP servers。当前支持 stdio transport，
+启动时连接 server，调用 `listTools()` 发现工具并注册到 Aurevoy 的 `ToolRegistry`；
+工具执行时再通过 MCP `callTool()` 转发。
+
+支持 Claude Desktop 风格：
+```json
+{
+  "mcpServers": {
+    "demo": {
+      "command": "node",
+      "args": ["./mcp/demo-server.js"],
+      "riskLevel": "caution"
+    }
+  }
+}
+```
+
+- `name`：server 名；对象映射写法可省略，使用 key。
+- `command` / `args` / `cwd` / `env`：stdio server 启动参数。
+- `enabled`：为 `false` 时跳过。
+- `riskLevel`：可填 `safe | caution | dangerous`；不填时按 MCP tool annotations 推断，兜底 `caution`。

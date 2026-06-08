@@ -1,4 +1,16 @@
-import { AGENT_DEFAULT_HOST, AGENT_DEFAULT_PORT } from '@aurevoy/shared';
+import { AGENT_DEFAULT_HOST, AGENT_DEFAULT_PORT, type ToolRiskLevel } from '@aurevoy/shared';
+
+export interface McpServerConfig {
+  name: string;
+  transport: 'stdio';
+  command: string;
+  args: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  enabled: boolean;
+  /** MCP 工具缺省风险等级；不填时按 tool annotations 推断，兜底为 caution。 */
+  riskLevel?: ToolRiskLevel;
+}
 
 /** 运行时配置，可通过环境变量覆盖（开发期通过 apps/agent/.env 注入） */
 export const config = {
@@ -28,10 +40,101 @@ export const config = {
     /** 单轮 LLM 调用超时（毫秒）；防止半开连接导致任务永久挂起 */
     timeoutMs: parseNumber(process.env.AUREVOY_LLM_TIMEOUT_MS, 120000),
   },
+
+  /**
+   * MCP server 配置。支持 JSON 数组、单个对象、对象映射，以及 Claude Desktop 风格：
+   * {"mcpServers":{"name":{"command":"node","args":["server.js"]}}}
+   */
+  mcpServers: parseMcpServers(process.env.AUREVOY_MCP_SERVERS_JSON),
 } as const;
 
 /** 解析数字环境变量，非法或缺失时回退默认值（避免 NaN 污染配置）。 */
 function parseNumber(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
   return raw != null && raw !== '' && !Number.isNaN(n) ? n : fallback;
+}
+
+function parseMcpServers(raw: string | undefined): McpServerConfig[] {
+  if (!raw?.trim()) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`AUREVOY_MCP_SERVERS_JSON 不是合法 JSON：${message}`);
+  }
+
+  return normalizeMcpServerEntries(parsed).map(([fallbackName, value]) =>
+    parseMcpServerConfig(fallbackName, value),
+  );
+}
+
+function normalizeMcpServerEntries(parsed: unknown): Array<[string | undefined, unknown]> {
+  if (Array.isArray(parsed)) return parsed.map((item) => [undefined, item]);
+  if (!isRecord(parsed)) throw new Error('AUREVOY_MCP_SERVERS_JSON 必须是对象或数组');
+  if (typeof parsed.command === 'string') return [[undefined, parsed]];
+  if (isRecord(parsed.mcpServers)) return Object.entries(parsed.mcpServers);
+  return Object.entries(parsed);
+}
+
+function parseMcpServerConfig(
+  fallbackName: string | undefined,
+  value: unknown,
+): McpServerConfig {
+  if (!isRecord(value)) throw new Error(`MCP server 配置必须是对象：${fallbackName ?? '<unnamed>'}`);
+
+  const name = readOptionalString(value.name) ?? fallbackName;
+  if (!name?.trim()) throw new Error('MCP server 缺少 name');
+
+  const transport = readOptionalString(value.transport) ?? 'stdio';
+  if (transport !== 'stdio') {
+    throw new Error(`MCP server "${name}" 暂只支持 stdio transport`);
+  }
+
+  const command = readOptionalString(value.command);
+  if (!command) throw new Error(`MCP server "${name}" 缺少 command`);
+
+  return {
+    name,
+    transport,
+    command,
+    args: readStringArray(value.args, `${name}.args`),
+    cwd: readOptionalString(value.cwd),
+    env: readStringRecord(value.env, `${name}.env`),
+    enabled: value.enabled !== false,
+    riskLevel: readRiskLevel(value.riskLevel, `${name}.riskLevel`),
+  };
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+function readStringArray(value: unknown, label: string): string[] {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`MCP 配置 ${label} 必须是字符串数组`);
+  }
+  return value;
+}
+
+function readStringRecord(value: unknown, label: string): Record<string, string> | undefined {
+  if (value == null) return undefined;
+  if (!isRecord(value)) throw new Error(`MCP 配置 ${label} 必须是对象`);
+  const entries = Object.entries(value);
+  if (entries.some(([, item]) => typeof item !== 'string')) {
+    throw new Error(`MCP 配置 ${label} 的值必须都是字符串`);
+  }
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function readRiskLevel(value: unknown, label: string): ToolRiskLevel | undefined {
+  if (value == null) return undefined;
+  if (value === 'safe' || value === 'caution' || value === 'dangerous') return value;
+  throw new Error(`MCP 配置 ${label} 必须是 safe/caution/dangerous`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

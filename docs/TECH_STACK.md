@@ -16,7 +16,7 @@
 | 后端语言 | TypeScript | 5.7 | 全栈统一语言 |
 | 开发热重载 | tsx | 4.x | 直接跑 TS，watch 模式 |
 | 本地存储 | better-sqlite3 | 11.x | 同步 SQLite，简单可靠 |
-| 工具协议 | MCP | —（预留） | 标准化工具/数据源接入 |
+| 工具协议 | MCP TypeScript SDK | 1.29.0 | 标准化工具/数据源接入 |
 | Monorepo | npm workspaces | npm 11 | 多包管理，零额外工具 |
 
 ## 2. 关键选型与理由
@@ -78,7 +78,7 @@ ReAct 工具调用循环不引入 `openai` SDK、Vercel AI SDK 或 LangChain.js�
 | 方向 | 候选 | 触发条件 |
 |---|---|---|
 | 真实 LLM | 原生 fetch（OpenAI 兼容）——**已采用，不引 SDK**（见 2.7） | ✅ 已落地 |
-| 工具协议 | `@modelcontextprotocol/sdk` | 接第一个 MCP server |
+| 工具协议 | `@modelcontextprotocol/sdk` | ✅ 已接入 stdio client；未来扩展 Streamable HTTP / SSE |
 | 向量检索/记忆 | sqlite-vec / LanceDB | 做长期记忆与 RAG |
 | 前端状态管理 | Zustand / Jotai | 状态复杂到 useState 撑不住 |
 | 前端 UI 库 | shadcn/ui 等 | 需要成体系组件 |
