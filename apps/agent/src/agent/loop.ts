@@ -25,6 +25,8 @@ const MAX_ITERATIONS = 20;
 const DUPLICATE_CALL_LIMIT = 3;
 /** 单轮最多并行工具调用数 */
 const MAX_TOOL_CALLS_PER_TURN = 10;
+/** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
+const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'running', 'paused'];
 /** 进行中任务的取消句柄 */
 const activeAbortControllers = new Map<string, AbortController>();
 
@@ -42,6 +44,62 @@ export function cancelTask(taskId: string): boolean {
 /** 该任务当前是否有正在执行的循环（用于续聊并发守卫）。 */
 export function isTaskRunning(taskId: string): boolean {
   return activeAbortControllers.has(taskId);
+}
+
+/**
+ * 启动期恢复扫描：SQLite 里仍处于运行态/等待态的任务，说明上一次进程已中断。
+ *
+ * 这里不自动续跑，因为审批、外部工具副作用和用户意图都可能已经过期；
+ * 先收敛为可解释的 failed，再由用户显式 resume。
+ */
+export function markInterruptedTasksAfterRestart(): Task[] {
+  const recovered: Task[] = [];
+  for (const task of taskStore.list()) {
+    if (!INTERRUPTED_STATUSES.includes(task.status)) continue;
+    const previousStatus = task.status;
+    const previousPhase = task.phase;
+    task.status = 'failed';
+    task.phase = 'failed';
+    task.plan = task.plan.map((step) =>
+      step.status === 'completed' ? step : { ...step, status: 'failed' },
+    );
+    task.updatedAt = new Date().toISOString();
+    taskStore.save(task);
+    writeTrace(task.id, 'error', 'failed', {
+      ok: false,
+      errorCategory: 'unknown',
+      summary: '引擎启动时发现任务在上次进程中断前未结束，已标记为可恢复失败',
+      data: { previousStatus, previousPhase, recoveredAt: task.updatedAt },
+    });
+    recovered.push(task);
+  }
+  return recovered;
+}
+
+/**
+ * 恢复一个历史任务：不追加假用户输入，只修补协议层悬空工具结果后重新运行。
+ *
+ * 某些 LLM API 要求 assistant tool_calls 后必须紧跟 tool 结果；如果崩溃发生在
+ * 工具调用与结果写入之间，直接续跑会被 Provider 拒绝，因此恢复前先写入可解释结果。
+ */
+export function prepareTaskForResume(task: Task): Task {
+  const now = new Date().toISOString();
+  const previousStatus = task.status;
+  const previousPhase = task.phase;
+  const patchedToolResults = patchDanglingToolResults(task.messages);
+  task.status = 'pending';
+  task.phase = 'initializing';
+  task.plan = task.plan.map((step) =>
+    step.status === 'completed' ? step : { ...step, status: 'pending' },
+  );
+  task.updatedAt = now;
+  taskStore.save(task);
+  writeTrace(task.id, 'phase', 'initializing', {
+    ok: true,
+    summary: '用户恢复历史任务，使用持久消息历史重新进入 Agent 循环',
+    data: { previousStatus, previousPhase, patchedToolResults },
+  });
+  return task;
 }
 
 /**
@@ -604,4 +662,33 @@ function makeToolResult(toolCallId: string, payload: unknown): Message {
     toolCallId,
     createdAt: new Date().toISOString(),
   };
+}
+
+function patchDanglingToolResults(messages: Message[]): number {
+  let patched = 0;
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    if (message.role !== 'assistant' || !message.toolCalls?.length) continue;
+
+    const existing = new Set<string>();
+    let insertAt = i + 1;
+    while (insertAt < messages.length && messages[insertAt].role === 'tool') {
+      const toolCallId = messages[insertAt].toolCallId;
+      if (toolCallId) existing.add(toolCallId);
+      insertAt += 1;
+    }
+
+    const missing = message.toolCalls.filter((toolCall) => !existing.has(toolCall.id));
+    if (missing.length === 0) continue;
+
+    const results = missing.map((toolCall) =>
+      makeToolResult(toolCall.id, {
+        error: '上次执行在该工具返回前中断；恢复任务时已关闭这次悬空工具调用，请重新规划或改用其他方式。',
+      }),
+    );
+    messages.splice(insertAt, 0, ...results);
+    patched += results.length;
+    i = insertAt + results.length - 1;
+  }
+  return patched;
 }

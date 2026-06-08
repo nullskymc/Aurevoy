@@ -84,5 +84,7 @@ npm run build:shared   # 仅构建共享类型（改完 shared 必做）
   **MCP TypeScript SDK 接入**（启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers 并注册工具）。
 - ✅ M3：工程治理已落地：显式 runtime phase、SQLite 轨迹日志、运行详情轨迹回看、
   `npm run regression:m3` 回归集、命令执行器沙箱边界（默认关闭）。
-- 当前重点：M4 记忆、多轮对话与任务恢复；任何记忆能力都必须可查看、可编辑、可删除、可解释来源。
+- ✅ M4：记忆、多轮对话与任务恢复已落地：上下文压缩、长期记忆 CRUD/来源/置信度、
+  向量检索选型评估、启动期中断扫描与 `POST /api/tasks/:id/resume` 真实恢复。
+- 当前重点：M5 设置、分发、Windows 与交付质量；设置入口必须控制真实配置，不能只做静态表单。
   详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md) 与 [`docs/ENGINEERING_GOVERNANCE.md`](./docs/ENGINEERING_GOVERNANCE.md)。

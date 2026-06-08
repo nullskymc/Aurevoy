@@ -75,7 +75,7 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/index.ts` | 进程入口，启动 Fastify |
 | `src/config.ts` | 运行时配置（host/port/dbPath/cors），全部可被环境变量覆盖 |
 | `src/server.ts` | HTTP 路由 + SSE 端点（见 `docs/API.md`） |
-| `src/agent/loop.ts` | **Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**（调 LLM → 有 tool_calls 则执行并回灌 → 直到最终答案）；含显式 runtime phase、防死循环、重试、取消、每轮持久化 |
+| `src/agent/loop.ts` | **Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**（调 LLM → 有 tool_calls 则执行并回灌 → 直到最终答案）；含显式 runtime phase、防死循环、重试、取消、任务恢复和每轮持久化 |
 | `src/agent/events.ts` | `TaskEventBus`：按 `taskId` 发布/订阅 `AgentEvent`，桥接执行与 SSE |
 | `src/agent/tool-call-accumulator.ts` | 流式 `tool_calls` 累积器：按 `index` 跨 chunk 拼接 `id`/`name`/`arguments`，处理并行调用与截断 |
 | `src/llm/provider.ts` | `LLMProvider` 抽象（`stream(messages, options)` 支持 tools/signal）+ `OpenAICompatibleProvider`；`getProvider()` 按配置返回，未配置即报错 |
@@ -111,6 +111,9 @@ API 请求响应、运行时常量（默认地址端口）。
    用户约束与最近窗口逐字保留，超预算时就地压缩旧 assistant/tool 内容，压缩留轨迹。
 4b. **多轮对话**：任务结束后 `POST /api/tasks/:id/messages` 经 `addUserTurn()` 追加 user 轮次，
    带完整历史重新进入同一循环；前端复用同一 `streamUrl` 订阅。
+4c. **任务恢复**：Agent 启动时扫描 SQLite 中遗留的 `pending/planning/running/paused` 任务，
+   将其标记为 `failed` 并写入“上次进程中断”的轨迹说明；用户调用
+   `POST /api/tasks/:id/resume` 后，后端先补齐可能悬空的 tool result，再用持久消息历史继续运行。
 5. `events.ts` 把事件序列化为 SSE（`data: {json}\n\n`）推给前端；前端按事件类型增量渲染。
 6. 收到 `done`，前端与后端各自关闭 SSE 连接。
 7. 任务状态通过 `taskStore.save()` 落库，可经 `GET /api/tasks` 回看。

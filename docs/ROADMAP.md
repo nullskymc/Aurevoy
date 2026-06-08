@@ -11,7 +11,7 @@
 | M1 | 真实 LLM 与单 Agent 工具循环 | ✅ 完成 |
 | M2 | 工具能力、审批闭环与 MCP | ✅ 完成 |
 | M3 | 工程治理：状态机、轨迹、评测、沙箱边界 | ✅ 完成 |
-| M4 | 记忆、多轮对话与任务恢复 | ⏳ 当前重点 |
+| M4 | 记忆、多轮对话与任务恢复 | ✅ 完成 |
 | M5 | 设置、分发、Windows 与交付质量 | ⏳ 待启动 |
 
 ---
@@ -69,7 +69,7 @@
 
 - [x] 将 `runTask()` 的隐式流程整理为显式阶段：initializing / thinking / calling_tool / waiting_approval / finalizing / failed / cancelled
 - [x] 在 `packages/shared` 中补充 `TaskPhase`、`Task.phase` 和 `phase` 事件，避免前后端各自猜状态
-- [x] `pause` / `resume` 不作为 UI 文案先行；当前只暴露真实的 cancel 与 approval 能力
+- [x] `pause` 不作为 UI 文案先行；当前只暴露真实的 cancel / approval / resume 能力
 
 ### M3.2 轨迹日志与审计
 
@@ -96,7 +96,7 @@
 - 任意高风险工具都有可审计的审批记录。
 - 行为改动能用固定用例回归，不靠手感判断。
 
-## M4 — 记忆、多轮对话与任务恢复（⏳ 待启动）
+## M4 — 记忆、多轮对话与任务恢复（✅ 已完成）
 
 目标：让 Aurevoy 能持续理解用户和任务上下文，但保持用户可控和来源可解释。
 
@@ -114,12 +114,19 @@
 - [x] 记忆来源：每条长期记忆记录来源任务、时间和置信度
       （`MemorySource{origin,taskId,taskGoal,createdAt}` + `confidence`；
       agent 经 `remember` 内置工具写入并自动记录来源任务，留工具轨迹可审计）
-- [ ] 向量检索：评估 sqlite-vec / LanceDB，仅在需要语义召回时引入
-- [ ] 任务恢复：进程重启后能恢复未完成/失败任务的可解释状态
+- [x] 向量检索：评估 sqlite-vec / LanceDB，仅在需要语义召回时引入
+      （当前 M4 采用 SQLite 结构化长期记忆 + 启停/置信度/来源治理，不引入向量依赖；
+      原因：个人本地记忆规模尚小，直接引入 embedding/向量库会带来模型配置、索引重建、
+      隐私和可解释性成本。触发条件见 `docs/TECH_STACK.md`）
+- [x] 任务恢复：进程重启后能恢复未完成/失败任务的可解释状态
+      （启动期扫描 SQLite 中遗留的 `pending/planning/running/paused` 任务并收敛为
+      `failed/failed` + 轨迹说明；`POST /api/tasks/:id/resume` 基于持久消息历史继续运行，
+      恢复前会补齐崩溃造成的悬空工具结果；前端提供“恢复”操作）
 
 完成标准：
 - 用户能知道 Aurevoy 记住了什么、为什么记住、如何删除。
 - 多轮不是简单拼接历史消息，而是有上下文压缩、来源和边界。
+- 进程重启造成的未完成任务不会卡在假运行态；用户能看到中断原因并显式恢复。
 
 ## M5 — 设置、分发、Windows 与交付质量（⏳ 待启动）
 

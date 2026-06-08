@@ -67,6 +67,21 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 - `message` 为空 → `400 {"error":"message is required"}`
 - 续聊复用相同的 `streamUrl`；订阅后会先补发数据库快照（含历史消息）再推送本轮实时事件。
 
+### POST `/api/tasks/:id/resume`
+恢复未完成、失败或已取消任务。后端不伪造新的用户消息，而是基于该任务已持久化的
+`messages` 重新进入 Agent 循环；若上次中断发生在 assistant `tool_calls` 之后且工具结果尚未写入，
+恢复前会补一条可解释的 `role:"tool"` 失败结果，保证 Provider 协议合法且轨迹可回看。
+```json
+// 202 → ResumeTaskResponse
+{ "task": { /* Task（已回到 pending/initializing） */ }, "streamUrl": "/api/tasks/<id>/stream" }
+```
+- 任务不存在 → `404 {"error":"task not found"}`
+- 任务正在运行 → `409 {"error":"任务正在运行，不能重复恢复"}`
+- 任务已完成 → `409 {"error":"已完成任务不需要恢复"}`
+- 引擎启动时会扫描 SQLite 中遗留的 `pending | planning | running | paused` 任务；
+  这些任务说明上次进程中断前未正常收尾，会被标记为 `failed/failed` 并写入可解释恢复轨迹，
+  之后可由该端点显式恢复。
+
 ### GET `/api/tasks/:id/stream`  (SSE)
 订阅某任务的实时事件流。
 - 响应头：`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`Connection: keep-alive`

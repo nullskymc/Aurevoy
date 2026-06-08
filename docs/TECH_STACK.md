@@ -47,7 +47,8 @@ Aurevoy 的重点是本地 runtime、工具协议、状态恢复、安全治理�
 - **同步 API**，代码简单、无回调地狱，适合本地单用户场景。
 - 零外部服务，纯文件，符合"本地优先"。
 - **取舍**：原生模块，换 Node 大版本或换平台需 `npm rebuild`（Windows 上 install 自动重编）。
-- 后续向量检索可加 `sqlite-vec` 扩展或独立向量库。
+- M4 长期记忆当前不引入向量库：先用 SQLite 结构化字段、启停、来源和置信度保证用户可控。
+  只有当记忆数量增长到人工列表/确定性筛选无法满足语义召回时，再加向量检索。
 
 ### 2.5 通信：HTTP + SSE（而非 WebSocket）
 - 任务输出是**单向流式**（引擎→UI），SSE 最贴合、实现最简单、自动重连。
@@ -92,6 +93,23 @@ ReAct 工具调用循环不引入 `openai` SDK、Vercel AI SDK 或 LangChain.js�
 - M3 回归使用 `scripts/m3-regression.mjs` 启动真实后端、临时 OpenAI-compatible fixture、
   临时 MCP stdio server 和临时 SQLite；测试替身只存在于回归脚本，不进入生产路径。
 
+### 2.10 长期记忆检索：先结构化，暂不引入向量库
+
+M4 已评估 `sqlite-vec` 与 LanceDB，当前结论是**暂不作为主路径依赖**：
+
+- `sqlite-vec` 更适合继续保持单 SQLite 文件、本地优先和轻部署，但仍需要 embedding 生成、
+  索引版本、重建策略和跨平台原生扩展验证。
+- LanceDB 更适合后续文档级 RAG、批量向量数据和 ANN 检索，但会引入新的存储目录、
+  索引生命周期和打包验证成本。
+- 当前长期记忆是用户偏好、目录、模型偏好、习惯和事实，规模小且强可解释；
+  直接注入启用记忆并保留来源/置信度，比提前引入语义召回更可控。
+
+引入向量检索的触发条件：
+
+- 启用记忆数量超过上下文预算，且简单的分类、更新时间、置信度筛选不能保证召回质量。
+- 增加本地知识库/RAG 文档能力，需要根据当前任务语义召回片段。
+- 已有可配置 embedding Provider、索引重建流程、隐私说明和回归用例。
+
 ## 3. 依赖管理纪律
 
 - **锁版本**：优先精确或受控版本，避免无意的大版本跳跃。
@@ -108,7 +126,7 @@ ReAct 工具调用循环不引入 `openai` SDK、Vercel AI SDK 或 LangChain.js�
 | 可观测性 | SQLite 轨迹日志；后续 OpenTelemetry | ✅ 已接入任务级轨迹；跨任务指标或外部面板时再扩展 |
 | 评测 | 脚本化 M3 回归；后续 Vitest/Playwright | ✅ `npm run regression:m3` 覆盖 Agent/安全/恢复最小集 |
 | 沙箱 | `sandbox/command-executor.ts`；后续独立进程/容器 | ✅ 已定义默认关闭边界；加 shell/代码执行时替换为隔离实现 |
-| 向量检索/记忆 | sqlite-vec / LanceDB | 做长期记忆与 RAG |
+| 向量检索/记忆 | 当前 SQLite 结构化记忆；候选 sqlite-vec / LanceDB | M4 已评估暂缓引入；当长期记忆需要语义召回、RAG 文档库或跨任务相似度检索时再引入 |
 | 前端状态管理 | Zustand / Jotai | 状态复杂到 useState 撑不住 |
 | 前端 UI 库 | shadcn/ui 等 | 需要成体系组件 |
 | 构建加速 | pnpm + turborepo | 包变多 / 构建变慢 |

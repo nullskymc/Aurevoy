@@ -71,6 +71,16 @@ npm run regression:m3
 
 该脚本覆盖 Agent 基础链路、安全边界、迟到 SSE、历史轨迹回看和命令执行器默认关闭。
 
+当前 M4 回归入口：
+
+```bash
+npm run build
+npm run regression:m4
+```
+
+该脚本覆盖多轮上下文、上下文压缩、长期记忆 CRUD、Agent 写入记忆、记忆注入/禁用、
+启动期中断任务恢复扫描，以及 `POST /api/tasks/:id/resume` 的真实续跑路径。
+
 ## 6. 路线图约束
 
 - 新增功能必须写清楚：用户价值、真实能力边界、失败路径、验证方式。

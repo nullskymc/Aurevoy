@@ -14,11 +14,21 @@ import type {
   MemoryCategory,
   MemoryEntry,
   MemoryListResponse,
+  ResumeTaskResponse,
   TaskTraceListResponse,
   UpdateMemoryRequest,
 } from '@aurevoy/shared';
 import { config } from './config.js';
-import { addUserTurn, createTask, runTask, cancelTask, isTaskRunning, resolveApproval } from './agent/loop.js';
+import {
+  addUserTurn,
+  cancelTask,
+  createTask,
+  isTaskRunning,
+  markInterruptedTasksAfterRestart,
+  prepareTaskForResume,
+  resolveApproval,
+  runTask,
+} from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
 import { taskStore, traceStore, memoryStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
@@ -28,6 +38,10 @@ const startedAt = Date.now();
 
 export async function buildServer() {
   const app = Fastify({ logger: true });
+  const recoveredTasks = markInterruptedTasksAfterRestart();
+  if (recoveredTasks.length > 0) {
+    app.log.warn(`启动恢复：${recoveredTasks.length} 个未完成任务已标记为可恢复失败`);
+  }
 
   await app.register(cors, { origin: config.corsOrigins });
 
@@ -106,6 +120,27 @@ export async function buildServer() {
       return reply.code(202).send(body);
     },
   );
+
+  // 任务恢复：从持久消息历史重新进入 Agent 循环，不伪造用户输入。
+  app.post<{ Params: { id: string } }>('/api/tasks/:id/resume', async (req, reply) => {
+    const task = taskStore.get(req.params.id);
+    if (!task) return reply.code(404).send({ error: 'task not found' });
+    if (isTaskRunning(req.params.id)) {
+      return reply.code(409).send({ error: '任务正在运行，不能重复恢复' });
+    }
+    if (task.status === 'completed') {
+      return reply.code(409).send({ error: '已完成任务不需要恢复' });
+    }
+
+    const resumed = prepareTaskForResume(task);
+    void runTask(resumed);
+
+    const body: ResumeTaskResponse = {
+      task: resumed,
+      streamUrl: `/api/tasks/${resumed.id}/stream`,
+    };
+    return reply.code(202).send(body);
+  });
 
   // 取消一个进行中的任务
   app.post<{ Params: { id: string } }>('/api/tasks/:id/cancel', async (req, reply) => {

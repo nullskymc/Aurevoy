@@ -7,6 +7,7 @@ import {
   type HealthResponse,
   type MemoryEntry,
   type MemoryListResponse,
+  type ResumeTaskResponse,
   type Task,
   type TaskTraceEntry,
   type TaskTraceListResponse,
@@ -59,6 +60,15 @@ export async function continueTask(
     body: JSON.stringify({ message }),
   });
   if (!res.ok) throw new Error(`continue task failed: ${res.status}`);
+  return res.json();
+}
+
+/** 恢复未完成、失败或已取消任务；后端从持久历史重新进入 Agent 循环 */
+export async function resumeTask(taskId: string): Promise<ResumeTaskResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/resume`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`resume task failed: ${res.status}`);
   return res.json();
 }
 

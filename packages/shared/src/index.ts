@@ -260,6 +260,17 @@ export interface ContinueTaskResponse {
   streamUrl: string;
 }
 
+/**
+ * POST /api/tasks/:id/resume — 恢复一个未完成、失败或已取消任务。
+ *
+ * 后端会先把重启/取消/失败造成的悬空工具调用补成可解释工具结果，
+ * 再用该任务的真实历史重新进入 Agent 循环。
+ */
+export interface ResumeTaskResponse {
+  task: Task;
+  streamUrl: string;
+}
+
 // ============================================================
 // 长期记忆 (M4.3)
 // ============================================================

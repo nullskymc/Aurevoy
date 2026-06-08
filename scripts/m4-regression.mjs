@@ -2,6 +2,7 @@ import { mkdtemp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 
 // M4.1 多轮对话回归：验证同一任务内追加用户输入后，后端带完整历史重跑循环，
 // 上下文真实保留；并校验续聊端点的 404 / 409 / 400 边界。
@@ -27,6 +28,8 @@ process.env.AUREVOY_RECENT_MESSAGE_WINDOW = '1';
 process.env.AUREVOY_COMPRESSED_MESSAGE_CHAR_CAP = '200';
 
 await import('../apps/agent/dist/tools/builtins.js');
+const { taskStore } = await import('../apps/agent/dist/store/db.js');
+const seededRecoveryTaskId = seedInterruptedTask(taskStore);
 const { buildServer } = await import('../apps/agent/dist/server.js');
 
 const app = await buildServer();
@@ -34,6 +37,7 @@ await app.listen({ host: '127.0.0.1', port: 0 });
 const baseUrl = `http://127.0.0.1:${app.server.address().port}`;
 
 try {
+  await caseStartupRecoveryAndResume();
   await caseMultiTurnContext();
   await caseContextCompression();
   await caseContinueNotFound();
@@ -91,6 +95,39 @@ async function caseMultiTurnContext() {
     lastAssistant.content.includes('BLUE-42'),
     `第二轮上下文未保留第一轮口令，回复：${lastAssistant.content}`,
   );
+}
+
+async function caseStartupRecoveryAndResume() {
+  const recovered = await getJson(`/api/tasks/${seededRecoveryTaskId}`);
+  assert(recovered.status === 'failed', `启动恢复应把中断任务标记为 failed，实际 ${recovered.status}`);
+  assert(recovered.phase === 'failed', `启动恢复 phase 应为 failed，实际 ${recovered.phase}`);
+
+  const tracesBefore = (await getJson(`/api/tasks/${seededRecoveryTaskId}/traces`)).traces;
+  assert(
+    tracesBefore.some((t) => String(t.summary).includes('进程中断前未结束')),
+    '启动恢复缺少可解释轨迹',
+  );
+
+  const resumed = await postJson(`/api/tasks/${seededRecoveryTaskId}/resume`, {});
+  assert(
+    resumed.task.status === 'pending' || resumed.task.status === 'running',
+    `恢复响应应回到 pending 或已开始 running，实际 ${resumed.task.status}`,
+  );
+  await drainStream(seededRecoveryTaskId);
+
+  const after = await getJson(`/api/tasks/${seededRecoveryTaskId}`);
+  assert(after.status === 'completed', `恢复后任务应完成，实际 ${after.status}`);
+  assert(
+    after.messages.some(
+      (m) => m.role === 'tool' && String(m.content).includes('上次执行在该工具返回前中断'),
+    ),
+    '恢复前应补齐悬空工具调用的可解释 tool 结果',
+  );
+  const last = after.messages[after.messages.length - 1];
+  assert(last.content.includes('recovered=yes'), `恢复后模型未收到补齐后的历史，回复：${last.content}`);
+
+  const completed = await rawPost(`/api/tasks/${seededRecoveryTaskId}/resume`, {});
+  assert(completed.status === 409, `已完成任务再次恢复应 409，实际 ${completed.status}`);
 }
 
 // M4.2 会话级短期记忆：历史超预算时压缩旧内容，保留用户约束与近窗口，且不破坏配对契约。
@@ -299,7 +336,9 @@ async function startLlmFixture() {
     }
 
     let content;
-    if (joined.includes('M4_INJECT')) {
+    if (joined.includes('M4_RECOVER')) {
+      content = `final: recovered=${hasToolResult ? 'yes' : 'no'}`;
+    } else if (joined.includes('M4_INJECT')) {
       // 校验某条记忆是否被注入到 system 消息（marker 来自用户文本）
       const marker = (joined.match(/MEM[A-Za-z0-9]+/) ?? [])[0];
       const systemText = messages
@@ -437,4 +476,40 @@ function closeServer(server) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function seedInterruptedTask(store) {
+  const now = new Date().toISOString();
+  const taskId = randomUUID();
+  store.save({
+    id: taskId,
+    goal: 'M4_RECOVER 恢复上次中断任务',
+    status: 'running',
+    phase: 'calling_tool',
+    plan: [{ id: 'exec', description: '调用工具：list_directory', status: 'running' }],
+    messages: [
+      {
+        id: randomUUID(),
+        role: 'user',
+        content: 'M4_RECOVER 恢复上次中断任务',
+        createdAt: now,
+      },
+      {
+        id: randomUUID(),
+        role: 'assistant',
+        content: '',
+        createdAt: now,
+        toolCalls: [
+          {
+            id: 'call_interrupted',
+            type: 'function',
+            function: { name: 'list_directory', arguments: JSON.stringify({ path: '.' }) },
+          },
+        ],
+      },
+    ],
+    createdAt: now,
+    updatedAt: now,
+  });
+  return taskId;
 }

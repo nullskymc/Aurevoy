@@ -219,6 +219,7 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 当前阶段前端提供：
 
 - **重试**：用当前目标创建一个新任务。
+- **恢复**：调用 `POST /api/tasks/:id/resume`，基于持久消息历史继续失败/取消/中断任务。
 - **停止**：调用 `POST /api/tasks/:id/cancel`；只有接口返回后才更新取消/停止状态。
 - **新对话**：清空当前对话状态，回到空状态 hero。
 - **审批**：对 `approval_request` 调用 `POST /api/tasks/:id/approvals`，并展示投递是否成功。
@@ -226,7 +227,6 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 后续控制能力应按契约优先原则新增；没有后端真实行为前，不能在 UI 上提供可点击假入口：
 
 - `POST /api/tasks/:id/pause`
-- `POST /api/tasks/:id/resume`
 
 对应请求/响应类型必须先定义在 `packages/shared/src/`。
 

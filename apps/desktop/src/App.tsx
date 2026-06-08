@@ -24,6 +24,7 @@ import {
   listTaskTraces,
   listTasks,
   listTools,
+  resumeTask,
   streamTask,
   updateMemory,
 } from "./lib/api";
@@ -357,6 +358,34 @@ function App() {
     void startGoal(currentTask.goal);
   }
 
+  /** 从后端持久历史恢复当前任务；与“重试原始目标”不同，会保留已有消息与工具轨迹。 */
+  async function handleResumeTask(): Promise<void> {
+    if (!currentTask || busy) return;
+
+    setBusy(true);
+    setEvents([]);
+    setTraces([]);
+    setOutput("");
+    setPlan([]);
+    setStatus("running");
+    setPhase("initializing");
+    esRef.current?.close();
+
+    try {
+      const { task } = await resumeTask(currentTask.id);
+      setCurrentTask(task);
+      setPhase(task.phase);
+      updateTaskList(task);
+      esRef.current = streamTask(task.id, handleEvent, () => {
+        setBusy(false);
+      });
+    } catch (err) {
+      setBusy(false);
+      setNotice(`恢复任务失败：${err instanceof Error ? err.message : String(err)}`);
+      if (err instanceof TypeError) setOnline(false);
+    }
+  }
+
   function handleStopStream(): void {
     esRef.current?.close();
     setBusy(false);
@@ -418,6 +447,13 @@ function App() {
   }
 
   const showConversation = currentTask !== null;
+  const canResume =
+    !!currentTask &&
+    !busy &&
+    currentTask.status !== "completed" &&
+    currentTask.status !== "running" &&
+    currentTask.status !== "planning" &&
+    currentTask.status !== "paused";
 
   // 当前运行轮次的实时工具活动（来自事件流）；历史轮次由 Conversation 从消息派生
   const liveToolActivity = deriveToolActivityFromEvents(events);
@@ -446,6 +482,14 @@ function App() {
                   disabled={!currentTask}
                 >
                   重试
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => void handleResumeTask()}
+                  disabled={!canResume}
+                >
+                  恢复
                 </button>
                 <button
                   type="button"
