@@ -9,6 +9,7 @@ interface ComposerProps {
   provider?: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onOpenSettings: () => void;
   /** busy 时点击发送按钮触发停止/取消 */
   onStop?: () => void;
 }
@@ -21,10 +22,12 @@ export function Composer({
   provider,
   onChange,
   onSubmit,
+  onOpenSettings,
   onStop,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const canSend = value.trim().length > 0 && !busy && online !== false;
+  const providerConfigured = provider !== "unconfigured";
+  const canSend = value.trim().length > 0 && !busy && online !== false && providerConfigured;
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     // Enter 提交，Shift+Enter 换行
@@ -49,10 +52,10 @@ export function Composer({
 
         <div className="composer-toolbar">
           <div className="composer-tools-left">
-            <button type="button" className="composer-icon-btn" title="附加" aria-label="附加">
+            <button type="button" className="composer-icon-btn" title="附件尚未启用" aria-label="附件" disabled>
               <PlusIcon />
             </button>
-            <button type="button" className="composer-chip" title="Provider">
+            <button type="button" className="composer-chip" title="模型设置" onClick={onOpenSettings}>
               <GearIcon />
               <span>{provider ? (provider === "unconfigured" ? "未配置 LLM" : provider) : "未连接"}</span>
             </button>
@@ -86,6 +89,11 @@ export function Composer({
           <ScreenIcon />
           本地模式
         </span>
+        {provider === "unconfigured" && (
+          <button type="button" className="composer-footer-link" onClick={onOpenSettings}>
+            配置模型
+          </button>
+        )}
       </div>
     </div>
   );

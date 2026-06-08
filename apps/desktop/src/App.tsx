@@ -37,6 +37,7 @@ import {
   updateTool,
   updateMemory,
 } from "./lib/api";
+import { ensureDesktopAgentProcess } from "./lib/desktopAgent";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
 import { InspectorPanel } from "./components/InspectorPanel";
@@ -121,9 +122,22 @@ function App() {
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
-    void refreshRuntime();
+    void bootstrapRuntime();
     return () => esRef.current?.close();
   }, []);
+
+  async function bootstrapRuntime(): Promise<void> {
+    try {
+      const status = await ensureDesktopAgentProcess();
+      if (status?.error) {
+        setNotice(`${status.message}：${status.error}`);
+      }
+    } catch (err) {
+      setNotice(`启动 Agent 引擎失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      await refreshRuntime();
+    }
+  }
 
   async function refreshRuntime(): Promise<void> {
     try {
@@ -547,13 +561,17 @@ function App() {
         onSelectTask={handleSelectTask}
         onOpenInspector={() => setInspectorOpen(true)}
         onOpenMemory={handleOpenMemory}
+        onOpenSettings={handleOpenSettings}
       />
 
       <main className="main">
         <header className="topbar">
           {showConversation ? (
             <>
-              <StatusPill status={status} phase={phase} />
+              <div className="topbar-context">
+                <StatusPill status={status} phase={phase} />
+                <span className="topbar-title">{currentTask?.goal}</span>
+              </div>
               <div className="topbar-actions">
                 <button
                   type="button"
@@ -592,7 +610,16 @@ function App() {
               </div>
             </>
           ) : (
-            <span />
+            <>
+              <div className="topbar-context">
+                <span className="topbar-kicker">Aurevoy Agent</span>
+              </div>
+              <div className="topbar-actions">
+                <button type="button" className="ghost-btn" onClick={handleOpenSettings}>
+                  设置
+                </button>
+              </div>
+            </>
           )}
         </header>
 
@@ -628,6 +655,7 @@ function App() {
                 provider={health?.provider}
                 onChange={setGoal}
                 onSubmit={handleComposerSubmit}
+                onOpenSettings={handleOpenSettings}
                 onStop={handleStopStream}
               />
             </div>
@@ -643,11 +671,9 @@ function App() {
               provider={health?.provider}
               onChange={setGoal}
               onSubmit={handleComposerSubmit}
+              onOpenSettings={handleOpenSettings}
               onStop={handleStopStream}
             />
-            <button type="button" className="ghost-btn" onClick={handleOpenSettings}>
-              设置
-            </button>
           </div>
         )}
       </main>

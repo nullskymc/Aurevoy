@@ -1,0 +1,271 @@
+use serde::Serialize;
+use std::{
+    env,
+    net::{SocketAddr, TcpStream},
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+    sync::Mutex,
+    time::{Duration, Instant},
+};
+
+const AGENT_HOST: &str = "127.0.0.1";
+const AGENT_PORT: u16 = 8787;
+const AGENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const AGENT_HEALTH_TIMEOUT: Duration = Duration::from_millis(300);
+
+#[derive(Default)]
+pub struct AgentProcessState {
+    child: Mutex<Option<ManagedAgentChild>>,
+}
+
+struct ManagedAgentChild {
+    child: Child,
+    command_label: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProcessStatus {
+    pub base_url: String,
+    pub mode: AgentProcessMode,
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub message: String,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentProcessMode {
+    External,
+    Managed,
+    Unavailable,
+}
+
+impl Drop for AgentProcessState {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.child.lock() {
+            if let Some(mut managed) = guard.take() {
+                let _ = managed.child.kill();
+                let _ = managed.child.wait();
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub fn ensure_agent_process(
+    state: tauri::State<'_, AgentProcessState>,
+) -> Result<AgentProcessStatus, String> {
+    if agent_port_is_open() {
+        return Ok(external_status());
+    }
+
+    if let Some(status) = current_managed_status(&state)? {
+        return Ok(status);
+    }
+
+    let spec = resolve_agent_command()?;
+    let mut command = Command::new(&spec.program);
+    command
+        .args(&spec.args)
+        .current_dir(&spec.cwd)
+        .env("AUREVOY_HOST", AGENT_HOST)
+        .env("AUREVOY_PORT", AGENT_PORT.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let child = command
+        .spawn()
+        .map_err(|err| format!("启动 Agent 引擎失败：{err}"))?;
+    let pid = child.id();
+    let command_label = spec.label.clone();
+    {
+        let mut guard = state
+            .child
+            .lock()
+            .map_err(|_| "Agent 进程状态锁已损坏".to_string())?;
+        *guard = Some(ManagedAgentChild {
+            child,
+            command_label,
+        });
+    }
+
+    if wait_for_agent_port() {
+        return Ok(AgentProcessStatus {
+            base_url: agent_base_url(),
+            mode: AgentProcessMode::Managed,
+            running: true,
+            pid: Some(pid),
+            message: format!("Agent 引擎已由桌面壳托管启动：{}", spec.label),
+            error: None,
+        });
+    }
+
+    stop_managed_child(&state)?;
+    Ok(AgentProcessStatus {
+        base_url: agent_base_url(),
+        mode: AgentProcessMode::Unavailable,
+        running: false,
+        pid: None,
+        message: "Agent 引擎启动后未在超时时间内响应".to_string(),
+        error: Some("health check timeout".to_string()),
+    })
+}
+
+#[tauri::command]
+pub fn agent_process_status(
+    state: tauri::State<'_, AgentProcessState>,
+) -> Result<AgentProcessStatus, String> {
+    if agent_port_is_open() {
+        return Ok(external_status());
+    }
+    Ok(
+        current_managed_status(&state)?.unwrap_or_else(|| AgentProcessStatus {
+            base_url: agent_base_url(),
+            mode: AgentProcessMode::Unavailable,
+            running: false,
+            pid: None,
+            message: "Agent 引擎未运行".to_string(),
+            error: None,
+        }),
+    )
+}
+
+fn current_managed_status(
+    state: &tauri::State<'_, AgentProcessState>,
+) -> Result<Option<AgentProcessStatus>, String> {
+    let mut guard = state
+        .child
+        .lock()
+        .map_err(|_| "Agent 进程状态锁已损坏".to_string())?;
+
+    let Some(managed) = guard.as_mut() else {
+        return Ok(None);
+    };
+
+    match managed.child.try_wait() {
+        Ok(None) => Ok(Some(AgentProcessStatus {
+            base_url: agent_base_url(),
+            mode: AgentProcessMode::Managed,
+            running: true,
+            pid: Some(managed.child.id()),
+            message: format!("Agent 引擎子进程运行中：{}", managed.command_label),
+            error: None,
+        })),
+        Ok(Some(status)) => {
+            let label = managed.command_label.clone();
+            *guard = None;
+            Ok(Some(AgentProcessStatus {
+                base_url: agent_base_url(),
+                mode: AgentProcessMode::Unavailable,
+                running: false,
+                pid: None,
+                message: format!("Agent 引擎子进程已退出：{label}"),
+                error: Some(status.to_string()),
+            }))
+        }
+        Err(err) => Ok(Some(AgentProcessStatus {
+            base_url: agent_base_url(),
+            mode: AgentProcessMode::Unavailable,
+            running: false,
+            pid: None,
+            message: "无法读取 Agent 引擎子进程状态".to_string(),
+            error: Some(err.to_string()),
+        })),
+    }
+}
+
+fn stop_managed_child(state: &tauri::State<'_, AgentProcessState>) -> Result<(), String> {
+    let mut guard = state
+        .child
+        .lock()
+        .map_err(|_| "Agent 进程状态锁已损坏".to_string())?;
+
+    if let Some(mut managed) = guard.take() {
+        let _ = managed.child.kill();
+        let _ = managed.child.wait();
+    }
+    Ok(())
+}
+
+struct AgentCommandSpec {
+    program: PathBuf,
+    args: Vec<String>,
+    cwd: PathBuf,
+    label: String,
+}
+
+fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
+    if let Ok(path) = env::var("AUREVOY_AGENT_SIDECAR") {
+        let program = PathBuf::from(path);
+        let cwd = program
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        return Ok(AgentCommandSpec {
+            label: program.display().to_string(),
+            program,
+            args: Vec::new(),
+            cwd,
+        });
+    }
+
+    if cfg!(debug_assertions) {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .map_err(|err| format!("无法定位仓库根目录：{err}"))?;
+        return Ok(AgentCommandSpec {
+            program: PathBuf::from(npm_program()),
+            args: vec!["run".to_string(), "dev:agent".to_string()],
+            cwd: repo_root,
+            label: "npm run dev:agent".to_string(),
+        });
+    }
+
+    Err(
+        "未配置 Agent sidecar。请设置 AUREVOY_AGENT_SIDECAR，或在打包流程中加入 sidecar 二进制。"
+            .to_string(),
+    )
+}
+
+fn wait_for_agent_port() -> bool {
+    let started = Instant::now();
+    while started.elapsed() < AGENT_STARTUP_TIMEOUT {
+        if agent_port_is_open() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
+fn agent_port_is_open() -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], AGENT_PORT));
+    TcpStream::connect_timeout(&address, AGENT_HEALTH_TIMEOUT).is_ok()
+}
+
+fn external_status() -> AgentProcessStatus {
+    AgentProcessStatus {
+        base_url: agent_base_url(),
+        mode: AgentProcessMode::External,
+        running: true,
+        pid: None,
+        message: "检测到已有 Agent 引擎在线，桌面壳将复用该进程".to_string(),
+        error: None,
+    }
+}
+
+fn agent_base_url() -> String {
+    format!("http://{AGENT_HOST}:{AGENT_PORT}")
+}
+
+fn npm_program() -> &'static str {
+    if cfg!(windows) {
+        "npm.cmd"
+    } else {
+        "npm"
+    }
+}

@@ -61,10 +61,11 @@ Aurevoy/  (npm workspaces monorepo)
 
 | 文件/目录 | 职责 |
 |---|---|
-| `src-tauri/` | Rust 桌面壳；窗口、打包、系统集成。`tauri.conf.json` 配置产品名/窗口/devUrl |
+| `src-tauri/` | Rust 桌面壳；窗口、打包、系统集成。`tauri.conf.json` 配置产品名/窗口/devUrl；`src/agent_process.rs` 负责本地 Agent 引擎子进程托管 |
 | `src/main.tsx` | React 挂载入口 |
 | `src/App.tsx` | 主界面：输入目标、展示状态/计划/流式输出/轨迹回看 |
 | `src/lib/api.ts` | 访问 Agent 引擎的客户端：`checkHealth` / `createTask` / `listTasks` / `listTaskTraces` / `streamTask` |
+| `src/lib/desktopAgent.ts` | Tauri command 薄封装：请求桌面壳确保本地 Agent 引擎运行；业务健康仍由 `api.ts` 的 HTTP 探测决定 |
 
 前端**不直接持有业务状态真相**，状态来自后端事件流；UI 只做渲染与交互。
 
@@ -139,4 +140,6 @@ API 请求响应、运行时常量（默认地址端口）。
 
 - **后端**：纯 Node，无平台专有依赖；`better-sqlite3` 为原生模块，Windows 上 `npm install` 会自动重编。
 - **前端壳**：Tauri 跨平台，Windows 需安装 Microsoft Visual C++ Build Tools + WebView2。
+- **引擎托管**：桌面壳使用 Rust `Command` 启动 Agent 子进程；开发期使用 `npm`/`npm.cmd`，
+  生产期应指向平台对应的 sidecar 二进制，避免要求普通用户安装 Node。
 - **约定**：路径用 `path` 模块拼接，不要硬编码 `/`；不要调用 macOS 专有命令。

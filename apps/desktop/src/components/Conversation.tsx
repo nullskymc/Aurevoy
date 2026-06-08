@@ -118,6 +118,10 @@ export function Conversation({
   return (
     <div className="conversation">
       <div className="conversation-thread">
+        {!busy && plan.length > 0 && (
+          <RunSummaryPanel plan={plan} status={status} phase={phase} />
+        )}
+
         {historyMessages.map((message) => {
           if (message.role === "user") {
             return (
@@ -195,6 +199,34 @@ export function Conversation({
         <div ref={bottomRef} />
       </div>
     </div>
+  );
+}
+
+function RunSummaryPanel({
+  plan,
+  status,
+  phase,
+}: {
+  plan: PlanStep[];
+  status: TaskStatus | null;
+  phase: TaskPhase | null;
+}) {
+  const done = plan.filter((step) => step.status === "completed").length;
+
+  return (
+    <section className="run-summary" aria-label="Agent 执行摘要">
+      <div className="run-summary-head">
+        <div>
+          <p className="run-summary-eyebrow">Agent 工作流</p>
+          <h2>执行轨迹</h2>
+        </div>
+        <StatusPill status={status} phase={phase} />
+      </div>
+      <div className="run-summary-progress" aria-label={`已完成 ${done} / ${plan.length}`}>
+        <span style={{ width: `${plan.length ? (done / plan.length) * 100 : 0}%` }} />
+      </div>
+      <PlanCard plan={plan} defaultOpen={false} />
+    </section>
   );
 }
 
@@ -334,8 +366,8 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function PlanCard({ plan }: { plan: PlanStep[] }) {
-  const [open, setOpen] = useState(true);
+function PlanCard({ plan, defaultOpen = true }: { plan: PlanStep[]; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   const done = plan.filter((step) => step.status === "completed").length;
 
   return (

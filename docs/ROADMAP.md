@@ -12,7 +12,7 @@
 | M2 | 工具能力、审批闭环与 MCP | ✅ 完成 |
 | M3 | 工程治理：状态机、轨迹、评测、沙箱边界 | ✅ 完成 |
 | M4 | 记忆、多轮对话与任务恢复 | ✅ 完成 |
-| M5 | 设置、分发、Windows 与交付质量 | ⏳ 待启动 |
+| M5 | 设置、分发、Windows 与交付质量 | 🚧 进行中 |
 
 ---
 
@@ -44,7 +44,9 @@
 
 未完的交付强化：
 - [ ] 自动化覆盖：并行工具、Ollama 降级、工具失败后自我修正、最大轮次兜底
-- [ ] Provider 运行时配置与 Key 管理进入真实设置界面
+- [x] Provider 运行时配置与 Key 管理进入真实设置界面
+      （已并入 M5 设置界面：`/api/settings` 持久化 Provider/Base URL/Model/API Key，
+      PATCH 后清空 Provider 缓存并影响下一轮真实任务；API Key 不回显）
 
 ## M2 — 工具能力、审批闭环与 MCP（✅ 已完成）
 
@@ -128,7 +130,7 @@
 - 多轮不是简单拼接历史消息，而是有上下文压缩、来源和边界。
 - 进程重启造成的未完成任务不会卡在假运行态；用户能看到中断原因并显式恢复。
 
-## M5 — 设置、分发、Windows 与交付质量（⏳ 待启动）
+## M5 — 设置、分发、Windows 与交付质量（🚧 进行中）
 
 目标：把本地开发应用推进到普通用户可安装、可配置、可维护。
 
@@ -143,7 +145,11 @@
 - [x] 数据管理：任务历史、轨迹日志、记忆、SQLite 文件位置、清理策略
       （`GET /api/data` 返回路径与计数；`POST /api/data/cleanup` 清理保留期外终态任务和轨迹）
 - [ ] macOS 打包、签名、自动更新
-- [ ] 引擎随桌面应用启动的进程管理（sidecar 或子进程托管）
+- [x] 引擎随桌面应用启动的进程管理（sidecar 或子进程托管）
+      （Tauri 桌面壳启动时先探测 `127.0.0.1:8787`，已有引擎则复用；
+      离线时通过 `src-tauri/src/agent_process.rs` 托管子进程，开发期默认
+      `npm run dev:agent`，生产期支持 `AUREVOY_AGENT_SIDECAR` 指向打包后的 sidecar；
+      前端启动阶段调用 `ensure_agent_process`，业务在线状态仍以 `/api/health` 为准）
 - [ ] Windows 适配：WebView2、原生模块重编、路径与权限
 - [x] 跨平台 CI：macOS + Windows build/typecheck/冒烟
       （`.github/workflows/ci.yml` 在 ubuntu/macos/windows 跑 `npm ci`、`npm run build`、
