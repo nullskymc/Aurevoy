@@ -13,10 +13,10 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { buildContextWindow } from './context.js';
+import { buildContextWindow, buildMemorySystemMessage } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 import { withRetry } from './retry.js';
-import { taskStore, traceStore } from '../store/db.js';
+import { taskStore, traceStore, memoryStore } from '../store/db.js';
 import { config } from '../config.js';
 
 /** 单任务最大 LLM 调用轮次 */
@@ -210,6 +210,10 @@ export async function runTask(task: Task): Promise<void> {
         });
       }
 
+      // 长期记忆：把启用的记忆作为 system 消息注入到上下文最前面（禁用的不注入）
+      const memoryMessage = buildMemorySystemMessage(memoryStore.listEnabled());
+      const requestMessages = memoryMessage ? [memoryMessage, ...ctx.messages] : ctx.messages;
+
       // ---------- 调用 LLM（带重试） ----------
       try {
         await withRetry(
@@ -219,7 +223,7 @@ export async function runTask(task: Task): Promise<void> {
             reasoningContent = '';
             finishReason = undefined;
             toolCalls = [];
-            const stream = getProvider().stream(ctx.messages, {
+            const stream = getProvider().stream(requestMessages, {
               tools: toolDescriptors.length > 0 ? toolDescriptors : undefined,
               toolChoice: 'auto',
               signal: abortController.signal,
@@ -362,7 +366,7 @@ export async function runTask(task: Task): Promise<void> {
         }
 
         const toolStartedAt = Date.now();
-        const result = await toolRegistry.invoke(call);
+        const result = await toolRegistry.invoke(call, { taskId: task.id, taskGoal: task.goal });
         taskEvents.publish({ type: 'tool_result', taskId: task.id, result });
         writeTrace(task.id, 'tool_result', 'calling_tool', {
           iteration: iteration + 1,

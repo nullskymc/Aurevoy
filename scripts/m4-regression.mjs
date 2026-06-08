@@ -39,6 +39,10 @@ try {
   await caseContinueNotFound();
   await caseContinueEmptyMessage();
   await caseContinueWhileRunning();
+  await caseMemoryCrud();
+  await caseAgentRemembersWithSource();
+  await caseEnabledMemoryInjected();
+  await caseDisabledMemoryNotInjected();
 
   console.log('M4 regression passed');
 } finally {
@@ -152,6 +156,93 @@ async function caseContinueWhileRunning() {
   await fetch(`${baseUrl}/api/tasks/${created.task.id}/cancel`, { method: 'POST' });
 }
 
+// ---------------- 记忆用例 (M4.3) ----------------
+
+async function caseMemoryCrud() {
+  const created = await postJson('/api/memories', {
+    content: '手动记忆：项目根在 /work/aurevoy',
+    category: 'directory',
+  });
+  assert(created.source.origin === 'user', '手动新增来源应为 user');
+  assert(created.confidence === 1, '手动新增默认置信度应为 1');
+  assert(created.enabled === true, '新增记忆默认应启用');
+
+  const list = await getJson('/api/memories');
+  assert(list.memories.some((m) => m.id === created.id), '列表应包含新增记忆');
+
+  const disabled = await patchJson(`/api/memories/${created.id}`, { enabled: false });
+  assert(disabled.enabled === false, '停用后 enabled 应为 false');
+
+  const edited = await patchJson(`/api/memories/${created.id}`, { content: '改过的内容' });
+  assert(edited.content === '改过的内容', '编辑后内容应更新');
+
+  const delRes = await fetch(`${baseUrl}/api/memories/${created.id}`, { method: 'DELETE' });
+  assert(delRes.ok, `删除应成功，实际 ${delRes.status}`);
+  const after = await getJson('/api/memories');
+  assert(!after.memories.some((m) => m.id === created.id), '删除后列表不应再包含');
+
+  const notFound = await fetch(`${baseUrl}/api/memories/nope`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert(notFound.status === 404, `更新不存在记忆应 404，实际 ${notFound.status}`);
+
+  const empty = await rawPost('/api/memories', { content: '   ' });
+  assert(empty.status === 400, `空内容新增应 400，实际 ${empty.status}`);
+}
+
+async function caseAgentRemembersWithSource() {
+  const before = (await getJson('/api/memories')).memories.length;
+  const created = await postJson('/api/tasks', { goal: 'M4_REMEMBER 记住我的偏好' });
+  await drainStream(created.task.id);
+
+  const memories = (await getJson('/api/memories')).memories;
+  assert(memories.length === before + 1, 'agent remember 工具应新增一条记忆');
+  const mine = memories.find(
+    (m) => m.source.origin === 'agent' && m.source.taskId === created.task.id,
+  );
+  assert(mine, 'agent 记忆应记录来源任务 id');
+  assert(mine.content.includes('简洁中文'), 'agent 记忆内容应为工具写入的内容');
+  assert(
+    mine.source.taskGoal && mine.source.taskGoal.includes('M4_REMEMBER'),
+    '应记录来源任务目标',
+  );
+
+  // 可审计：应留下 remember 工具轨迹
+  const traces = (await getJson(`/api/tasks/${created.task.id}/traces`)).traces;
+  assert(
+    traces.some((t) => t.toolName === 'remember' && t.kind === 'tool_result' && t.ok),
+    'remember 工具缺少成功轨迹',
+  );
+}
+
+async function caseEnabledMemoryInjected() {
+  const marker = 'MEMENABLED' + Math.random().toString(36).slice(2, 8).toUpperCase();
+  await postJson('/api/memories', { content: `偏好标记 ${marker}`, category: 'preference' });
+
+  const created = await postJson('/api/tasks', { goal: `M4_INJECT 检查 ${marker}` });
+  await drainStream(created.task.id);
+  const task = await getJson(`/api/tasks/${created.task.id}`);
+  const last = task.messages[task.messages.length - 1];
+  assert(last.content.includes('injected=yes'), `启用记忆未注入上下文，回复：${last.content}`);
+}
+
+async function caseDisabledMemoryNotInjected() {
+  const marker = 'MEMDISABLED' + Math.random().toString(36).slice(2, 8).toUpperCase();
+  const mem = await postJson('/api/memories', {
+    content: `偏好标记 ${marker}`,
+    category: 'preference',
+  });
+  await patchJson(`/api/memories/${mem.id}`, { enabled: false });
+
+  const created = await postJson('/api/tasks', { goal: `M4_INJECT 检查 ${marker}` });
+  await drainStream(created.task.id);
+  const task = await getJson(`/api/tasks/${created.task.id}`);
+  const last = task.messages[task.messages.length - 1];
+  assert(last.content.includes('injected=no'), `禁用记忆不应被注入，回复：${last.content}`);
+}
+
 // ---------------- LLM fixture ----------------
 
 async function startLlmFixture() {
@@ -165,6 +256,7 @@ async function startLlmFixture() {
     const messages = body.messages ?? [];
     const userTexts = messages.filter((m) => m.role === 'user').map((m) => m.content);
     const joined = userTexts.join(' | ');
+    const hasToolResult = messages.some((m) => m.role === 'tool');
 
     // 持续生成（用于 409 运行中测试）
     if (joined.includes('M4_HANG')) {
@@ -174,8 +266,49 @@ async function startLlmFixture() {
       return;
     }
 
+    // agent 通过 remember 工具写入长期记忆（首轮发起工具调用）
+    if (joined.includes('M4_REMEMBER') && !hasToolResult) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      sse(res, {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_remember',
+                  type: 'function',
+                  function: {
+                    name: 'remember',
+                    arguments: JSON.stringify({
+                      content: '用户偏好用简洁中文回答',
+                      category: 'preference',
+                      confidence: 0.9,
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      });
+      sse(res, { choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+
     let content;
-    if (joined.includes('M4_ASK')) {
+    if (joined.includes('M4_INJECT')) {
+      // 校验某条记忆是否被注入到 system 消息（marker 来自用户文本）
+      const marker = (joined.match(/MEM[A-Za-z0-9]+/) ?? [])[0];
+      const systemText = messages
+        .filter((m) => m.role === 'system')
+        .map((m) => String(m.content))
+        .join('\n');
+      const injected = !!marker && systemText.includes(marker);
+      content = `final: injected=${injected ? 'yes' : 'no'}`;
+    } else if (joined.includes('M4_ASK')) {
       // 第二轮：校验旧的大 assistant 内容是否被压缩、用户约束是否逐字保留
       const bigAssistant = messages.find(
         (m) => m.role === 'assistant' && String(m.content).length > 0,
@@ -264,6 +397,16 @@ function rawPost(path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+async function patchJson(path, body) {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  assert(res.ok, `PATCH ${path} failed: ${res.status}`);
+  return res.json();
 }
 
 function sse(res, payload) {

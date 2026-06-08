@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import type { Task, TaskTraceEntry } from '@aurevoy/shared';
+import type { MemoryEntry, Task, TaskTraceEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
 
 /**
@@ -49,6 +49,23 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_task_traces_task_started
     ON task_traces(task_id, started_at);
+
+  CREATE TABLE IF NOT EXISTS memories (
+    id            TEXT PRIMARY KEY,
+    category      TEXT NOT NULL,
+    content       TEXT NOT NULL,
+    confidence    REAL NOT NULL DEFAULT 1,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    origin        TEXT NOT NULL,
+    source_task_id TEXT,
+    source_task_goal TEXT,
+    source_created_at TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_memories_enabled
+    ON memories(enabled, updated_at);
 `);
 
 const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
@@ -218,5 +235,114 @@ export const traceStore = {
       .prepare('SELECT * FROM task_traces WHERE task_id = ? ORDER BY started_at ASC')
       .all(taskId) as TaskTraceRow[];
     return rows.map(rowToTrace);
+  },
+};
+
+interface MemoryRow {
+  id: string;
+  category: string;
+  content: string;
+  confidence: number;
+  enabled: number;
+  origin: string;
+  source_task_id: string | null;
+  source_task_goal: string | null;
+  source_created_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToMemory(row: MemoryRow): MemoryEntry {
+  return {
+    id: row.id,
+    category: row.category as MemoryEntry['category'],
+    content: row.content,
+    confidence: row.confidence,
+    enabled: row.enabled === 1,
+    source: {
+      origin: row.origin as MemoryEntry['source']['origin'],
+      taskId: row.source_task_id ?? undefined,
+      taskGoal: row.source_task_goal ?? undefined,
+      createdAt: row.source_created_at,
+    },
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export const memoryStore = {
+  create(entry: MemoryEntry): MemoryEntry {
+    db.prepare(
+      `INSERT INTO memories (
+         id, category, content, confidence, enabled, origin,
+         source_task_id, source_task_goal, source_created_at, created_at, updated_at
+       ) VALUES (
+         @id, @category, @content, @confidence, @enabled, @origin,
+         @sourceTaskId, @sourceTaskGoal, @sourceCreatedAt, @createdAt, @updatedAt
+       )`,
+    ).run({
+      id: entry.id,
+      category: entry.category,
+      content: entry.content,
+      confidence: entry.confidence,
+      enabled: entry.enabled ? 1 : 0,
+      origin: entry.source.origin,
+      sourceTaskId: nullable(entry.source.taskId),
+      sourceTaskGoal: nullable(entry.source.taskGoal),
+      sourceCreatedAt: entry.source.createdAt,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+    });
+    return entry;
+  },
+
+  get(id: string): MemoryEntry | undefined {
+    const row = db.prepare('SELECT * FROM memories WHERE id = ?').get(id) as MemoryRow | undefined;
+    return row ? rowToMemory(row) : undefined;
+  },
+
+  list(): MemoryEntry[] {
+    const rows = db
+      .prepare('SELECT * FROM memories ORDER BY updated_at DESC')
+      .all() as MemoryRow[];
+    return rows.map(rowToMemory);
+  },
+
+  /** 仅启用的记忆，用于注入 Agent 上下文（按更新时间升序，稳定排列）。 */
+  listEnabled(): MemoryEntry[] {
+    const rows = db
+      .prepare('SELECT * FROM memories WHERE enabled = 1 ORDER BY updated_at ASC')
+      .all() as MemoryRow[];
+    return rows.map(rowToMemory);
+  },
+
+  update(id: string, patch: Partial<Pick<MemoryEntry, 'content' | 'category' | 'confidence' | 'enabled'>>): MemoryEntry | undefined {
+    const current = this.get(id);
+    if (!current) return undefined;
+    const next: MemoryEntry = {
+      ...current,
+      content: patch.content ?? current.content,
+      category: patch.category ?? current.category,
+      confidence: patch.confidence ?? current.confidence,
+      enabled: patch.enabled ?? current.enabled,
+      updatedAt: new Date().toISOString(),
+    };
+    db.prepare(
+      `UPDATE memories SET content=@content, category=@category, confidence=@confidence,
+         enabled=@enabled, updated_at=@updatedAt WHERE id=@id`,
+    ).run({
+      id,
+      content: next.content,
+      category: next.category,
+      confidence: next.confidence,
+      enabled: next.enabled ? 1 : 0,
+      updatedAt: next.updatedAt,
+    });
+    return next;
+  },
+
+  delete(id: string): boolean {
+    const info = db.prepare('DELETE FROM memories WHERE id = ?').run(id);
+    return info.changes > 0;
   },
 };

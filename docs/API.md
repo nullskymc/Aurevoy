@@ -91,6 +91,20 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 - `delivered=false`：无对应的待审批项（已超时/已决策/不存在）。
 - 字段缺失或类型错误 → `400`；任务不存在 → `404`。
 
+### 长期记忆 `/api/memories`  (M4.3)
+跨会话长期记忆。每条记录来源（用户手动 / agent 写入）、来源任务、置信度与启停状态。
+启用的记忆会作为 system 消息注入每轮 Agent 上下文；禁用后不注入但仍可见可恢复。
+
+- `GET /api/memories` → `MemoryListResponse { memories: MemoryEntry[] }`（含禁用，按更新时间倒序）。
+- `POST /api/memories`（`CreateMemoryRequest { content, category?, confidence? }`）→ `201 MemoryEntry`。
+  用户手动新增，`source.origin='user'`，默认 `confidence=1`、`enabled=true`。`content` 为空 → `400`。
+- `PATCH /api/memories/:id`（`UpdateMemoryRequest { content?, category?, confidence?, enabled? }`）
+  → `200 MemoryEntry`。编辑内容/分类/置信度或启停。记忆不存在 → `404`；`category` 非法或内容空 → `400`。
+- `DELETE /api/memories/:id` → `200 { id, deleted: true }`；记忆不存在 → `404`。
+
+> Agent 侧通过内置 `remember` 工具写入记忆（`source.origin='agent'`，自动记录来源任务与目标），
+> 调用会留下工具轨迹可审计。删除/禁用始终由用户掌控（agent 无删除工具）。
+
 ## 2. 事件契约：`AgentEvent`
 
 所有事件都带 `taskId`（用于多任务路由）。`type` 是判别字段：

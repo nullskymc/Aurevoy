@@ -7,6 +7,7 @@ interface TaskHistorySidebarProps {
   onNewTask: () => void;
   onSelectTask: (task: Task) => void;
   onOpenInspector: () => void;
+  onOpenMemory: () => void;
 }
 
 export function TaskHistorySidebar({
@@ -15,6 +16,7 @@ export function TaskHistorySidebar({
   onNewTask,
   onSelectTask,
   onOpenInspector,
+  onOpenMemory,
 }: TaskHistorySidebarProps) {
   return (
     <aside className="sidebar" aria-label="导航与对话历史">
@@ -31,7 +33,7 @@ export function TaskHistorySidebar({
           <PluginIcon />
           <span>工具</span>
         </button>
-        <button type="button" className="sidebar-action" disabled title="即将推出">
+        <button type="button" className="sidebar-action" onClick={onOpenMemory}>
           <ClockIcon />
           <span>记忆</span>
         </button>

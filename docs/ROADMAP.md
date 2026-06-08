@@ -107,9 +107,13 @@
       （`agent/context.ts` 确定性上下文窗口：用户约束与最近窗口逐字保留，
       超预算时就地压缩旧 assistant/tool 内容为摘要，不破坏 tool 配对契约；
       压缩留可审计轨迹。预算见 `AUREVOY_CONTEXT_CHAR_BUDGET` 等）
-- [ ] 长期记忆：用户偏好、常用目录、模型偏好、工作习惯
-- [ ] 记忆 CRUD：查看、编辑、删除、禁用；不能只写入不可见黑盒
-- [ ] 记忆来源：每条长期记忆记录来源任务、时间和置信度
+- [x] 长期记忆：用户偏好、常用目录、模型偏好、工作习惯
+      （SQLite `memories` 表 + `memoryStore`；启用的记忆作为 system 消息注入每轮上下文）
+- [x] 记忆 CRUD：查看、编辑、删除、禁用；不能只写入不可见黑盒
+      （`/api/memories` CRUD + 前端记忆面板;禁用即不注入但仍可见可恢复）
+- [x] 记忆来源：每条长期记忆记录来源任务、时间和置信度
+      （`MemorySource{origin,taskId,taskGoal,createdAt}` + `confidence`；
+      agent 经 `remember` 内置工具写入并自动记录来源任务，留工具轨迹可审计）
 - [ ] 向量检索：评估 sqlite-vec / LanceDB，仅在需要语义召回时引入
 - [ ] 任务恢复：进程重启后能恢复未完成/失败任务的可解释状态
 

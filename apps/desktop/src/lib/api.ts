@@ -2,12 +2,16 @@ import {
   AGENT_DEFAULT_BASE_URL,
   type AgentEvent,
   type ContinueTaskResponse,
+  type CreateMemoryRequest,
   type CreateTaskResponse,
   type HealthResponse,
+  type MemoryEntry,
+  type MemoryListResponse,
   type Task,
   type TaskTraceEntry,
   type TaskTraceListResponse,
   type ToolDescriptor,
+  type UpdateMemoryRequest,
 } from '@aurevoy/shared';
 
 /** Agent 引擎地址（可通过 Vite 环境变量覆盖） */
@@ -89,6 +93,43 @@ export async function listTools(): Promise<ToolDescriptor[]> {
   const res = await fetch(`${BASE_URL}/api/tools`);
   if (!res.ok) throw new Error(`list tools failed: ${res.status}`);
   return res.json();
+}
+
+// ===== 长期记忆 (M4.3) =====
+
+export async function listMemories(): Promise<MemoryEntry[]> {
+  const res = await fetch(`${BASE_URL}/api/memories`);
+  if (!res.ok) throw new Error(`list memories failed: ${res.status}`);
+  const body = (await res.json()) as MemoryListResponse;
+  return body.memories;
+}
+
+export async function createMemory(body: CreateMemoryRequest): Promise<MemoryEntry> {
+  const res = await fetch(`${BASE_URL}/api/memories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`create memory failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateMemory(
+  id: string,
+  body: UpdateMemoryRequest,
+): Promise<MemoryEntry> {
+  const res = await fetch(`${BASE_URL}/api/memories/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`update memory failed: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteMemory(id: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/memories/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`delete memory failed: ${res.status}`);
 }
 
 /**

@@ -261,6 +261,70 @@ export interface ContinueTaskResponse {
 }
 
 // ============================================================
+// 长期记忆 (M4.3)
+// ============================================================
+
+/** 长期记忆的分类，便于用户理解与筛选。 */
+export type MemoryCategory =
+  | 'preference' // 用户偏好（语气、格式、语言等）
+  | 'directory' // 常用目录/路径
+  | 'model' // 模型偏好
+  | 'habit' // 工作习惯
+  | 'fact' // 关于用户的长期事实
+  | 'other';
+
+/** 记忆来源：用户手动添加，或 agent 通过 remember 工具写入。 */
+export type MemoryOrigin = 'user' | 'agent';
+
+/** 一条长期记忆的来源信息（可解释性的核心：从哪来、何时、多确信）。 */
+export interface MemorySource {
+  origin: MemoryOrigin;
+  /** 来源任务（agent 写入时记录是哪个任务产生的记忆） */
+  taskId?: string;
+  /** 来源任务的目标摘要，便于用户回溯 */
+  taskGoal?: string;
+  createdAt: string;
+}
+
+/**
+ * 一条跨会话长期记忆。
+ * 必须可查看、可编辑、可删除、可禁用；每条都记录来源与置信度，不做不可见黑盒。
+ */
+export interface MemoryEntry {
+  id: string;
+  category: MemoryCategory;
+  /** 记忆内容（自然语言） */
+  content: string;
+  /** 置信度 0~1；用户手动添加默认 1，agent 写入按其判断 */
+  confidence: number;
+  /** 是否启用；禁用后不注入到 Agent 上下文，但仍保留可见可恢复 */
+  enabled: boolean;
+  source: MemorySource;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** POST /api/memories — 用户手动新增一条记忆 */
+export interface CreateMemoryRequest {
+  content: string;
+  category?: MemoryCategory;
+  confidence?: number;
+}
+
+/** PATCH /api/memories/:id — 编辑/启停一条记忆 */
+export interface UpdateMemoryRequest {
+  content?: string;
+  category?: MemoryCategory;
+  confidence?: number;
+  enabled?: boolean;
+}
+
+/** GET /api/memories — 记忆列表 */
+export interface MemoryListResponse {
+  memories: MemoryEntry[];
+}
+
+// ============================================================
 // 运行时常量
 // ============================================================
 

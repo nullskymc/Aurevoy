@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type {
   AgentEvent,
   HealthResponse,
+  MemoryCategory,
+  MemoryEntry,
   PlanStep,
   Task,
   TaskPhase,
@@ -14,16 +16,21 @@ import {
   cancelTask,
   checkHealth,
   continueTask,
+  createMemory,
   createTask,
+  deleteMemory,
   getTask,
+  listMemories,
   listTaskTraces,
   listTasks,
   listTools,
   streamTask,
+  updateMemory,
 } from "./lib/api";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
 import { InspectorPanel } from "./components/InspectorPanel";
+import { MemoryPanel } from "./components/MemoryPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { StatusPill } from "./components/StatusPill";
 import type { FeedItem } from "./components/AgentEventFeed";
@@ -84,6 +91,8 @@ function App() {
   const [goal, setGoal] = useState("");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memories, setMemories] = useState<MemoryEntry[]>([]);
   const [online, setOnline] = useState<boolean | null>(null);
   const [output, setOutput] = useState("");
   const [phase, setPhase] = useState<TaskPhase | null>(null);
@@ -371,6 +380,43 @@ function App() {
     });
   }
 
+  async function refreshMemories(): Promise<void> {
+    try {
+      setMemories(await listMemories());
+    } catch (err) {
+      setNotice(`读取记忆失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function handleOpenMemory(): void {
+    setMemoryOpen(true);
+    void refreshMemories();
+  }
+
+  function handleCreateMemory(content: string, category: MemoryCategory): void {
+    void createMemory({ content, category })
+      .then((created) => setMemories((prev) => [created, ...prev]))
+      .catch((err) => setNotice(`新增记忆失败：${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  function handleToggleMemory(id: string, enabled: boolean): void {
+    void updateMemory(id, { enabled })
+      .then((updated) => setMemories((prev) => prev.map((m) => (m.id === id ? updated : m))))
+      .catch((err) => setNotice(`更新记忆失败：${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  function handleEditMemory(id: string, content: string, category: MemoryCategory): void {
+    void updateMemory(id, { content, category })
+      .then((updated) => setMemories((prev) => prev.map((m) => (m.id === id ? updated : m))))
+      .catch((err) => setNotice(`编辑记忆失败：${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  function handleDeleteMemory(id: string): void {
+    void deleteMemory(id)
+      .then(() => setMemories((prev) => prev.filter((m) => m.id !== id)))
+      .catch((err) => setNotice(`删除记忆失败：${err instanceof Error ? err.message : String(err)}`));
+  }
+
   const showConversation = currentTask !== null;
 
   // 当前运行轮次的实时工具活动（来自事件流）；历史轮次由 Conversation 从消息派生
@@ -384,6 +430,7 @@ function App() {
         onNewTask={handleNewTask}
         onSelectTask={handleSelectTask}
         onOpenInspector={() => setInspectorOpen(true)}
+        onOpenMemory={handleOpenMemory}
       />
 
       <main className="main">
@@ -484,6 +531,16 @@ function App() {
         traces={traces}
         tools={tools}
         onClose={() => setInspectorOpen(false)}
+      />
+
+      <MemoryPanel
+        open={memoryOpen}
+        memories={memories}
+        onClose={() => setMemoryOpen(false)}
+        onCreate={handleCreateMemory}
+        onToggle={handleToggleMemory}
+        onEdit={handleEditMemory}
+        onDelete={handleDeleteMemory}
       />
     </div>
   );

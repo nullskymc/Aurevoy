@@ -1,4 +1,5 @@
-import type { Message } from '@aurevoy/shared';
+import type { MemoryEntry, Message } from '@aurevoy/shared';
+import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 
 /**
@@ -126,5 +127,40 @@ export function buildContextWindow(
     finalChars: totalChars(messages),
     totalMessages,
     compressedCount,
+  };
+}
+
+/** 注入上下文的记忆条数上限（防止记忆膨胀挤占预算）。 */
+const MAX_INJECTED_MEMORIES = 50;
+
+const CATEGORY_LABEL: Record<MemoryEntry['category'], string> = {
+  preference: '偏好',
+  directory: '常用目录',
+  model: '模型偏好',
+  habit: '习惯',
+  fact: '事实',
+  other: '其他',
+};
+
+/**
+ * 把启用的长期记忆构建为一条 system 消息，注入到 LLM 上下文最前面。
+ * 已禁用的记忆不会出现在这里（启停的真实效果）。无启用记忆时返回 null。
+ */
+export function buildMemorySystemMessage(memories: MemoryEntry[]): Message | null {
+  const enabled = memories.filter((m) => m.enabled).slice(0, MAX_INJECTED_MEMORIES);
+  if (enabled.length === 0) return null;
+
+  const lines = enabled.map((m) => `- (${CATEGORY_LABEL[m.category]}) ${m.content}`);
+  const content =
+    '[关于用户的长期记忆]\n' +
+    '以下是用户确认或你此前记录并启用的长期记忆，作为背景参考；' +
+    '若与当前对话中的明确信息冲突，以当前对话为准：\n' +
+    lines.join('\n');
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content,
+    createdAt: new Date().toISOString(),
   };
 }

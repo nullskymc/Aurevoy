@@ -1,9 +1,15 @@
 import type { ToolDescriptor, ToolCall, ToolResult, ToolRiskLevel } from '@aurevoy/shared';
 
+/** 工具执行上下文：携带本次调用所属的任务等信息（如 remember 工具记录来源）。 */
+export interface ToolContext {
+  taskId?: string;
+  taskGoal?: string;
+}
+
 /** 一个可被 Agent 调用的工具 */
 export interface Tool {
   descriptor: ToolDescriptor;
-  execute(args: Record<string, unknown>): Promise<unknown>;
+  execute(args: Record<string, unknown>, context?: ToolContext): Promise<unknown>;
 }
 
 /**
@@ -28,13 +34,13 @@ class ToolRegistry {
     return this.tools.get(name)?.descriptor.riskLevel ?? 'safe';
   }
 
-  async invoke(call: ToolCall): Promise<ToolResult> {
+  async invoke(call: ToolCall, context?: ToolContext): Promise<ToolResult> {
     const tool = this.tools.get(call.toolName);
     if (!tool) {
       return { callId: call.id, ok: false, error: `未知工具: ${call.toolName}` };
     }
     try {
-      const output = await tool.execute(call.args);
+      const output = await tool.execute(call.args, context);
       return { callId: call.id, ok: true, output };
     } catch (err) {
       return {

@@ -1,20 +1,26 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import { randomUUID } from 'node:crypto';
 import type {
   AgentEvent,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
   ContinueTaskRequest,
   ContinueTaskResponse,
+  CreateMemoryRequest,
   CreateTaskRequest,
   CreateTaskResponse,
   HealthResponse,
+  MemoryCategory,
+  MemoryEntry,
+  MemoryListResponse,
   TaskTraceListResponse,
+  UpdateMemoryRequest,
 } from '@aurevoy/shared';
 import { config } from './config.js';
 import { addUserTurn, createTask, runTask, cancelTask, isTaskRunning, resolveApproval } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
-import { taskStore, traceStore } from './store/db.js';
+import { taskStore, traceStore, memoryStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
 import { getProviderName } from './llm/provider.js';
 
@@ -125,6 +131,77 @@ export async function buildServer() {
       return reply.send(body);
     },
   );
+
+  // ===== 长期记忆 CRUD (M4.3) =====
+  const MEMORY_CATEGORIES: readonly MemoryCategory[] = [
+    'preference',
+    'directory',
+    'model',
+    'habit',
+    'fact',
+    'other',
+  ];
+  const isCategory = (v: unknown): v is MemoryCategory =>
+    typeof v === 'string' && MEMORY_CATEGORIES.includes(v as MemoryCategory);
+  const clampConfidence = (v: unknown): number => {
+    const n = typeof v === 'number' && Number.isFinite(v) ? v : 1;
+    return Math.min(1, Math.max(0, n));
+  };
+
+  // 列出全部记忆（含禁用，供管理界面查看）
+  app.get('/api/memories', async (): Promise<MemoryListResponse> => {
+    return { memories: memoryStore.list() };
+  });
+
+  // 用户手动新增一条记忆
+  app.post<{ Body: CreateMemoryRequest }>('/api/memories', async (req, reply) => {
+    const content = req.body?.content?.trim();
+    if (!content) return reply.code(400).send({ error: 'content is required' });
+    const now = new Date().toISOString();
+    const entry: MemoryEntry = {
+      id: randomUUID(),
+      category: isCategory(req.body?.category) ? req.body.category : 'other',
+      content,
+      confidence: req.body?.confidence === undefined ? 1 : clampConfidence(req.body.confidence),
+      enabled: true,
+      source: { origin: 'user', createdAt: now },
+      createdAt: now,
+      updatedAt: now,
+    };
+    memoryStore.create(entry);
+    return reply.code(201).send(entry);
+  });
+
+  // 编辑 / 启停一条记忆
+  app.patch<{ Params: { id: string }; Body: UpdateMemoryRequest }>(
+    '/api/memories/:id',
+    async (req, reply) => {
+      const existing = memoryStore.get(req.params.id);
+      if (!existing) return reply.code(404).send({ error: 'memory not found' });
+      const body = req.body ?? {};
+      const patch: Partial<Pick<MemoryEntry, 'content' | 'category' | 'confidence' | 'enabled'>> = {};
+      if (typeof body.content === 'string') {
+        const trimmed = body.content.trim();
+        if (!trimmed) return reply.code(400).send({ error: 'content 不能为空' });
+        patch.content = trimmed;
+      }
+      if (body.category !== undefined) {
+        if (!isCategory(body.category)) return reply.code(400).send({ error: 'category 非法' });
+        patch.category = body.category;
+      }
+      if (body.confidence !== undefined) patch.confidence = clampConfidence(body.confidence);
+      if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+      const updated = memoryStore.update(req.params.id, patch);
+      return reply.send(updated);
+    },
+  );
+
+  // 删除一条记忆
+  app.delete<{ Params: { id: string } }>('/api/memories/:id', async (req, reply) => {
+    const deleted = memoryStore.delete(req.params.id);
+    if (!deleted) return reply.code(404).send({ error: 'memory not found' });
+    return reply.send({ id: req.params.id, deleted: true });
+  });
 
   // SSE 事件流：订阅某个任务的实时输出
   app.get<{ Params: { id: string } }>('/api/tasks/:id/stream', (req, reply) => {

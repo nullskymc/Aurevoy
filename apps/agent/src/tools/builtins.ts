@@ -1,7 +1,10 @@
 import { promises as fs } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import type { MemoryCategory, MemoryEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
 import { toolRegistry } from './registry.js';
+import { memoryStore } from '../store/db.js';
 
 /**
  * 内置基础工具：文件读写、目录列举、HTTP 抓取。
@@ -200,6 +203,86 @@ toolRegistry.register({
       contentType: res.headers.get('content-type') ?? null,
       truncated,
       body,
+    };
+  },
+});
+
+// ---- remember（safe）：写入跨会话长期记忆 ----
+// 设计：agent 可主动记住用户偏好/习惯/事实；每条记录来源任务与置信度，
+// 完全可在记忆面板查看/编辑/删除/禁用（用户保有最终控制权，故无需逐次审批）。
+const MEMORY_CATEGORIES: readonly MemoryCategory[] = [
+  'preference',
+  'directory',
+  'model',
+  'habit',
+  'fact',
+  'other',
+];
+const MAX_MEMORY_CONTENT = 2000;
+
+toolRegistry.register({
+  descriptor: {
+    name: 'remember',
+    description:
+      '把一条关于用户的长期事实记下来，跨会话保留（如偏好、常用目录、工作习惯）。' +
+      '仅在信息明确且对将来有用时使用；不要记录临时上下文或敏感隐私。' +
+      '用户可随时在记忆面板查看、编辑、停用或删除你记下的内容。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: '要长期记住的内容（一句自然语言）' },
+        category: {
+          type: 'string',
+          enum: [...MEMORY_CATEGORIES],
+          description: '分类：preference/directory/model/habit/fact/other',
+        },
+        confidence: {
+          type: 'number',
+          description: '你对这条记忆的置信度 0~1（默认 0.7）',
+        },
+      },
+      required: ['content'],
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+  },
+  async execute(args, context) {
+    const content = typeof args.content === 'string' ? args.content.trim() : '';
+    if (!content) throw new Error('content 必须是非空字符串');
+    if (content.length > MAX_MEMORY_CONTENT) {
+      throw new Error(`记忆内容过长（上限 ${MAX_MEMORY_CONTENT} 字符）`);
+    }
+    const category: MemoryCategory =
+      typeof args.category === 'string' && MEMORY_CATEGORIES.includes(args.category as MemoryCategory)
+        ? (args.category as MemoryCategory)
+        : 'other';
+    let confidence = typeof args.confidence === 'number' ? args.confidence : 0.7;
+    if (!Number.isFinite(confidence)) confidence = 0.7;
+    confidence = Math.min(1, Math.max(0, confidence));
+
+    const now = new Date().toISOString();
+    const entry: MemoryEntry = {
+      id: randomUUID(),
+      category,
+      content,
+      confidence,
+      enabled: true,
+      source: {
+        origin: 'agent',
+        taskId: context?.taskId,
+        taskGoal: context?.taskGoal,
+        createdAt: now,
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+    memoryStore.create(entry);
+    return {
+      stored: true,
+      id: entry.id,
+      category,
+      confidence,
+      note: '已记入长期记忆，用户可在记忆面板管理。',
     };
   },
 });
