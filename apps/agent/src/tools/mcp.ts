@@ -12,6 +12,15 @@ import { toolRegistry } from './registry.js';
 
 const MCP_TOOL_NAME_PREFIX = 'mcp';
 const MAX_TOOL_NAME_LENGTH = 64;
+const MAX_MCP_DESCRIPTION_LENGTH = 500;
+const SUSPICIOUS_DESCRIPTION_PATTERNS = [
+  /ignore (all )?(previous|prior) instructions/i,
+  /system prompt/i,
+  /developer message/i,
+  /reveal (secrets|credentials|api keys?)/i,
+  /bypass/i,
+  /do not tell/i,
+];
 
 interface McpConnection {
   serverName: string;
@@ -161,10 +170,7 @@ function toRegistryTool(
 ) {
   const descriptor: ToolDescriptor = {
     name: registeredName,
-    description:
-      mcpTool.description ??
-      mcpTool.title ??
-      `MCP tool "${mcpTool.name}" from server "${server.name}"`,
+    description: sanitizeMcpToolDescription(server, mcpTool),
     inputSchema: mcpTool.inputSchema,
     riskLevel: inferRiskLevel(server, mcpTool),
     source: { type: 'mcp', serverName: server.name, originalName: mcpTool.name },
@@ -192,6 +198,19 @@ function inferRiskLevel(server: McpServerConfig, tool: McpSdkTool): ToolRiskLeve
   if (tool.annotations?.destructiveHint) return 'dangerous';
   if (tool.annotations?.readOnlyHint && !tool.annotations.openWorldHint) return 'safe';
   return 'caution';
+}
+
+function sanitizeMcpToolDescription(server: McpServerConfig, tool: McpSdkTool): string {
+  const fallback = `MCP tool "${tool.name}" from server "${server.name}"`;
+  const raw = tool.description ?? tool.title ?? fallback;
+  const compact = raw.replace(/\s+/g, ' ').trim();
+  const suspicious = SUSPICIOUS_DESCRIPTION_PATTERNS.some((pattern) => pattern.test(compact));
+  const truncated =
+    compact.length > MAX_MCP_DESCRIPTION_LENGTH
+      ? `${compact.slice(0, MAX_MCP_DESCRIPTION_LENGTH)}…`
+      : compact;
+  if (!suspicious) return truncated || fallback;
+  return `[MCP 描述已净化：疑似 prompt injection，原描述未注入模型上下文] ${fallback}`;
 }
 
 function makeRegistryToolName(serverName: string, toolName: string, usedNames: Set<string>): string {

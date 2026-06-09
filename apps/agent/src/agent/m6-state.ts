@@ -7,6 +7,7 @@ import type {
   TaskArtifact,
   TaskArtifactStatus,
   TaskBudget,
+  TaskCheckpoint,
   TokenUsage,
 } from '@aurevoy/shared';
 import { getProviderName } from '../llm/provider.js';
@@ -183,6 +184,22 @@ export function markArtifactApplied(
   artifacts[index] = next;
   task.artifacts = artifacts;
   return next;
+}
+
+export function createCheckpoint(args: {
+  label: string;
+  stepId?: string;
+  message?: string;
+  data?: unknown;
+}): TaskCheckpoint {
+  return {
+    id: randomUUID(),
+    label: args.label,
+    stepId: args.stepId,
+    message: args.message,
+    data: args.data,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function addOptional(left: number | undefined, right: number | undefined): number | undefined {

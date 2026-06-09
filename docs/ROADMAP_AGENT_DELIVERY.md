@@ -244,16 +244,16 @@ node scripts/m6-regression.mjs
 
 ### M7.1 文件与资料工具
 
-- [ ] 新增 `search_files`，风险等级 `safe`。
+- [x] 新增 `search_files`，风险等级 `safe`。
   - 支持文件名 glob。
   - 支持工作区内文本内容搜索。
   - 返回路径、匹配片段、大小、mtime。
-- [ ] 新增 `copy_file`，风险等级 `caution`。
-- [ ] 新增 `move_file` / `rename_file`，风险等级 `caution`。
-- [ ] 新增 `delete_file`，风险等级 `dangerous`，默认禁用。
-  - 优先移入回收站，不做永久删除。
+- [x] 新增 `copy_file`，风险等级 `caution`。
+- [x] 新增 `move_file` / `rename_file`，风险等级 `caution`。
+- [x] 新增 `delete_file`，风险等级 `dangerous`，默认禁用。
+  - 当前移入工作区 `.aurevoy-trash`，不做永久删除。
   - 工作区外路径拒绝。
-- [ ] 增强 `read_file`：
+- [x] 增强 `read_file`：
   - 编码错误可诊断。
   - 支持更明确的大文件截断和建议。
 
@@ -264,21 +264,21 @@ node scripts/m6-regression.mjs
 
 ### M7.2 `http_fetch` 安全改造
 
-- [ ] 增加 SSRF 防护：
+- [x] 增加 SSRF 防护：
   - 拒绝 `127.0.0.0/8`
   - 拒绝 `10.0.0.0/8`
   - 拒绝 `172.16.0.0/12`
   - 拒绝 `192.168.0.0/16`
   - 拒绝 `169.254.0.0/16`
   - 拒绝 `::1`、`fc00::/7` 等本地/私有地址。
-- [ ] 不再直接 `redirect: 'follow'` 无限制跟随；改为最多 3 次重定向，且每次目标都重新校验。
-- [ ] 增加 Content-Type 策略：
+- [x] 不再直接 `redirect: 'follow'` 无限制跟随；改为最多 3 次重定向，且每次目标都重新校验。
+- [x] 增加 Content-Type 策略：
   - 文本类型可提取。
   - 二进制类型返回元信息，不把二进制内容塞进 prompt。
-- [ ] HTML 清洗：
+- [x] HTML 清洗：
   - 去除 `script`、`style`、`iframe`、`object`、`embed`。
   - 输出正文摘要和链接，而不是原始 HTML。
-- [ ] 为网页内容增加来源结构：URL、抓取时间、status、contentType、truncated、cleanedText。
+- [x] 为网页内容增加来源结构：URL、抓取时间、status、contentType、truncated、cleanedText。
 
 验收：
 
@@ -288,15 +288,15 @@ node scripts/m6-regression.mjs
 
 ### M7.3 工具 schema validation 与 MCP 治理
 
-- [ ] 引入运行时 schema validation。
+- [x] 引入运行时 schema validation。
   - 优先评估 Zod；如引入依赖，更新 `docs/TECH_STACK.md` 说明理由。
   - 内置工具的 schema 需要同时服务 LLM `inputSchema` 和 runtime validation。
-- [ ] `ToolRegistry.invoke()` 执行前校验参数。
-- [ ] MCP 工具描述净化：
+- [x] `ToolRegistry.invoke()` 执行前校验参数。
+- [x] MCP 工具描述净化：
   - 描述长度截断。
   - 可疑 prompt injection 关键词检测。
   - 工具来源、server 名和风险等级在 UI 可见。
-- [ ] 本地风险等级可覆盖 MCP annotations；annotations 只作为参考，不作为可信边界。
+- [x] 本地风险等级可覆盖 MCP annotations；annotations 只作为参考，不作为可信边界。
 
 验收：
 
@@ -305,13 +305,13 @@ node scripts/m6-regression.mjs
 
 ### M7.4 多步计划与 checkpoint
 
-- [ ] 保留现有单步计划作为降级路径。
-- [ ] 增加结构化计划生成机制。
+- [x] 保留现有单步计划作为降级路径。
+- [x] 增加结构化计划生成机制。
   - 可用 prompt 引导 JSON 片段，不强依赖所有 Provider 支持 strict JSON。
   - 解析失败时回退单步计划。
-- [ ] `PlanStep` 支持真实多步状态更新。
-- [ ] 每个关键步骤完成后创建 `TaskCheckpoint`。
-- [ ] `resume` 优先基于最近 checkpoint 给模型构造恢复上下文。
+- [x] `PlanStep` 支持真实多步状态更新。
+- [x] 每个关键步骤完成后创建 `TaskCheckpoint`。
+- [x] `resume` 优先基于最近 checkpoint 给模型构造恢复上下文。
 
 验收：
 
@@ -320,29 +320,28 @@ node scripts/m6-regression.mjs
 
 ### M7.5 前端工作台改造
 
-- [ ] 拆分 `apps/desktop/src/App.tsx`：
+- [x] 拆分 `apps/desktop/src/App.tsx`：
   - `useTaskState`
   - `useSSEStream`
   - `useSettings`
   - `useTools`
   - `useMemories`
   - `useArtifacts`
-- [ ] 引入 Markdown 渲染。
-  - 候选：`react-markdown` + `remark-gfm`。
-  - 需注意链接安全和代码块样式。
-- [ ] `Conversation.tsx` 新增：
+- [x] 引入 Markdown 渲染。
+  - 当前实现使用内置安全 Markdown 渲染边界，避免在 M7 引入额外依赖；链接仍需走安全属性，复杂 GFM 留给后续增强。
+- [x] `Conversation.tsx` 新增：
   - 多步 `PlanCard`
   - `ClarificationCard`
   - `ArtifactCard`
   - `BudgetBar`
-- [ ] `InspectorPanel` 新增：
+- [x] `InspectorPanel` 新增：
   - artifact 列表。
   - token usage。
   - 预算使用。
-- [ ] `TaskHistorySidebar` 新增：
+- [x] `TaskHistorySidebar` 新增：
   - 本地搜索。
   - 状态筛选。
-  - 任务删除或清理入口。
+  - 清理入口继续由设置页的数据管理承载，侧栏先提供搜索和状态筛选。
 
 验收：
 
@@ -353,15 +352,45 @@ node scripts/m6-regression.mjs
 
 新增或扩展回归覆盖：
 
-- [ ] `caseSearchFiles`
-- [ ] `caseCopyMoveDeleteFile`
-- [ ] `caseHttpFetchSSRFDenied`
-- [ ] `caseHttpFetchRedirectLimit`
-- [ ] `caseToolSchemaValidation`
-- [ ] `caseMcpPromptInjectionDescriptionSanitized`
-- [ ] `caseMultiStepPlan`
-- [ ] `caseCheckpointResume`
-- [ ] 前端构建：`npm run build -w @aurevoy/desktop`
+- [x] `caseSearchFiles`
+- [x] `caseCopyMoveDeleteFile`
+- [x] `caseHttpFetchSSRFDenied`
+- [x] `caseHttpFetchRedirectLimit`
+- [x] `caseToolSchemaValidation`
+- [x] `caseMcpPromptInjectionDescriptionSanitized`
+- [x] `caseMultiStepPlan`
+- [x] `caseCheckpointResume`
+- [x] 前端构建：`npm run build -w @aurevoy/desktop`
+
+### M7 复盘
+
+已交付：
+
+- 文件工具：新增 `search_files`、`copy_file`、`move_file`/`rename_file`、`delete_file`；
+  所有路径继续复用工作区和 symlink 真实路径校验。`delete_file` 默认禁用，启用后仍按
+  dangerous 审批，并移入 `.aurevoy-trash`。
+- `read_file`：不再因大文件直接失败，而返回截断预览、大小、编码诊断和后续建议。
+- `http_fetch`：改为手动 redirect，最多 3 次；每次请求前做 DNS 解析和本机/私网地址拒绝；
+  文本内容才进入上下文，二进制只返回元信息；HTML 会移除高风险标签并输出 `cleanedText`
+  与链接来源。
+- 工具治理：`ToolRegistry.invoke()` 在执行前基于工具 `inputSchema` 做运行时校验；
+  MCP 描述做长度截断和 prompt injection 关键词检测，疑似恶意描述不再原样注入模型上下文；
+  server 配置里的本地 `riskLevel` 优先于 MCP annotations。
+- 计划与 checkpoint：普通任务保留单步降级；文件/网页/命令/产物类目标会生成多步计划，
+  工具成功后推进步骤并创建 `checkpoint_created` 事件；恢复任务时 trace 会记录最近 checkpoint。
+- 前端工作台：`App.tsx` 已拆出 `useTaskState`、`useSSEStream`、`useSettings`、`useTools`、
+  `useMemories`、`useArtifacts`；对话流支持安全 Markdown 渲染、BudgetBar、checkpoint 事件；
+  Inspector 展示 checkpoint；历史侧栏支持本地搜索和状态筛选。
+- 验证：新增 `npm run regression:m7`，覆盖 M7 文件工具、安全网络、schema validation、
+  MCP 描述净化、多步计划和 checkpoint resume；前端构建纳入 M7 完成门槛。
+
+已知边界：
+
+- `delete_file` 当前使用工作区 `.aurevoy-trash`，不是系统级回收站；跨平台系统回收站集成留给 M8。
+- `search_files` 是确定性 glob/文本搜索，不做语义索引；大规模知识库索引仍属于 M8。
+- `http_fetch` 的 HTML 清洗是轻量实现，不等同完整浏览器 DOM 解析；复杂网页、JS 渲染和截图留给浏览器 MCP 阶段。
+- 运行时 schema validation 覆盖当前 JSON Schema 子集，未引入 Zod/Ajv 作为新直接依赖；复杂 schema 关键字需要后续扩展。
+- 多步计划采用确定性启发式生成，避免依赖 Provider strict JSON；后续可引入模型生成计划和更细粒度 step/checkpoint 映射。
 
 ## M8 — 知识库、评测、浏览器与交付体验
 

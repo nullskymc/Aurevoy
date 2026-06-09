@@ -63,7 +63,10 @@ Aurevoy/  (npm workspaces monorepo)
 |---|---|
 | `src-tauri/` | Rust 桌面壳；窗口、打包、系统集成。`tauri.conf.json` 配置产品名/窗口/devUrl；`src/agent_process.rs` 负责本地 Agent 引擎子进程托管 |
 | `src/main.tsx` | React 挂载入口 |
-| `src/App.tsx` | 主界面：输入目标、展示状态/计划/流式输出/轨迹回看 |
+| `src/App.tsx` | 主界面壳：组织任务工作台、侧栏、设置、记忆、工具和运行详情 |
+| `src/hooks/` | 前端状态拆分：`useTaskState`、`useSSEStream`、`useSettings`、`useTools`、`useMemories`、`useArtifacts` |
+| `src/components/Conversation.tsx` | 对话与交付工作台：目标、计划、追问、工具活动、artifact、预算和最终回复 |
+| `src/components/MarkdownRenderer.tsx` | 安全 Markdown 渲染边界：只渲染受控块/内联语法，链接使用安全属性 |
 | `src/lib/api.ts` | 访问 Agent 引擎的客户端：`checkHealth` / `createTask` / `listTasks` / `listTaskTraces` / `streamTask` |
 | `src/lib/desktopAgent.ts` | Tauri command 薄封装：请求桌面壳确保本地 Agent 引擎运行；业务健康仍由 `api.ts` 的 HTTP 探测决定 |
 
@@ -74,15 +77,16 @@ Aurevoy/  (npm workspaces monorepo)
 | 文件 | 职责 |
 |---|---|
 | `src/index.ts` | 进程入口，启动 Fastify |
-| `src/config.ts` | 运行时配置（host/port/dbPath/cors），全部可被环境变量覆盖 |
+| `src/config.ts` | 运行时配置（host/port/dbPath/cors/provider/sandbox/network/MCP），全部可被环境变量覆盖 |
 | `src/server.ts` | HTTP 路由 + SSE 端点（见 `docs/API.md`） |
-| `src/agent/loop.ts` | **Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**（调 LLM → 有 tool_calls 则执行并回灌 → 直到最终答案）；含显式 runtime phase、防死循环、重试、取消、任务恢复和每轮持久化 |
+| `src/agent/loop.ts` | **Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**（调 LLM → 有 tool_calls 则执行并回灌 → 直到最终答案）；含显式 runtime phase、多步计划、checkpoint、防死循环、重试、取消、任务恢复和每轮持久化 |
+| `src/agent/m6-state.ts` | Agent 交付状态辅助：预算、token usage、追问、artifact、checkpoint 的创建与状态更新 |
 | `src/agent/events.ts` | `TaskEventBus`：按 `taskId` 发布/订阅 `AgentEvent`，桥接执行与 SSE |
 | `src/agent/tool-call-accumulator.ts` | 流式 `tool_calls` 累积器：按 `index` 跨 chunk 拼接 `id`/`name`/`arguments`，处理并行调用与截断 |
 | `src/llm/provider.ts` | `LLMProvider` 抽象（`stream(messages, options)` 支持 tools/signal）+ `OpenAICompatibleProvider`；`getProvider()` 按配置返回，未配置即报错 |
-| `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；`riskLevelOf()` 查风险等级 |
-| `src/tools/builtins.ts` | 内置基础工具：`list_directory`/`read_file`/`write_file`/`http_fetch`；文件类路径限定 `config.workspaceDir` 内（防穿越） |
-| `src/tools/mcp.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到 `ToolRegistry` |
+| `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；执行前做 JSON Schema 子集校验；`riskLevelOf()` 查风险等级 |
+| `src/tools/builtins.ts` | 内置基础工具：目录/读写/搜索/复制/移动/删除、HTTP 抓取、记忆、追问、artifact、命令执行；文件类路径限定 `config.workspaceDir` 内（防穿越） |
+| `src/tools/mcp.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到 `ToolRegistry`；MCP 描述会截断/净化，本地风险覆盖优先于 annotations |
 | `src/runtime/settings.ts` | 运行设置服务：从 SQLite 加载/保存 Provider、工作区、工具边界、MCP 和清理策略；更新后影响真实 runtime |
 | `src/sandbox/command-executor.ts` | 命令/代码执行前置边界：策略、超时、输出上限、env allowlist；默认禁用，不暴露 shell |
 | `src/store/db.ts` | SQLite 持久化（`taskStore`：save/get/list；`traceStore`：append/list） |
@@ -102,23 +106,25 @@ API 请求响应、运行时常量（默认地址端口）。
 2. `server.ts` 调 `createTask()` 建 `Task` 存库 → 立即 `201` 返回 `{task, streamUrl}`；
    同时 `void runTask(task)` 异步执行（不阻塞响应）。
 3. 前端拿到 `task.id` → `EventSource(streamUrl)` 订阅 SSE。
-4. `runTask` 跑 **ReAct 工具调用循环**，逐步 emit 事件到 `TaskEventBus`：
+4. `runTask` 先按目标生成降级优先的计划：普通任务保留单步计划，文件/网页/命令/产物类目标生成多步计划。
+5. `runTask` 跑 **ReAct 工具调用循环**，逐步 emit 事件到 `TaskEventBus`：
    `status(running)` → `phase(initializing/thinking)` →（每轮）流式 `token` →
    若模型请求工具则 `phase(calling_tool)` → `tool_call` → 执行 → `tool_result` →
    非 safe 工具会进入 `phase(waiting_approval)` 并等待审批；
    把工具结果作为 `role:'tool'` 消息回灌、再请求 LLM →…直到模型给出最终答案 →
    `phase(finalizing)` → `message` → `status(completed|failed|cancelled)` → `done`。
-   计划以隐式方式呈现：用工具调用轨迹更新 `plan`/`step_update`。
+   工具成功会推进 `plan`/`step_update`，并创建 `checkpoint_created` 事件，供 UI 回看和恢复说明使用。
    每轮请求 LLM 前，`agent/context.ts` 把完整历史压成**上下文窗口**（会话级短期记忆）：
    用户约束与最近窗口逐字保留，超预算时就地压缩旧 assistant/tool 内容，压缩留轨迹。
-4b. **多轮对话**：任务结束后 `POST /api/tasks/:id/messages` 经 `addUserTurn()` 追加 user 轮次，
+5b. **多轮对话**：任务结束后 `POST /api/tasks/:id/messages` 经 `addUserTurn()` 追加 user 轮次，
    带完整历史重新进入同一循环；前端复用同一 `streamUrl` 订阅。
-4c. **任务恢复**：Agent 启动时扫描 SQLite 中遗留的 `pending/planning/running/paused` 任务，
+5c. **任务恢复**：Agent 启动时扫描 SQLite 中遗留的 `pending/planning/running/paused` 任务，
    将其标记为 `failed` 并写入“上次进程中断”的轨迹说明；用户调用
-   `POST /api/tasks/:id/resume` 后，后端先补齐可能悬空的 tool result，再用持久消息历史继续运行。
-5. `events.ts` 把事件序列化为 SSE（`data: {json}\n\n`）推给前端；前端按事件类型增量渲染。
-6. 收到 `done`，前端与后端各自关闭 SSE 连接。
-7. 任务状态通过 `taskStore.save()` 落库，可经 `GET /api/tasks` 回看。
+   `POST /api/tasks/:id/resume` 后，后端先补齐可能悬空的 tool result，再用持久消息历史继续运行；
+   如果存在 checkpoint，恢复 trace 会记录最近 checkpoint。
+6. `events.ts` 把事件序列化为 SSE（`data: {json}\n\n`）推给前端；前端按事件类型增量渲染。
+7. 收到 `done`，前端与后端各自关闭 SSE 连接。
+8. 任务状态通过 `taskStore.save()` 落库，可经 `GET /api/tasks` 回看。
    运行轨迹通过 `traceStore.append()` 落入 `task_traces`，可经 `GET /api/tasks/:id/traces` 回看。
 
 ## 6. 扩展边界（往哪里加东西）
@@ -128,6 +134,7 @@ API 请求响应、运行时常量（默认地址端口）。
 | 接真实大模型 | 在 `llm/provider.ts` 新增 `LLMProvider` 实现，改 `getProvider()` | Agent 循环、前端 |
 | 加一个工具 | 在 `tools/` 新建并 `toolRegistry.register()` | Agent 循环内联逻辑 |
 | 接 MCP server | 配置 `AUREVOY_MCP_SERVERS_JSON`，或扩展 `tools/mcp.ts` 的 transport 支持 | 工具调用协议 / Agent 循环 |
+| 改网络抓取边界 | `tools/builtins.ts` 的 `http_fetch` 策略 + `config.network` + `docs/API.md` | 绕过 SSRF/重定向校验直接 fetch |
 | 加轨迹日志/审计 | `store/` 新增结构化记录，`agent/` 在状态边界写入 | 前端临时数组、console-only 日志 |
 | 加沙箱/命令执行 | 新增执行器模块和权限策略，默认关闭高风险能力 | 直接在工具里调用本机 shell |
 | 加评测 | 新增可复现用例和脚本，覆盖工具/状态/安全路径 | 只靠手工试一次 |

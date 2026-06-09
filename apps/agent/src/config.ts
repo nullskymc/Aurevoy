@@ -66,6 +66,17 @@ export const config = {
       .filter(Boolean),
   },
 
+  network: {
+    /**
+     * http_fetch 默认拒绝本机/私网地址；这里仅给受控开发或企业内网场景提供显式放行。
+     * 匹配按 URL hostname 精确匹配，不支持通配，避免误把任意 DNS 解析结果当成可信目标。
+     */
+    httpFetchPrivateHostAllowlist: (process.env.AUREVOY_HTTP_FETCH_PRIVATE_HOST_ALLOWLIST ?? '')
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean),
+  },
+
   /**
    * MCP server 配置。支持 JSON 数组、单个对象、对象映射，以及 Claude Desktop 风格：
    * {"mcpServers":{"name":{"command":"node","args":["server.js"]}}}

@@ -27,6 +27,7 @@ import {
   assertBudgetWithinLimits,
   BudgetExceededError,
   createArtifact,
+  createCheckpoint,
   createClarification,
   effectiveBudget,
   initialBudgetUsage,
@@ -107,17 +108,18 @@ export function prepareTaskForResume(task: Task): Task {
   const previousStatus = task.status;
   const previousPhase = task.phase;
   const patchedToolResults = patchDanglingToolResults(task.messages);
+  const lastCheckpoint = task.checkpoints?.at(-1);
   task.status = 'pending';
   task.phase = 'initializing';
-  task.plan = task.plan.map((step) =>
-    step.status === 'completed' ? step : { ...step, status: 'pending' },
-  );
+  task.plan = resumePlanFromCheckpoint(task.plan, lastCheckpoint?.stepId);
   task.updatedAt = now;
   taskStore.save(task);
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
-    summary: '用户恢复历史任务，使用持久消息历史重新进入 Agent 循环',
-    data: { previousStatus, previousPhase, patchedToolResults },
+    summary: lastCheckpoint
+      ? `用户恢复历史任务，从 checkpoint 继续：${lastCheckpoint.label}`
+      : '用户恢复历史任务，使用持久消息历史重新进入 Agent 循环',
+    data: { previousStatus, previousPhase, patchedToolResults, checkpoint: lastCheckpoint },
   });
   return task;
 }
@@ -287,14 +289,43 @@ export async function runTask(task: Task): Promise<void> {
     taskStore.save(task);
   };
 
-  // 隐式计划：用单步计划承载工具调用轨迹
-  const planStep: PlanStep = { id: 'exec', description: '正在执行任务…', status: 'running' };
-  task.plan = [planStep];
+  task.plan = buildInitialPlan(task);
+  let activeStepIndex = task.plan.findIndex((step) => step.status === 'running');
+  if (activeStepIndex < 0) activeStepIndex = 0;
+  task.plan = task.plan.map((step, index) => ({
+    ...step,
+    status: index === activeStepIndex ? 'running' : step.status,
+  }));
+
   const updateStep = (description: string, status: PlanStep['status']) => {
-    planStep.description = description;
-    planStep.status = status;
+    const index = Math.max(0, Math.min(activeStepIndex, task.plan.length - 1));
+    const step = task.plan[index] ?? { id: 'exec', description, status };
+    const next = { ...step, description, status };
+    task.plan[index] = next;
     touch();
-    taskEvents.publish({ type: 'step_update', taskId: task.id, step: { ...planStep } });
+    taskEvents.publish({ type: 'step_update', taskId: task.id, step: { ...next } });
+  };
+  const completeCurrentStep = (label: string, data?: unknown) => {
+    const current = task.plan[activeStepIndex];
+    if (!current) return;
+    if (current.status !== 'completed') {
+      task.plan[activeStepIndex] = { ...current, status: 'completed' };
+      taskEvents.publish({ type: 'step_update', taskId: task.id, step: task.plan[activeStepIndex] });
+    }
+    const checkpoint = createCheckpoint({
+      label,
+      stepId: current.id,
+      message: `完成步骤：${current.description}`,
+      data,
+    });
+    task.checkpoints = [...(task.checkpoints ?? []), checkpoint];
+    taskEvents.publish({ type: 'checkpoint_created', taskId: task.id, checkpoint });
+    if (activeStepIndex < task.plan.length - 1) {
+      activeStepIndex += 1;
+      task.plan[activeStepIndex] = { ...task.plan[activeStepIndex], status: 'running' };
+      taskEvents.publish({ type: 'step_update', taskId: task.id, step: task.plan[activeStepIndex] });
+    }
+    touch();
   };
   const setRuntimePhase = (phase: TaskPhase, detail?: string, status?: TaskStatus) => {
     if (status && task.status !== status) {
@@ -619,6 +650,13 @@ export async function runTask(task: Task): Promise<void> {
           summary: enrichedResult.ok ? `工具成功：${name}` : `工具失败：${name}`,
           data: enrichedResult.ok ? { output: summarizePayload(enrichedResult.output) } : undefined,
         });
+        if (enrichedResult.ok) {
+          completeCurrentStep(`工具完成：${name}`, {
+            toolName: name,
+            callId: call.id,
+            output: summarizePayload(enrichedResult.output),
+          });
+        }
 
         messages.push(
           makeToolResult(tc.id, enrichedResult.ok ? enrichedResult.output : { error: enrichedResult.error }),
@@ -656,6 +694,61 @@ export async function runTask(task: Task): Promise<void> {
 
 // ---------------- 内部辅助 ----------------
 
+function buildInitialPlan(task: Task): PlanStep[] {
+  const existing = task.plan.filter((step) => step.status !== 'completed');
+  if (existing.length > 1) return task.plan;
+
+  const generated = inferStructuredPlan(task.goal);
+  if (generated.length === 0) {
+    return [{ id: 'exec', description: '正在执行任务…', status: 'running' }];
+  }
+  return generated.map((description, index): PlanStep => ({
+    id: `step-${index + 1}`,
+    description,
+    status: index === 0 ? 'running' : 'pending',
+  }));
+}
+
+function inferStructuredPlan(goal: string): string[] {
+  const text = goal.toLowerCase();
+  const steps: string[] = [];
+  if (/(整理|总结|summary|report|材料|资料|文件|docs?|markdown|md|todo|搜索|search)/i.test(goal)) {
+    steps.push('扫描工作区材料');
+    steps.push('阅读与提取关键信息');
+  }
+  if (/(网页|url|http|fetch|抓取|网站|页面)/i.test(goal)) {
+    steps.push('抓取并清洗网页来源');
+    steps.push('提取网页正文与链接');
+  }
+  if (/(运行|执行|命令|typecheck|build|test|npm|脚本|command)/i.test(goal)) {
+    steps.push('确认命令执行边界');
+    steps.push('运行命令并收集输出');
+  }
+  if (/(生成|写入|保存|artifact|报告|summary|markdown|md|翻译|输出)/i.test(goal)) {
+    steps.push('生成可预览产物');
+    steps.push('确认后保存结果');
+  }
+  const unique = [...new Set(steps)];
+  if (unique.length < 2 || !text.trim()) return [];
+  unique.push('汇总结果并说明后续建议');
+  return unique.slice(0, 6);
+}
+
+function resumePlanFromCheckpoint(plan: PlanStep[], checkpointStepId?: string): PlanStep[] {
+  if (plan.length === 0) return plan;
+  if (!checkpointStepId) {
+    return plan.map((step, index) => ({
+      ...step,
+      status: step.status === 'completed' ? 'completed' : index === 0 ? 'running' : 'pending',
+    }));
+  }
+  const checkpointIndex = plan.findIndex((step) => step.id === checkpointStepId);
+  return plan.map((step, index) => {
+    if (index <= checkpointIndex) return { ...step, status: 'completed' };
+    return { ...step, status: index === checkpointIndex + 1 ? 'running' : 'pending' };
+  });
+}
+
 function finishCompleted(
   task: Task,
   updateStep: (d: string, s: PlanStep['status']) => void,
@@ -663,6 +756,9 @@ function finishCompleted(
 ): void {
   task.status = 'completed';
   task.phase = 'finalizing';
+  task.plan = task.plan.map((step) =>
+    step.status === 'completed' ? step : { ...step, status: 'completed' },
+  );
   updateStep('任务完成', 'completed');
   touch();
   writeTrace(task.id, 'done', 'finalizing', { ok: true, summary: '任务完成' });
@@ -678,6 +774,9 @@ function finishCancelled(
 ): void {
   task.status = 'cancelled';
   task.phase = 'cancelled';
+  task.plan = task.plan.map((step) =>
+    step.status === 'completed' ? step : { ...step, status: 'cancelled' },
+  );
   updateStep('任务已取消', 'cancelled');
   touch();
   writeTrace(task.id, 'done', 'cancelled', {

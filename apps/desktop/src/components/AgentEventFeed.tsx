@@ -41,6 +41,8 @@ function getEventTitle(event: AgentEvent): string {
       return `产物已创建：${event.artifact.name}`;
     case "artifact_updated":
       return `产物已更新：${event.artifact.name}`;
+    case "checkpoint_created":
+      return `Checkpoint：${event.checkpoint.label}`;
     case "budget_usage":
       return "预算使用更新";
     case "token_usage":
@@ -81,6 +83,8 @@ function getEventDetail(event: AgentEvent): string {
     case "artifact_created":
     case "artifact_updated":
       return `${event.artifact.type} · ${event.artifact.status}`;
+    case "checkpoint_created":
+      return event.checkpoint.message ?? event.checkpoint.createdAt;
     case "budget_usage":
       return `${event.usage.iterations} 轮 / ${event.usage.toolCalls} 工具 / ${event.usage.outputBytes} bytes`;
     case "token_usage":

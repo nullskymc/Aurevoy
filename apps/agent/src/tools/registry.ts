@@ -86,6 +86,18 @@ class ToolRegistry {
     if (!this.isEnabled(call.toolName)) {
       return { callId: call.id, ok: false, error: `工具已禁用: ${call.toolName}` };
     }
+    const validationError = validateToolArgs(tool.descriptor.inputSchema, call.args);
+    if (validationError) {
+      return {
+        callId: call.id,
+        ok: false,
+        error: `工具参数不符合 schema：${validationError}`,
+        output: {
+          code: 'schema_validation_failed',
+          message: validationError,
+        },
+      };
+    }
     try {
       const output = await tool.execute(call.args, context);
       return { callId: call.id, ok: true, output };
@@ -100,6 +112,83 @@ class ToolRegistry {
 }
 
 export const toolRegistry = new ToolRegistry();
+
+function validateToolArgs(schema: Record<string, unknown>, args: Record<string, unknown>): string | null {
+  return validateSchema(schema, args, 'args');
+}
+
+function validateSchema(schema: unknown, value: unknown, path: string): string | null {
+  if (!isRecord(schema)) return null;
+
+  const type = schema.type;
+  if (typeof type === 'string') {
+    const typeError = validateType(type, value, path);
+    if (typeError) return typeError;
+  }
+
+  const enumValues = schema.enum;
+  if (Array.isArray(enumValues) && !enumValues.includes(value)) {
+    return `${path} 必须是 ${enumValues.map(String).join(' | ')}`;
+  }
+
+  if (type === 'object' || (isRecord(value) && isRecord(schema.properties))) {
+    if (!isRecord(value)) return `${path} 必须是对象`;
+    const properties = isRecord(schema.properties) ? schema.properties : {};
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const key of required) {
+      if (typeof key === 'string' && value[key] === undefined) return `${path}.${key} 必填`;
+    }
+    for (const [key, item] of Object.entries(value)) {
+      const propertySchema = properties[key];
+      if (propertySchema === undefined) {
+        if (schema.additionalProperties === false) return `${path}.${key} 不允许`;
+        if (isRecord(schema.additionalProperties)) {
+          const nestedError = validateSchema(schema.additionalProperties, item, `${path}.${key}`);
+          if (nestedError) return nestedError;
+        }
+        continue;
+      }
+      const nestedError = validateSchema(propertySchema, item, `${path}.${key}`);
+      if (nestedError) return nestedError;
+    }
+  }
+
+  if (type === 'array' || Array.isArray(value)) {
+    if (!Array.isArray(value)) return `${path} 必须是数组`;
+    const itemSchema = schema.items;
+    if (itemSchema !== undefined) {
+      for (let index = 0; index < value.length; index += 1) {
+        const nestedError = validateSchema(itemSchema, value[index], `${path}[${index}]`);
+        if (nestedError) return nestedError;
+      }
+    }
+  }
+
+  return null;
+}
+
+function validateType(type: string, value: unknown, path: string): string | null {
+  switch (type) {
+    case 'object':
+      return isRecord(value) ? null : `${path} 必须是对象`;
+    case 'array':
+      return Array.isArray(value) ? null : `${path} 必须是数组`;
+    case 'string':
+      return typeof value === 'string' ? null : `${path} 必须是字符串`;
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value) ? null : `${path} 必须是数字`;
+    case 'integer':
+      return Number.isInteger(value) ? null : `${path} 必须是整数`;
+    case 'boolean':
+      return typeof value === 'boolean' ? null : `${path} 必须是布尔值`;
+    default:
+      return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 // ---- 示例内置工具：返回当前时间，验证工具调用链路 ----
 toolRegistry.register({

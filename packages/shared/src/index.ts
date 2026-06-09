@@ -133,6 +133,8 @@ export interface TaskCheckpoint {
   id: string;
   label: string;
   createdAt: string;
+  stepId?: string;
+  message?: string;
   data?: unknown;
 }
 
@@ -291,6 +293,7 @@ export type AgentEvent =
     }
   | { type: 'artifact_created'; taskId: string; artifact: TaskArtifact }
   | { type: 'artifact_updated'; taskId: string; artifact: TaskArtifact }
+  | { type: 'checkpoint_created'; taskId: string; checkpoint: TaskCheckpoint }
   | { type: 'budget_usage'; taskId: string; usage: BudgetUsage; budget?: TaskBudget }
   | { type: 'token_usage'; taskId: string; usage: AggregatedTokenUsage }
   | { type: 'done'; taskId: string; status: TaskStatus }

@@ -19,6 +19,28 @@
 
 ---
 
+## Agent 交付路线进度
+
+主路线图记录桌面产品工程底座；Agent 交付能力的细分路线见
+[`ROADMAP_AGENT_DELIVERY.md`](./ROADMAP_AGENT_DELIVERY.md)。截至当前：
+
+- ✅ M6 已完成：结构化追问、任务产物、执行预算、token usage、基础命令执行和对应前端展示/回归。
+- ✅ M7 已完成：文件搜索/复制/移动/删除、`http_fetch` SSRF 与重定向防护、工具 schema validation、
+  MCP 描述净化与本地风险覆盖、多步计划、checkpoint 恢复上下文、工作台拆分和 M7 回归。
+- 下一步进入 M8：知识库/RAG、Agent usability eval、浏览器 MCP、发布体验与更完整的打包升级路径。
+
+当前验证口径：
+
+```bash
+npm run typecheck
+npm run build
+npm run regression:m3
+npm run regression:m4
+npm run regression:m5
+npm run regression:m6
+npm run regression:m7
+```
+
 ## M0 — 产品底座（✅ 已完成）
 
 - [x] npm workspaces monorepo（desktop / agent / shared）

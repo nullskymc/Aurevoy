@@ -26,6 +26,7 @@ process.env.AUREVOY_LLM_API_KEY = 'test-key';
 process.env.AUREVOY_LLM_BASE_URL = llmFixture.url;
 process.env.AUREVOY_LLM_MODEL = 'm3-fixture-model';
 process.env.AUREVOY_APPROVAL_TIMEOUT_MS = '120';
+process.env.AUREVOY_HTTP_FETCH_PRIVATE_HOST_ALLOWLIST = '127.0.0.1';
 process.env.AUREVOY_MCP_SERVERS_JSON = JSON.stringify({
   mcpServers: {
     fixture: {

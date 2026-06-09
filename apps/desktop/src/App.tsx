@@ -4,14 +4,7 @@ import type {
   AgentEvent,
   HealthResponse,
   MemoryCategory,
-  MemoryEntry,
-  McpServerStatus,
-  PlanStep,
-  RuntimeSettings,
   Task,
-  TaskPhase,
-  TaskStatus,
-  TaskTraceEntry,
   ToolDescriptor,
   UpdateRuntimeSettingsRequest,
 } from "@aurevoy/shared";
@@ -35,13 +28,18 @@ import {
   listTasks,
   listTools,
   resumeTask,
-  streamTask,
   updateArtifact,
   updateSettings,
   updateTool,
   updateMemory,
 } from "./lib/api";
 import { ensureDesktopAgentProcess } from "./lib/desktopAgent";
+import { useArtifacts } from "./hooks/useArtifacts";
+import { useMemories } from "./hooks/useMemories";
+import { useSSEStream } from "./hooks/useSSEStream";
+import { useSettings } from "./hooks/useSettings";
+import { useTaskState } from "./hooks/useTaskState";
+import { useTools } from "./hooks/useTools";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
 import { InspectorPanel } from "./components/InspectorPanel";
@@ -136,8 +134,6 @@ function mergeById<T extends { id: string }>(items: T[], next: T): T[] {
 
 function App() {
   const [activeView, setActiveView] = useState<MainView>("chat");
-  const [busy, setBusy] = useState(false);
-  const [currentTask, setCurrentTask] = useState<Task | null>(null);
   const [events, setEvents] = useState<FeedItem[]>([]);
   const [goal, setGoal] = useState("");
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -154,28 +150,49 @@ function App() {
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
-  const [settingsSaving, setSettingsSaving] = useState(false);
-  const [fetchingModels, setFetchingModels] = useState(false);
   const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
-  const [memories, setMemories] = useState<MemoryEntry[]>([]);
-  const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
-  const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
-  const [dataStatus, setDataStatus] = useState<Awaited<ReturnType<typeof getDataStatus>> | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
-  const [output, setOutput] = useState("");
-  const [phase, setPhase] = useState<TaskPhase | null>(null);
-  const [plan, setPlan] = useState<PlanStep[]>([]);
-  const [status, setStatus] = useState<TaskStatus | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [traces, setTraces] = useState<TaskTraceEntry[]>([]);
-  const [tools, setTools] = useState<ToolDescriptor[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
-  const esRef = useRef<EventSource | null>(null);
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
+  const {
+    busy,
+    currentTask,
+    output,
+    phase,
+    plan,
+    status,
+    tasks,
+    traces,
+    setBusy,
+    setCurrentTask,
+    setOutput,
+    setPhase,
+    setPlan,
+    setStatus,
+    setTasks,
+    setTraces,
+    patchCurrentTask,
+    updateTaskList,
+  } = useTaskState();
+  const { closeStream, openStream } = useSSEStream();
+  const {
+    runtimeSettings,
+    mcpServers,
+    dataStatus,
+    settingsSaving,
+    fetchingModels,
+    setRuntimeSettings,
+    setMcpServers,
+    setDataStatus,
+    setSettingsSaving,
+    setFetchingModels,
+  } = useSettings();
+  const { tools, setTools } = useTools();
+  const { memories, setMemories } = useMemories();
+  const { mergeArtifact } = useArtifacts(setCurrentTask, updateTaskList);
 
   useEffect(() => {
     void bootstrapRuntime();
-    return () => esRef.current?.close();
   }, []);
 
   useEffect(() => {
@@ -265,24 +282,6 @@ function App() {
     }
   }
 
-  function updateTaskList(task: Task): void {
-    setTasks((previous) => {
-      const withoutTask = previous.filter((item) => item.id !== task.id);
-      return [task, ...withoutTask].sort(
-        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-      );
-    });
-  }
-
-  function patchCurrentTask(patch: Partial<Task>): void {
-    setCurrentTask((previous) => {
-      if (!previous) return previous;
-      const nextTask = { ...previous, ...patch };
-      updateTaskList(nextTask);
-      return nextTask;
-    });
-  }
-
   function handleEvent(event: AgentEvent): void {
     setEvents((previous) => [...previous, createFeedItem(event)]);
 
@@ -350,11 +349,14 @@ function App() {
         break;
       case "artifact_created":
       case "artifact_updated":
+        mergeArtifact(event.artifact);
+        break;
+      case "checkpoint_created":
         setCurrentTask((previous) => {
           if (!previous) return previous;
           const nextTask = {
             ...previous,
-            artifacts: mergeById(previous.artifacts ?? [], event.artifact),
+            checkpoints: mergeById(previous.checkpoints ?? [], event.checkpoint),
           };
           updateTaskList(nextTask);
           return nextTask;
@@ -385,7 +387,7 @@ function App() {
                 ? "failed"
                 : "finalizing",
         });
-        esRef.current?.close();
+        closeStream();
         void refreshRuntime();
         void refreshTaskTraces(event.taskId);
         // 工具结果等消息只持久化、不走 live message 事件，拉取完整快照补全本轮线程
@@ -422,7 +424,7 @@ function App() {
     setStatus("pending");
     setPhase("initializing");
     setGoal("");
-    esRef.current?.close();
+    closeStream();
 
     try {
       const { task } = await createTask(trimmed);
@@ -430,9 +432,7 @@ function App() {
       setPhase(task.phase);
       setTraces([]);
       updateTaskList(task);
-      esRef.current = streamTask(task.id, handleEvent, () => {
-        setBusy(false);
-      });
+      openStream(task.id, handleEvent, () => setBusy(false));
     } catch (err) {
       setStatus("failed");
       setOutput(`无法连接 Agent 引擎：${err instanceof Error ? err.message : String(err)}`);
@@ -443,7 +443,7 @@ function App() {
   }
 
   function handleSelectTask(task: Task): void {
-    esRef.current?.close();
+    closeStream();
     setBusy(false);
     setModelDrawerOpen(false);
     setActiveView("chat");
@@ -463,16 +463,14 @@ function App() {
     setStatus("running");
     setPhase("initializing");
     setGoal("");
-    esRef.current?.close();
+    closeStream();
 
     try {
       const { task } = await continueTask(currentTask.id, trimmed);
       setCurrentTask(task);
       setPhase(task.phase);
       updateTaskList(task);
-      esRef.current = streamTask(task.id, handleEvent, () => {
-        setBusy(false);
-      });
+      openStream(task.id, handleEvent, () => setBusy(false));
     } catch (err) {
       setBusy(false);
       setNotice(`继续对话失败：${err instanceof Error ? err.message : String(err)}`);
@@ -490,7 +488,7 @@ function App() {
   }
 
   function handleNewTask(): void {
-    esRef.current?.close();
+    closeStream();
     setBusy(false);
     setModelDrawerOpen(false);
     setActiveView("chat");
@@ -521,16 +519,14 @@ function App() {
     setPlan([]);
     setStatus("running");
     setPhase("initializing");
-    esRef.current?.close();
+    closeStream();
 
     try {
       const { task } = await resumeTask(currentTask.id);
       setCurrentTask(task);
       setPhase(task.phase);
       updateTaskList(task);
-      esRef.current = streamTask(task.id, handleEvent, () => {
-        setBusy(false);
-      });
+      openStream(task.id, handleEvent, () => setBusy(false));
     } catch (err) {
       setBusy(false);
       setNotice(`恢复任务失败：${err instanceof Error ? err.message : String(err)}`);
@@ -539,7 +535,7 @@ function App() {
   }
 
   function handleStopStream(): void {
-    esRef.current?.close();
+    closeStream();
     setBusy(false);
     // 通知后端中断任务的 LLM 流（fire-and-forget；失败不影响前端已停止）
     const taskId = currentTask?.id;

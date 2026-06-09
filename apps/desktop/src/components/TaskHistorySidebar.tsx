@@ -1,4 +1,5 @@
-import type { Task } from "@aurevoy/shared";
+import { useMemo, useState } from "react";
+import type { Task, TaskStatus } from "@aurevoy/shared";
 import { getRelativeTime } from "./status";
 
 type MainView = "chat" | "search" | "tools" | "memory" | "settings";
@@ -28,6 +29,17 @@ export function TaskHistorySidebar({
   onOpenMemory,
   onOpenSettings,
 }: TaskHistorySidebarProps) {
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<TaskStatus | "all">("all");
+  const visibleTasks = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return tasks.filter((task) => {
+      const matchesQuery = !q || task.goal.toLowerCase().includes(q);
+      const matchesStatus = statusFilter === "all" || task.status === statusFilter;
+      return matchesQuery && matchesStatus;
+    });
+  }, [query, statusFilter, tasks]);
+
   return (
     <aside className="sidebar app-sidebar" aria-label="导航与对话历史">
       <div className="sidebar-brand">
@@ -94,11 +106,36 @@ export function TaskHistorySidebar({
 
       <div className="sidebar-scroll">
         <p className="sidebar-section-label">对话</p>
+        <div className="history-filter">
+          <label>
+            <span className="sr-only">搜索对话</span>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索任务"
+            />
+          </label>
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as TaskStatus | "all")}
+            aria-label="按状态筛选"
+          >
+            <option value="all">全部状态</option>
+            <option value="running">运行中</option>
+            <option value="paused">暂停</option>
+            <option value="completed">已完成</option>
+            <option value="failed">失败</option>
+            <option value="cancelled">已取消</option>
+          </select>
+        </div>
         {tasks.length === 0 ? (
           <p className="sidebar-empty">还没有对话记录</p>
+        ) : visibleTasks.length === 0 ? (
+          <p className="sidebar-empty">没有匹配的对话</p>
         ) : (
           <ul className="conv-list">
-            {tasks.map((task) => (
+            {visibleTasks.map((task) => (
               <li key={task.id}>
                 <button
                   type="button"

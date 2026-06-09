@@ -10,6 +10,7 @@ import type {
   ToolRiskLevel,
 } from "@aurevoy/shared";
 import { StatusPill } from "./StatusPill";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import { getPhaseLabel, getStatusLabel } from "./status";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
@@ -151,7 +152,7 @@ export function Conversation({
       <div ref={topRef} />
       <div className="conversation-thread">
         {!busy && plan.length > 0 && (
-          <RunSummaryPanel plan={plan} status={status} phase={phase} />
+          <RunSummaryPanel task={task} plan={plan} status={status} phase={phase} />
         )}
 
         {historyMessages.map((message) => {
@@ -178,7 +179,7 @@ export function Conversation({
                   {artifacts.length > 0 && (
                     <ArtifactList artifacts={artifacts} onDecision={onArtifactDecision} />
                   )}
-                  {hasText && <div className="agent-text">{message.content}</div>}
+                  {hasText && <MarkdownRenderer content={message.content} />}
                 </div>
               </article>
             );
@@ -195,6 +196,7 @@ export function Conversation({
             />
             <div className="doc-body">
               {plan.length > 0 && <PlanCard plan={plan} />}
+              <BudgetBar task={task} />
 
               {liveToolActivity.length > 0 && (
                 <ToolActivityList items={liveToolActivity} onDecision={onToolDecision} />
@@ -227,8 +229,8 @@ export function Conversation({
                 </div>
               ) : (
                 hasOutput && (
-                  <div className="agent-text">
-                    {output}
+                  <div className="agent-text markdown-stream">
+                    <MarkdownRenderer content={output} />
                     <span className="stream-caret" aria-hidden="true" />
                   </div>
                 )
@@ -345,7 +347,7 @@ function ArtifactCard({
       </button>
       {open && (
         <div className="artifact-body">
-          <pre>{preview}</pre>
+          <MarkdownRenderer content={preview} />
           {artifact.status === "draft" && (
             <div className="artifact-actions">
               <button type="button" onClick={() => onDecision(artifact.id, "rejected")}>
@@ -399,10 +401,12 @@ function AgentIcon() {
 }
 
 function RunSummaryPanel({
+  task,
   plan,
   status,
   phase,
 }: {
+  task: Task;
   plan: PlanStep[];
   status: TaskStatus | null;
   phase: TaskPhase | null;
@@ -421,9 +425,41 @@ function RunSummaryPanel({
       <div className="run-summary-progress" aria-label={`已完成 ${done} / ${plan.length}`}>
         <span style={{ width: `${plan.length ? (done / plan.length) * 100 : 0}%` }} />
       </div>
+      <BudgetBar task={task} />
       <PlanCard plan={plan} defaultOpen={false} />
     </section>
   );
+}
+
+function BudgetBar({ task }: { task: Task }) {
+  const usage = task.budgetUsage;
+  const budget = task.budget;
+  if (!usage && !budget) return null;
+  const toolLimit = budget?.maxToolCalls ?? 80;
+  const outputLimit = budget?.maxOutputBytes ?? 1024 * 1024;
+  const toolRatio = Math.min(100, ((usage?.toolCalls ?? 0) / toolLimit) * 100);
+  const outputRatio = Math.min(100, ((usage?.outputBytes ?? 0) / outputLimit) * 100);
+
+  return (
+    <section className="budget-bar" aria-label="预算使用">
+      <div>
+        <span>工具</span>
+        <strong>{usage?.toolCalls ?? 0}/{toolLimit}</strong>
+      </div>
+      <div className="budget-track"><span style={{ width: `${toolRatio}%` }} /></div>
+      <div>
+        <span>输出</span>
+        <strong>{formatBytes(usage?.outputBytes ?? 0)}/{formatBytes(outputLimit)}</strong>
+      </div>
+      <div className="budget-track"><span style={{ width: `${outputRatio}%` }} /></div>
+    </section>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${bytes}B`;
 }
 
 function ToolActivityList({

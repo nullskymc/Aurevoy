@@ -121,6 +121,26 @@ export function InspectorPanel({
 
           <section className="inspector-section">
             <div className="inspector-label-row">
+              <p className="inspector-label">Checkpoint</p>
+              <span className="inspector-count">{task?.checkpoints?.length ?? 0}</span>
+            </div>
+            {!task?.checkpoints?.length ? (
+              <p className="inspector-empty">暂无 checkpoint</p>
+            ) : (
+              <div className="artifact-mini-list">
+                {task.checkpoints.map((checkpoint) => (
+                  <article key={checkpoint.id} className="artifact-mini">
+                    <strong>{checkpoint.label}</strong>
+                    <span>{new Date(checkpoint.createdAt).toLocaleString("zh-CN")}</span>
+                    {checkpoint.message && <small>{checkpoint.message}</small>}
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="inspector-section">
+            <div className="inspector-label-row">
               <p className="inspector-label">轨迹日志</p>
               <span className="inspector-count">{traces.length}</span>
             </div>

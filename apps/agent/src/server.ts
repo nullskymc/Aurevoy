@@ -444,6 +444,9 @@ export async function buildServer() {
     for (const artifact of task.artifacts ?? []) {
       send({ type: 'artifact_updated', taskId: task.id, artifact });
     }
+    for (const checkpoint of task.checkpoints ?? []) {
+      send({ type: 'checkpoint_created', taskId: task.id, checkpoint });
+    }
     for (const clarification of task.clarifications ?? []) {
       send(
         clarification.status === 'pending'

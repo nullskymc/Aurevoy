@@ -29,6 +29,8 @@
 MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名称格式为
 `mcp_<server>_<tool>`（非法字符会转为 `_`，超长名称会附加稳定 hash）。
 禁用工具仍会出现在列表中，但不会提供给模型，直接调用也会返回明确失败。
+M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化；server 配置中的本地
+`riskLevel` 优先于 MCP annotations。
 
 ### PATCH `/api/tools/:name`
 启用或停用一个工具。
@@ -92,6 +94,7 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 恢复未完成、失败或已取消任务。后端不伪造新的用户消息，而是基于该任务已持久化的
 `messages` 重新进入 Agent 循环；若上次中断发生在 assistant `tool_calls` 之后且工具结果尚未写入，
 恢复前会补一条可解释的 `role:"tool"` 失败结果，保证 Provider 协议合法且轨迹可回看。
+若任务已有 `checkpoints`，恢复 trace 会记录最近 checkpoint，便于用户理解从哪里继续。
 ```json
 // 202 → ResumeTaskResponse
 { "task": { /* Task（已回到 pending/initializing） */ }, "streamUrl": "/api/tasks/<id>/stream" }
@@ -213,6 +216,7 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `clarification_resolved` | `clarification: ClarificationRequest` | 用户已回复、超时或取消追问 |
 | `artifact_created` | `artifact: TaskArtifact` | 创建 draft 任务产物 |
 | `artifact_updated` | `artifact: TaskArtifact` | 产物状态或写入路径变化 |
+| `checkpoint_created` | `checkpoint: TaskCheckpoint` | 关键步骤完成后创建恢复点 |
 | `budget_usage` | `usage: BudgetUsage`, `budget?` | 预算使用量更新 |
 | `token_usage` | `usage: AggregatedTokenUsage` | Provider token usage 汇总更新 |
 | `done` | `status: TaskStatus` | 任务结束（completed/failed/cancelled） |
@@ -242,7 +246,8 @@ status(running)
   → token × N                       (下一轮，带着工具结果)
   → phase(finalizing) → message → status(completed) → done(completed)
 ```
-- 计划以隐式方式呈现：循环用工具调用轨迹更新 `plan`/`step_update`，不强制先规划。
+- 计划以降级优先方式呈现：普通任务保留单步计划；文件/网页/命令/产物类目标会生成多步计划，
+  工具成功后推进 `step_update` 并发布 `checkpoint_created`。
 - 一轮可能有多个并行 `tool_call`（各带独立 `id`），对应多个 `tool_result`。
 - 取消时以 `status(cancelled)` + `done(cancelled)` 收尾。
 - `phase` 是诊断和 UI 解释用的细粒度阶段，必须来自后端真实状态转换，不能由前端猜测。
@@ -390,6 +395,16 @@ interface TaskTraceEntry {
 | `AUREVOY_COMMAND_TIMEOUT_MS` | `30000` | 命令执行超时 |
 | `AUREVOY_COMMAND_OUTPUT_LIMIT_BYTES` | `65536` | stdout/stderr 输出上限 |
 | `AUREVOY_COMMAND_ENV_ALLOWLIST` | `PATH,HOME,TMPDIR` | 允许传入执行环境的变量名 |
+| `AUREVOY_HTTP_FETCH_PRIVATE_HOST_ALLOWLIST` | 空 | `http_fetch` 私网/本机主机精确放行列表，逗号分隔；默认拒绝，主要用于受控内网或回归 fixture |
+
+M7 文件与网络工具边界：
+
+- `search_files`：`safe`，支持文件名 glob 和工作区内文本搜索；返回路径、片段、大小、mtime。
+- `copy_file` / `move_file` / `rename_file`：`caution`，工作区内路径校验，目标存在默认拒绝覆盖。
+- `delete_file`：`dangerous`，默认禁用；启用后仍需审批，当前移入工作区 `.aurevoy-trash`。
+- `read_file`：`safe`，大文件返回截断预览和建议；UTF-8 解码异常会返回诊断，不伪装为可靠文本。
+- `http_fetch`：`caution`，拒绝本机/私网/metadata 地址，最多 3 次重定向且每跳重新校验；
+  二进制响应只返回元信息，HTML 会清洗 `script/style/iframe/object/embed` 后输出 `cleanedText` 和链接。
 
 ## 7. MCP server 配置
 

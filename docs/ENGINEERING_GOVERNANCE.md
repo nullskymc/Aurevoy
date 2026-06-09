@@ -107,6 +107,17 @@ npm run regression:m6
 artifact 确认/拒绝、预算超限 trace、OpenAI-compatible token usage、
 `execute_command` 审批后真实执行，以及 cwd 越界拒绝。
 
+当前 M7 回归入口：
+
+```bash
+npm run build
+npm run regression:m7
+```
+
+该脚本覆盖文件搜索/复制/移动/删除、删除默认禁用与审批、`http_fetch` SSRF 和重定向策略、
+工具参数 runtime schema validation、MCP 描述 prompt injection 净化、本地 MCP 风险覆盖、
+多步计划、checkpoint 创建和基于 checkpoint 的恢复 trace。
+
 ## 6. 路线图约束
 
 - 新增功能必须写清楚：用户价值、真实能力边界、失败路径、验证方式。

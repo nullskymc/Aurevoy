@@ -113,6 +113,17 @@ npm run regression:m6
 `regression:m6` 覆盖结构化追问、追问超时、artifact 草稿/确认/拒绝、预算超限、
 Provider token usage、`execute_command` 成功执行和工作区 cwd 越界拒绝。
 
+### 回归 M7 工具与安全治理
+
+```bash
+npm run build
+npm run regression:m7
+```
+
+`regression:m7` 覆盖 `search_files`、文件复制/移动/删除、删除默认禁用、审批拒绝、
+`http_fetch` SSRF/重定向策略、工具 schema validation、MCP 描述净化、本地风险覆盖、
+多步计划和 checkpoint 恢复。
+
 ## 7. 提交前检查清单
 
 - [ ] `npm run typecheck` 通过
@@ -122,6 +133,7 @@ Provider token usage、`execute_command` 成功执行和工作区 cwd 越界拒�
 - [ ] 改了 Agent loop / 工具 / 审批 / 存储 → 有可复现的轨迹或回归用例
 - [ ] 改了 Agent runtime / 工具 / 审批 / 安全边界 → `npm run regression:m3` 通过
 - [ ] 改了 M6 交付链路（追问 / 产物 / 预算 / token / 命令执行）→ `npm run regression:m6` 通过
+- [ ] 改了 M7 工具 / HTTP 安全 / schema / MCP / checkpoint / 工作台拆分 → `npm run regression:m7` 通过
 - [ ] 新增工具 → 已声明风险等级、审批行为、错误路径和输入 schema
 - [ ] 新增执行能力 → 已定义沙箱/权限边界、超时、输出上限和取消路径
 - [ ] 无硬编码秘钥；无平台专有路径/命令

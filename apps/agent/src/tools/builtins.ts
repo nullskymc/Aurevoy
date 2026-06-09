@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import type { MemoryCategory, MemoryEntry, TaskArtifact } from '@aurevoy/shared';
 import { config } from '../config.js';
 import { toolRegistry } from './registry.js';
@@ -17,8 +18,12 @@ import { commandExecutor } from '../sandbox/command-executor.js';
  */
 
 const MAX_READ_BYTES = 256 * 1024; // 单次读文件上限 256KB
+const MAX_SEARCH_FILES = 5000;
+const MAX_SEARCH_RESULTS = 50;
+const MAX_SNIPPET_CHARS = 240;
 const MAX_FETCH_BYTES = 1024 * 1024; // 单次抓取上限 1MB
 const FETCH_TIMEOUT_MS = 20000;
+const MAX_FETCH_REDIRECTS = 3;
 
 /** 把用户给的相对/绝对路径解析为工作区内的绝对路径；越界则抛错。 */
 export function resolveInWorkspace(input: unknown): string {
@@ -105,7 +110,7 @@ toolRegistry.register({
 toolRegistry.register({
   descriptor: {
     name: 'read_file',
-    description: '读取工作区内一个文本文件的内容（最多 256KB）。path 相对工作区根。',
+    description: '读取工作区内一个文本文件的内容（最多 256KB）。大文件会返回截断预览和继续处理建议。',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', description: '相对工作区的文件路径' } },
@@ -119,13 +124,211 @@ toolRegistry.register({
     await assertRealPathInside(file);
     const stat = await fs.stat(file);
     if (!stat.isFile()) throw new Error('目标不是文件');
-    if (stat.size > MAX_READ_BYTES) {
-      throw new Error(`文件过大（${stat.size} 字节），上限 ${MAX_READ_BYTES} 字节`);
+    const handle = await fs.open(file, 'r');
+    try {
+      const bytesToRead = Math.min(stat.size, MAX_READ_BYTES);
+      const buffer = Buffer.alloc(bytesToRead);
+      await handle.read(buffer, 0, bytesToRead, 0);
+      const hasReplacement = buffer.toString('utf8').includes('\uFFFD');
+      const truncated = stat.size > MAX_READ_BYTES;
+      if (hasReplacement) {
+        return {
+          path: relative(workspaceRootPath(), file),
+          size: stat.size,
+          encoding: 'utf8',
+          ok: false,
+          diagnostic: '文件无法可靠按 UTF-8 解码，内容可能是二进制或其他编码。',
+          suggestion: '请转换为 UTF-8 文本，或后续增加二进制/编码指定读取能力。',
+          truncated,
+        };
+      }
+      return {
+        path: relative(workspaceRootPath(), file),
+        size: stat.size,
+        encoding: 'utf8',
+        truncated,
+        content: buffer.toString('utf8'),
+        suggestion: truncated ? `文件超过 ${MAX_READ_BYTES} 字节，本次只返回开头预览；请用 search_files 定位片段或拆分文件。` : undefined,
+      };
+    } finally {
+      await handle.close();
     }
-    const content = await fs.readFile(file, 'utf8');
-    return { path: relative(workspaceRootPath(), file), size: stat.size, content };
   },
 });
+
+// ---- search_files（safe）：文件名 glob + 文本内容搜索 ----
+toolRegistry.register({
+  descriptor: {
+    name: 'search_files',
+    description: '在工作区内搜索文件名 glob 和文本内容，返回路径、匹配片段、大小与 mtime。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '相对工作区的起始目录，缺省为根目录' },
+        glob: { type: 'string', description: '文件名 glob，例如 **/*.md 或 *.ts' },
+        query: { type: 'string', description: '要搜索的文本内容；省略时只按文件名匹配' },
+        maxResults: { type: 'integer', description: '最多返回结果数，默认 50，上限 50' },
+      },
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+  },
+  async execute(args) {
+    await ensureWorkspace();
+    const root = resolveInWorkspace(typeof args.path === 'string' ? args.path : '.');
+    await assertRealPathInside(root);
+    const stat = await fs.stat(root);
+    if (!stat.isDirectory()) throw new Error('search_files 的 path 必须是目录');
+    const glob = typeof args.glob === 'string' && args.glob.trim() ? args.glob.trim() : '**/*';
+    const query = typeof args.query === 'string' && args.query.length > 0 ? args.query : undefined;
+    const maxResults = clampInteger(args.maxResults, 1, MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS);
+    const matcher = createGlobMatcher(glob);
+    const results: Array<Record<string, unknown>> = [];
+    let scannedFiles = 0;
+    let skippedLargeFiles = 0;
+
+    for await (const file of walkFiles(root)) {
+      if (scannedFiles >= MAX_SEARCH_FILES || results.length >= maxResults) break;
+      scannedFiles += 1;
+      const relativePath = relative(workspaceRootPath(), file) || '.';
+      if (!matcher(relativePath)) continue;
+      const fileStat = await fs.stat(file);
+      const base = {
+        path: relativePath,
+        size: fileStat.size,
+        mtime: fileStat.mtime.toISOString(),
+      };
+      if (!query) {
+        results.push(base);
+        continue;
+      }
+      if (fileStat.size > MAX_READ_BYTES) {
+        skippedLargeFiles += 1;
+        continue;
+      }
+      const content = await readUtf8Preview(file);
+      const index = content.indexOf(query);
+      if (index < 0) continue;
+      results.push({
+        ...base,
+        match: {
+          query,
+          snippet: makeSnippet(content, index, query.length),
+        },
+      });
+    }
+
+    return {
+      root: relative(workspaceRootPath(), root) || '.',
+      glob,
+      query,
+      scannedFiles,
+      skippedLargeFiles,
+      truncated: scannedFiles >= MAX_SEARCH_FILES || results.length >= maxResults,
+      results,
+    };
+  },
+});
+
+// ---- copy_file（caution，需审批）----
+toolRegistry.register({
+  descriptor: {
+    name: 'copy_file',
+    description: '在工作区内复制文件。目标存在时默认拒绝覆盖，除非 overwrite=true。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourcePath: { type: 'string', description: '相对工作区的源文件路径' },
+        targetPath: { type: 'string', description: '相对工作区的目标文件路径' },
+        overwrite: { type: 'boolean', description: '是否覆盖已有目标文件，默认 false' },
+      },
+      required: ['sourcePath', 'targetPath'],
+      additionalProperties: false,
+    },
+    riskLevel: 'caution',
+  },
+  async execute(args) {
+    const source = resolveInWorkspace(args.sourcePath);
+    const target = resolveInWorkspace(args.targetPath);
+    await assertRealPathInside(source);
+    await fs.mkdir(join(target, '..'), { recursive: true });
+    await assertRealPathInside(target);
+    const sourceStat = await fs.stat(source);
+    if (!sourceStat.isFile()) throw new Error('sourcePath 不是文件');
+    if (args.overwrite !== true && await pathExists(target)) throw new Error('targetPath 已存在；如需覆盖请显式传 overwrite=true');
+    await fs.copyFile(source, target);
+    return { sourcePath: relative(workspaceRootPath(), source), targetPath: relative(workspaceRootPath(), target), bytesCopied: sourceStat.size };
+  },
+});
+
+// ---- move_file / rename_file（caution，需审批）----
+const moveFileTool = {
+  descriptor: {
+    name: 'move_file',
+    description: '在工作区内移动或重命名文件。目标存在时默认拒绝覆盖，除非 overwrite=true。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourcePath: { type: 'string', description: '相对工作区的源文件路径' },
+        targetPath: { type: 'string', description: '相对工作区的目标文件路径' },
+        overwrite: { type: 'boolean', description: '是否覆盖已有目标文件，默认 false' },
+      },
+      required: ['sourcePath', 'targetPath'],
+      additionalProperties: false,
+    },
+    riskLevel: 'caution' as const,
+  },
+  async execute(args: Record<string, unknown>) {
+    const source = resolveInWorkspace(args.sourcePath);
+    const target = resolveInWorkspace(args.targetPath);
+    await assertRealPathInside(source);
+    await fs.mkdir(join(target, '..'), { recursive: true });
+    await assertRealPathInside(target);
+    const sourceStat = await fs.stat(source);
+    if (!sourceStat.isFile()) throw new Error('sourcePath 不是文件');
+    if (args.overwrite !== true && await pathExists(target)) throw new Error('targetPath 已存在；如需覆盖请显式传 overwrite=true');
+    await fs.rename(source, target);
+    return { sourcePath: relative(workspaceRootPath(), source), targetPath: relative(workspaceRootPath(), target), bytesMoved: sourceStat.size };
+  },
+};
+toolRegistry.register(moveFileTool);
+toolRegistry.register({
+  ...moveFileTool,
+  descriptor: { ...moveFileTool.descriptor, name: 'rename_file', description: 'move_file 的别名：在工作区内重命名文件。' },
+});
+
+// ---- delete_file（dangerous，默认禁用）：移动到回收区，不永久删除 ----
+toolRegistry.register({
+  descriptor: {
+    name: 'delete_file',
+    description: '把工作区内文件移入工作区 .aurevoy-trash 回收区，不做永久删除。默认禁用，启用后仍需审批。',
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string', description: '相对工作区的待删除文件路径' } },
+      required: ['path'],
+      additionalProperties: false,
+    },
+    riskLevel: 'dangerous',
+  },
+  async execute(args) {
+    const file = resolveInWorkspace(args.path);
+    await assertRealPathInside(file);
+    const stat = await fs.stat(file);
+    if (!stat.isFile()) throw new Error('path 不是文件');
+    const trashDir = resolveInWorkspace('.aurevoy-trash');
+    await fs.mkdir(trashDir, { recursive: true });
+    await assertRealPathInside(trashDir);
+    const trashName = `${Date.now()}-${relative(workspaceRootPath(), file).replace(/[/\\:]/g, '_')}`;
+    const trashPath = join(trashDir, trashName);
+    await fs.rename(file, trashPath);
+    return {
+      path: relative(workspaceRootPath(), file),
+      trashedPath: relative(workspaceRootPath(), trashPath),
+      bytesMoved: stat.size,
+    };
+  },
+});
+toolRegistry.setEnabled('delete_file', false);
 
 // ---- write_file（dangerous，需审批）----
 toolRegistry.register({
@@ -158,7 +361,7 @@ toolRegistry.register({
 toolRegistry.register({
   descriptor: {
     name: 'http_fetch',
-    description: '抓取一个 http(s) URL 的文本内容（GET，最多 1MB）。用于查资料/读网页。',
+    description: '安全抓取一个 http(s) URL。最多 3 次重定向，拒绝本机/内网地址，HTML 会清洗后返回正文与链接。',
     inputSchema: {
       type: 'object',
       properties: { url: { type: 'string', description: '要抓取的 http/https URL' } },
@@ -168,48 +371,31 @@ toolRegistry.register({
     riskLevel: 'caution',
   },
   async execute(args) {
-    const raw = args.url;
-    if (typeof raw !== 'string' || raw.trim() === '') throw new Error('url 必须是非空字符串');
-    let parsed: URL;
-    try {
-      parsed = new URL(raw);
-    } catch {
-      throw new Error(`非法 URL: ${raw}`);
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error('只允许 http/https 协议');
-    }
-    const res = await fetch(parsed, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    const reader = res.body?.getReader();
-    const decoder = new TextDecoder();
-    let received = 0;
-    let body = '';
-    let truncated = false;
-    if (reader) {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        received += value.byteLength;
-        if (received > MAX_FETCH_BYTES) {
-          body += decoder.decode(value.slice(0, MAX_FETCH_BYTES - (received - value.byteLength)));
-          truncated = true;
-          await reader.cancel().catch(() => {});
-          break;
-        }
-        body += decoder.decode(value, { stream: true });
-      }
-    }
-    return {
-      url: parsed.toString(),
-      status: res.status,
-      contentType: res.headers.get('content-type') ?? null,
-      truncated,
-      body,
+    const raw = readNonEmptyString(args.url, 'url');
+    const fetched = await fetchWithPolicy(raw);
+    const contentType = fetched.res.headers.get('content-type') ?? '';
+    const metadata = {
+      url: fetched.url.toString(),
+      fetchedAt: new Date().toISOString(),
+      status: fetched.res.status,
+      contentType: contentType || null,
+      redirects: fetched.redirects,
     };
+    if (!isTextContentType(contentType)) {
+      return {
+        ...metadata,
+        binary: true,
+        body: null,
+        contentLength: fetched.res.headers.get('content-length'),
+        note: 'Content-Type 不是文本，未把二进制内容注入模型上下文。',
+      };
+    }
+    const { body, truncated } = await readResponseText(fetched.res);
+    if (isHtmlContentType(contentType) || /<html[\s>]/i.test(body)) {
+      const cleaned = cleanHtml(body, fetched.url);
+      return { ...metadata, truncated, cleanedText: cleaned.text, links: cleaned.links };
+    }
+    return { ...metadata, truncated, cleanedText: body };
   },
 });
 
@@ -444,6 +630,269 @@ toolRegistry.setEnabled('execute_command', config.sandbox.commandExecutionEnable
 function readNonEmptyString(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`${label} 必须是非空字符串`);
   return value;
+}
+
+function clampInteger(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await fs.stat(path);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
+async function* walkFiles(root: string): AsyncGenerator<string> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === '.aurevoy-trash') continue;
+    const path = join(root, entry.name);
+    await assertRealPathInside(path);
+    if (entry.isDirectory()) {
+      yield* walkFiles(path);
+    } else if (entry.isFile()) {
+      yield path;
+    }
+  }
+}
+
+function createGlobMatcher(pattern: string): (path: string) => boolean {
+  const normalized = pattern.replace(/\\/g, '/');
+  const regex = new RegExp(`^${globToRegex(normalized)}$`);
+  return (path: string) => regex.test(path.replace(/\\/g, '/'));
+}
+
+function globToRegex(pattern: string): string {
+  let output = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    const next = pattern[index + 1];
+    if (char === '*' && next === '*') {
+      output += '.*';
+      index += 1;
+    } else if (char === '*') {
+      output += '[^/]*';
+    } else if (char === '?') {
+      output += '[^/]';
+    } else {
+      output += escapeRegex(char);
+    }
+  }
+  return output;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+}
+
+async function readUtf8Preview(path: string): Promise<string> {
+  const buffer = await fs.readFile(path);
+  return buffer.toString('utf8');
+}
+
+function makeSnippet(content: string, index: number, length: number): string {
+  const start = Math.max(0, index - Math.floor((MAX_SNIPPET_CHARS - length) / 2));
+  const end = Math.min(content.length, start + MAX_SNIPPET_CHARS);
+  return `${start > 0 ? '…' : ''}${content.slice(start, end)}${end < content.length ? '…' : ''}`;
+}
+
+interface FetchPolicyResult {
+  url: URL;
+  res: Response;
+  redirects: string[];
+}
+
+async function fetchWithPolicy(rawUrl: string): Promise<FetchPolicyResult> {
+  let url = parseHttpUrl(rawUrl);
+  const redirects: string[] = [];
+
+  for (let redirectCount = 0; redirectCount <= MAX_FETCH_REDIRECTS; redirectCount += 1) {
+    await assertPublicHttpTarget(url);
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!isRedirectStatus(res.status)) return { url, res, redirects };
+    const location = res.headers.get('location');
+    if (!location) return { url, res, redirects };
+    if (redirectCount === MAX_FETCH_REDIRECTS) {
+      throw new Error(`重定向次数超过上限 ${MAX_FETCH_REDIRECTS}`);
+    }
+    url = parseHttpUrl(new URL(location, url).toString());
+    redirects.push(url.toString());
+  }
+
+  throw new Error(`重定向次数超过上限 ${MAX_FETCH_REDIRECTS}`);
+}
+
+function parseHttpUrl(raw: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`非法 URL: ${raw}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('只允许 http/https 协议');
+  }
+  return parsed;
+}
+
+async function assertPublicHttpTarget(url: URL): Promise<void> {
+  if (isHttpFetchPrivateHostAllowed(url.hostname)) return;
+  if (isPrivateHostname(url.hostname)) throw new Error(`拒绝访问本机或私有地址: ${url.hostname}`);
+  const records = await lookup(url.hostname, { all: true, verbatim: true });
+  if (records.length === 0) throw new Error(`无法解析主机: ${url.hostname}`);
+  for (const record of records) {
+    if (isPrivateAddress(record.address)) {
+      throw new Error(`拒绝访问本机或私有地址: ${record.address}`);
+    }
+  }
+}
+
+function isHttpFetchPrivateHostAllowed(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return config.network.httpFetchPrivateHostAllowlist.includes(normalized);
+}
+
+function isPrivateHostname(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return normalized === 'localhost' || normalized.endsWith('.localhost') || isPrivateAddress(normalized);
+}
+
+function isPrivateAddress(address: string): boolean {
+  const normalized = address.replace(/^::ffff:/i, '');
+  if (isPrivateIpv4(normalized)) return true;
+  return isPrivateIpv6(address);
+}
+
+function isPrivateIpv4(address: string): boolean {
+  const parts = address.split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = parts;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    a >= 224
+  );
+}
+
+function isPrivateIpv6(address: string): boolean {
+  const normalized = address.toLowerCase();
+  return (
+    normalized === '::1' ||
+    normalized === '::' ||
+    normalized.startsWith('fc') ||
+    normalized.startsWith('fd') ||
+    normalized.startsWith('fe80:') ||
+    normalized.startsWith('ff')
+  );
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function isTextContentType(contentType: string): boolean {
+  const value = contentType.toLowerCase();
+  return (
+    value.startsWith('text/') ||
+    value.includes('application/json') ||
+    value.includes('application/xml') ||
+    value.includes('application/xhtml+xml') ||
+    value.includes('application/javascript')
+  );
+}
+
+function isHtmlContentType(contentType: string): boolean {
+  const value = contentType.toLowerCase();
+  return value.includes('text/html') || value.includes('application/xhtml+xml');
+}
+
+async function readResponseText(res: Response): Promise<{ body: string; truncated: boolean }> {
+  const reader = res.body?.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let body = '';
+  let truncated = false;
+  if (!reader) return { body, truncated };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > MAX_FETCH_BYTES) {
+      body += decoder.decode(value.slice(0, MAX_FETCH_BYTES - (received - value.byteLength)));
+      truncated = true;
+      await reader.cancel().catch(() => {});
+      break;
+    }
+    body += decoder.decode(value, { stream: true });
+  }
+  return { body, truncated };
+}
+
+function cleanHtml(html: string, baseUrl: URL): { text: string; links: Array<{ text: string; url: string }> } {
+  const withoutDangerousBlocks = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, ' ')
+    .replace(/<object[\s\S]*?<\/object>/gi, ' ')
+    .replace(/<embed[\s\S]*?>/gi, ' ');
+  const links = extractLinks(withoutDangerousBlocks, baseUrl);
+  const text = decodeHtmlEntities(
+    withoutDangerousBlocks
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|section|article|li|h[1-6])>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n\s+/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim(),
+  );
+  return { text, links };
+}
+
+function extractLinks(html: string, baseUrl: URL): Array<{ text: string; url: string }> {
+  const links: Array<{ text: string; url: string }> = [];
+  const pattern = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  for (;;) {
+    const match = pattern.exec(html);
+    if (!match || links.length >= 30) break;
+    try {
+      const url = new URL(decodeHtmlEntities(match[1]), baseUrl);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+      const text = decodeHtmlEntities(match[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+      links.push({ text: text.slice(0, 120), url: url.toString() });
+    } catch {
+      // 忽略无法解析的 href，避免单个坏链接导致抓取失败。
+    }
+  }
+  return links;
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, dec: string) => String.fromCodePoint(Number.parseInt(dec, 10)));
 }
 
 function readArtifactType(value: unknown): TaskArtifact['type'] {
