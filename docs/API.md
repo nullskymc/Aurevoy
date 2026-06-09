@@ -143,11 +143,19 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 
 - `GET /api/settings` → `RuntimeSettings`
 - `PATCH /api/settings`（`UpdateRuntimeSettingsRequest`）→ `RuntimeSettings`
+- `GET /api/settings/models` → `ModelListResponse { models: string[] }`：按当前已保存的
+  Base URL/API Key 手动拉取一次 OpenAI-compatible `/models`，前端不在打开模型菜单时自动请求。
 
 可更新项：OpenAI 兼容 `baseUrl` / `model` / `temperature` / `timeoutMs` / `apiKey`、
-工作区目录、命令执行边界、MCP server JSON、数据清理保留天数。
+`availableModels` / `enabledModels`、工作区目录、命令执行边界、MCP server JSON、数据清理保留天数。
 Provider 设置会清空 Provider 缓存，下一轮任务使用新配置；工作区目录会被文件工具实时读取；
 MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空工作区等返回 `400`。
+
+模型列表字段语义：
+- `availableModels`：最近一次手动 `GET /api/settings/models` 获取到的完整模型列表，由设置页保存。
+- `enabledModels`：用户勾选后允许出现在主界面 Composer 模型菜单中的模型列表。
+- 后端兼容旧版 `llm.modelOptions` 持久化键；若新 `enabledModels` 尚不存在，会读取旧值作为迁移来源。
+- 后端会保证当前 active `model` 始终包含在 `enabledModels` 中，避免主界面隐藏正在使用的模型。
 
 ### 数据管理 `/api/data`  (M5)
 

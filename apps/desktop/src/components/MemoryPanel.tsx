@@ -48,72 +48,62 @@ export function MemoryPanel({
   }
 
   return (
-    <div
-      className="drawer-overlay"
-      data-open="true"
-      role="dialog"
-      aria-label="长期记忆管理"
-      onClick={onClose}
-    >
-      <aside className="inspector memory-drawer" data-open="true" onClick={(e) => e.stopPropagation()}>
-        <header className="drawer-head">
-          <div>
-            <h2 className="drawer-title">长期记忆</h2>
-            <p className="drawer-sub">
-              共 {memories.length} 条 · 启用 {enabledCount} 条。启用的记忆会作为背景注入对话。
-            </p>
-          </div>
-          <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">
-            ✕
-          </button>
-        </header>
+    <section className="page-panel memory-page" aria-label="长期记忆管理">
+      <header className="page-panel-head">
+        <div>
+          <h1>长期记忆</h1>
+          <p>共 {memories.length} 条，启用 {enabledCount} 条。启用的记忆会作为背景注入对话。</p>
+        </div>
+        <button type="button" className="ghost-btn" onClick={onClose}>
+          返回对话
+        </button>
+      </header>
 
-        <div className="memory-add">
-          <select
-            className="memory-cat-select"
-            value={newCategory}
-            onChange={(e) => setNewCategory(e.target.value as MemoryCategory)}
-            aria-label="记忆分类"
-          >
-            {CATEGORY_OPTIONS.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
-              </option>
+      <div className="memory-add">
+        <select
+          className="memory-cat-select"
+          value={newCategory}
+          onChange={(e) => setNewCategory(e.target.value as MemoryCategory)}
+          aria-label="记忆分类"
+        >
+          {CATEGORY_OPTIONS.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+        <input
+          className="memory-add-input"
+          value={newContent}
+          placeholder="新增一条长期记忆，例如：偏好用简洁中文回答"
+          onChange={(e) => setNewContent(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submitNew();
+          }}
+        />
+        <button type="button" className="memory-add-btn" onClick={submitNew} disabled={!newContent.trim()}>
+          添加
+        </button>
+      </div>
+
+      <div className="page-scroll">
+        {memories.length === 0 ? (
+          <p className="drawer-empty">还没有记忆。你可以手动添加，Agent 也会在对话中记录。</p>
+        ) : (
+          <ul className="memory-list">
+            {memories.map((memory) => (
+              <MemoryItem
+                key={memory.id}
+                memory={memory}
+                onToggle={onToggle}
+                onEdit={onEdit}
+                onDelete={onDelete}
+              />
             ))}
-          </select>
-          <input
-            className="memory-add-input"
-            value={newContent}
-            placeholder="新增一条长期记忆，例如：偏好用简洁中文回答"
-            onChange={(e) => setNewContent(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submitNew();
-            }}
-          />
-          <button type="button" className="memory-add-btn" onClick={submitNew} disabled={!newContent.trim()}>
-            添加
-          </button>
-        </div>
-
-        <div className="drawer-scroll">
-          {memories.length === 0 ? (
-            <p className="drawer-empty">还没有记忆。你可以手动添加，Agent 也会在对话中记录。</p>
-          ) : (
-            <ul className="memory-list">
-              {memories.map((memory) => (
-                <MemoryItem
-                  key={memory.id}
-                  memory={memory}
-                  onToggle={onToggle}
-                  onEdit={onEdit}
-                  onDelete={onDelete}
-                />
-              ))}
-            </ul>
-          )}
-        </div>
-      </aside>
-    </div>
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 

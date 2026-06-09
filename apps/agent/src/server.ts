@@ -17,6 +17,7 @@ import type {
   MemoryCategory,
   MemoryEntry,
   MemoryListResponse,
+  ModelListResponse,
   ResumeTaskResponse,
   TaskTraceListResponse,
   UpdateRuntimeSettingsRequest,
@@ -37,7 +38,7 @@ import {
 import { taskEvents } from './agent/events.js';
 import { taskStore, traceStore, memoryStore, toolSettingsStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
-import { getProviderName } from './llm/provider.js';
+import { getProviderName, listProviderModels } from './llm/provider.js';
 import { getMcpStatuses, reloadMcpTools } from './tools/mcp.js';
 import {
   loadPersistedSettings,
@@ -92,6 +93,15 @@ export async function buildServer() {
   });
 
   app.get('/api/settings', async () => readRuntimeSettings());
+
+  app.get('/api/settings/models', async (_req, reply): Promise<ModelListResponse | unknown> => {
+    try {
+      return { models: await listProviderModels() };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: message });
+    }
+  });
 
   app.patch<{ Body: UpdateRuntimeSettingsRequest }>('/api/settings', async (req, reply) => {
     try {

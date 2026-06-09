@@ -136,10 +136,16 @@
 
 - [x] 设置界面：Provider、Base URL、Model、API Key、工作区目录、工具开关、MCP servers
       （`SettingsPanel` 调用 `/api/settings`、`/api/tools`、`/api/mcp/status`、`/api/data`；
-      API Key 不回显，只显示是否已配置）
+      API Key 不回显，只显示是否已配置；设置页作为主区页面切换，不再占用运行详情抽屉）
 - [x] 设置变更必须影响真实运行配置；不能只做静态表单
       （SQLite `app_settings` 持久化；PATCH 后更新内存 `config`、清空 Provider 缓存、
       文件工具实时读取新工作区、MCP JSON 改动触发 MCP 工具重载；`npm run regression:m5` 覆盖）
+- [x] 模型列表管理：手动获取 Provider 模型、用户勾选主界面可选模型、Composer 模型菜单只展示启用项
+      （`GET /api/settings/models` 只在设置页手动触发；`availableModels` 保存最近一次获取结果；
+      `enabledModels` 保存主界面可选模型；后端兼容旧 `llm.modelOptions` 并保证当前 active model 不被隐藏）
+- [x] 桌面 UI 密度与设置页统一：侧栏容器复用、全局尺寸 token、字体比例控制、模型 popover 空白/Escape 关闭
+      （设置页和主界面共享 `.sidebar`/`.sidebar-action`/`.sidebar-scroll`；Composer、toast、工具卡、
+      模型 popover 和设置控件切到统一字号/间距/圆角/控件高度 token）
 - [x] 工具管理：查看工具、风险等级、启用/禁用、MCP 连接状态
       （工具启停写入 `tool_settings`；禁用工具不提供给模型且不可执行；MCP server 状态返回连接/失败原因）
 - [x] 数据管理：任务历史、轨迹日志、记忆、SQLite 文件位置、清理策略

@@ -1,0 +1,101 @@
+import { useEffect, useRef } from "react";
+import type { RuntimeSettings } from "@aurevoy/shared";
+
+export interface ModelSelectorDraft {
+  model: string;
+}
+
+interface ModelSelectorDrawerProps {
+  open: boolean;
+  provider?: string;
+  settings: RuntimeSettings | null;
+  saving: boolean;
+  onClose: () => void;
+  onOpenFullSettings: () => void;
+  onSave: (draft: ModelSelectorDraft) => void;
+}
+
+export function ModelSelectorDrawer({
+  open,
+  provider,
+  settings,
+  saving,
+  onClose,
+  onOpenFullSettings,
+  onSave,
+}: ModelSelectorDrawerProps) {
+  const currentModel = settings?.llm.model ?? parseProviderModel(provider);
+  const models = settings?.llm.enabledModels ?? [];
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointerDown(event: globalThis.PointerEvent): void {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (popoverRef.current?.contains(target)) return;
+      onClose();
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent): void {
+      if (event.key === "Escape") onClose();
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose, open]);
+
+  if (!open) return null;
+
+  return (
+    <div ref={popoverRef} className="model-popover" role="dialog" aria-label="模型选择">
+      <div className="model-popover-section">
+        <p className="model-popover-label">模型</p>
+        {models.length === 0 ? (
+          <p className="model-popover-empty">还没有启用主界面模型</p>
+        ) : (
+          <div className="model-popover-list">
+            {models.map((model) => (
+              <button
+                key={model}
+                type="button"
+                className="model-popover-item"
+                data-active={model === currentModel}
+                disabled={saving || model === currentModel}
+                onClick={() => onSave({ model })}
+              >
+                <span>{model}</span>
+                {model === currentModel && <CheckIcon />}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="model-popover-footer">
+        <button type="button" className="model-popover-action" onClick={onOpenFullSettings}>
+          {models.length === 0 ? "去设置启用模型" : "管理模型列表"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+      <path d="M4.2 10.3l3.5 3.5 8-8.2" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function parseProviderModel(provider?: string): string {
+  if (!provider || provider === "unconfigured") return "";
+  const [, model] = provider.split(/:(.*)/s);
+  return model ?? provider;
+}

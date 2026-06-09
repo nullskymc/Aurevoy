@@ -8,6 +8,10 @@ const SETTING_KEYS = {
   llmApiKey: 'llm.apiKey',
   llmBaseUrl: 'llm.baseUrl',
   llmModel: 'llm.model',
+  llmAvailableModels: 'llm.availableModels',
+  llmEnabledModels: 'llm.enabledModels',
+  /** 旧版本字段：曾同时表示“已获取列表”和“主界面可选列表”，现在只作为迁移来源。 */
+  llmModelOptions: 'llm.modelOptions',
   llmTemperature: 'llm.temperature',
   llmTimeoutMs: 'llm.timeoutMs',
   workspaceDir: 'workspaceDir',
@@ -48,6 +52,8 @@ export function readRuntimeSettings(): RuntimeSettings {
       provider: 'openai',
       baseUrl: config.llm.baseUrl,
       model: config.llm.model,
+      availableModels: readModelList(SETTING_KEYS.llmAvailableModels),
+      enabledModels: readEnabledModels(),
       temperature: config.llm.temperature,
       timeoutMs: config.llm.timeoutMs,
       apiKeyConfigured: config.llm.apiKey.trim().length > 0,
@@ -79,6 +85,12 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
       config.llm.model = requireNonEmpty(body.llm.model, 'model');
       settingsStore.set(SETTING_KEYS.llmModel, config.llm.model);
       providerChanged = true;
+    }
+    if (body.llm.availableModels !== undefined) {
+      settingsStore.set(SETTING_KEYS.llmAvailableModels, stringifyModelList(body.llm.availableModels));
+    }
+    if (body.llm.enabledModels !== undefined) {
+      settingsStore.set(SETTING_KEYS.llmEnabledModels, stringifyModelList(ensureCurrentModelEnabled(body.llm.enabledModels)));
     }
     if (body.llm.temperature !== undefined) {
       config.llm.temperature = clampNumber(body.llm.temperature, 0, 2, 'temperature');
@@ -125,6 +137,39 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
 
 export function readCleanupPolicyDays(): number {
   return parseNumber(settingsStore.get(SETTING_KEYS.cleanupPolicyDays), DEFAULT_CLEANUP_POLICY_DAYS);
+}
+
+function readEnabledModels(): string[] {
+  const explicit = settingsStore.get(SETTING_KEYS.llmEnabledModels);
+  if (explicit !== undefined) return parseModelList(explicit);
+  return readModelList(SETTING_KEYS.llmModelOptions);
+}
+
+function readModelList(key: string): string[] {
+  const raw = settingsStore.get(key);
+  if (!raw) return [];
+  return parseModelList(raw);
+}
+
+function parseModelList(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return [...new Set(parsed.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))];
+  } catch {
+    return [];
+  }
+}
+
+function stringifyModelList(models: string[]): string {
+  const unique = [...new Set(models.map((model) => model.trim()).filter(Boolean))];
+  return JSON.stringify(unique);
+}
+
+function ensureCurrentModelEnabled(models: string[]): string[] {
+  const currentModel = config.llm.model.trim();
+  if (!currentModel) return models;
+  return models.includes(currentModel) ? models : [currentModel, ...models];
 }
 
 function normalizeProvider(provider: string): 'openai' {

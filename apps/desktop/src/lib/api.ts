@@ -10,6 +10,7 @@ import {
   type MemoryEntry,
   type MemoryListResponse,
   type McpStatusResponse,
+  type ModelListResponse,
   type ResumeTaskResponse,
   type RuntimeSettings,
   type Task,
@@ -142,6 +143,13 @@ export async function updateSettings(
   });
   if (!res.ok) throw new Error(`update settings failed: ${res.status}`);
   return res.json();
+}
+
+export async function listProviderModels(): Promise<string[]> {
+  const res = await fetch(`${BASE_URL}/api/settings/models`);
+  if (!res.ok) throw new Error(`list provider models failed: ${res.status}`);
+  const body = (await res.json()) as ModelListResponse;
+  return body.models;
 }
 
 export async function getMcpStatus(): Promise<McpStatusResponse> {

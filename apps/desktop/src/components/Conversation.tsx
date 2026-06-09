@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Message, PlanStep, Task, TaskPhase, TaskStatus, ToolRiskLevel } from "@aurevoy/shared";
 import { StatusPill } from "./StatusPill";
 import { getPhaseLabel, getStatusLabel } from "./status";
@@ -92,12 +92,30 @@ export function Conversation({
   liveToolActivity,
   onToolDecision,
 }: ConversationProps) {
+  const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const previousTaskIdRef = useRef<string | null>(null);
 
-  // 新内容到达时平滑滚动到底部
+  // 只在实时运行时跟随最新输出；历史回看保持自然阅读位置。
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [output, phase, plan, status, liveToolActivity, task.messages.length]);
+    if (busy) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [busy, output, phase, plan, status, liveToolActivity, task.messages.length]);
+
+  // 切换历史任务时回到任务顶部，避免复用滚动容器导致摘要被顶栏遮住。
+  useEffect(() => {
+    if (previousTaskIdRef.current === task.id) return;
+    previousTaskIdRef.current = task.id;
+    const resetScroll = () => {
+      const scrollParent = topRef.current?.closest(".main-scroll");
+      if (scrollParent instanceof HTMLElement) {
+        scrollParent.scrollTo({ top: 0, behavior: "auto" });
+      } else {
+        topRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+      }
+    };
+    resetScroll();
+    window.requestAnimationFrame(resetScroll);
+  }, [task.id]);
 
   const messages = task.messages;
   const resultMap = buildToolResultMap(messages);
@@ -117,6 +135,7 @@ export function Conversation({
 
   return (
     <div className="conversation">
+      <div ref={topRef} />
       <div className="conversation-thread">
         {!busy && plan.length > 0 && (
           <RunSummaryPanel plan={plan} status={status} phase={phase} />
@@ -125,9 +144,10 @@ export function Conversation({
         {historyMessages.map((message) => {
           if (message.role === "user") {
             return (
-              <div className="msg msg-user" key={message.id}>
-                <div className="msg-bubble">{message.content}</div>
-              </div>
+              <article className="doc-block doc-block-user" key={message.id}>
+                <DocumentMeta icon={<TargetIcon />} label="目标" />
+                <div className="doc-user-text">{message.content}</div>
+              </article>
             );
           }
           if (message.role === "assistant") {
@@ -135,15 +155,15 @@ export function Conversation({
             const hasText = message.content.trim().length > 0;
             if (!hasText && tools.length === 0) return null;
             return (
-              <div className="msg msg-agent" key={message.id}>
-                <div className="msg-avatar">A</div>
-                <div className="msg-body">
+              <article className="doc-block doc-block-agent" key={message.id}>
+                <DocumentMeta icon={<AgentIcon />} label="Aurevoy" />
+                <div className="doc-body">
                   {tools.length > 0 && (
                     <ToolActivityList items={tools} onDecision={onToolDecision} />
                   )}
                   {hasText && <div className="agent-text">{message.content}</div>}
                 </div>
-              </div>
+              </article>
             );
           }
           return null;
@@ -151,9 +171,12 @@ export function Conversation({
 
         {/* 当前运行轮次的实时尾巴 */}
         {busy && (
-          <div className="msg msg-agent">
-            <div className="msg-avatar">A</div>
-            <div className="msg-body">
+          <article className="doc-block doc-block-agent">
+            <DocumentMeta
+              icon={<AgentIcon />}
+              label={getPhaseLabel(phase) || getStatusLabel(status)}
+            />
+            <div className="doc-body">
               {plan.length > 0 && <PlanCard plan={plan} />}
 
               {liveToolActivity.length > 0 && (
@@ -187,7 +210,7 @@ export function Conversation({
                 </div>
               )}
             </div>
-          </div>
+          </article>
         )}
 
         {!busy && (
@@ -199,6 +222,41 @@ export function Conversation({
         <div ref={bottomRef} />
       </div>
     </div>
+  );
+}
+
+function DocumentMeta({ icon, label }: { icon: ReactNode; label: string }) {
+  return (
+    <div className="doc-meta">
+      <span className="doc-meta-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function TargetIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.35" fill="none" />
+      <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.35" fill="none" />
+    </svg>
+  );
+}
+
+function AgentIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <path
+        d="M4.2 5.8c0-.9.7-1.6 1.6-1.6h8.4c.9 0 1.6.7 1.6 1.6v5.9c0 .9-.7 1.6-1.6 1.6H8l-3.2 2.5v-2.5c-.5-.2-.8-.8-.8-1.4V5.8z"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        fill="none"
+        strokeLinejoin="round"
+      />
+      <path d="M7.2 8.2h5.6M7.2 10.6h3.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -260,6 +318,10 @@ function toolStatusIcon(status: ToolActivity["status"]): string {
   }
 }
 
+function getToolKindLabel(name: string): string {
+  return /cmd|command|exec|shell|terminal/i.test(name) ? "命令" : "工具";
+}
+
 function ToolActivityCard({
   item,
   onDecision,
@@ -284,6 +346,7 @@ function ToolActivityCard({
           ? "完成"
           : "失败";
   const icon = toolStatusIcon(item.status);
+  const kindLabel = getToolKindLabel(item.name);
   const detail =
     item.status === "error"
       ? item.error ?? "未知错误"
@@ -298,11 +361,12 @@ function ToolActivityCard({
   }
 
   return (
-    <section className="tool-card" data-status={item.status} aria-label={`工具调用 ${item.name}`}>
+    <section className="tool-card" data-open={open} data-status={item.status} aria-label={`${kindLabel}调用 ${item.name}`}>
       <button type="button" className="tool-card-head" onClick={() => setOpen((v) => !v)}>
         <span className="tool-card-icon" aria-hidden="true">
           {icon}
         </span>
+        <span className="tool-card-kind">{kindLabel}</span>
         <span className="tool-card-name">{item.name}</span>
         {item.riskLevel && item.riskLevel !== "safe" && (
           <span className="tool-card-risk" data-risk={item.riskLevel}>

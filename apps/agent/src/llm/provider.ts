@@ -95,6 +95,10 @@ interface OpenAIPayload {
   choices?: OpenAIChoice[];
 }
 
+interface OpenAIModelListPayload {
+  data?: Array<{ id?: string }>;
+}
+
 /**
  * OpenAI 兼容的流式 Provider。
  *
@@ -362,6 +366,45 @@ export function isLLMConfigured(): boolean {
  */
 export function getProviderName(): string {
   return isLLMConfigured() ? `openai:${config.llm.model}` : 'unconfigured';
+}
+
+/** 从当前 OpenAI-compatible Provider 手动获取模型列表，供设置页固定保存。 */
+export async function listProviderModels(): Promise<string[]> {
+  assertConfigured();
+  const url = `${config.llm.baseUrl.replace(/\/$/, '')}/models`;
+  const signal = AbortSignal.timeout(config.llm.timeoutMs);
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${config.llm.apiKey}`,
+    },
+    signal,
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`获取模型列表失败 (${res.status}): ${detail.slice(0, 300)}`);
+  }
+
+  const json = (await res.json()) as unknown;
+  const models = extractModelIds(json);
+
+  return [...new Set(models.filter((model) => model.trim().length > 0))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function extractModelIds(json: unknown): string[] {
+  if (Array.isArray(json)) return json.filter((item): item is string => typeof item === 'string');
+  if (!json || typeof json !== 'object') return [];
+  const record = json as OpenAIModelListPayload & { models?: unknown };
+  if (Array.isArray(record.models)) {
+    return record.models.filter((item): item is string => typeof item === 'string');
+  }
+  if (Array.isArray(record.data)) {
+    return record.data
+      .map((item) => item.id)
+      .filter((id): id is string => typeof id === 'string');
+  }
+  return [];
 }
 
 let cachedProvider: LLMProvider | null = null;

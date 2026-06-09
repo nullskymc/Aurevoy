@@ -9,7 +9,7 @@ interface ComposerProps {
   provider?: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
-  onOpenSettings: () => void;
+  onOpenModelSelector: () => void;
   /** busy 时点击发送按钮触发停止/取消 */
   onStop?: () => void;
 }
@@ -22,7 +22,7 @@ export function Composer({
   provider,
   onChange,
   onSubmit,
-  onOpenSettings,
+  onOpenModelSelector,
   onStop,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -55,7 +55,13 @@ export function Composer({
             <button type="button" className="composer-icon-btn" title="附件尚未启用" aria-label="附件" disabled>
               <PlusIcon />
             </button>
-            <button type="button" className="composer-chip" title="模型设置" onClick={onOpenSettings}>
+            <button
+              type="button"
+              className="composer-chip"
+              title="选择模型"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={onOpenModelSelector}
+            >
               <GearIcon />
               <span>{provider ? (provider === "unconfigured" ? "未配置 LLM" : provider) : "未连接"}</span>
             </button>
@@ -90,7 +96,12 @@ export function Composer({
           本地模式
         </span>
         {provider === "unconfigured" && (
-          <button type="button" className="composer-footer-link" onClick={onOpenSettings}>
+          <button
+            type="button"
+            className="composer-footer-link"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={onOpenModelSelector}
+          >
             配置模型
           </button>
         )}

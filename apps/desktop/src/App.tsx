@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from "react";
+import { createPortal } from "react-dom";
 import type {
   AgentEvent,
   HealthResponse,
@@ -26,6 +27,7 @@ import {
   getDataStatus,
   getMcpStatus,
   getSettings,
+  listProviderModels,
   getTask,
   listMemories,
   listTaskTraces,
@@ -42,11 +44,39 @@ import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MemoryPanel } from "./components/MemoryPanel";
+import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
 import { SettingsPanel, type SettingsDraft } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { StatusPill } from "./components/StatusPill";
 import type { FeedItem } from "./components/AgentEventFeed";
+import { getPhaseLabel, getStatusLabel } from "./components/status";
 import "./App.css";
+
+type MainView = "chat" | "search" | "tools" | "memory" | "settings";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "tools" | "data";
+
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 380;
+const MIN_INSPECTOR_WIDTH = 300;
+const MAX_INSPECTOR_WIDTH = 520;
+const MIN_FONT_SCALE = 0.86;
+const MAX_FONT_SCALE = 1.08;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
+  const stored = window.localStorage.getItem(key);
+  const parsed = stored ? Number(stored) : Number.NaN;
+  return Number.isFinite(parsed) ? clamp(parsed, min, max) : fallback;
+}
+
+function parseProviderModel(provider?: string | null): string {
+  if (!provider || provider === "unconfigured") return "";
+  const [, model] = provider.split(/:(.*)/s);
+  return model ?? provider;
+}
 
 /** 从实时事件流派生工具调用活动（当前运行轮次使用） */
 function deriveToolActivityFromEvents(events: FeedItem[]): ToolActivity[] {
@@ -97,15 +127,28 @@ function createFeedItem(event: AgentEvent): FeedItem {
 }
 
 function App() {
+  const [activeView, setActiveView] = useState<MainView>("chat");
   const [busy, setBusy] = useState(false);
   const [currentTask, setCurrentTask] = useState<Task | null>(null);
   const [events, setEvents] = useState<FeedItem[]>([]);
   const [goal, setGoal] = useState("");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [memoryOpen, setMemoryOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    readStoredNumber("aurevoy.sidebarWidth", 280, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
+  );
+  const [inspectorWidth, setInspectorWidth] = useState(() =>
+    readStoredNumber("aurevoy.inspectorWidth", 340, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH),
+  );
+  const [fontScale, setFontScale] = useState(() =>
+    readStoredNumber("aurevoy.fontScale", 0.94, MIN_FONT_SCALE, MAX_FONT_SCALE),
+  );
+  const [searchQuery, setSearchQuery] = useState("");
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
   const [memories, setMemories] = useState<MemoryEntry[]>([]);
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
@@ -120,11 +163,24 @@ function App() {
   const [tools, setTools] = useState<ToolDescriptor[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
+  const mainScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     void bootstrapRuntime();
     return () => esRef.current?.close();
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("aurevoy.sidebarWidth", String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem("aurevoy.inspectorWidth", String(inspectorWidth));
+  }, [inspectorWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem("aurevoy.fontScale", String(fontScale));
+  }, [fontScale]);
 
   async function bootstrapRuntime(): Promise<void> {
     try {
@@ -184,6 +240,13 @@ function App() {
     setGoal("");
     setEvents([]);
     void refreshTaskTraces(task.id);
+    resetMainScroll();
+  }
+
+  function resetMainScroll(): void {
+    const reset = () => mainScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    window.requestAnimationFrame(reset);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(reset));
   }
 
   async function refreshTaskTraces(taskId: string): Promise<void> {
@@ -344,6 +407,8 @@ function App() {
   function handleSelectTask(task: Task): void {
     esRef.current?.close();
     setBusy(false);
+    setModelDrawerOpen(false);
+    setActiveView("chat");
     applyTaskSnapshot(task);
   }
 
@@ -389,6 +454,8 @@ function App() {
   function handleNewTask(): void {
     esRef.current?.close();
     setBusy(false);
+    setModelDrawerOpen(false);
+    setActiveView("chat");
     setCurrentTask(null);
     setStatus(null);
     setPhase(null);
@@ -397,6 +464,7 @@ function App() {
     setEvents([]);
     setTraces([]);
     setGoal("");
+    resetMainScroll();
   }
 
   function handleRetry(): void {
@@ -464,13 +532,51 @@ function App() {
   }
 
   function handleOpenMemory(): void {
-    setMemoryOpen(true);
+    setModelDrawerOpen(false);
+    setActiveView("memory");
+    setInspectorOpen(false);
     void refreshMemories();
   }
 
-  function handleOpenSettings(): void {
-    setSettingsOpen(true);
+  function handleOpenSettings(section: SettingsSectionId = "general"): void {
+    setNotice(null);
+    setModelDrawerOpen(false);
+    setSettingsInitialSection(section);
+    setActiveView("settings");
+    setInspectorOpen(false);
     void refreshSettings();
+  }
+
+  function handleCloseSettings(): void {
+    setNotice(null);
+    setInspectorOpen(false);
+    setActiveView("chat");
+    resetMainScroll();
+  }
+
+  function handleOpenModelSelector(): void {
+    setNotice(null);
+    setModelDrawerOpen(true);
+    setInspectorOpen(false);
+    if (!runtimeSettings) void refreshSettings();
+  }
+
+  function handleOpenFullSettingsFromModelDrawer(): void {
+    setModelDrawerOpen(false);
+    handleOpenSettings("provider");
+  }
+
+  function handleOpenSearch(): void {
+    setModelDrawerOpen(false);
+    setActiveView("search");
+    setInspectorOpen(false);
+  }
+
+  function handleOpenTools(): void {
+    setModelDrawerOpen(false);
+    setActiveView("tools");
+    setInspectorOpen(false);
+    void refreshRuntime();
   }
 
   function handleSaveSettings(draft: SettingsDraft): void {
@@ -496,6 +602,69 @@ function App() {
         return refreshSettings();
       })
       .catch((err) => setNotice(`保存设置失败：${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setSettingsSaving(false));
+  }
+
+  function handleSaveModelSelection(draft: ModelSelectorDraft): void {
+    setSettingsSaving(true);
+    void updateSettings({
+      llm: {
+        provider: "openai",
+        model: draft.model,
+      },
+    })
+      .then((next) => {
+        setRuntimeSettings(next);
+        setHealth((previous) =>
+          previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
+        );
+        setModelDrawerOpen(false);
+        setNotice("模型已切换");
+        return refreshRuntime();
+      })
+      .catch((err) => setNotice(`切换模型失败：${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setSettingsSaving(false));
+  }
+
+  function handleFetchModels(): void {
+    setFetchingModels(true);
+    void listProviderModels()
+      .then((models) => {
+        const currentModel = runtimeSettings?.llm.model ?? parseProviderModel(health?.provider);
+        const existingEnabled = runtimeSettings?.llm.enabledModels ?? [];
+        const firstFetch = (runtimeSettings?.llm.availableModels.length ?? 0) === 0;
+        const enabledModels = !firstFetch && existingEnabled.length > 0
+          ? existingEnabled.filter((model) => models.includes(model))
+          : [];
+        if (currentModel && models.includes(currentModel) && !enabledModels.includes(currentModel)) {
+          enabledModels.unshift(currentModel);
+        }
+        return updateSettings({ llm: { availableModels: models, enabledModels } });
+      })
+      .then((next) => {
+        setRuntimeSettings(next);
+        setNotice(`已获取 ${next.llm.availableModels.length} 个模型，已启用 ${next.llm.enabledModels.length} 个`);
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`获取模型列表失败：${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setFetchingModels(false));
+  }
+
+  function handleSaveEnabledModels(models: string[]): void {
+    const currentModel = runtimeSettings?.llm.model;
+    const enabledModels = currentModel && !models.includes(currentModel) ? [currentModel, ...models] : models;
+    setSettingsSaving(true);
+    void updateSettings({
+      llm: {
+        enabledModels,
+      },
+    })
+      .then((next) => {
+        setRuntimeSettings(next);
+        setNotice(`已启用 ${next.llm.enabledModels.length} 个主界面模型`);
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`保存模型列表失败：${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setSettingsSaving(false));
   }
 
@@ -540,6 +709,34 @@ function App() {
       .catch((err) => setNotice(`删除记忆失败：${err instanceof Error ? err.message : String(err)}`));
   }
 
+  function handleFontScaleChange(nextScale: number): void {
+    setFontScale(clamp(nextScale, MIN_FONT_SCALE, MAX_FONT_SCALE));
+  }
+
+  function startResize(panel: "left" | "right", event: PointerEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panel === "left" ? sidebarWidth : inspectorWidth;
+
+    // 拖拽只修改布局宽度状态；具体列宽由 CSS 变量消费，避免组件互相知道布局细节。
+    function handleMove(moveEvent: globalThis.PointerEvent): void {
+      const delta = moveEvent.clientX - startX;
+      if (panel === "left") {
+        setSidebarWidth(clamp(startWidth + delta, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH));
+      } else {
+        setInspectorWidth(clamp(startWidth - delta, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH));
+      }
+    }
+
+    function handleUp(): void {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    }
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp, { once: true });
+  }
+
   const showConversation = currentTask !== null;
   const canResume =
     !!currentTask &&
@@ -551,26 +748,65 @@ function App() {
 
   // 当前运行轮次的实时工具活动（来自事件流）；历史轮次由 Conversation 从消息派生
   const liveToolActivity = deriveToolActivityFromEvents(events);
+  const shellStyle = {
+    "--sidebar-width": `${sidebarWidth}px`,
+    "--inspector-width": `${inspectorWidth}px`,
+    "--font-scale": fontScale,
+  } as CSSProperties;
+  const isChatView = activeView === "chat";
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      data-active-view={activeView}
+      data-left-collapsed={leftCollapsed}
+      data-inspector-open={inspectorOpen}
+      style={shellStyle}
+    >
       <TaskHistorySidebar
         activeTaskId={currentTask?.id}
+        activeView={activeView}
         tasks={tasks}
         onNewTask={handleNewTask}
         onSelectTask={handleSelectTask}
-        onOpenInspector={() => setInspectorOpen(true)}
+        onCollapse={() => setLeftCollapsed(true)}
+        onOpenSearch={handleOpenSearch}
+        onOpenTools={handleOpenTools}
         onOpenMemory={handleOpenMemory}
         onOpenSettings={handleOpenSettings}
       />
 
+      <div
+        className="resize-handle resize-handle-left"
+        role="separator"
+        aria-label="调整左侧栏宽度"
+        onPointerDown={(event) => startResize("left", event)}
+      />
+
       <main className="main">
         <header className="topbar">
-          {showConversation ? (
+          <div className="topbar-left-tools">
+            {leftCollapsed && (
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setLeftCollapsed(false)}
+                aria-label="展开左侧栏"
+              >
+                <SidebarIcon />
+              </button>
+            )}
+          </div>
+          {isChatView && showConversation ? (
             <>
               <div className="topbar-context">
                 <StatusPill status={status} phase={phase} />
-                <span className="topbar-title">{currentTask?.goal}</span>
+                <div className="topbar-title-group">
+                  <span className="topbar-title">{currentTask?.goal}</span>
+                  <span className="topbar-subtitle">
+                    {getPhaseLabel(phase) || getStatusLabel(status)} · {currentTask?.messages.length ?? 0} 条消息
+                  </span>
+                </div>
               </div>
               <div className="topbar-actions">
                 <button
@@ -600,41 +836,85 @@ function App() {
                 <button
                   type="button"
                   className="ghost-btn"
-                  onClick={() => setInspectorOpen(true)}
+                  onClick={() => setInspectorOpen((open) => !open)}
                 >
-                  运行详情
+                  {inspectorOpen ? "隐藏详情" : "运行详情"}
                 </button>
-                <button type="button" className="ghost-btn" onClick={handleOpenSettings}>
-                  设置
+              </div>
+            </>
+          ) : isChatView ? (
+            <>
+              <div className="topbar-context">
+                <span className="topbar-kicker">Aurevoy Agent</span>
+              </div>
+              <div className="topbar-actions">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => setInspectorOpen((open) => !open)}
+                >
+                  {inspectorOpen ? "隐藏详情" : "运行详情"}
                 </button>
               </div>
             </>
           ) : (
             <>
               <div className="topbar-context">
-                <span className="topbar-kicker">Aurevoy Agent</span>
+                <div className="topbar-title-group">
+                  <span className="topbar-title">{getMainViewTitle(activeView)}</span>
+                  <span className="topbar-subtitle">{getMainViewSubtitle(activeView)}</span>
+                </div>
               </div>
               <div className="topbar-actions">
-                <button type="button" className="ghost-btn" onClick={handleOpenSettings}>
-                  设置
+                <button type="button" className="ghost-btn" onClick={() => setActiveView("chat")}>
+                  返回对话
                 </button>
               </div>
             </>
           )}
         </header>
 
-        {notice && (
-          <div className="notice-banner" role="alert">
-            <span>{notice}</span>
-            <button type="button" className="notice-close" onClick={() => setNotice(null)} aria-label="关闭">
-              ✕
-            </button>
-          </div>
-        )}
-
-        {showConversation ? (
+        {activeView === "search" ? (
+          <SearchPage
+            query={searchQuery}
+            tasks={tasks}
+            onQueryChange={setSearchQuery}
+            onSelectTask={handleSelectTask}
+          />
+        ) : activeView === "tools" ? (
+          <ToolsPage tools={tools} onToggleTool={handleToggleTool} />
+        ) : activeView === "memory" ? (
+          <MemoryPanel
+            open
+            memories={memories}
+            onClose={() => setActiveView("chat")}
+            onCreate={handleCreateMemory}
+            onToggle={handleToggleMemory}
+            onEdit={handleEditMemory}
+            onDelete={handleDeleteMemory}
+          />
+        ) : activeView === "settings" ? (
+          <SettingsPanel
+            settings={runtimeSettings}
+            tools={tools}
+            mcpServers={mcpServers}
+            dataStatus={dataStatus}
+            saving={settingsSaving}
+            fetchingModels={fetchingModels}
+            fontScale={fontScale}
+            initialSection={settingsInitialSection}
+            onClose={handleCloseSettings}
+            onSave={handleSaveSettings}
+            onToggleTool={handleToggleTool}
+            onCleanup={handleCleanupData}
+            onRefresh={refreshSettings}
+            onFetchModels={handleFetchModels}
+            onSaveEnabledModels={handleSaveEnabledModels}
+            onFontScaleChange={handleFontScaleChange}
+          />
+        ) : showConversation ? (
           <>
-            <div className="main-scroll">
+            <div className="main-scroll" ref={mainScrollRef}>
               <Conversation
                 task={currentTask}
                 status={status}
@@ -655,8 +935,17 @@ function App() {
                 provider={health?.provider}
                 onChange={setGoal}
                 onSubmit={handleComposerSubmit}
-                onOpenSettings={handleOpenSettings}
+                onOpenModelSelector={handleOpenModelSelector}
                 onStop={handleStopStream}
+              />
+              <ModelSelectorDrawer
+                open={modelDrawerOpen}
+                provider={health?.provider}
+                settings={runtimeSettings}
+                saving={settingsSaving}
+                onClose={() => setModelDrawerOpen(false)}
+                onOpenFullSettings={handleOpenFullSettingsFromModelDrawer}
+                onSave={handleSaveModelSelection}
               />
             </div>
           </>
@@ -671,12 +960,28 @@ function App() {
               provider={health?.provider}
               onChange={setGoal}
               onSubmit={handleComposerSubmit}
-              onOpenSettings={handleOpenSettings}
+              onOpenModelSelector={handleOpenModelSelector}
               onStop={handleStopStream}
+            />
+            <ModelSelectorDrawer
+              open={modelDrawerOpen}
+              provider={health?.provider}
+              settings={runtimeSettings}
+              saving={settingsSaving}
+              onClose={() => setModelDrawerOpen(false)}
+              onOpenFullSettings={handleOpenFullSettingsFromModelDrawer}
+              onSave={handleSaveModelSelection}
             />
           </div>
         )}
       </main>
+
+      <div
+        className="resize-handle resize-handle-right"
+        role="separator"
+        aria-label="调整右侧栏宽度"
+        onPointerDown={(event) => startResize("right", event)}
+      />
 
       <InspectorPanel
         open={inspectorOpen}
@@ -689,30 +994,142 @@ function App() {
         onClose={() => setInspectorOpen(false)}
       />
 
-      <MemoryPanel
-        open={memoryOpen}
-        memories={memories}
-        onClose={() => setMemoryOpen(false)}
-        onCreate={handleCreateMemory}
-        onToggle={handleToggleMemory}
-        onEdit={handleEditMemory}
-        onDelete={handleDeleteMemory}
-      />
-
-      <SettingsPanel
-        open={settingsOpen}
-        settings={runtimeSettings}
-        tools={tools}
-        mcpServers={mcpServers}
-        dataStatus={dataStatus}
-        saving={settingsSaving}
-        onClose={() => setSettingsOpen(false)}
-        onSave={handleSaveSettings}
-        onToggleTool={handleToggleTool}
-        onCleanup={handleCleanupData}
-        onRefresh={refreshSettings}
-      />
+      {notice && <ToastNotice message={notice} onClose={() => setNotice(null)} />}
     </div>
+  );
+}
+
+function ToastNotice({ message, onClose }: { message: string; onClose: () => void }) {
+  return createPortal(
+    <div className="toast-bubble" role="status">
+      <span>{message}</span>
+      <button type="button" className="toast-close" onClick={onClose} aria-label="关闭通知">
+        ×
+      </button>
+    </div>,
+    document.body,
+  );
+}
+
+function SidebarIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+      <path
+        d="M3.8 4.2h12.4c.9 0 1.6.7 1.6 1.6v8.4c0 .9-.7 1.6-1.6 1.6H3.8c-.9 0-1.6-.7-1.6-1.6V5.8c0-.9.7-1.6 1.6-1.6zM7.4 4.5v11"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        fill="none"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function getMainViewTitle(view: MainView): string {
+  if (view === "search") return "搜索";
+  if (view === "tools") return "工具";
+  if (view === "memory") return "记忆";
+  if (view === "settings") return "设置";
+  return "对话";
+}
+
+function getMainViewSubtitle(view: MainView): string {
+  if (view === "search") return "搜索本地对话历史";
+  if (view === "tools") return "来自后端工具注册表的真实工具";
+  if (view === "memory") return "长期记忆管理";
+  if (view === "settings") return "模型、MCP、工具、数据与字体";
+  return "目标、计划与执行结果";
+}
+
+function SearchPage({
+  query,
+  tasks,
+  onQueryChange,
+  onSelectTask,
+}: {
+  query: string;
+  tasks: Task[];
+  onQueryChange: (query: string) => void;
+  onSelectTask: (task: Task) => void;
+}) {
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredTasks = normalizedQuery
+    ? tasks.filter((task) => task.goal.toLowerCase().includes(normalizedQuery))
+    : tasks;
+
+  return (
+    <section className="page-panel">
+      <header className="page-panel-head">
+        <div>
+          <h1>搜索</h1>
+          <p>当前搜索范围是本地任务历史，不包含未接入的全局文件索引。</p>
+        </div>
+      </header>
+      <input
+        className="page-search-input"
+        value={query}
+        placeholder="输入目标关键词"
+        onChange={(event) => onQueryChange(event.currentTarget.value)}
+      />
+      <div className="page-list">
+        {filteredTasks.length === 0 ? (
+          <p className="page-empty">没有匹配的对话</p>
+        ) : (
+          filteredTasks.map((task) => (
+            <button key={task.id} type="button" className="page-list-row" onClick={() => onSelectTask(task)}>
+              <span className="page-list-title">{task.goal}</span>
+              <span className="page-list-meta">
+                {task.status} · {new Date(task.updatedAt).toLocaleString("zh-CN")}
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ToolsPage({
+  tools,
+  onToggleTool,
+}: {
+  tools: ToolDescriptor[];
+  onToggleTool: (name: string, enabled: boolean) => void;
+}) {
+  return (
+    <section className="page-panel">
+      <header className="page-panel-head">
+        <div>
+          <h1>工具</h1>
+          <p>工具列表来自 Agent 后端注册表，启停会写回运行时设置。</p>
+        </div>
+      </header>
+      <div className="tool-page-grid">
+        {tools.length === 0 ? (
+          <p className="page-empty">未发现可用工具</p>
+        ) : (
+          tools.map((tool) => (
+            <article key={tool.name} className="tool-page-card">
+              <header>
+                <strong>{tool.name}</strong>
+                <span>{tool.source?.type === "mcp" ? `MCP:${tool.source.serverName}` : "内置"}</span>
+              </header>
+              <p>{tool.description}</p>
+              <label className="memory-toggle tool-page-toggle">
+                <input
+                  type="checkbox"
+                  checked={tool.enabled !== false}
+                  onChange={(event) => onToggleTool(tool.name, event.currentTarget.checked)}
+                />
+                <span>
+                  {tool.enabled === false ? "停用" : "启用"} · {tool.riskLevel ?? "safe"}
+                </span>
+              </label>
+            </article>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 

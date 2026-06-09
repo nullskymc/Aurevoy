@@ -352,6 +352,10 @@ export interface RuntimeSettings {
     provider: 'openai';
     baseUrl: string;
     model: string;
+    /** 最近一次手动从当前 Provider 获取到的完整模型列表。 */
+    availableModels: string[];
+    /** 用户勾选后允许出现在主界面模型菜单中的模型列表。 */
+    enabledModels: string[];
     temperature: number;
     timeoutMs: number;
     apiKeyConfigured: boolean;
@@ -368,6 +372,8 @@ export interface UpdateRuntimeSettingsRequest {
     provider: 'openai';
     baseUrl: string;
     model: string;
+    availableModels: string[];
+    enabledModels: string[];
     temperature: number;
     timeoutMs: number;
     /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
@@ -377,6 +383,10 @@ export interface UpdateRuntimeSettingsRequest {
   commandExecutionEnabled?: boolean;
   mcpServersJson?: string;
   cleanupPolicyDays?: number;
+}
+
+export interface ModelListResponse {
+  models: string[];
 }
 
 export interface ToolListResponse {
