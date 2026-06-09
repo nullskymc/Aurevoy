@@ -16,6 +16,7 @@
     "regression:m3": "node scripts/m3-regression.mjs",
     "regression:m4": "node scripts/m4-regression.mjs",
     "regression:m5": "node scripts/m5-regression.mjs",
+    "regression:m6": "node scripts/m6-regression.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "clean": "rimraf \"packages/*/dist\" \"apps/*/dist\""
   },

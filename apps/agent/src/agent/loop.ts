@@ -4,11 +4,15 @@ import type {
   MessageToolCall,
   PlanStep,
   Task,
+  TaskArtifact,
   TaskErrorCategory,
   TaskPhase,
   TaskStatus,
   TaskTraceEntry,
+  TaskBudget,
+  TokenUsage,
   ToolCall,
+  ToolResult,
   ToolRiskLevel,
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
@@ -18,9 +22,20 @@ import { toolRegistry } from '../tools/registry.js';
 import { withRetry } from './retry.js';
 import { taskStore, traceStore, memoryStore } from '../store/db.js';
 import { config } from '../config.js';
+import {
+  addTokenUsage,
+  assertBudgetWithinLimits,
+  BudgetExceededError,
+  createArtifact,
+  createClarification,
+  effectiveBudget,
+  initialBudgetUsage,
+  markArtifactApplied,
+  normalizeBudget,
+  resolveClarification,
+  updateWallTime,
+} from './m6-state.js';
 
-/** 单任务最大 LLM 调用轮次 */
-const MAX_ITERATIONS = 20;
 /** 同一工具+相同参数最多重复调用次数，超过即注入纠正提示 */
 const DUPLICATE_CALL_LIMIT = 3;
 /** 单轮最多并行工具调用数 */
@@ -32,12 +47,17 @@ const activeAbortControllers = new Map<string, AbortController>();
 
 /** 等待中的工具审批：taskId → (callId → 决策回调) */
 const pendingApprovals = new Map<string, Map<string, (approved: boolean) => void>>();
+/** 等待中的用户追问：taskId → (clarificationId → 回复回调) */
+const pendingClarifications = new Map<string, Map<string, (answer: string | null) => void>>();
 
 /** 取消一个进行中的任务（hard cancel：中断 fetch 流） */
 export function cancelTask(taskId: string): boolean {
   const ac = activeAbortControllers.get(taskId);
   if (!ac) return false;
   ac.abort();
+  const clarifications = pendingClarifications.get(taskId);
+  for (const resolve of clarifications?.values() ?? []) resolve(null);
+  pendingClarifications.delete(taskId);
   return true;
 }
 
@@ -138,6 +158,18 @@ export function resolveApproval(taskId: string, callId: string, approved: boolea
   return true;
 }
 
+/** 投递一次用户追问回复；返回是否命中等待中的请求。 */
+export function resolveClarificationAnswer(
+  taskId: string,
+  clarificationId: string,
+  answer: string,
+): boolean {
+  const resolve = pendingClarifications.get(taskId)?.get(clarificationId);
+  if (!resolve) return false;
+  resolve(answer);
+  return true;
+}
+
 /** 等待用户对某次工具调用的审批；超时或任务取消视为拒绝。 */
 function waitForApproval(taskId: string, callId: string, signal: AbortSignal): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
@@ -169,8 +201,43 @@ function waitForApproval(taskId: string, callId: string, signal: AbortSignal): P
   });
 }
 
+/** 等待用户回复追问；超时或任务取消返回 null，不伪造用户输入。 */
+function waitForClarification(
+  taskId: string,
+  clarificationId: string,
+  signal: AbortSignal,
+): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      const map = pendingClarifications.get(taskId);
+      map?.delete(clarificationId);
+      if (map && map.size === 0) pendingClarifications.delete(taskId);
+    };
+    const finish = (answer: string | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(answer);
+    };
+    const onAbort = () => finish(null);
+    const timer = setTimeout(() => finish(null), config.agent.approvalTimeoutMs);
+
+    if (signal.aborted) return finish(null);
+    signal.addEventListener('abort', onAbort, { once: true });
+    let map = pendingClarifications.get(taskId);
+    if (!map) {
+      map = new Map();
+      pendingClarifications.set(taskId, map);
+    }
+    map.set(clarificationId, finish);
+  });
+}
+
 /** 创建一个新任务并持久化（尚未开始执行） */
-export function createTask(goal: string): Task {
+export function createTask(goal: string, budget?: TaskBudget): Task {
   const now = new Date().toISOString();
   const userMsg: Message = {
     id: randomUUID(),
@@ -185,6 +252,12 @@ export function createTask(goal: string): Task {
     phase: 'initializing',
     plan: [],
     messages: [userMsg],
+    artifacts: [],
+    clarifications: [],
+    checkpoints: [],
+    budget: normalizeBudget(budget),
+    budgetUsage: initialBudgetUsage(),
+    tokenUsage: { available: false, provider: getProviderName(), model: config.llm.model },
     createdAt: now,
     updatedAt: now,
   };
@@ -207,6 +280,7 @@ export function createTask(goal: string): Task {
 export async function runTask(task: Task): Promise<void> {
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
+  const taskStartedAtMs = Date.now();
 
   const touch = () => {
     task.updatedAt = new Date().toISOString();
@@ -232,6 +306,66 @@ export async function runTask(task: Task): Promise<void> {
     writeTrace(task.id, 'phase', phase, { ok: true, summary: detail });
     taskEvents.publish({ type: 'phase', taskId: task.id, phase, detail });
   };
+  const handleAskUserTool = async (call: ToolCall, iteration: number): Promise<Message> => {
+    const question =
+      typeof call.args.question === 'string' && call.args.question.trim()
+        ? call.args.question.trim()
+        : '请补充完成任务所需的信息。';
+    const options = Array.isArray(call.args.options)
+      ? call.args.options.filter((item): item is string => typeof item === 'string')
+      : undefined;
+    const context = typeof call.args.context === 'string' ? call.args.context : undefined;
+    const clarification = createClarification({ callId: call.id, question, options, context });
+    task.clarifications = [...(task.clarifications ?? []), clarification];
+    touch();
+    taskEvents.publish({ type: 'clarification_request', taskId: task.id, clarification });
+    writeTrace(task.id, 'tool_call', 'waiting_clarification', {
+      iteration,
+      callId: call.id,
+      toolName: 'ask_user',
+      riskLevel: 'safe',
+      ok: true,
+      summary: 'Agent 发起追问',
+      data: { question, options, context },
+    });
+    updateStep('等待用户补充信息', 'paused');
+    setRuntimePhase('waiting_clarification', question, 'paused');
+
+    const answer = await waitForClarification(task.id, clarification.id, abortController.signal);
+    if (abortController.signal.aborted) {
+      resolveClarification(task, clarification.id, 'cancelled');
+      touch();
+      return makeToolResult(call.id, { error: '任务已取消，追问未完成' });
+    }
+
+    const resolved = answer == null
+      ? resolveClarification(task, clarification.id, 'timeout')
+      : resolveClarification(task, clarification.id, 'answered', answer);
+    touch();
+    if (resolved) {
+      taskEvents.publish({ type: 'clarification_resolved', taskId: task.id, clarification: resolved });
+    }
+    const result: ToolResult =
+      answer == null
+        ? { callId: call.id, ok: false, error: '用户未回复追问，等待已超时' }
+        : { callId: call.id, ok: true, output: { answer } };
+    taskEvents.publish({ type: 'tool_result', taskId: task.id, result });
+    writeTrace(task.id, 'tool_result', 'waiting_clarification', {
+      iteration,
+      callId: call.id,
+      toolName: 'ask_user',
+      riskLevel: 'safe',
+      ok: result.ok,
+      errorCategory: result.ok ? undefined : 'timeout',
+      errorMessage: result.error,
+      summary: result.ok ? '用户已回复追问' : '追问等待超时',
+      data: result.ok ? { answer } : undefined,
+    });
+    return makeToolResult(
+      call.id,
+      result.ok ? result.output : { error: '用户未回复追问，不能假定答案；请降级、改问或解释无法继续。' },
+    );
+  };
 
   const messages = task.messages;
   const toolDescriptors = toolRegistry.list();
@@ -241,13 +375,25 @@ export async function runTask(task: Task): Promise<void> {
     setRuntimePhase('initializing', '准备运行任务', 'running');
     taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
 
-    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+    for (let iteration = 0; ; iteration++) {
       if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+      task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
+      task.budgetUsage.iterations = iteration;
+      updateWallTime(task, taskStartedAtMs);
+      assertBudgetWithinLimits(task);
+      task.budgetUsage.iterations = iteration + 1;
+      taskEvents.publish({
+        type: 'budget_usage',
+        taskId: task.id,
+        usage: task.budgetUsage,
+        budget: effectiveBudget(task),
+      });
       setRuntimePhase('thinking', `第 ${iteration + 1} 轮模型思考`, 'running');
 
       let textBuffer = '';
       let reasoningContent = '';
       let finishReason: string | undefined;
+      let tokenUsage: TokenUsage | null | undefined;
       let toolCalls: AccumulatedToolCall[] = [];
       const llmStartedAt = Date.now();
 
@@ -280,6 +426,7 @@ export async function runTask(task: Task): Promise<void> {
             textBuffer = '';
             reasoningContent = '';
             finishReason = undefined;
+            tokenUsage = undefined;
             toolCalls = [];
             const stream = getProvider().stream(requestMessages, {
               tools: toolDescriptors.length > 0 ? toolDescriptors : undefined,
@@ -289,20 +436,27 @@ export async function runTask(task: Task): Promise<void> {
             for await (const chunk of stream) {
               if (chunk.textDelta) {
                 textBuffer += chunk.textDelta;
+                task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
+                task.budgetUsage.outputBytes += Buffer.byteLength(chunk.textDelta);
+                assertBudgetWithinLimits(task);
                 taskEvents.publish({ type: 'token', taskId: task.id, delta: chunk.textDelta });
               }
               if (chunk.reasoningContentDelta) reasoningContent += chunk.reasoningContentDelta;
               if (chunk.done) {
                 finishReason = chunk.finishReason;
                 toolCalls = chunk.toolCallsSnapshot ?? [];
+                tokenUsage = chunk.tokenUsage;
               }
             }
           },
           abortController.signal,
         );
+        const aggregatedUsage = addTokenUsage(task, tokenUsage);
+        taskEvents.publish({ type: 'token_usage', taskId: task.id, usage: aggregatedUsage });
         writeTrace(task.id, 'llm', 'thinking', {
           iteration: iteration + 1,
           startedAtMs: llmStartedAt,
+          tokenUsage,
           ok: true,
           finishReason,
           summary: finishReason === 'tool_calls' ? '模型请求工具调用' : '模型返回回复',
@@ -389,6 +543,24 @@ export async function runTask(task: Task): Promise<void> {
         const risk = toolRegistry.riskLevelOf(name);
         taskEvents.publish({ type: 'tool_call', taskId: task.id, call });
         writeToolCallTrace(task.id, call, risk, iteration + 1);
+        task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
+        task.budgetUsage.toolCalls += 1;
+        updateWallTime(task, taskStartedAtMs);
+        taskEvents.publish({
+          type: 'budget_usage',
+          taskId: task.id,
+          usage: task.budgetUsage,
+          budget: effectiveBudget(task),
+        });
+        assertBudgetWithinLimits(task);
+
+        if (name === 'ask_user') {
+          const toolMessage = await handleAskUserTool(call, iteration + 1);
+          messages.push(toolMessage);
+          if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+          setRuntimePhase('thinking', '已收到追问回复，继续推理', 'running');
+          continue;
+        }
 
         // 风险门：非 safe 工具执行前请求用户审批
         if (risk !== 'safe') {
@@ -424,23 +596,32 @@ export async function runTask(task: Task): Promise<void> {
         }
 
         const toolStartedAt = Date.now();
-        const result = await toolRegistry.invoke(call, { taskId: task.id, taskGoal: task.goal });
-        taskEvents.publish({ type: 'tool_result', taskId: task.id, result });
+        const result = await toolRegistry.invoke(call, {
+          taskId: task.id,
+          taskGoal: task.goal,
+          task,
+          abortSignal: abortController.signal,
+        });
+        const enrichedResult = handleToolSideEffects(task, call, result);
+        task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
+        task.budgetUsage.outputBytes += estimatePayloadBytes(enrichedResult.output ?? enrichedResult.error ?? '');
+        assertBudgetWithinLimits(task);
+        taskEvents.publish({ type: 'tool_result', taskId: task.id, result: enrichedResult });
         writeTrace(task.id, 'tool_result', 'calling_tool', {
           iteration: iteration + 1,
           startedAtMs: toolStartedAt,
           callId: tc.id,
           toolName: name,
           riskLevel: risk,
-          ok: result.ok,
-          errorCategory: result.ok ? undefined : 'tool',
-          errorMessage: result.error,
-          summary: result.ok ? `工具成功：${name}` : `工具失败：${name}`,
-          data: result.ok ? { output: summarizePayload(result.output) } : undefined,
+          ok: enrichedResult.ok,
+          errorCategory: enrichedResult.ok ? undefined : 'tool',
+          errorMessage: enrichedResult.error,
+          summary: enrichedResult.ok ? `工具成功：${name}` : `工具失败：${name}`,
+          data: enrichedResult.ok ? { output: summarizePayload(enrichedResult.output) } : undefined,
         });
 
         messages.push(
-          makeToolResult(tc.id, result.ok ? result.output : { error: result.error }),
+          makeToolResult(tc.id, enrichedResult.ok ? enrichedResult.output : { error: enrichedResult.error }),
         );
       }
 
@@ -449,15 +630,6 @@ export async function runTask(task: Task): Promise<void> {
       if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
     }
 
-    // 超过最大轮次兜底
-    setRuntimePhase('finalizing', '达到最大推理轮次，整理已有信息', 'running');
-    const fallback = makeAssistant(
-      '已达到最大推理轮次，基于目前收集到的信息，这是我能给出的结果。',
-      '',
-    );
-    messages.push(fallback);
-    taskEvents.publish({ type: 'message', taskId: task.id, message: fallback });
-    return finishCompleted(task, updateStep, touch);
   } catch (err) {
     if ((err as { name?: string })?.name === 'AbortError') {
       return finishCancelled(task, updateStep, touch);
@@ -531,6 +703,7 @@ type TracePatch = Partial<
     | 'errorMessage'
     | 'summary'
     | 'data'
+    | 'tokenUsage'
   >
 > & {
   startedAtMs?: number;
@@ -556,7 +729,7 @@ function writeTrace(
     provider: getProviderName(),
     model: config.llm.model,
     finishReason: patch.finishReason,
-    tokenUsage: null,
+    tokenUsage: patch.tokenUsage ?? null,
     startedAt: new Date(startedAtMs).toISOString(),
     endedAt: new Date(endedAtMs).toISOString(),
     durationMs: Math.max(0, endedAtMs - startedAtMs),
@@ -566,6 +739,53 @@ function writeTrace(
     summary: patch.summary,
     data: patch.data,
   });
+}
+
+function handleToolSideEffects(task: Task, call: ToolCall, result: ToolResult): ToolResult {
+  if (!result.ok) return result;
+  if (call.toolName === 'create_artifact') {
+    const draft = extractArtifactDraft(result.output);
+    if (!draft) {
+      return { callId: call.id, ok: false, error: 'create_artifact 返回格式非法' };
+    }
+    const artifact = createArtifact({
+      ...draft,
+      sourceCallId: call.id,
+    });
+    task.artifacts = [...(task.artifacts ?? []), artifact];
+    taskEvents.publish({ type: 'artifact_created', taskId: task.id, artifact });
+    return { callId: call.id, ok: true, output: { artifact } };
+  }
+  if (call.toolName === 'apply_artifact') {
+    const output = result.output as { artifactId?: unknown; path?: unknown } | undefined;
+    const artifactId = typeof output?.artifactId === 'string' ? output.artifactId : undefined;
+    const path = typeof output?.path === 'string' ? output.path : undefined;
+    if (artifactId && path) {
+      const artifact = markArtifactApplied(task, artifactId, path);
+      if (artifact) taskEvents.publish({ type: 'artifact_updated', taskId: task.id, artifact });
+    }
+  }
+  return result;
+}
+
+function extractArtifactDraft(output: unknown):
+  | { name: string; content: string; type?: TaskArtifact['type']; mimeType?: string }
+  | null {
+  if (!output || typeof output !== 'object') return null;
+  const draft = (output as { artifactDraft?: unknown }).artifactDraft;
+  if (!draft || typeof draft !== 'object') return null;
+  const record = draft as Record<string, unknown>;
+  if (typeof record.name !== 'string' || typeof record.content !== 'string') return null;
+  const type =
+    record.type === 'file' || record.type === 'diff' || record.type === 'url' || record.type === 'text'
+      ? record.type
+      : undefined;
+  return {
+    name: record.name,
+    content: record.content,
+    type,
+    mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
+  };
 }
 
 function writeToolCallTrace(
@@ -605,6 +825,7 @@ function writeApprovalTrace(
 }
 
 function classifyError(err: unknown): TaskErrorCategory {
+  if (err instanceof BudgetExceededError) return 'timeout';
   const name = (err as { name?: string })?.name;
   const status = (err as { status?: number })?.status;
   const message = err instanceof Error ? err.message : String(err);
@@ -625,6 +846,15 @@ function summarizePayload(value: unknown): unknown {
     chars: text.length,
     preview: text.slice(0, 1200),
   };
+}
+
+function estimatePayloadBytes(value: unknown): number {
+  if (typeof value === 'string') return Buffer.byteLength(value);
+  try {
+    return Buffer.byteLength(JSON.stringify(value ?? null));
+  } catch {
+    return Buffer.byteLength(String(value));
+  }
 }
 
 function makeAssistant(content: string, reasoningContent: string): Message {

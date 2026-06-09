@@ -59,13 +59,17 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 创建并**立即异步启动**一个任务。
 ```json
 // 请求体 CreateTaskRequest
-{ "goal": "帮我整理这周的会议纪要" }
+{
+  "goal": "帮我整理这周的会议纪要",
+  "budget": { "maxIterations": 12, "maxToolCalls": 40, "maxWallTimeMs": 300000, "maxOutputBytes": 262144 }
+}
 ```
 ```json
 // 201 → CreateTaskResponse
 { "task": { /* Task */ }, "streamUrl": "/api/tasks/<id>/stream" }
 ```
 - `goal` 为空 → `400 {"error":"goal is required"}`
+- `budget` 可选；非法或非正数预算字段会被忽略，未提供字段使用后端默认值。
 - 返回后任务在后台执行，进度通过 `streamUrl` 的 SSE 推送。
 
 ### POST `/api/tasks/:id/messages`
@@ -123,6 +127,32 @@ MCP server 暴露的工具会在 Agent 启动期注册进同一个列表，名�
 - `delivered=false`：无对应的待审批项（已超时/已决策/不存在）。
 - 字段缺失或类型错误 → `400`；任务不存在 → `404`。
 
+### POST `/api/tasks/:id/clarifications/:clarificationId`  (M6)
+回复 Agent 的结构化追问。该端点只把真实用户回复投递给当前等待中的任务，不新建任务。
+```json
+// 请求体 ClarificationAnswerRequest
+{ "answer": "docs/SUMMARY.md" }
+```
+```json
+// 200 → ClarificationAnswerResponse
+{ "taskId": "<id>", "clarificationId": "<id>", "delivered": true }
+```
+- `delivered=false`：无对应的待追问项（已超时/已回复/不存在或任务未在等待）。
+- `answer` 为空 → `400 {"error":"answer is required"}`；任务不存在 → `404`。
+- 回复后后端发布 `clarification_resolved`，并把答案作为 tool result 回灌给模型继续同一任务。
+
+### 任务产物 `/api/tasks/:id/artifacts`  (M6)
+任务产物是 Agent 生成的可预览、可确认、可回看的交付物。M6 先支持文本类内容保存在任务 JSON 中。
+
+- `GET /api/tasks/:id/artifacts` → `TaskArtifactListResponse { taskId, artifacts }`
+- `GET /api/tasks/:id/artifacts/:artifactId/content` →
+  `TaskArtifactContentResponse { taskId, artifactId, content, mimeType? }`
+- `PATCH /api/tasks/:id/artifacts/:artifactId`（`UpdateTaskArtifactRequest { status }`）→ `TaskArtifact`
+
+`status` 只能是 `confirmed` 或 `rejected`；非法状态 → `400`；任务或产物不存在 → `404`。
+确认/拒绝只更新 artifact 状态并发布 `artifact_updated`；真实写文件仍必须由 Agent 调用
+`apply_artifact` 工具，按 `dangerous` 风险等级走审批和工作区路径校验。
+
 ### 长期记忆 `/api/memories`  (M4.3)
 跨会话长期记忆。每条记录来源（用户手动 / agent 写入）、来源任务、置信度与启停状态。
 启用的记忆会作为 system 消息注入每轮 Agent 上下文；禁用后不注入但仍可见可恢复。
@@ -179,12 +209,18 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `tool_call` | `call: ToolCall` | 发起一次工具调用 |
 | `approval_request` | `call: ToolCall`, `riskLevel` | 非 safe 工具执行前请求用户确认 |
 | `tool_result` | `result: ToolResult` | 工具返回结果 |
+| `clarification_request` | `clarification: ClarificationRequest` | Agent 信息不足，暂停等待用户补充 |
+| `clarification_resolved` | `clarification: ClarificationRequest` | 用户已回复、超时或取消追问 |
+| `artifact_created` | `artifact: TaskArtifact` | 创建 draft 任务产物 |
+| `artifact_updated` | `artifact: TaskArtifact` | 产物状态或写入路径变化 |
+| `budget_usage` | `usage: BudgetUsage`, `budget?` | 预算使用量更新 |
+| `token_usage` | `usage: AggregatedTokenUsage` | Provider token usage 汇总更新 |
 | `done` | `status: TaskStatus` | 任务结束（completed/failed/cancelled） |
 | `error` | `message: string` | 执行出错 |
 
 `TaskStatus`：`pending | planning | running | paused | completed | failed | cancelled`
 
-`TaskPhase`：`initializing | thinking | calling_tool | waiting_approval | finalizing | failed | cancelled`
+`TaskPhase`：`initializing | thinking | calling_tool | waiting_approval | waiting_clarification | finalizing | failed | cancelled`
 
 ### 典型事件序列
 
@@ -222,6 +258,27 @@ status(running)
 工具的风险等级由 `ToolDescriptor.riskLevel`（`safe`|`caution`|`dangerous`，缺省 `safe`）声明，
 `safe` 工具自动放行；审批超时（5 分钟）或任务取消视为拒绝。
 
+结构化追问（`ask_user`）：
+```
+… → tool_call(name=ask_user)
+  → clarification_request
+  → phase(waiting_clarification)
+  → [POST /api/tasks/:id/clarifications/:clarificationId]
+  → clarification_resolved
+  → tool_result({ answer })
+  → phase(thinking) → token × N → message → done
+```
+追问超时或取消时不会伪造答案；后端会回灌明确失败结果，由模型解释降级或无法继续的原因。
+
+产物生成与应用：
+```
+… → tool_call(name=create_artifact)
+  → artifact_created(status=draft)
+  → artifact_updated(status=confirmed|rejected)    (用户在前端确认/拒绝)
+  → tool_call(name=apply_artifact)                 (仅需要写入真实文件时)
+  → approval_request → tool_result → artifact_updated(status=applied)
+```
+
 ### 前端消费示例
 ```ts
 import { streamTask, createTask } from "./lib/api";
@@ -242,6 +299,9 @@ const es = streamTask(task.id, (event) => {
 interface Task {
   id: string; goal: string; status: TaskStatus; phase: TaskPhase | null;
   plan: PlanStep[]; messages: Message[];
+  budget?: TaskBudget; budgetUsage?: BudgetUsage;
+  artifacts?: TaskArtifact[]; clarifications?: ClarificationRequest[];
+  checkpoints?: TaskCheckpoint[]; tokenUsage?: AggregatedTokenUsage;
   createdAt: string; updatedAt: string;   // ISO 8601
 }
 interface PlanStep { id: string; description: string; status: TaskStatus; }
@@ -255,6 +315,23 @@ interface MessageToolCall { id: string; type: 'function'; function: { name: stri
 interface ToolDescriptor { name: string; description: string; inputSchema: Record<string, unknown>; riskLevel?: 'safe'|'caution'|'dangerous'; }
 interface ToolCall   { id: string; toolName: string; args: Record<string, unknown>; }
 interface ToolResult { callId: string; ok: boolean; output?: unknown; error?: string; }
+interface TaskArtifact {
+  id: string; type: 'text'|'file'|'diff'|'url'; name: string; content: string;
+  mimeType?: string; sourceCallId?: string;
+  status: 'draft'|'confirmed'|'applied'|'rejected';
+  createdAt: string; appliedAt?: string; appliedPath?: string;
+}
+interface ClarificationRequest {
+  id: string; question: string; options?: string[]; context?: string; callId: string;
+  status: 'pending'|'answered'|'timeout'|'cancelled';
+  answer?: string; createdAt: string; answeredAt?: string;
+}
+interface TaskBudget { maxIterations?: number; maxToolCalls?: number; maxWallTimeMs?: number; maxOutputBytes?: number; }
+interface BudgetUsage { iterations: number; toolCalls: number; wallTimeMs: number; outputBytes: number; }
+interface AggregatedTokenUsage {
+  available: boolean; provider?: string; model?: string; updatedAt?: string;
+  promptTokens?: number; completionTokens?: number; totalTokens?: number; estimatedCostUsd?: number;
+}
 interface TaskTraceEntry {
   id: string; taskId: string; kind: 'llm'|'tool_call'|'tool_result'|'approval'|'error'|'done'|'phase';
   phase: TaskPhase | null; iteration?: number; callId?: string; toolName?: string;
@@ -269,6 +346,12 @@ interface TaskTraceEntry {
 - **新增事件类型**：在 `AgentEvent` 联合里加一个分支（必须含 `taskId`），前端 `switch` 默认忽略未知类型即可向后兼容。
 - **审批事件 `approval_request`**：非 safe 工具执行前必须发出该事件，载荷为 `{ call: ToolCall; riskLevel }`。
   循环在执行 `caution`/`dangerous` 工具前等待用户授权；拒绝、超时或取消都必须回灌为明确的工具失败结果。
+- **追问事件 `clarification_request`**：只用于信息补充，不等同于审批。前端回复后必须调用
+  `POST /api/tasks/:id/clarifications/:clarificationId`，不能把追问当作新任务。
+- **产物事件 `artifact_created` / `artifact_updated`**：只表示任务产物状态变化；写入真实文件仍由
+  `apply_artifact` 工具承担，并受审批和工作区限制。
+- **预算与 token**：`budget_usage` 是后端 runtime 强制计量；`token_usage.available=false`
+  表示 Provider 未返回 usage，不允许前端伪造成本。
 - **破坏性改动**：改字段语义/删字段时，前后端要同一次提交内联动，并 `npm run build:shared`。
 - **鉴权**：当前为本机单用户、无鉴权。若未来引擎需被其它客户端访问，必须先加鉴权（token/本地 socket 校验），不可裸暴露。
 - **真实能力**：API 不提供 Mock 成功响应；配置缺失、工具不可用、模型失败等情况必须返回明确错误或事件。
@@ -297,11 +380,13 @@ interface TaskTraceEntry {
 
 ## 6. 沙箱 / 高风险执行配置
 
-命令/代码执行当前只定义边界，默认关闭，没有作为工具暴露给模型。
+命令执行通过 `execute_command` 工具暴露，风险等级 `dangerous`，默认禁用。
+设置页或环境变量显式开启后才会提供给模型；执行前仍必须走审批。
+实现使用 `child_process.spawn()` 且 `shell:false`，不支持管道/重定向等 shell 语法。
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `AUREVOY_ENABLE_COMMAND_EXECUTION` | `false` | 未来显式启用隔离命令执行器；当前默认拒绝 |
+| `AUREVOY_ENABLE_COMMAND_EXECUTION` | `false` | 是否启用基础命令执行工具；默认不提供给模型 |
 | `AUREVOY_COMMAND_TIMEOUT_MS` | `30000` | 命令执行超时 |
 | `AUREVOY_COMMAND_OUTPUT_LIMIT_BYTES` | `65536` | stdout/stderr 输出上限 |
 | `AUREVOY_COMMAND_ENV_ALLOWLIST` | `PATH,HOME,TMPDIR` | 允许传入执行环境的变量名 |

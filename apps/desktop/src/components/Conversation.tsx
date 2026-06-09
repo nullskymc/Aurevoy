@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { Message, PlanStep, Task, TaskPhase, TaskStatus, ToolRiskLevel } from "@aurevoy/shared";
+import type {
+  ClarificationRequest,
+  Message,
+  PlanStep,
+  Task,
+  TaskArtifact,
+  TaskPhase,
+  TaskStatus,
+  ToolRiskLevel,
+} from "@aurevoy/shared";
 import { StatusPill } from "./StatusPill";
 import { getPhaseLabel, getStatusLabel } from "./status";
 
@@ -26,6 +35,8 @@ interface ConversationProps {
   liveToolActivity: ToolActivity[];
   /** 工具审批决策回调（批准/拒绝） */
   onToolDecision: (callId: string, approved: boolean) => void;
+  onClarificationAnswer: (clarificationId: string, answer: string) => void;
+  onArtifactDecision: (artifactId: string, status: "confirmed" | "rejected") => void;
 }
 
 interface ToolResultInfo {
@@ -91,6 +102,8 @@ export function Conversation({
   busy,
   liveToolActivity,
   onToolDecision,
+  onClarificationAnswer,
+  onArtifactDecision,
 }: ConversationProps) {
   const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -152,14 +165,18 @@ export function Conversation({
           }
           if (message.role === "assistant") {
             const tools = toolActivitiesFromAssistant(message, resultMap);
+            const artifacts = (task.artifacts ?? []).filter((artifact) => artifact.sourceCallId && tools.some((tool) => tool.id === artifact.sourceCallId));
             const hasText = message.content.trim().length > 0;
-            if (!hasText && tools.length === 0) return null;
+            if (!hasText && tools.length === 0 && artifacts.length === 0) return null;
             return (
               <article className="doc-block doc-block-agent" key={message.id}>
                 <DocumentMeta icon={<AgentIcon />} label="Aurevoy" />
                 <div className="doc-body">
                   {tools.length > 0 && (
                     <ToolActivityList items={tools} onDecision={onToolDecision} />
+                  )}
+                  {artifacts.length > 0 && (
+                    <ArtifactList artifacts={artifacts} onDecision={onArtifactDecision} />
                   )}
                   {hasText && <div className="agent-text">{message.content}</div>}
                 </div>
@@ -182,6 +199,22 @@ export function Conversation({
               {liveToolActivity.length > 0 && (
                 <ToolActivityList items={liveToolActivity} onDecision={onToolDecision} />
               )}
+
+              {(task.clarifications ?? []).filter((item) => item.status === "pending").map((clarification) => (
+                <ClarificationCard
+                  key={clarification.id}
+                  clarification={clarification}
+                  onAnswer={onClarificationAnswer}
+                />
+              ))}
+
+              {(task.artifacts ?? []).filter((item) => item.status === "draft").map((artifact) => (
+                <ArtifactCard
+                  key={artifact.id}
+                  artifact={artifact}
+                  onDecision={onArtifactDecision}
+                />
+              ))}
 
               {thinking ? (
                 <div className="agent-thinking">
@@ -222,6 +255,111 @@ export function Conversation({
         <div ref={bottomRef} />
       </div>
     </div>
+  );
+}
+
+function ClarificationCard({
+  clarification,
+  onAnswer,
+}: {
+  clarification: ClarificationRequest;
+  onAnswer: (clarificationId: string, answer: string) => void;
+}) {
+  const [answer, setAnswer] = useState(clarification.options?.[0] ?? "");
+  const [submitted, setSubmitted] = useState(false);
+
+  function submit(value = answer) {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    setSubmitted(true);
+    onAnswer(clarification.id, trimmed);
+  }
+
+  return (
+    <section className="clarification-card" aria-label="Agent 追问">
+      <div className="clarification-head">
+        <strong>需要你补充信息</strong>
+        <span>等待回复</span>
+      </div>
+      <p>{clarification.question}</p>
+      {clarification.context && <small>{clarification.context}</small>}
+      {clarification.options?.length ? (
+        <div className="clarification-options">
+          {clarification.options.map((option) => (
+            <button type="button" key={option} disabled={submitted} onClick={() => submit(option)}>
+              {option}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="clarification-input-row">
+          <input
+            value={answer}
+            disabled={submitted}
+            placeholder="输入补充信息"
+            onChange={(event) => setAnswer(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") submit();
+            }}
+          />
+          <button type="button" disabled={submitted || !answer.trim()} onClick={() => submit()}>
+            回复
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ArtifactList({
+  artifacts,
+  onDecision,
+}: {
+  artifacts: TaskArtifact[];
+  onDecision: (artifactId: string, status: "confirmed" | "rejected") => void;
+}) {
+  return (
+    <div className="artifact-list">
+      {artifacts.map((artifact) => (
+        <ArtifactCard key={artifact.id} artifact={artifact} onDecision={onDecision} />
+      ))}
+    </div>
+  );
+}
+
+function ArtifactCard({
+  artifact,
+  onDecision,
+}: {
+  artifact: TaskArtifact;
+  onDecision: (artifactId: string, status: "confirmed" | "rejected") => void;
+}) {
+  const [open, setOpen] = useState(artifact.status === "draft");
+  const preview = artifact.content.length > 1600 ? `${artifact.content.slice(0, 1600)}\n…` : artifact.content;
+  return (
+    <section className="artifact-card" data-status={artifact.status}>
+      <button type="button" className="artifact-head" onClick={() => setOpen((value) => !value)}>
+        <span className="artifact-type">{artifact.type}</span>
+        <strong>{artifact.name}</strong>
+        <span>{artifact.status}</span>
+      </button>
+      {open && (
+        <div className="artifact-body">
+          <pre>{preview}</pre>
+          {artifact.status === "draft" && (
+            <div className="artifact-actions">
+              <button type="button" onClick={() => onDecision(artifact.id, "rejected")}>
+                拒绝
+              </button>
+              <button type="button" onClick={() => onDecision(artifact.id, "confirmed")}>
+                确认
+              </button>
+            </div>
+          )}
+          {artifact.appliedPath && <small>已写入：{artifact.appliedPath}</small>}
+        </div>
+      )}
+    </section>
   );
 }
 

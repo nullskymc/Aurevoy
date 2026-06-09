@@ -25,6 +25,7 @@ export type TaskPhase =
   | 'thinking'
   | 'calling_tool'
   | 'waiting_approval'
+  | 'waiting_clarification'
   | 'finalizing'
   | 'failed'
   | 'cancelled';
@@ -68,6 +69,73 @@ export interface PlanStep {
   status: TaskStatus;
 }
 
+export type TaskArtifactType = 'text' | 'file' | 'diff' | 'url';
+export type TaskArtifactStatus = 'draft' | 'confirmed' | 'applied' | 'rejected';
+
+/** Agent 交付给用户确认、预览或落盘的任务产物。 */
+export interface TaskArtifact {
+  id: string;
+  type: TaskArtifactType;
+  name: string;
+  content: string;
+  mimeType?: string;
+  sourceCallId?: string;
+  status: TaskArtifactStatus;
+  createdAt: string;
+  appliedAt?: string;
+  appliedPath?: string;
+}
+
+export type ClarificationStatus = 'pending' | 'answered' | 'timeout' | 'cancelled';
+
+/** Agent 在信息不足时暂停任务并等待用户补充的结构化追问。 */
+export interface ClarificationRequest {
+  id: string;
+  question: string;
+  options?: string[];
+  context?: string;
+  callId: string;
+  status: ClarificationStatus;
+  answer?: string;
+  createdAt: string;
+  answeredAt?: string;
+}
+
+/** 单个任务的硬预算，超限后 runtime 必须可解释地暂停或失败。 */
+export interface TaskBudget {
+  maxIterations?: number;
+  maxToolCalls?: number;
+  maxWallTimeMs?: number;
+  maxOutputBytes?: number;
+}
+
+/** 当前任务已经消耗的预算计数。 */
+export interface BudgetUsage {
+  iterations: number;
+  toolCalls: number;
+  wallTimeMs: number;
+  outputBytes: number;
+}
+
+/** 任务级 token 汇总；不支持 usage 的 Provider 保持字段缺省而不是伪造。 */
+export interface AggregatedTokenUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  estimatedCostUsd?: number;
+  available: boolean;
+  provider?: string;
+  model?: string;
+  updatedAt?: string;
+}
+
+export interface TaskCheckpoint {
+  id: string;
+  label: string;
+  createdAt: string;
+  data?: unknown;
+}
+
 /** 一个用户任务（Agent 的工作单元） */
 export interface Task {
   id: string;
@@ -79,6 +147,12 @@ export interface Task {
   /** Agent 拆解出的计划步骤 */
   plan: PlanStep[];
   messages: Message[];
+  budget?: TaskBudget;
+  budgetUsage?: BudgetUsage;
+  artifacts?: TaskArtifact[];
+  clarifications?: ClarificationRequest[];
+  checkpoints?: TaskCheckpoint[];
+  tokenUsage?: AggregatedTokenUsage;
   createdAt: string;
   updatedAt: string;
 }
@@ -205,6 +279,20 @@ export type AgentEvent =
       call: ToolCall;
       riskLevel: ToolRiskLevel;
     } // 执行非 safe 工具前请求用户确认
+  | {
+      type: 'clarification_request';
+      taskId: string;
+      clarification: ClarificationRequest;
+    }
+  | {
+      type: 'clarification_resolved';
+      taskId: string;
+      clarification: ClarificationRequest;
+    }
+  | { type: 'artifact_created'; taskId: string; artifact: TaskArtifact }
+  | { type: 'artifact_updated'; taskId: string; artifact: TaskArtifact }
+  | { type: 'budget_usage'; taskId: string; usage: BudgetUsage; budget?: TaskBudget }
+  | { type: 'token_usage'; taskId: string; usage: AggregatedTokenUsage }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string };
 
@@ -215,6 +303,7 @@ export type AgentEvent =
 /** POST /api/tasks — 创建并启动一个任务 */
 export interface CreateTaskRequest {
   goal: string;
+  budget?: TaskBudget;
 }
 
 export interface CreateTaskResponse {
@@ -245,6 +334,36 @@ export interface ApprovalDecisionResponse {
   callId: string;
   /** 决策是否被成功投递到等待中的循环（false 表示无对应待审批项） */
   delivered: boolean;
+}
+
+/** POST /api/tasks/:id/clarifications/:clarificationId — 回复一次 Agent 追问 */
+export interface ClarificationAnswerRequest {
+  answer: string;
+}
+
+export interface ClarificationAnswerResponse {
+  taskId: string;
+  clarificationId: string;
+  delivered: boolean;
+}
+
+/** GET /api/tasks/:id/artifacts */
+export interface TaskArtifactListResponse {
+  taskId: string;
+  artifacts: TaskArtifact[];
+}
+
+/** GET /api/tasks/:id/artifacts/:artifactId/content */
+export interface TaskArtifactContentResponse {
+  taskId: string;
+  artifactId: string;
+  content: string;
+  mimeType?: string;
+}
+
+/** PATCH /api/tasks/:id/artifacts/:artifactId */
+export interface UpdateTaskArtifactRequest {
+  status?: Extract<TaskArtifactStatus, 'confirmed' | 'rejected'>;
 }
 
 /** GET /api/tasks/:id/traces — 任务轨迹回看 */

@@ -1,4 +1,4 @@
-import type { Message, MessageRole, ToolDescriptor } from '@aurevoy/shared';
+import type { Message, MessageRole, TokenUsage, ToolDescriptor } from '@aurevoy/shared';
 import { config } from '../config.js';
 import { ToolCallAccumulator, type AccumulatedToolCall, type ToolCallDelta } from '../agent/tool-call-accumulator.js';
 
@@ -21,6 +21,8 @@ export interface LLMStreamChunk {
   finishReason?: LLMFinishReason;
   /** 累积中的 tool_calls 快照；done=true 时为完整结果 */
   toolCallsSnapshot?: AccumulatedToolCall[];
+  /** Provider 返回的 usage；不支持时缺省。 */
+  tokenUsage?: TokenUsage | null;
 }
 
 export interface LLMStreamOptions {
@@ -93,6 +95,11 @@ interface OpenAIChoice {
 /** 上游 /chat/completions 响应载荷（流式单帧或非流式整体） */
 interface OpenAIPayload {
   choices?: OpenAIChoice[];
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  } | null;
 }
 
 interface OpenAIModelListPayload {
@@ -140,6 +147,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         model: this.opts.model,
         temperature: options?.temperature ?? this.opts.temperature,
         stream: useStream,
+        ...(useStream ? { stream_options: { include_usage: true } } : {}),
         messages: payloadMessages,
         ...(tools ? { tools, tool_choice: options?.toolChoice ?? 'auto' } : {}),
       }),
@@ -172,6 +180,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const decoder = new TextDecoder();
     let buffer = '';
     let finishReason: string | null = null;
+    let tokenUsage: TokenUsage | null = null;
 
     while (true) {
       if (signal.aborted) {
@@ -201,6 +210,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
           continue; // 跨 chunk 截断，忽略本行
         }
 
+        if (json.usage) tokenUsage = normalizeUsage(json.usage);
         const choice = json.choices?.[0];
         if (!choice) continue;
         const delta = choice.delta ?? {};
@@ -228,6 +238,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       done: true,
       finishReason: normalizeFinish(finishReason, accumulator.hasAny()),
       toolCallsSnapshot: accumulator.snapshot(),
+      tokenUsage,
     };
   }
 
@@ -260,6 +271,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       done: true,
       finishReason: normalizeFinish(choice?.finish_reason ?? null, accumulator.hasAny()),
       toolCallsSnapshot: accumulator.snapshot(),
+      tokenUsage: normalizeUsage(json.usage),
     };
   }
 }
@@ -325,6 +337,15 @@ function normalizeFinish(reason: string | null, hasToolCalls: boolean): LLMFinis
   if (reason && VALID_FINISH.includes(reason)) return reason as LLMFinishReason;
   // 某些提供商在非流式或降级时不给 finish_reason，用是否有 tool_calls 兜底
   return hasToolCalls ? 'tool_calls' : 'stop';
+}
+
+function normalizeUsage(usage: OpenAIPayload['usage']): TokenUsage | null {
+  if (!usage) return null;
+  const out: TokenUsage = {};
+  if (typeof usage.prompt_tokens === 'number') out.promptTokens = usage.prompt_tokens;
+  if (typeof usage.completion_tokens === 'number') out.completionTokens = usage.completion_tokens;
+  if (typeof usage.total_tokens === 'number') out.totalTokens = usage.total_tokens;
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 /** 当前支持的 Provider 类型。后续接入新厂商时在此扩展。 */

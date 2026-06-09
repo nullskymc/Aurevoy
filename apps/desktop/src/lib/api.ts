@@ -1,6 +1,7 @@
 import {
   AGENT_DEFAULT_BASE_URL,
   type AgentEvent,
+  type ClarificationAnswerResponse,
   type CleanupDataResponse,
   type ContinueTaskResponse,
   type CreateMemoryRequest,
@@ -14,6 +15,7 @@ import {
   type ResumeTaskResponse,
   type RuntimeSettings,
   type Task,
+  type TaskArtifact,
   type TaskTraceEntry,
   type TaskTraceListResponse,
   type ToolListResponse,
@@ -21,6 +23,7 @@ import {
   type UpdateRuntimeSettingsRequest,
   type UpdateToolRequest,
   type UpdateMemoryRequest,
+  type UpdateTaskArtifactRequest,
 } from '@aurevoy/shared';
 
 /** Agent 引擎地址（可通过 Vite 环境变量覆盖） */
@@ -105,6 +108,34 @@ export async function approveToolCall(
     body: JSON.stringify({ callId, approved }),
   });
   if (!res.ok) throw new Error(`approve tool call failed: ${res.status}`);
+}
+
+export async function answerClarification(
+  taskId: string,
+  clarificationId: string,
+  answer: string,
+): Promise<ClarificationAnswerResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/clarifications/${clarificationId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer }),
+  });
+  if (!res.ok) throw new Error(`answer clarification failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateArtifact(
+  taskId: string,
+  artifactId: string,
+  body: UpdateTaskArtifactRequest,
+): Promise<TaskArtifact> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/artifacts/${artifactId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`update artifact failed: ${res.status}`);
+  return res.json();
 }
 
 export async function listTools(): Promise<ToolDescriptor[]> {

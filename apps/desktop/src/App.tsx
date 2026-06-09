@@ -16,6 +16,7 @@ import type {
   UpdateRuntimeSettingsRequest,
 } from "@aurevoy/shared";
 import {
+  answerClarification,
   approveToolCall,
   cancelTask,
   checkHealth,
@@ -35,6 +36,7 @@ import {
   listTools,
   resumeTask,
   streamTask,
+  updateArtifact,
   updateSettings,
   updateTool,
   updateMemory,
@@ -124,6 +126,12 @@ function createFeedItem(event: AgentEvent): FeedItem {
     event,
     createdAt: new Date().toISOString(),
   };
+}
+
+function mergeById<T extends { id: string }>(items: T[], next: T): T[] {
+  const index = items.findIndex((item) => item.id === next.id);
+  if (index < 0) return [...items, next];
+  return items.map((item) => (item.id === next.id ? next : item));
 }
 
 function App() {
@@ -328,6 +336,36 @@ function App() {
       case "tool_call":
       case "tool_result":
         break;
+      case "clarification_request":
+      case "clarification_resolved":
+        setCurrentTask((previous) => {
+          if (!previous) return previous;
+          const nextTask = {
+            ...previous,
+            clarifications: mergeById(previous.clarifications ?? [], event.clarification),
+          };
+          updateTaskList(nextTask);
+          return nextTask;
+        });
+        break;
+      case "artifact_created":
+      case "artifact_updated":
+        setCurrentTask((previous) => {
+          if (!previous) return previous;
+          const nextTask = {
+            ...previous,
+            artifacts: mergeById(previous.artifacts ?? [], event.artifact),
+          };
+          updateTaskList(nextTask);
+          return nextTask;
+        });
+        break;
+      case "budget_usage":
+        patchCurrentTask({ budgetUsage: event.usage, budget: event.budget });
+        break;
+      case "token_usage":
+        patchCurrentTask({ tokenUsage: event.usage });
+        break;
       case "done":
         setStatus(event.status);
         setPhase(
@@ -521,6 +559,36 @@ function App() {
         `提交${approved ? "批准" : "拒绝"}失败：${err instanceof Error ? err.message : String(err)}。请重试。`,
       );
     });
+  }
+
+  function handleClarificationAnswer(clarificationId: string, answer: string): void {
+    const taskId = currentTask?.id;
+    if (!taskId) return;
+    setNotice(null);
+    void answerClarification(taskId, clarificationId, answer).catch((err) => {
+      setNotice(`提交追问回复失败：${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  function handleArtifactDecision(artifactId: string, status: "confirmed" | "rejected"): void {
+    const taskId = currentTask?.id;
+    if (!taskId) return;
+    setNotice(null);
+    void updateArtifact(taskId, artifactId, { status })
+      .then((artifact) => {
+        setCurrentTask((previous) => {
+          if (!previous) return previous;
+          const nextTask = {
+            ...previous,
+            artifacts: mergeById(previous.artifacts ?? [], artifact),
+          };
+          updateTaskList(nextTask);
+          return nextTask;
+        });
+      })
+      .catch((err) => {
+        setNotice(`更新产物状态失败：${err instanceof Error ? err.message : String(err)}`);
+      });
   }
 
   async function refreshMemories(): Promise<void> {
@@ -924,6 +992,8 @@ function App() {
                 busy={busy}
                 liveToolActivity={liveToolActivity}
                 onToolDecision={handleToolDecision}
+                onClarificationAnswer={handleClarificationAnswer}
+                onArtifactDecision={handleArtifactDecision}
               />
             </div>
             <div className="composer-dock">

@@ -1166,6 +1166,37 @@ button:disabled {
   gap: 8px;
 }
 
+.artifact-mini-list {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-mini {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 10px 12px;
+}
+
+.artifact-mini strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-mini span,
+.artifact-mini small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tool-item {
   min-width: 0;
   border: 1px solid var(--border);
@@ -1503,6 +1534,156 @@ button:disabled {
 
 .agent-thinking-inline {
   font-size: 13px;
+}
+
+.artifact-list {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-card,
+.clarification-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card-bg);
+  overflow: hidden;
+}
+
+.artifact-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 0 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.artifact-head strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: calc(13.5px * var(--font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-head span:last-child,
+.artifact-type {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.artifact-body {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding: 12px 14px;
+}
+
+.artifact-body pre {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--code-bg);
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.artifact-actions,
+.clarification-options,
+.clarification-input-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.artifact-actions {
+  justify-content: flex-end;
+}
+
+.artifact-actions button,
+.clarification-options button,
+.clarification-input-row button {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+
+.artifact-actions button:last-child,
+.clarification-input-row button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.artifact-actions button:disabled,
+.clarification-options button:disabled,
+.clarification-input-row button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.artifact-body small,
+.clarification-card small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.clarification-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.clarification-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.clarification-head strong {
+  font-size: 13.5px;
+}
+
+.clarification-head span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.clarification-card p {
+  margin: 0;
+  color: var(--text);
+  font-size: calc(14px * var(--font-scale));
+  line-height: 1.55;
+}
+
+.clarification-input-row input {
+  min-width: 180px;
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  padding: 8px 10px;
 }
 
 /* ============ 检查器：工具调用行 ============ */

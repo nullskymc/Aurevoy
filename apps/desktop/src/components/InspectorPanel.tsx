@@ -61,6 +61,14 @@ export function InspectorPanel({
                 <dd>{getPhaseLabel(phase ?? task?.phase ?? null) || "未开始"}</dd>
               </div>
               <div>
+                <dt>Token</dt>
+                <dd>{formatTokenUsage(task)}</dd>
+              </div>
+              <div>
+                <dt>预算</dt>
+                <dd>{formatBudgetUsage(task)}</dd>
+              </div>
+              <div>
                 <dt>引擎版本</dt>
                 <dd>{health ? health.version : "未连接"}</dd>
               </div>
@@ -69,6 +77,46 @@ export function InspectorPanel({
                 <dd>{health ? `${Math.round(health.uptimeMs / 1000)} 秒` : "未连接"}</dd>
               </div>
             </dl>
+          </section>
+
+          <section className="inspector-section">
+            <div className="inspector-label-row">
+              <p className="inspector-label">产物</p>
+              <span className="inspector-count">{task?.artifacts?.length ?? 0}</span>
+            </div>
+            {!task?.artifacts?.length ? (
+              <p className="inspector-empty">暂无任务产物</p>
+            ) : (
+              <div className="artifact-mini-list">
+                {task.artifacts.map((artifact) => (
+                  <article key={artifact.id} className="artifact-mini" data-status={artifact.status}>
+                    <strong>{artifact.name}</strong>
+                    <span>{artifact.type} · {artifact.status}</span>
+                    {artifact.appliedPath && <small>{artifact.appliedPath}</small>}
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="inspector-section">
+            <div className="inspector-label-row">
+              <p className="inspector-label">追问</p>
+              <span className="inspector-count">{task?.clarifications?.length ?? 0}</span>
+            </div>
+            {!task?.clarifications?.length ? (
+              <p className="inspector-empty">暂无追问</p>
+            ) : (
+              <div className="artifact-mini-list">
+                {task.clarifications.map((clarification) => (
+                  <article key={clarification.id} className="artifact-mini" data-status={clarification.status}>
+                    <strong>{clarification.question}</strong>
+                    <span>{clarification.status}</span>
+                    {clarification.answer && <small>{clarification.answer}</small>}
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="inspector-section">
@@ -187,4 +235,17 @@ function getTraceDetail(trace: TaskTraceEntry): string {
     trace.tokenUsage == null && trace.kind === "llm" ? "token: 不可用" : undefined,
   ].filter(Boolean);
   return parts.join(" / ") || trace.kind;
+}
+
+function formatTokenUsage(task: Task | null): string {
+  const usage = task?.tokenUsage;
+  if (!usage) return "未记录";
+  if (!usage.available) return "不可用";
+  return `${usage.totalTokens ?? 0} total / ${usage.promptTokens ?? 0} in / ${usage.completionTokens ?? 0} out`;
+}
+
+function formatBudgetUsage(task: Task | null): string {
+  const usage = task?.budgetUsage;
+  if (!usage) return "未开始";
+  return `${usage.iterations} 轮 / ${usage.toolCalls} 工具 / ${usage.outputBytes} bytes`;
 }

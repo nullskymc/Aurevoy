@@ -23,6 +23,9 @@
 | 工具调用 | 工具统一注册；riskLevel 生效；非 safe 工具需审批 | 在 Agent loop 内写工具特例；绕过审批 |
 | MCP | 启动期发现工具；连接失败可诊断；工具名稳定 | MCP server 失败导致整个引擎不可用 |
 | 状态 | 任务、消息、计划、工具结果持久化 | 刷新或重启后任务状态不可恢复 |
+| 产物 | 先生成 draft artifact；用户确认/审批后才写真实文件 | 直接覆盖用户文件或只给口头“已完成” |
+| 追问 | 信息不足时进入 `waiting_clarification` 并等待真实用户回复 | 编造用户意图或新建任务丢历史 |
+| 预算 | 轮次、工具调用、耗时、输出量可配置且超限可诊断 | 无限循环、无限输出或只靠 prompt 限制 |
 | 取消/超时 | LLM 和等待审批可取消；超时进入失败/拒绝路径 | 用户点停止但后端继续不可见执行 |
 | 错误 | 错误进入 `error` + `done(failed)`；UI 可见 | 后端吞错、前端卡在运行中 |
 
@@ -36,6 +39,8 @@
 - 用户审批决策：批准/拒绝、时间、关联 callId。
 - 错误分类：配置错误、模型错误、工具错误、权限错误、超时、取消、解析错误。
 - 成本指标：token 用量和估算成本在 Provider 支持时记录；不支持时明确为空。
+- 交付产物：artifact id、类型、状态、来源 callId、确认/拒绝/写入路径。
+- 人机交互：clarification id、问题、用户回复、超时/取消状态。
 
 这些记录优先落在 SQLite，后续再考虑 OpenTelemetry/Prometheus/LangSmith 等外部观测系统。
 
@@ -90,6 +95,17 @@ npm run regression:m5
 
 该脚本覆盖运行设置真实生效、Provider 缓存失效、工作区目录切换、工具启停影响模型可见工具、
 MCP 配置校验/状态展示，以及数据状态与终态任务清理。
+
+当前 M6 回归入口：
+
+```bash
+npm run build
+npm run regression:m6
+```
+
+该脚本覆盖 `ask_user` 追问与恢复、追问超时降级、`create_artifact` 草稿产物、
+artifact 确认/拒绝、预算超限 trace、OpenAI-compatible token usage、
+`execute_command` 审批后真实执行，以及 cwd 越界拒绝。
 
 ## 6. 路线图约束
 

@@ -20,6 +20,12 @@ db.exec(`
     phase      TEXT,
     plan       TEXT NOT NULL DEFAULT '[]',
     messages   TEXT NOT NULL DEFAULT '[]',
+    artifacts  TEXT NOT NULL DEFAULT '[]',
+    clarifications TEXT NOT NULL DEFAULT '[]',
+    checkpoints TEXT NOT NULL DEFAULT '[]',
+    budget     TEXT,
+    budget_usage TEXT,
+    token_usage TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -86,6 +92,22 @@ const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name
 if (!taskColumns.some((column) => column.name === 'phase')) {
   db.exec('ALTER TABLE tasks ADD COLUMN phase TEXT');
 }
+const taskColumnMigrations: Array<{ name: string; sql: string }> = [
+  { name: 'artifacts', sql: "ALTER TABLE tasks ADD COLUMN artifacts TEXT NOT NULL DEFAULT '[]'" },
+  {
+    name: 'clarifications',
+    sql: "ALTER TABLE tasks ADD COLUMN clarifications TEXT NOT NULL DEFAULT '[]'",
+  },
+  { name: 'checkpoints', sql: "ALTER TABLE tasks ADD COLUMN checkpoints TEXT NOT NULL DEFAULT '[]'" },
+  { name: 'budget', sql: 'ALTER TABLE tasks ADD COLUMN budget TEXT' },
+  { name: 'budget_usage', sql: 'ALTER TABLE tasks ADD COLUMN budget_usage TEXT' },
+  { name: 'token_usage', sql: 'ALTER TABLE tasks ADD COLUMN token_usage TEXT' },
+];
+for (const migration of taskColumnMigrations) {
+  if (!taskColumns.some((column) => column.name === migration.name)) {
+    db.exec(migration.sql);
+  }
+}
 
 interface TaskRow {
   id: string;
@@ -94,6 +116,12 @@ interface TaskRow {
   phase: string | null;
   plan: string;
   messages: string;
+  artifacts: string;
+  clarifications: string;
+  checkpoints: string;
+  budget: string | null;
+  budget_usage: string | null;
+  token_usage: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -129,6 +157,12 @@ function rowToTask(row: TaskRow): Task {
     phase: (row.phase as Task['phase']) ?? null,
     plan: JSON.parse(row.plan),
     messages: JSON.parse(row.messages),
+    artifacts: (parseJsonColumn(row.artifacts) as Task['artifacts']) ?? [],
+    clarifications: (parseJsonColumn(row.clarifications) as Task['clarifications']) ?? [],
+    checkpoints: (parseJsonColumn(row.checkpoints) as Task['checkpoints']) ?? [],
+    budget: (parseJsonColumn(row.budget) as Task['budget']) ?? undefined,
+    budgetUsage: (parseJsonColumn(row.budget_usage) as Task['budgetUsage']) ?? undefined,
+    tokenUsage: (parseJsonColumn(row.token_usage) as Task['tokenUsage']) ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -176,11 +210,20 @@ function nullable<T>(value: T | undefined): T | null {
 export const taskStore = {
   save(task: Task): void {
     db.prepare(
-      `INSERT INTO tasks (id, goal, status, phase, plan, messages, created_at, updated_at)
-       VALUES (@id, @goal, @status, @phase, @plan, @messages, @createdAt, @updatedAt)
+      `INSERT INTO tasks (
+         id, goal, status, phase, plan, messages, artifacts, clarifications, checkpoints,
+         budget, budget_usage, token_usage, created_at, updated_at
+       )
+       VALUES (
+         @id, @goal, @status, @phase, @plan, @messages, @artifacts, @clarifications,
+         @checkpoints, @budget, @budgetUsage, @tokenUsage, @createdAt, @updatedAt
+       )
        ON CONFLICT(id) DO UPDATE SET
          goal=excluded.goal, status=excluded.status, phase=excluded.phase, plan=excluded.plan,
-         messages=excluded.messages, updated_at=excluded.updated_at`,
+         messages=excluded.messages, artifacts=excluded.artifacts,
+         clarifications=excluded.clarifications, checkpoints=excluded.checkpoints,
+         budget=excluded.budget, budget_usage=excluded.budget_usage,
+         token_usage=excluded.token_usage, updated_at=excluded.updated_at`,
     ).run({
       id: task.id,
       goal: task.goal,
@@ -188,6 +231,12 @@ export const taskStore = {
       phase: task.phase,
       plan: JSON.stringify(task.plan),
       messages: JSON.stringify(task.messages),
+      artifacts: JSON.stringify(task.artifacts ?? []),
+      clarifications: JSON.stringify(task.clarifications ?? []),
+      checkpoints: JSON.stringify(task.checkpoints ?? []),
+      budget: task.budget === undefined ? null : JSON.stringify(task.budget),
+      budgetUsage: task.budgetUsage === undefined ? null : JSON.stringify(task.budgetUsage),
+      tokenUsage: task.tokenUsage === undefined ? null : JSON.stringify(task.tokenUsage),
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });

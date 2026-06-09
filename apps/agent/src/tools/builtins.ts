@@ -1,10 +1,11 @@
 import { promises as fs } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { MemoryCategory, MemoryEntry } from '@aurevoy/shared';
+import type { MemoryCategory, MemoryEntry, TaskArtifact } from '@aurevoy/shared';
 import { config } from '../config.js';
 import { toolRegistry } from './registry.js';
 import { memoryStore } from '../store/db.js';
+import { commandExecutor } from '../sandbox/command-executor.js';
 
 /**
  * 内置基础工具：文件读写、目录列举、HTTP 抓取。
@@ -20,7 +21,7 @@ const MAX_FETCH_BYTES = 1024 * 1024; // 单次抓取上限 1MB
 const FETCH_TIMEOUT_MS = 20000;
 
 /** 把用户给的相对/绝对路径解析为工作区内的绝对路径；越界则抛错。 */
-function resolveInWorkspace(input: unknown): string {
+export function resolveInWorkspace(input: unknown): string {
   const workspaceRoot = workspaceRootPath();
   if (typeof input !== 'string' || input.trim() === '') {
     throw new Error('path 必须是非空字符串');
@@ -35,7 +36,7 @@ function resolveInWorkspace(input: unknown): string {
   return target;
 }
 
-async function ensureWorkspace(): Promise<void> {
+export async function ensureWorkspace(): Promise<void> {
   await fs.mkdir(workspaceRootPath(), { recursive: true });
 }
 
@@ -58,7 +59,7 @@ async function realpathOrNearest(p: string): Promise<string> {
  * 二次校验：跟随符号链接后，目标的真实路径仍必须落在工作区真实根目录内。
  * 防止工作区内的 symlink 指向外部目录导致越界读写。
  */
-async function assertRealPathInside(target: string): Promise<void> {
+export async function assertRealPathInside(target: string): Promise<void> {
   await ensureWorkspace();
   const workspaceRoot = workspaceRootPath();
   const realRoot = await fs.realpath(workspaceRoot);
@@ -69,7 +70,7 @@ async function assertRealPathInside(target: string): Promise<void> {
   }
 }
 
-function workspaceRootPath(): string {
+export function workspaceRootPath(): string {
   return resolve(config.workspaceDir);
 }
 
@@ -291,3 +292,167 @@ toolRegistry.register({
     };
   },
 });
+
+// ---- create_artifact（safe）：只创建任务草稿产物，不写真实用户文件 ----
+toolRegistry.register({
+  descriptor: {
+    name: 'create_artifact',
+    description: '创建一个可预览、可确认的任务产物草稿。不会写入真实文件；需要用户确认后再 apply_artifact。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '产物名称，例如 SUMMARY.md 或 调研报告' },
+        content: { type: 'string', description: '产物正文内容' },
+        type: { type: 'string', enum: ['text', 'file', 'diff', 'url'], description: '产物类型，默认 text' },
+        mimeType: { type: 'string', description: 'MIME 类型，例如 text/markdown' },
+      },
+      required: ['name', 'content'],
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+  },
+  async execute(args) {
+    const name = readNonEmptyString(args.name, 'name');
+    const content = readNonEmptyString(args.content, 'content');
+    const type = readArtifactType(args.type);
+    return {
+      artifactDraft: {
+        name,
+        content,
+        type,
+        mimeType: typeof args.mimeType === 'string' ? args.mimeType : guessMimeType(name),
+      },
+    };
+  },
+});
+
+// ---- ask_user（safe）：由 loop 接管暂停/等待，不在工具体内阻塞 ----
+toolRegistry.register({
+  descriptor: {
+    name: 'ask_user',
+    description:
+      '当目标信息不足、路径不存在、格式或选择不明确时，向用户提出一个结构化追问并等待回复。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: '要问用户的具体问题' },
+        options: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '可选答案列表；没有明确选项时可省略',
+        },
+        context: { type: 'string', description: '为什么需要追问的简短上下文' },
+      },
+      required: ['question'],
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+  },
+  async execute() {
+    throw new Error('ask_user 由 Agent 循环接管，不能直接执行');
+  },
+});
+
+// ---- apply_artifact（dangerous）：审批后把已确认或草稿产物写入工作区文件 ----
+toolRegistry.register({
+  descriptor: {
+    name: 'apply_artifact',
+    description:
+      '将已有 artifact 写入工作区内的目标文件。该工具会覆盖目标文件，必须先获得用户审批。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        artifactId: { type: 'string', description: '要应用的 artifact id' },
+        path: { type: 'string', description: '相对工作区的写入路径' },
+      },
+      required: ['artifactId', 'path'],
+      additionalProperties: false,
+    },
+    riskLevel: 'dangerous',
+  },
+  async execute(args, context) {
+    const artifactId = readNonEmptyString(args.artifactId, 'artifactId');
+    const path = readNonEmptyString(args.path, 'path');
+    const task = context?.task;
+    const artifact = task?.artifacts?.find((item) => item.id === artifactId);
+    if (!artifact) throw new Error(`artifact 不存在: ${artifactId}`);
+    if (artifact.status === 'rejected') throw new Error('artifact 已被拒绝，不能写入文件');
+    const file = resolveInWorkspace(path);
+    await fs.mkdir(join(file, '..'), { recursive: true });
+    await assertRealPathInside(file);
+    await fs.writeFile(file, artifact.content, 'utf8');
+    return {
+      artifactId,
+      path: relative(workspaceRootPath(), file),
+      bytesWritten: Buffer.byteLength(artifact.content),
+    };
+  },
+});
+
+// ---- execute_command（dangerous，默认禁用）：基础进程命令执行 ----
+toolRegistry.register({
+  descriptor: {
+    name: 'execute_command',
+    description:
+      '在工作区内执行一个基础命令。使用 shell=false，不支持管道/重定向；默认禁用，需设置页显式开启。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: '可执行文件名或绝对路径，例如 node' },
+        args: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '命令参数数组，不经过 shell 解析',
+        },
+        cwd: { type: 'string', description: '相对工作区的执行目录，缺省为工作区根' },
+        env: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: '额外环境变量，只允许 envAllowlist 中的键',
+        },
+      },
+      required: ['command'],
+      additionalProperties: false,
+    },
+    riskLevel: 'dangerous',
+  },
+  async execute(args, context) {
+    const command = readNonEmptyString(args.command, 'command');
+    const rawArgs = Array.isArray(args.args) ? args.args : [];
+    if (rawArgs.some((item) => typeof item !== 'string')) throw new Error('args 必须是字符串数组');
+    const env =
+      args.env && typeof args.env === 'object' && !Array.isArray(args.env)
+        ? Object.fromEntries(
+            Object.entries(args.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+          )
+        : undefined;
+    return commandExecutor.execute(
+      {
+        command,
+        args: rawArgs,
+        cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
+        env,
+      },
+      context?.abortSignal,
+    );
+  },
+});
+
+// execute_command 只有设置显式开启时才提供给模型，避免“可见但默认失败”的危险工具噪音。
+toolRegistry.setEnabled('execute_command', config.sandbox.commandExecutionEnabled);
+
+function readNonEmptyString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim() === '') throw new Error(`${label} 必须是非空字符串`);
+  return value;
+}
+
+function readArtifactType(value: unknown): TaskArtifact['type'] {
+  return value === 'file' || value === 'diff' || value === 'url' || value === 'text' ? value : 'text';
+}
+
+function guessMimeType(name: string): string {
+  if (/\.md$/i.test(name)) return 'text/markdown';
+  if (/\.json$/i.test(name)) return 'application/json';
+  if (/\.html?$/i.test(name)) return 'text/html';
+  return 'text/plain';
+}

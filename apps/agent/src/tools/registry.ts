@@ -1,9 +1,11 @@
-import type { ToolDescriptor, ToolCall, ToolResult, ToolRiskLevel } from '@aurevoy/shared';
+import type { ToolDescriptor, ToolCall, ToolResult, ToolRiskLevel, Task } from '@aurevoy/shared';
 
 /** 工具执行上下文：携带本次调用所属的任务等信息（如 remember 工具记录来源）。 */
 export interface ToolContext {
   taskId?: string;
   taskGoal?: string;
+  task?: Task;
+  abortSignal?: AbortSignal;
 }
 
 /** 一个可被 Agent 调用的工具 */

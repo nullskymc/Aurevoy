@@ -5,6 +5,8 @@ import type {
   AgentEvent,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
+  ClarificationAnswerRequest,
+  ClarificationAnswerResponse,
   CleanupDataRequest,
   CleanupDataResponse,
   ContinueTaskRequest,
@@ -19,7 +21,10 @@ import type {
   MemoryListResponse,
   ModelListResponse,
   ResumeTaskResponse,
+  TaskArtifactContentResponse,
+  TaskArtifactListResponse,
   TaskTraceListResponse,
+  UpdateTaskArtifactRequest,
   UpdateRuntimeSettingsRequest,
   UpdateToolRequest,
   UpdateMemoryRequest,
@@ -33,6 +38,7 @@ import {
   markInterruptedTasksAfterRestart,
   prepareTaskForResume,
   resolveApproval,
+  resolveClarificationAnswer,
   runTask,
 } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
@@ -106,9 +112,11 @@ export async function buildServer() {
   app.patch<{ Body: UpdateRuntimeSettingsRequest }>('/api/settings', async (req, reply) => {
     try {
       const result = updateRuntimeSettings(req.body ?? {});
+      toolRegistry.setEnabled('execute_command', result.settings.commandExecutionEnabled);
       if (result.mcpChanged) {
         await reloadMcpTools();
         toolRegistry.applySettings(toolSettingsStore.list());
+        toolRegistry.setEnabled('execute_command', result.settings.commandExecutionEnabled);
       }
       return reply.send(result.settings);
     } catch (err) {
@@ -161,7 +169,7 @@ export async function buildServer() {
     const goal = req.body?.goal?.trim();
     if (!goal) return reply.code(400).send({ error: 'goal is required' });
 
-    const task = createTask(goal);
+    const task = createTask(goal, req.body?.budget);
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runTask(task);
 
@@ -241,6 +249,73 @@ export async function buildServer() {
       const delivered = resolveApproval(req.params.id, callId, approved);
       const body: ApprovalDecisionResponse = { taskId: req.params.id, callId, delivered };
       return reply.send(body);
+    },
+  );
+
+  // 回复 Agent 的结构化追问，同一任务从暂停点继续。
+  app.post<{ Params: { id: string; clarificationId: string }; Body: ClarificationAnswerRequest }>(
+    '/api/tasks/:id/clarifications/:clarificationId',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      const answer = req.body?.answer?.trim();
+      if (!answer) return reply.code(400).send({ error: 'answer is required' });
+      const delivered = resolveClarificationAnswer(req.params.id, req.params.clarificationId, answer);
+      const body: ClarificationAnswerResponse = {
+        taskId: req.params.id,
+        clarificationId: req.params.clarificationId,
+        delivered,
+      };
+      return reply.send(body);
+    },
+  );
+
+  app.get<{ Params: { id: string } }>('/api/tasks/:id/artifacts', async (req, reply) => {
+    const task = taskStore.get(req.params.id);
+    if (!task) return reply.code(404).send({ error: 'task not found' });
+    const body: TaskArtifactListResponse = {
+      taskId: req.params.id,
+      artifacts: task.artifacts ?? [],
+    };
+    return reply.send(body);
+  });
+
+  app.get<{ Params: { id: string; artifactId: string } }>(
+    '/api/tasks/:id/artifacts/:artifactId/content',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      const artifact = task.artifacts?.find((item) => item.id === req.params.artifactId);
+      if (!artifact) return reply.code(404).send({ error: 'artifact not found' });
+      const body: TaskArtifactContentResponse = {
+        taskId: req.params.id,
+        artifactId: req.params.artifactId,
+        content: artifact.content,
+        mimeType: artifact.mimeType,
+      };
+      return reply.send(body);
+    },
+  );
+
+  app.patch<{ Params: { id: string; artifactId: string }; Body: UpdateTaskArtifactRequest }>(
+    '/api/tasks/:id/artifacts/:artifactId',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      const status = req.body?.status;
+      if (status !== 'confirmed' && status !== 'rejected') {
+        return reply.code(400).send({ error: 'status 只能是 confirmed 或 rejected' });
+      }
+      const artifacts = task.artifacts ?? [];
+      const index = artifacts.findIndex((item) => item.id === req.params.artifactId);
+      if (index < 0) return reply.code(404).send({ error: 'artifact not found' });
+      const artifact = { ...artifacts[index], status };
+      artifacts[index] = artifact;
+      task.artifacts = artifacts;
+      task.updatedAt = new Date().toISOString();
+      taskStore.save(task);
+      taskEvents.publish({ type: 'artifact_updated', taskId: task.id, artifact });
+      return reply.send(artifact);
     },
   );
 
@@ -357,8 +432,24 @@ export async function buildServer() {
     if (task.plan.length > 0) {
       send({ type: 'plan', taskId: task.id, plan: task.plan });
     }
+    if (task.budgetUsage) {
+      send({ type: 'budget_usage', taskId: task.id, usage: task.budgetUsage, budget: task.budget });
+    }
+    if (task.tokenUsage) {
+      send({ type: 'token_usage', taskId: task.id, usage: task.tokenUsage });
+    }
     for (const message of task.messages) {
       send({ type: 'message', taskId: task.id, message });
+    }
+    for (const artifact of task.artifacts ?? []) {
+      send({ type: 'artifact_updated', taskId: task.id, artifact });
+    }
+    for (const clarification of task.clarifications ?? []) {
+      send(
+        clarification.status === 'pending'
+          ? { type: 'clarification_request', taskId: task.id, clarification }
+          : { type: 'clarification_resolved', taskId: task.id, clarification },
+      );
     }
     if (['completed', 'failed', 'cancelled'].includes(task.status)) {
       send({ type: 'done', taskId: task.id, status: task.status });

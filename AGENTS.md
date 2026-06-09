@@ -40,6 +40,7 @@ packages/shared (TS 类型)  ← 前后端共享契约，跨进程数据结构�
 | [`docs/CONVENTIONS.md`](./docs/CONVENTIONS.md) | 代码规范、目录约定、扩展指南 | 写任何代码前 |
 | [`docs/ENGINEERING_GOVERNANCE.md`](./docs/ENGINEERING_GOVERNANCE.md) | 工程治理、可观测性、安全、评测与交付门槛 | 改 Agent runtime / 工具 / 存储 / 发布流程 |
 | [`docs/ROADMAP.md`](./docs/ROADMAP.md) | 分阶段规划与任务清单 | 决定"做什么" |
+| [`docs/ROADMAP_AGENT_DELIVERY.md`](./docs/ROADMAP_AGENT_DELIVERY.md) | Agent 功能真实落地路线图 | 规划从技术底座到可用任务执行能力 |
 
 ## 4. 给协作智能体的硬性规则
 
@@ -70,6 +71,7 @@ npm run dev:agent      # 仅后端引擎（tsx watch 热重载）
 npm run typecheck      # 全 workspace 类型检查
 npm run build          # 构建 shared → agent → desktop
 npm run build:shared   # 仅构建共享类型（改完 shared 必做）
+npm run regression:m6  # M6 交付能力回归（追问/产物/预算/token/命令）
 ```
 
 环境要求：Node >= 20、Rust (stable)、macOS Xcode CLT。详见 README。
@@ -86,5 +88,10 @@ npm run build:shared   # 仅构建共享类型（改完 shared 必做）
   `npm run regression:m3` 回归集、命令执行器沙箱边界（默认关闭）。
 - ✅ M4：记忆、多轮对话与任务恢复已落地：上下文压缩、长期记忆 CRUD/来源/置信度、
   向量检索选型评估、启动期中断扫描与 `POST /api/tasks/:id/resume` 真实恢复。
+- ✅ M6：Agent 交付能力已落地：结构化追问、任务产物、执行预算、token usage、
+  `create_artifact`/`apply_artifact`/`execute_command` 工具、前端产物与追问展示、
+  `npm run regression:m6` 回归集。
 - 当前重点：M5 设置、分发、Windows 与交付质量；设置入口必须控制真实配置，不能只做静态表单。
-  详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md) 与 [`docs/ENGINEERING_GOVERNANCE.md`](./docs/ENGINEERING_GOVERNANCE.md)。
+  Agent 功能路线进入 M7：文件/网页工具扩展、安全加固、多步计划和工作台拆分。
+  详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)、[`docs/ROADMAP_AGENT_DELIVERY.md`](./docs/ROADMAP_AGENT_DELIVERY.md)
+  与 [`docs/ENGINEERING_GOVERNANCE.md`](./docs/ENGINEERING_GOVERNANCE.md)。

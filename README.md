@@ -58,6 +58,9 @@ npm run build
 
 # M3 Agent runtime 回归（需先 build）
 npm run regression:m3
+
+# M6 Agent 交付能力回归（追问、产物、预算、token、命令执行）
+npm run regression:m6
 ```
 
 ## 目录约定
@@ -66,6 +69,8 @@ npm run regression:m3
 - 前后端交互的数据结构统一定义在 `packages/shared/src/`，避免类型漂移。
 - MCP server 通过 `AUREVOY_MCP_SERVERS_JSON` 可选接入；启动时发现工具并注册到同一工具注册表。
 - Agent runtime 相关改动必须同步考虑工程治理：轨迹日志、权限/审批、沙箱边界、失败恢复和回归评测。
+- Agent 交付能力从 M6 开始在 [`docs/ROADMAP_AGENT_DELIVERY.md`](./docs/ROADMAP_AGENT_DELIVERY.md) 维护：
+  产物、追问、预算、token usage 和命令执行必须有真实链路与回归覆盖。
 
 ## 文档
 
@@ -78,3 +83,4 @@ npm run regression:m3
 - [`docs/CONVENTIONS.md`](./docs/CONVENTIONS.md) — 代码规范与扩展指南
 - [`docs/ENGINEERING_GOVERNANCE.md`](./docs/ENGINEERING_GOVERNANCE.md) — 工程治理与交付门槛
 - [`docs/ROADMAP.md`](./docs/ROADMAP.md) — 分阶段规划
+- [`docs/ROADMAP_AGENT_DELIVERY.md`](./docs/ROADMAP_AGENT_DELIVERY.md) — Agent 功能真实落地路线图

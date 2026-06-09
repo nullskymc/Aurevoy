@@ -33,6 +33,18 @@ function getEventTitle(event: AgentEvent): string {
       return event.result.ok ? "工具返回结果" : "工具调用失败";
     case "approval_request":
       return `等待确认：${event.call.toolName}`;
+    case "clarification_request":
+      return "等待补充信息";
+    case "clarification_resolved":
+      return "追问已处理";
+    case "artifact_created":
+      return `产物已创建：${event.artifact.name}`;
+    case "artifact_updated":
+      return `产物已更新：${event.artifact.name}`;
+    case "budget_usage":
+      return "预算使用更新";
+    case "token_usage":
+      return "Token 使用更新";
     case "done":
       return `任务${getStatusLabel(event.status)}`;
     case "error":
@@ -62,6 +74,19 @@ function getEventDetail(event: AgentEvent): string {
         : event.result.error ?? "未知错误";
     case "approval_request":
       return `风险等级 ${event.riskLevel}\n${JSON.stringify(event.call.args, null, 2)}`;
+    case "clarification_request":
+      return event.clarification.question;
+    case "clarification_resolved":
+      return event.clarification.answer ?? event.clarification.status;
+    case "artifact_created":
+    case "artifact_updated":
+      return `${event.artifact.type} · ${event.artifact.status}`;
+    case "budget_usage":
+      return `${event.usage.iterations} 轮 / ${event.usage.toolCalls} 工具 / ${event.usage.outputBytes} bytes`;
+    case "token_usage":
+      return event.usage.available
+        ? `${event.usage.totalTokens ?? 0} total`
+        : "Provider 未返回 usage";
     case "done":
       return event.status;
     case "error":

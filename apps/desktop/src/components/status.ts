@@ -31,6 +31,8 @@ export function getPhaseLabel(phase: TaskPhase | null): string {
       return "调用工具";
     case "waiting_approval":
       return "等待确认";
+    case "waiting_clarification":
+      return "等待补充信息";
     case "finalizing":
       return "整理结果";
     case "failed":
