@@ -145,6 +145,26 @@ button:disabled {
   cursor: col-resize;
 }
 
+.app-sidebar {
+  grid-column: 1;
+}
+
+.resize-handle-left {
+  grid-column: 2;
+}
+
+.main {
+  grid-column: 3;
+}
+
+.resize-handle-right {
+  grid-column: 4;
+}
+
+.inspector {
+  grid-column: 5;
+}
+
 .resize-handle:hover {
   background: var(--border);
 }
@@ -398,6 +418,20 @@ button:disabled {
   min-width: 0;
   border-bottom: 1px solid var(--border);
   padding: 0 18px;
+}
+
+.app-shell[data-left-collapsed="true"] .topbar {
+  display: grid;
+  grid-template-columns: minmax(40px, 1fr) auto minmax(40px, 1fr);
+  justify-items: center;
+}
+
+.app-shell[data-left-collapsed="true"] .topbar-left-tools {
+  justify-self: start;
+}
+
+.app-shell[data-left-collapsed="true"] .topbar-actions {
+  justify-self: end;
 }
 
 .topbar-left-tools {
