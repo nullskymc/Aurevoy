@@ -5,6 +5,7 @@ import type {
   RuntimeSettings,
   ToolDescriptor,
 } from "@aurevoy/shared";
+import { t } from "../i18n";
 
 interface SettingsDraft {
   baseUrl: string;
@@ -44,23 +45,23 @@ const SETTINGS_GROUPS: Array<{
   items: Array<{ id: SettingsSectionId; label: string; icon: SettingsIconName }>;
 }> = [
   {
-    label: "个人",
+    label: t("settings.group.personal"),
     items: [
-      { id: "general", label: "常规", icon: "sliders" },
-      { id: "appearance", label: "外观", icon: "appearance" },
-      { id: "provider", label: "模型配置", icon: "spark" },
+      { id: "general", label: t("settings.nav.general"), icon: "sliders" },
+      { id: "appearance", label: t("settings.nav.appearance"), icon: "appearance" },
+      { id: "provider", label: t("settings.nav.provider"), icon: "spark" },
     ],
   },
   {
-    label: "集成",
+    label: t("settings.group.integration"),
     items: [
-      { id: "mcp", label: "MCP 服务器", icon: "server" },
-      { id: "tools", label: "工具", icon: "tools" },
+      { id: "mcp", label: t("settings.nav.mcp"), icon: "server" },
+      { id: "tools", label: t("settings.nav.tools"), icon: "tools" },
     ],
   },
   {
-    label: "数据",
-    items: [{ id: "data", label: "本地数据", icon: "database" }],
+    label: t("settings.group.data"),
+    items: [{ id: "data", label: t("settings.nav.data"), icon: "database" }],
   },
 ];
 
@@ -114,20 +115,20 @@ export function SettingsPanel({
   )?.label;
 
   return (
-    <section className="settings-workspace" aria-label="设置">
-      <aside className="sidebar settings-nav" aria-label="设置分类">
+    <section className="settings-workspace" aria-label={t("settings.pageLabel")}>
+      <aside className="sidebar settings-nav" aria-label={t("settings.navLabel")}>
         <div className="sidebar-brand settings-nav-brand">
           <img className="sidebar-brand-logo" src="/aurevoy-wordmark.svg" alt="Aurevoy" />
         </div>
 
         <button type="button" className="sidebar-action settings-back" onClick={onClose}>
-          返回应用
+          {t("settings.backToApp")}
         </button>
 
         <input
           className="settings-search"
           value={query}
-          placeholder="搜索设置..."
+          placeholder={t("settings.searchPlaceholder")}
           onChange={(event) => setQuery(event.currentTarget.value)}
         />
 
@@ -157,7 +158,7 @@ export function SettingsPanel({
           <header className="settings-title-row">
             <h1>{activeTitle}</h1>
             <button type="button" className="settings-secondary-btn" onClick={onRefresh}>
-              刷新
+              {t("settings.refresh")}
             </button>
           </header>
 
@@ -313,35 +314,35 @@ function GeneralSettings({
 }) {
   return (
     <>
-      <SettingsChoiceGroup title="工作模式">
+      <SettingsChoiceGroup title={t("settings.workMode")}>
         <div className="settings-card-choice-grid">
           <label className="settings-choice-card" data-active="true">
             <span>
-              <strong>适用于编程</strong>
-              <small>保留更多技术细节、工具状态和执行轨迹</small>
+              <strong>{t("settings.workModeCodingTitle")}</strong>
+              <small>{t("settings.workModeCodingDesc")}</small>
             </span>
             <input type="radio" checked readOnly />
           </label>
           <label className="settings-choice-card">
             <span>
-              <strong>适用于日常工作</strong>
-              <small>更少技术细节，优先展示结论</small>
+              <strong>{t("settings.workModeDailyTitle")}</strong>
+              <small>{t("settings.workModeDailyDesc")}</small>
             </span>
             <input type="radio" disabled />
           </label>
         </div>
       </SettingsChoiceGroup>
 
-      <SettingsGroup title="权限">
+      <SettingsGroup title={t("settings.permissions")}>
         <SettingsSwitchRow
-          title="命令执行边界"
-          description="启用后，Agent 才能在沙箱策略内执行命令。默认关闭，不会伪造执行能力。"
+          title={t("settings.commandExecTitle")}
+          description={t("settings.commandExecDesc")}
           checked={draft.commandExecutionEnabled}
           onChange={(checked) => onDraftChange({ ...draft, commandExecutionEnabled: checked })}
         />
         <SettingsActionRow
-          title="工作区目录"
-          description="内置文件工具只应访问该目录边界内的内容。"
+          title={t("settings.workspaceTitle")}
+          description={t("settings.workspaceDesc")}
           control={
             <input
               className="settings-inline-input"
@@ -352,26 +353,26 @@ function GeneralSettings({
         />
       </SettingsGroup>
 
-      <SettingsGroup title="常规">
+      <SettingsGroup title={t("settings.general")}>
         <SettingsSelectRow
-          title="默认清理策略"
-          description="用于数据页的一键清理默认天数。"
+          title={t("settings.cleanupPolicyTitle")}
+          description={t("settings.cleanupPolicyDesc")}
           value={String(draft.cleanupPolicyDays)}
           options={[
-            { value: "7", label: "7 天" },
-            { value: "30", label: "30 天" },
-            { value: "90", label: "90 天" },
-            { value: "365", label: "365 天" },
+            { value: "7", label: `7 ${t("settings.unitDays")}` },
+            { value: "30", label: `30 ${t("settings.unitDays")}` },
+            { value: "90", label: `90 ${t("settings.unitDays")}` },
+            { value: "365", label: `365 ${t("settings.unitDays")}` },
           ]}
           onChange={(value) => onDraftChange({ ...draft, cleanupPolicyDays: Number(value) })}
         />
         <SettingsInfoRow
-          title="本地数据库"
-          description={dataStatus?.dbPath ?? settings?.dbPath ?? "未连接"}
+          title={t("settings.localDb")}
+          description={dataStatus?.dbPath ?? settings?.dbPath ?? t("settings.notConnected")}
         />
         <SettingsActionRow
-          title="保存运行设置"
-          description="保存模型、工作区、MCP、命令执行和清理策略。"
+          title={t("settings.saveRuntimeTitle")}
+          description={t("settings.saveRuntimeDesc")}
           control={
             <button
               type="button"
@@ -379,7 +380,7 @@ function GeneralSettings({
               disabled={saving}
               onClick={() => onSave(draft)}
             >
-              {saving ? "保存中" : "保存设置"}
+              {saving ? t("settings.saving") : t("settings.saveSettings")}
             </button>
           }
         />
@@ -396,10 +397,10 @@ function AppearanceSettings({
   onFontScaleChange: (scale: number) => void;
 }) {
   return (
-    <SettingsGroup title="外观">
+    <SettingsGroup title={t("settings.appearance")}>
       <SettingsActionRow
-        title="字体比例"
-        description="调整对话、设置和工具界面的整体文字密度。"
+        title={t("settings.fontScaleTitle")}
+        description={t("settings.fontScaleDesc")}
         control={
           <label className="settings-range-control">
             <input
@@ -414,7 +415,7 @@ function AppearanceSettings({
           </label>
         }
       />
-      <SettingsInfoRow title="主题" description="跟随系统浅色/深色模式。" />
+      <SettingsInfoRow title={t("settings.themeTitle")} description={t("settings.themeDesc")} />
     </SettingsGroup>
   );
 }
@@ -454,10 +455,10 @@ function ProviderSettings({
   }
 
   return (
-    <SettingsGroup title="模型配置">
+    <SettingsGroup title={t("settings.providerConfig")}>
       <SettingsActionRow
         title="Base URL"
-        description="OpenAI-compatible API endpoint。"
+        description={t("settings.baseUrlDesc")}
         control={
           <input
             className="settings-inline-input"
@@ -470,8 +471,8 @@ function ProviderSettings({
         title="Model"
         description={
           availableModels.length > 0
-            ? `已获取 ${availableModels.length} 个模型，主界面启用 ${enabledModels.length} 个。`
-            : "Agent runtime 调用的默认模型。"
+            ? `${t("settings.modelDescFetchedPrefix")} ${availableModels.length} ${t("settings.modelDescFetchedMid")} ${enabledModels.length} ${t("settings.modelDescFetchedSuffix")}`
+            : t("settings.modelDescDefault")
         }
         control={
           <div className="settings-model-input">
@@ -490,33 +491,33 @@ function ProviderSettings({
         }
       />
       <SettingsActionRow
-        title="获取模型列表"
-        description="只在点击时从当前 Base URL/API Key 拉取一次，并保存为可管理的模型清单。"
+        title={t("settings.fetchModelsTitle")}
+        description={t("settings.fetchModelsDesc")}
         control={
           <button type="button" className="settings-secondary-btn" disabled={fetchingModels} onClick={onFetchModels}>
-            {fetchingModels ? "获取中" : "获取模型"}
+            {fetchingModels ? t("settings.fetching") : t("settings.fetchModels")}
           </button>
         }
       />
       <div className="settings-model-manager">
         <div className="settings-model-manager-head">
           <span>
-            <strong>主界面可选模型</strong>
+            <strong>{t("settings.enabledModelsTitle")}</strong>
             <small>
-              勾选后才会出现在对话输入框的模型菜单中。当前模型保持勾选，避免被隐藏。
+              {t("settings.enabledModelsDesc")}
             </small>
           </span>
           <em>{enabledModels.length}/{availableModels.length}</em>
         </div>
         {currentModelMissing && (
           <p className="settings-model-warning">
-            当前模型 “{currentModel}” 不在最近一次获取的模型列表中，请确认 Base URL/API Key 或重新获取。
+            {t("settings.modelMissingPrefix")}{currentModel}{t("settings.modelMissingSuffix")}
           </p>
         )}
         {availableModels.length === 0 ? (
-          <p className="settings-model-empty">还没有获取模型列表。</p>
+          <p className="settings-model-empty">{t("settings.modelEmpty")}</p>
         ) : (
-          <div className="settings-model-list" role="list" aria-label="可启用模型">
+          <div className="settings-model-list" role="list" aria-label={t("settings.enableModelListLabel")}>
             {availableModels.map((model) => {
               const isCurrent = model === currentModel;
               return (
@@ -528,7 +529,7 @@ function ProviderSettings({
                     onChange={(event) => toggleEnabledModel(model, event.currentTarget.checked)}
                   />
                   <span>{model}</span>
-                  {isCurrent && <em>当前</em>}
+                  {isCurrent && <em>{t("settings.modelCurrent")}</em>}
                 </label>
               );
             })}
@@ -537,20 +538,20 @@ function ProviderSettings({
       </div>
       <SettingsActionRow
         title="API Key"
-        description={settings?.llm.apiKeyConfigured ? "已配置，留空不修改。" : "未配置模型密钥。"}
+        description={settings?.llm.apiKeyConfigured ? t("settings.apiKeyConfigured") : t("settings.apiKeyMissing")}
         control={
           <input
             className="settings-inline-input"
             type="password"
             value={draft.apiKey}
-            placeholder={settings?.llm.apiKeyConfigured ? "保持现有密钥" : "输入 API Key"}
+            placeholder={settings?.llm.apiKeyConfigured ? t("settings.apiKeyKeepPlaceholder") : t("settings.apiKeyInputPlaceholder")}
             onChange={(event) => onDraftChange({ ...draft, apiKey: event.currentTarget.value })}
           />
         }
       />
       <SettingsActionRow
-        title="采样温度"
-        description="控制模型输出的稳定性。"
+        title={t("settings.temperatureTitle")}
+        description={t("settings.temperatureDesc")}
         control={
           <input
             className="settings-number-input"
@@ -564,8 +565,8 @@ function ProviderSettings({
         }
       />
       <SettingsActionRow
-        title="请求超时"
-        description="模型调用超时时间，单位毫秒。"
+        title={t("settings.timeoutTitle")}
+        description={t("settings.timeoutDesc")}
         control={
           <input
             className="settings-number-input"
@@ -577,8 +578,8 @@ function ProviderSettings({
         }
       />
       <SettingsActionRow
-        title="保存模型配置"
-        description="写入后端运行时设置。"
+        title={t("settings.saveProviderTitle")}
+        description={t("settings.saveProviderDesc")}
         control={
           <button
             type="button"
@@ -586,7 +587,7 @@ function ProviderSettings({
             disabled={saving}
             onClick={() => onSave(draft)}
           >
-            {saving ? "保存中" : "保存"}
+            {saving ? t("settings.saving") : t("action.save")}
           </button>
         }
       />
@@ -609,7 +610,7 @@ function McpSettings({
 }) {
   return (
     <>
-      <SettingsGroup title="MCP 服务器">
+      <SettingsGroup title={t("settings.mcpServers")}>
         <textarea
           className="settings-textarea"
           rows={9}
@@ -623,21 +624,21 @@ function McpSettings({
             disabled={saving}
             onClick={() => onSave(draft)}
           >
-            保存 MCP 配置
+            {t("settings.saveMcp")}
           </button>
         </div>
       </SettingsGroup>
 
-      <SettingsGroup title="连接状态">
+      <SettingsGroup title={t("settings.connectionStatus")}>
         {mcpServers.length === 0 ? (
-          <SettingsInfoRow title="未配置 MCP server" description="保存配置后，启动期会连接并注册工具。" />
+          <SettingsInfoRow title={t("settings.mcpEmptyTitle")} description={t("settings.mcpEmptyDesc")} />
         ) : (
           mcpServers.map((server) => (
             <SettingsInfoRow
               key={server.name}
               title={server.name}
               description={`tools: ${server.registeredTools}${server.error ? ` / ${server.error}` : ""}`}
-              value={server.connected ? "已连接" : server.enabled ? "失败" : "停用"}
+              value={server.connected ? t("settings.connected") : server.enabled ? t("settings.failed") : t("settings.disabled")}
             />
           ))
         )}
@@ -654,9 +655,9 @@ function ToolSettings({
   onToggleTool: (name: string, enabled: boolean) => void;
 }) {
   return (
-    <SettingsGroup title="工具管理">
+    <SettingsGroup title={t("settings.toolMgmt")}>
       {tools.length === 0 ? (
-        <SettingsInfoRow title="未发现可用工具" description="Agent 后端未返回工具目录。" />
+        <SettingsInfoRow title={t("settings.toolEmptyTitle")} description={t("settings.toolEmptyDesc")} />
       ) : (
         tools.map((tool) => (
           <SettingsSwitchRow
@@ -687,22 +688,22 @@ function DataSettings({
 }) {
   return (
     <>
-      <SettingsGroup title="本地存储">
-        <SettingsInfoRow title="SQLite" description={dataStatus?.dbPath ?? settings?.dbPath ?? "未连接"} />
+      <SettingsGroup title={t("settings.localStorage")}>
+        <SettingsInfoRow title="SQLite" description={dataStatus?.dbPath ?? settings?.dbPath ?? t("settings.notConnected")} />
         <SettingsInfoRow
-          title="任务 / 轨迹 / 记忆"
+          title={t("settings.tasksTracesMemories")}
           description={
             dataStatus
               ? `${dataStatus.counts.tasks} / ${dataStatus.counts.traces} / ${dataStatus.counts.memories}`
-              : "未连接"
+              : t("settings.notConnected")
           }
         />
       </SettingsGroup>
 
-      <SettingsGroup title="数据清理">
+      <SettingsGroup title={t("settings.dataCleanup")}>
         <SettingsActionRow
-          title="清理终态任务"
-          description="只清理早于指定天数的终态任务和轨迹。"
+          title={t("settings.cleanupTitle")}
+          description={t("settings.cleanupDesc")}
           control={
             <div className="settings-cleanup-control">
               <input
@@ -714,7 +715,7 @@ function DataSettings({
                 onChange={(event) => onCleanupDaysChange(Number(event.currentTarget.value))}
               />
               <button type="button" className="settings-secondary-btn" onClick={() => onCleanup(cleanupDays)}>
-                清理
+                {t("settings.cleanup")}
               </button>
             </div>
           }
@@ -854,7 +855,7 @@ function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
 
 function sourceLabel(tool: ToolDescriptor): string {
   if (tool.source?.type === "mcp") return `MCP:${tool.source.serverName}`;
-  return "内置";
+  return t("settings.builtinTool");
 }
 
 export type { SettingsDraft };

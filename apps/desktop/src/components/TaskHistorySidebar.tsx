@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { Task, TaskStatus } from "@aurevoy/shared";
 import { getRelativeTime } from "./status";
+import { t } from "../i18n";
 
 type MainView = "chat" | "search" | "tools" | "memory" | "settings";
 
@@ -41,10 +42,10 @@ export function TaskHistorySidebar({
   }, [query, statusFilter, tasks]);
 
   return (
-    <aside className="sidebar app-sidebar" aria-label="导航与对话历史">
+    <aside className="sidebar app-sidebar" aria-label={t("sidebar.label")}>
       <div className="sidebar-brand">
         <img className="sidebar-brand-logo" src="/aurevoy-wordmark.svg" alt="Aurevoy" />
-        <button type="button" className="sidebar-collapse" onClick={onCollapse} aria-label="收起左侧栏">
+        <button type="button" className="sidebar-collapse" onClick={onCollapse} aria-label={t("nav.collapse")}>
           <CollapseIcon />
         </button>
       </div>
@@ -57,7 +58,7 @@ export function TaskHistorySidebar({
           onClick={onNewTask}
         >
           <EditIcon />
-          <span>新对话</span>
+          <span>{t("nav.newChat")}</span>
         </button>
         <button
           type="button"
@@ -66,7 +67,7 @@ export function TaskHistorySidebar({
           onClick={onOpenSearch}
         >
           <SearchIcon />
-          <span>搜索</span>
+          <span>{t("nav.search")}</span>
         </button>
         <button
           type="button"
@@ -75,20 +76,20 @@ export function TaskHistorySidebar({
           onClick={onOpenTools}
         >
           <PluginIcon />
-          <span>工具</span>
+          <span>{t("nav.tools")}</span>
         </button>
-        <button type="button" className="sidebar-action" disabled title="自动化尚未接入真实能力">
+        <button type="button" className="sidebar-action" disabled title={t("nav.automationDisabled")}>
           <ClockIcon />
-          <span>自动化</span>
+          <span>{t("nav.automation")}</span>
         </button>
-        <button type="button" className="sidebar-action" disabled title="站点尚未接入真实能力">
+        <button type="button" className="sidebar-action" disabled title={t("nav.sitesDisabled")}>
           <GridIcon />
-          <span>站点</span>
+          <span>{t("nav.sites")}</span>
         </button>
       </div>
 
       <div className="sidebar-projects">
-        <p className="sidebar-section-label">项目</p>
+        <p className="sidebar-section-label">{t("nav.projects")}</p>
         <button type="button" className="sidebar-action project-row" disabled>
           <FolderIcon />
           <span>Aurevoy</span>
@@ -100,43 +101,62 @@ export function TaskHistorySidebar({
           onClick={onOpenMemory}
         >
           <ClockIcon />
-          <span>记忆</span>
+          <span>{t("nav.memory")}</span>
         </button>
       </div>
 
       <div className="sidebar-scroll">
-        <p className="sidebar-section-label">对话</p>
+        <p className="sidebar-section-label">{t("nav.conversations")}</p>
         <div className="history-filter">
           <label>
-            <span className="sr-only">搜索对话</span>
+            <span className="sr-only">{t("sidebar.searchConversations")}</span>
             <input
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索任务"
+              placeholder={t("sidebar.searchPlaceholder")}
             />
           </label>
           <select
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as TaskStatus | "all")}
-            aria-label="按状态筛选"
+            aria-label={t("sidebar.filterByStatus")}
           >
-            <option value="all">全部状态</option>
-            <option value="running">运行中</option>
-            <option value="paused">暂停</option>
-            <option value="completed">已完成</option>
-            <option value="failed">失败</option>
-            <option value="cancelled">已取消</option>
+            <option value="all">{t("filter.all")}</option>
+            <option value="running">{t("filter.running")}</option>
+            <option value="paused">{t("filter.paused")}</option>
+            <option value="completed">{t("filter.completed")}</option>
+            <option value="failed">{t("filter.failed")}</option>
+            <option value="cancelled">{t("filter.cancelled")}</option>
           </select>
         </div>
         {tasks.length === 0 ? (
-          <p className="sidebar-empty">还没有对话记录</p>
+          <p className="sidebar-empty">{t("sidebar.emptyNoTasks")}</p>
         ) : visibleTasks.length === 0 ? (
-          <p className="sidebar-empty">没有匹配的对话</p>
+          <p className="sidebar-empty">{t("sidebar.emptyNoMatch")}</p>
         ) : (
-          <ul className="conv-list">
+          <ul
+            className="conv-list"
+            role="listbox"
+            aria-label={t("sidebar.listLabel")}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+              const items = Array.from(
+                event.currentTarget.querySelectorAll<HTMLButtonElement>(".conv-item"),
+              );
+              const index = items.indexOf(document.activeElement as HTMLButtonElement);
+              if (index === -1) return;
+              if (event.key === "ArrowDown" && index < items.length - 1) {
+                event.preventDefault();
+                items[index + 1].focus();
+              } else if (event.key === "ArrowUp" && index > 0) {
+                event.preventDefault();
+                items[index - 1].focus();
+              }
+            }}
+          >
             {visibleTasks.map((task) => (
-              <li key={task.id}>
+              <li key={task.id} role="option" aria-selected={task.id === activeTaskId}>
                 <button
                   type="button"
                   className="conv-item"
@@ -147,6 +167,16 @@ export function TaskHistorySidebar({
                   <span className="conv-status-dot" data-status={task.status} aria-hidden="true" />
                   <span className="conv-copy">
                     <span className="conv-title">{task.goal}</span>
+                    {(task.artifacts?.length || task.budgetUsage?.toolCalls) ? (
+                      <span className="conv-summary">
+                        {task.artifacts?.length ? (
+                          <span className="conv-summary-chip">📄 {task.artifacts.length} {t("sidebar.unitArtifacts")}</span>
+                        ) : null}
+                        {task.budgetUsage?.toolCalls ? (
+                          <span className="conv-summary-chip">⚙ {task.budgetUsage.toolCalls} {t("sidebar.unitTools")}</span>
+                        ) : null}
+                      </span>
+                    ) : null}
                     <span className="conv-meta">
                       <span>{task.status}</span>
                       <span>{getRelativeTime(task.updatedAt)}</span>
@@ -167,7 +197,7 @@ export function TaskHistorySidebar({
           onClick={onOpenSettings}
         >
           <GearIcon />
-          <span>设置</span>
+          <span>{t("nav.settings")}</span>
         </button>
       </div>
     </aside>

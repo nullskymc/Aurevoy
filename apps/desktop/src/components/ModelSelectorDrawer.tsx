@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { RuntimeSettings } from "@aurevoy/shared";
+import { t } from "../i18n";
 
 export interface ModelSelectorDraft {
   model: string;
@@ -53,11 +54,11 @@ export function ModelSelectorDrawer({
   if (!open) return null;
 
   return (
-    <div ref={popoverRef} className="model-popover" role="dialog" aria-label="模型选择">
+    <div ref={popoverRef} className="model-popover" role="dialog" aria-label={t("model.dialogLabel")}>
       <div className="model-popover-section">
-        <p className="model-popover-label">模型</p>
+        <p className="model-popover-label">{t("model.label")}</p>
         {models.length === 0 ? (
-          <p className="model-popover-empty">还没有启用主界面模型</p>
+          <p className="model-popover-empty">{t("model.empty")}</p>
         ) : (
           <div className="model-popover-list">
             {models.map((model) => (
@@ -79,7 +80,7 @@ export function ModelSelectorDrawer({
 
       <div className="model-popover-footer">
         <button type="button" className="model-popover-action" onClick={onOpenFullSettings}>
-          {models.length === 0 ? "去设置启用模型" : "管理模型列表"}
+          {models.length === 0 ? t("model.gotoEnable") : t("model.manage")}
         </button>
       </div>
     </div>

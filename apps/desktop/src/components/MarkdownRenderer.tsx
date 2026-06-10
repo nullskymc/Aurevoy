@@ -1,103 +1,60 @@
-import type { ReactNode } from "react";
+import { useMemo } from "react";
+import { marked } from "marked";
+import { markedHighlight } from "marked-highlight";
+import DOMPurify from "dompurify";
+import hljs from "highlight.js/lib/core";
+import javascript from "highlight.js/lib/languages/javascript";
+import typescript from "highlight.js/lib/languages/typescript";
+import python from "highlight.js/lib/languages/python";
+import css from "highlight.js/lib/languages/css";
+import json from "highlight.js/lib/languages/json";
+import bash from "highlight.js/lib/languages/bash";
+import xml from "highlight.js/lib/languages/xml";
+
+// 按需注册常用语言，避免打包整个 highlight.js。
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("js", javascript);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("ts", typescript);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("py", python);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("sh", bash);
+hljs.registerLanguage("html", xml);
+hljs.registerLanguage("xml", xml);
+
+// marked v5+ 通过 marked-highlight 扩展注册语法高亮（同步高亮，parse() 同步返回 string）。
+marked.use(
+  markedHighlight({
+    langPrefix: "hljs language-",
+    highlight(code: string, lang: string) {
+      if (lang && hljs.getLanguage(lang)) {
+        return hljs.highlight(code, { language: lang }).value;
+      }
+      return hljs.highlightAuto(code).value;
+    },
+  }),
+);
+
+marked.use({ gfm: true, breaks: false });
 
 interface MarkdownRendererProps {
   content: string;
 }
 
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
-  return <div className="markdown-body">{renderBlocks(content)}</div>;
-}
+  // marked 输出来自 LLM/工具的不可信内容，渲染前必须经 DOMPurify 净化，防 XSS。
+  const html = useMemo(() => {
+    try {
+      const raw = marked.parse(content, { async: false }) as string;
+      return DOMPurify.sanitize(raw);
+    } catch {
+      // 解析失败时退化为纯文本（已转义），不抛 HTML。
+      return DOMPurify.sanitize(content);
+    }
+  }, [content]);
 
-function renderBlocks(content: string): ReactNode[] {
-  const lines = content.replace(/\r\n/g, "\n").split("\n");
-  const blocks: ReactNode[] = [];
-  let paragraph: string[] = [];
-  let list: string[] = [];
-  let code: string[] | null = null;
-
-  const flushParagraph = () => {
-    if (paragraph.length === 0) return;
-    blocks.push(<p key={`p-${blocks.length}`}>{renderInline(paragraph.join(" "))}</p>);
-    paragraph = [];
-  };
-  const flushList = () => {
-    if (list.length === 0) return;
-    blocks.push(
-      <ul key={`ul-${blocks.length}`}>
-        {list.map((item, index) => <li key={index}>{renderInline(item)}</li>)}
-      </ul>,
-    );
-    list = [];
-  };
-
-  for (const line of lines) {
-    if (line.startsWith("```")) {
-      if (code) {
-        blocks.push(<pre key={`code-${blocks.length}`}><code>{code.join("\n")}</code></pre>);
-        code = null;
-      } else {
-        flushParagraph();
-        flushList();
-        code = [];
-      }
-      continue;
-    }
-    if (code) {
-      code.push(line);
-      continue;
-    }
-    if (!line.trim()) {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      const level = heading[1].length;
-      const children = renderInline(heading[2]);
-      blocks.push(level === 1
-        ? <h1 key={`h-${blocks.length}`}>{children}</h1>
-        : level === 2
-          ? <h2 key={`h-${blocks.length}`}>{children}</h2>
-          : <h3 key={`h-${blocks.length}`}>{children}</h3>);
-      continue;
-    }
-    const item = /^[-*]\s+(.+)$/.exec(line);
-    if (item) {
-      flushParagraph();
-      list.push(item[1]);
-      continue;
-    }
-    paragraph.push(line.trim());
-  }
-  flushParagraph();
-  flushList();
-  if (code) blocks.push(<pre key={`code-${blocks.length}`}><code>{code.join("\n")}</code></pre>);
-  return blocks;
-}
-
-function renderInline(text: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const pattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*/g;
-  let last = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text))) {
-    if (match.index > last) nodes.push(text.slice(last, match.index));
-    if (match[1] && match[2]) {
-      nodes.push(
-        <a key={nodes.length} href={match[2]} target="_blank" rel="noreferrer">
-          {match[1]}
-        </a>,
-      );
-    } else if (match[3]) {
-      nodes.push(<code key={nodes.length}>{match[3]}</code>);
-    } else if (match[4]) {
-      nodes.push(<strong key={nodes.length}>{match[4]}</strong>);
-    }
-    last = pattern.lastIndex;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return nodes;
+  return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />;
 }

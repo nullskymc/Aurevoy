@@ -2,6 +2,7 @@ import type { HealthResponse, Task, TaskPhase, TaskTraceEntry, ToolDescriptor } 
 import type { FeedItem } from "./AgentEventFeed";
 import { AgentEventFeed } from "./AgentEventFeed";
 import { getPhaseLabel } from "./status";
+import { t } from "../i18n";
 
 interface InspectorPanelProps {
   open: boolean;
@@ -36,56 +37,57 @@ export function InspectorPanel({
         onClick={onClose}
         aria-hidden={!open}
       />
-      <aside className="inspector" data-open={open} aria-label="任务检查器" aria-hidden={!open}>
+      <aside className="inspector" data-open={open} aria-label={t("inspector.panelLabel")} aria-hidden={!open}>
         <header className="inspector-head">
-          <h2>运行详情</h2>
-          <button type="button" className="inspector-close" onClick={onClose} aria-label="关闭">
+          <h2>{t("inspector.title")}</h2>
+          <button type="button" className="inspector-close" onClick={onClose} aria-label={t("action.close")}>
             ✕
           </button>
         </header>
 
         <div className="inspector-content">
           <section className="inspector-section">
-            <p className="inspector-label">任务上下文</p>
+            <p className="inspector-label">{t("inspector.taskContext")}</p>
             <dl className="meta-list">
               <div>
-                <dt>当前任务</dt>
-                <dd>{task ? task.goal : "未选择"}</dd>
+                <dt>{t("inspector.currentTask")}</dt>
+                <dd>{task ? task.goal : t("inspector.unselected")}</dd>
               </div>
               <div>
-                <dt>消息数</dt>
+                <dt>{t("inspector.messageCount")}</dt>
                 <dd>{task?.messages.length ?? 0}</dd>
               </div>
               <div>
-                <dt>当前阶段</dt>
-                <dd>{getPhaseLabel(phase ?? task?.phase ?? null) || "未开始"}</dd>
+                <dt>{t("inspector.currentPhase")}</dt>
+                <dd>{getPhaseLabel(phase ?? task?.phase ?? null) || t("inspector.notStarted")}</dd>
               </div>
               <div>
-                <dt>Token</dt>
+                <dt>{t("inspector.token")}</dt>
                 <dd>{formatTokenUsage(task)}</dd>
               </div>
               <div>
-                <dt>预算</dt>
+                <dt>{t("inspector.budget")}</dt>
                 <dd>{formatBudgetUsage(task)}</dd>
               </div>
               <div>
-                <dt>引擎版本</dt>
-                <dd>{health ? health.version : "未连接"}</dd>
+                <dt>{t("inspector.engineVersion")}</dt>
+                <dd>{health ? health.version : t("inspector.notConnected")}</dd>
               </div>
               <div>
-                <dt>运行时长</dt>
-                <dd>{health ? `${Math.round(health.uptimeMs / 1000)} 秒` : "未连接"}</dd>
+                <dt>{t("inspector.uptime")}</dt>
+                <dd>{health ? `${Math.round(health.uptimeMs / 1000)} ${t("inspector.uptimeUnit")}` : t("inspector.notConnected")}</dd>
               </div>
             </dl>
+            {task && <InspectorBudgetBar task={task} />}
           </section>
 
           <section className="inspector-section">
             <div className="inspector-label-row">
-              <p className="inspector-label">产物</p>
+              <p className="inspector-label">{t("inspector.artifacts")}</p>
               <span className="inspector-count">{task?.artifacts?.length ?? 0}</span>
             </div>
             {!task?.artifacts?.length ? (
-              <p className="inspector-empty">暂无任务产物</p>
+              <p className="inspector-empty">{t("inspector.emptyArtifacts")}</p>
             ) : (
               <div className="artifact-mini-list">
                 {task.artifacts.map((artifact) => (
@@ -101,11 +103,11 @@ export function InspectorPanel({
 
           <section className="inspector-section">
             <div className="inspector-label-row">
-              <p className="inspector-label">追问</p>
+              <p className="inspector-label">{t("inspector.clarifications")}</p>
               <span className="inspector-count">{task?.clarifications?.length ?? 0}</span>
             </div>
             {!task?.clarifications?.length ? (
-              <p className="inspector-empty">暂无追问</p>
+              <p className="inspector-empty">{t("inspector.emptyClarifications")}</p>
             ) : (
               <div className="artifact-mini-list">
                 {task.clarifications.map((clarification) => (
@@ -121,11 +123,11 @@ export function InspectorPanel({
 
           <section className="inspector-section">
             <div className="inspector-label-row">
-              <p className="inspector-label">Checkpoint</p>
+              <p className="inspector-label">{t("inspector.checkpoints")}</p>
               <span className="inspector-count">{task?.checkpoints?.length ?? 0}</span>
             </div>
             {!task?.checkpoints?.length ? (
-              <p className="inspector-empty">暂无 checkpoint</p>
+              <p className="inspector-empty">{t("inspector.emptyCheckpoints")}</p>
             ) : (
               <div className="artifact-mini-list">
                 {task.checkpoints.map((checkpoint) => (
@@ -141,11 +143,11 @@ export function InspectorPanel({
 
           <section className="inspector-section">
             <div className="inspector-label-row">
-              <p className="inspector-label">轨迹日志</p>
+              <p className="inspector-label">{t("inspector.traces")}</p>
               <span className="inspector-count">{traces.length}</span>
             </div>
             {traces.length === 0 ? (
-              <p className="inspector-empty">暂无持久轨迹</p>
+              <p className="inspector-empty">{t("inspector.emptyTraces")}</p>
             ) : (
               <div className="trace-list">
                 {traces.slice(-32).map((trace) => (
@@ -163,12 +165,12 @@ export function InspectorPanel({
 
           <section className="inspector-section">
             <div className="inspector-label-row">
-              <p className="inspector-label">工具目录</p>
+              <p className="inspector-label">{t("inspector.toolCatalog")}</p>
               <span className="inspector-count">{tools.length}</span>
             </div>
             <div className="tool-list">
               {tools.length === 0 ? (
-                <p className="inspector-empty">未发现可用工具</p>
+                <p className="inspector-empty">{t("inspector.emptyTools")}</p>
               ) : (
                 tools.map((tool) => (
                   <article key={tool.name} className="tool-item">
@@ -182,11 +184,11 @@ export function InspectorPanel({
 
           <section className="inspector-section">
             <div className="inspector-label-row">
-              <p className="inspector-label">工具调用</p>
+              <p className="inspector-label">{t("inspector.toolCalls")}</p>
               <span className="inspector-count">{toolEvents.length}</span>
             </div>
             {toolEvents.length === 0 ? (
-              <p className="inspector-empty">暂无工具调用</p>
+              <p className="inspector-empty">{t("inspector.emptyToolCalls")}</p>
             ) : (
               <div className="call-list">
                 {toolEvents.map((item) => {
@@ -198,7 +200,7 @@ export function InspectorPanel({
                           →
                         </span>
                         <span className="call-row-name">{event.call.toolName}</span>
-                        <span className="call-row-tag">调用</span>
+                        <span className="call-row-tag">{t("inspector.callTag")}</span>
                       </div>
                     );
                   }
@@ -209,8 +211,8 @@ export function InspectorPanel({
                         <span className="call-row-icon" aria-hidden="true">
                           {ok ? "✓" : "✕"}
                         </span>
-                        <span className="call-row-name">{ok ? "返回结果" : "调用失败"}</span>
-                        <span className="call-row-tag">{ok ? "成功" : "失败"}</span>
+                        <span className="call-row-name">{ok ? t("inspector.callReturned") : t("inspector.callFailed")}</span>
+                        <span className="call-row-tag">{ok ? t("inspector.success") : t("inspector.failure")}</span>
                       </div>
                     );
                   }
@@ -231,41 +233,81 @@ function getTraceTitle(trace: TaskTraceEntry): string {
   const phase = getPhaseLabel(trace.phase);
   const base =
     trace.kind === "llm"
-      ? `模型轮次${trace.iteration ? ` #${trace.iteration}` : ""}`
+      ? `${t("trace.llmRound")}${trace.iteration ? ` #${trace.iteration}` : ""}`
       : trace.kind === "tool_call"
-        ? `工具请求：${trace.toolName ?? "unknown"}`
+        ? `${t("trace.toolRequest")}${trace.toolName ?? t("trace.unknown")}`
         : trace.kind === "tool_result"
-          ? `工具结果：${trace.toolName ?? "unknown"}`
+          ? `${t("trace.toolResult")}${trace.toolName ?? t("trace.unknown")}`
           : trace.kind === "approval"
-            ? `审批：${trace.toolName ?? "unknown"}`
+            ? `${t("trace.approval")}${trace.toolName ?? t("trace.unknown")}`
             : trace.kind === "done"
-              ? "任务结束"
+              ? t("trace.taskDone")
               : trace.kind === "error"
-                ? "错误"
-                : "阶段变化";
+                ? t("trace.error")
+                : t("trace.phaseChange");
   return phase ? `${base} · ${phase}` : base;
 }
 
 function getTraceDetail(trace: TaskTraceEntry): string {
   const parts = [
     trace.summary,
-    trace.ok === true ? "成功" : trace.ok === false ? "失败" : undefined,
-    trace.errorCategory ? `分类：${trace.errorCategory}` : undefined,
+    trace.ok === true ? t("inspector.success") : trace.ok === false ? t("inspector.failure") : undefined,
+    trace.errorCategory ? `${t("trace.categoryPrefix")}${trace.errorCategory}` : undefined,
     trace.durationMs != null ? `${trace.durationMs}ms` : undefined,
-    trace.tokenUsage == null && trace.kind === "llm" ? "token: 不可用" : undefined,
+    trace.tokenUsage == null && trace.kind === "llm" ? t("trace.tokenUnavailable") : undefined,
   ].filter(Boolean);
   return parts.join(" / ") || trace.kind;
 }
 
+/** 运行详情内的预算使用可视化（从主对话区迁入，样式独立于对话区 BudgetBar）。 */
+function InspectorBudgetBar({ task }: { task: Task }) {
+  const usage = task.budgetUsage;
+  const budget = task.budget;
+  if (!usage && !budget) return null;
+  const toolLimit = budget?.maxToolCalls ?? 80;
+  const outputLimit = budget?.maxOutputBytes ?? 1024 * 1024;
+  const toolRatio = Math.min(100, ((usage?.toolCalls ?? 0) / toolLimit) * 100);
+  const outputRatio = Math.min(100, ((usage?.outputBytes ?? 0) / outputLimit) * 100);
+
+  return (
+    <div className="inspector-budget">
+      <div className="inspector-budget-row">
+        <span>{t("inspector.toolCalls")}</span>
+        <strong>
+          {usage?.toolCalls ?? 0} / {toolLimit}
+        </strong>
+        <div className="inspector-budget-track">
+          <span style={{ width: `${toolRatio}%` }} />
+        </div>
+      </div>
+      <div className="inspector-budget-row">
+        <span>{t("inspector.outputBytes")}</span>
+        <strong>
+          {formatBytes(usage?.outputBytes ?? 0)} / {formatBytes(outputLimit)}
+        </strong>
+        <div className="inspector-budget-track">
+          <span style={{ width: `${outputRatio}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${bytes}B`;
+}
+
 function formatTokenUsage(task: Task | null): string {
   const usage = task?.tokenUsage;
-  if (!usage) return "未记录";
-  if (!usage.available) return "不可用";
+  if (!usage) return t("inspector.notRecorded");
+  if (!usage.available) return t("inspector.unavailable");
   return `${usage.totalTokens ?? 0} total / ${usage.promptTokens ?? 0} in / ${usage.completionTokens ?? 0} out`;
 }
 
 function formatBudgetUsage(task: Task | null): string {
   const usage = task?.budgetUsage;
-  if (!usage) return "未开始";
-  return `${usage.iterations} 轮 / ${usage.toolCalls} 工具 / ${usage.outputBytes} bytes`;
+  if (!usage) return t("inspector.notStarted");
+  return `${usage.iterations} ${t("budget.unitIterations")} / ${usage.toolCalls} ${t("budget.tools")} / ${usage.outputBytes} bytes`;
 }

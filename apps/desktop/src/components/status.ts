@@ -1,44 +1,45 @@
 import type { TaskPhase, TaskStatus } from "@aurevoy/shared";
+import { t } from "../i18n";
 
 export function getStatusLabel(status: TaskStatus | null): string {
   switch (status) {
     case "pending":
-      return "等待中";
+      return t("status.pending");
     case "planning":
-      return "正在规划";
+      return t("status.planning");
     case "running":
-      return "执行中";
+      return t("status.running");
     case "paused":
-      return "等待确认";
+      return t("status.paused");
     case "completed":
-      return "已完成";
+      return t("status.completed");
     case "failed":
-      return "失败";
+      return t("status.failed");
     case "cancelled":
-      return "已取消";
+      return t("status.cancelled");
     default:
-      return "未开始";
+      return t("status.idle");
   }
 }
 
 export function getPhaseLabel(phase: TaskPhase | null): string {
   switch (phase) {
     case "initializing":
-      return "初始化";
+      return t("phase.initializing");
     case "thinking":
-      return "模型思考";
+      return t("phase.thinking");
     case "calling_tool":
-      return "调用工具";
+      return t("phase.calling_tool");
     case "waiting_approval":
-      return "等待确认";
+      return t("phase.waiting_approval");
     case "waiting_clarification":
-      return "等待补充信息";
+      return t("phase.waiting_clarification");
     case "finalizing":
-      return "整理结果";
+      return t("phase.finalizing");
     case "failed":
-      return "失败";
+      return t("phase.failed");
     case "cancelled":
-      return "已取消";
+      return t("phase.cancelled");
     default:
       return "";
   }
@@ -50,11 +51,11 @@ export function getRelativeTime(value: string): string {
 
   const diffMs = Date.now() - time;
   const diffMinutes = Math.floor(diffMs / 60000);
-  if (diffMinutes < 1) return "刚刚";
-  if (diffMinutes < 60) return `${diffMinutes} 分钟前`;
+  if (diffMinutes < 1) return t("time.justNow");
+  if (diffMinutes < 60) return `${diffMinutes} ${t("time.minutesAgo")}`;
 
   const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours} 小时前`;
+  if (diffHours < 24) return `${diffHours} ${t("time.hoursAgo")}`;
 
   return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
