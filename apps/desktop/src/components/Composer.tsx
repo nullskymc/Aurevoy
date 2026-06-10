@@ -1,4 +1,5 @@
 import { useRef, type KeyboardEvent } from "react";
+import { t } from "../i18n";
 
 interface ComposerProps {
   value: string;
@@ -7,6 +8,10 @@ interface ComposerProps {
   /** hero: 居中空状态的大输入框；docked: 对话底部的停靠输入框 */
   variant?: "hero" | "docked";
   provider?: string;
+  /** 是否处于"编辑并重试"模式 */
+  isEditing?: boolean;
+  /** 取消编辑模式 */
+  onCancelEdit?: () => void;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onOpenModelSelector: () => void;
@@ -20,6 +25,8 @@ export function Composer({
   online,
   variant = "hero",
   provider,
+  isEditing,
+  onCancelEdit,
   onChange,
   onSubmit,
   onOpenModelSelector,
@@ -38,13 +45,22 @@ export function Composer({
   }
 
   return (
-    <div className="composer" data-variant={variant}>
+    <div className="composer" data-variant={variant} data-editing={isEditing ? "true" : undefined}>
+      {isEditing && (
+        <div className="composer-edit-banner">
+          <PencilEditIcon />
+          <span>{t("composer.editMode")}</span>
+          <button type="button" className="composer-edit-cancel" onClick={onCancelEdit}>
+            {t("action.cancel")}
+          </button>
+        </div>
+      )}
       <div className="composer-box">
         <textarea
           ref={textareaRef}
           className="composer-input"
           value={value}
-          placeholder="随心输入，告诉 Aurevoy 你想完成什么"
+          placeholder={t("composer.placeholder")}
           rows={variant === "hero" ? 2 : 1}
           onChange={(event) => onChange(event.currentTarget.value)}
           onKeyDown={handleKeyDown}
@@ -52,33 +68,43 @@ export function Composer({
 
         <div className="composer-toolbar">
           <div className="composer-tools-left">
-            <button type="button" className="composer-icon-btn" title="附件尚未启用" aria-label="附件" disabled>
+            <button type="button" className="composer-icon-btn" title={t("composer.attachmentDisabled")} aria-label={t("composer.attachment")} disabled>
               <PlusIcon />
             </button>
             <button
               type="button"
               className="composer-chip"
-              title="选择模型"
+              title={t("composer.selectModel")}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={onOpenModelSelector}
             >
               <GearIcon />
-              <span>{provider ? (provider === "unconfigured" ? "未配置 LLM" : provider) : "未连接"}</span>
+              <span>{provider ? (provider === "unconfigured" ? t("composer.providerUnconfigured") : provider) : t("composer.providerDisconnected")}</span>
             </button>
           </div>
 
           <div className="composer-tools-right">
             <span className="composer-engine" data-online={String(online)}>
               <span className="composer-engine-dot" />
-              {online === null ? "检测中" : online ? "本地引擎在线" : "引擎离线"}
+              {online === null ? t("composer.engineChecking") : online ? t("composer.engineOnline") : t("composer.engineOffline")}
             </span>
             <button
               type="button"
               className="composer-send"
               disabled={busy ? !onStop : !canSend}
               onClick={busy ? onStop : onSubmit}
-              aria-label={busy ? "停止" : "发送"}
-              title={busy ? "停止生成" : "发送 (Enter)"}
+              aria-label={busy ? t("action.stop") : isEditing ? t("composer.sendEdit") : t("composer.send")}
+              title={
+                busy
+                  ? t("composer.stopHint")
+                  : !value.trim()
+                    ? t("composer.sendHintEmpty")
+                    : online === false
+                      ? t("composer.sendHintOffline")
+                      : !providerConfigured
+                        ? t("composer.sendHintUnconfigured")
+                        : t("composer.sendHintReady")
+              }
             >
               {busy ? <StopDot /> : <ArrowUpIcon />}
             </button>
@@ -93,7 +119,7 @@ export function Composer({
         </span>
         <span className="composer-footer-item">
           <ScreenIcon />
-          本地模式
+          {t("composer.localMode")}
         </span>
         {provider === "unconfigured" && (
           <button
@@ -102,7 +128,7 @@ export function Composer({
             onPointerDown={(event) => event.stopPropagation()}
             onClick={onOpenModelSelector}
           >
-            配置模型
+            {t("composer.configureModel")}
           </button>
         )}
       </div>
@@ -119,6 +145,14 @@ function PlusIcon() {
         strokeWidth="1.6"
         strokeLinecap="round"
       />
+    </svg>
+  );
+}
+
+function PencilEditIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+      <path d="M4 14.5l-.6 2.6 2.6-.6L16 6.5a1.5 1.5 0 00-2.1-2.1L4 14.5z" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinejoin="round" />
     </svg>
   );
 }

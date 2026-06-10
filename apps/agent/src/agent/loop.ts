@@ -3,6 +3,7 @@ import type {
   Message,
   MessageToolCall,
   PlanStep,
+  RevertMode,
   Task,
   TaskArtifact,
   TaskErrorCategory,
@@ -122,6 +123,285 @@ export function prepareTaskForResume(task: Task): Task {
     data: { previousStatus, previousPhase, patchedToolResults, checkpoint: lastCheckpoint },
   });
   return task;
+}
+
+/**
+ * 编辑重跑（Claude Code Rewind 的对话截断语义）：
+ * 把目标消息及其之后的所有消息从活跃历史移除，使任务回到该消息发送前的状态。
+ * 不回滚已落盘文件（Aurevoy 当前无 per-tool 文件快照，且已 apply 的产物不应被静默回滚）。
+ * 截断前将移除的消息归档到 archivedMessages（支持 unrevert）。
+ *
+ * - code_and_conv: 截断对话 + 清除 checkpoint/artifact/plan（完整重做）
+ * - conv_only: 仅截断对话，保留 checkpoint/artifact/plan（文件没问题，只想重新推理）
+ *
+ * 截断后调用方通常再 addUserTurn(编辑后的文本) + runTask，实现"带上下文从该点重新生成"。
+ */
+export function revertTask(
+  task: Task,
+  messageId: string,
+  mode: RevertMode = 'code_and_conv',
+): {
+  task: Task;
+  removedContent: string | null;
+  removedMessageId: string | null;
+  removedCount: number;
+} {
+  const index = task.messages.findIndex((m) => m.id === messageId);
+  if (index < 0) {
+    return { task, removedContent: null, removedMessageId: null, removedCount: 0 };
+  }
+
+  const removed = task.messages[index];
+  const removedMessages = task.messages.slice(index);
+  const removedCount = removedMessages.length;
+
+  task.archivedMessages = removedMessages;
+  task.messages = task.messages.slice(0, index);
+
+  if (mode === 'code_and_conv') {
+    const revertTime = removed.createdAt;
+    task.checkpoints = (task.checkpoints ?? []).filter((cp) => cp.createdAt < revertTime);
+    task.artifacts = (task.artifacts ?? []).filter((artifact) => {
+      if (artifact.status === 'applied') return true;
+      return artifact.createdAt < revertTime;
+    });
+    task.plan = task.plan.filter((step) => step.status === 'completed');
+  }
+
+  task.status = 'paused';
+  task.phase = null;
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+
+  taskEvents.publish({
+    type: 'reverted',
+    taskId: task.id,
+    messageId,
+    removedCount,
+    archivedCount: removedMessages.length,
+  });
+
+  writeTrace(task.id, 'phase', null, {
+    ok: true,
+    summary: `编辑重跑(mode=${mode})：截断到消息 ${messageId} 之前，移除 ${removedCount} 条消息（已归档），不回滚已落盘文件`,
+    data: { messageId, mode, removedCount, archivedCount: removedMessages.length },
+  });
+
+  return {
+    task,
+    removedContent: removed.role === 'user' ? removed.content : null,
+    removedMessageId: removed.id,
+    removedCount,
+  };
+}
+
+/**
+ * 撤销上一次 revert：从 archivedMessages 恢复被截断的消息到活跃历史。
+ * 仅在 revert 后尚未提交新的 continue 时可用（archivedMessages 非空且任务处于 paused）。
+ */
+export function unrevertTask(task: Task): { task: Task; restoredCount: number } {
+  const archived = task.archivedMessages ?? [];
+  if (archived.length === 0) {
+    return { task, restoredCount: 0 };
+  }
+
+  task.messages = [...task.messages, ...archived];
+  task.archivedMessages = [];
+
+  const lastMessage = task.messages.at(-1);
+  task.status = lastMessage?.role === 'user' ? 'completed' : 'completed';
+  task.phase = 'finalizing';
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+
+  const restoredCount = archived.length;
+
+  taskEvents.publish({
+    type: 'unreverted',
+    taskId: task.id,
+    restoredCount,
+  });
+
+  writeTrace(task.id, 'phase', null, {
+    ok: true,
+    summary: `撤销编辑重跑：恢复 ${restoredCount} 条归档消息到活跃历史`,
+    data: { restoredCount },
+  });
+
+  return { task, restoredCount };
+}
+
+/**
+ * 从指定消息处分支出一个新任务（非破坏性 fork）。
+ * 克隆父任务到目标消息（含）为止的所有消息，每条消息分配新 ID，
+ * 新任务独立演进，原任务不受影响。
+ */
+export function branchTask(
+  parentTask: Task,
+  messageId: string,
+  goalOverride?: string,
+): { task: Task; messageCount: number } {
+  const index = parentTask.messages.findIndex((m) => m.id === messageId);
+  if (index < 0) {
+    const now = new Date().toISOString();
+    const task: Task = {
+      id: randomUUID(),
+      goal: goalOverride ?? parentTask.goal,
+      status: 'pending',
+      phase: 'initializing',
+      plan: [],
+      messages: [],
+      parentTaskId: parentTask.id,
+      createdAt: now,
+      updatedAt: now,
+    };
+    taskStore.save(task);
+    return { task, messageCount: 0 };
+  }
+
+  const sourceMessages = parentTask.messages.slice(0, index + 1);
+  const idMap = new Map<string, string>();
+  for (const msg of sourceMessages) {
+    idMap.set(msg.id, randomUUID());
+  }
+
+  const clonedMessages: Message[] = sourceMessages.map((msg) => {
+    const cloned: Message = {
+      ...msg,
+      id: idMap.get(msg.id)!,
+    };
+    if (cloned.toolCalls) {
+      cloned.toolCalls = cloned.toolCalls.map((tc) => ({
+        ...tc,
+        id: idMap.get(tc.id) ?? randomUUID(),
+      }));
+    }
+    if (cloned.toolCallId) {
+      cloned.toolCallId = idMap.get(cloned.toolCallId) ?? cloned.toolCallId;
+    }
+    return cloned;
+  });
+
+  const now = new Date().toISOString();
+  const task: Task = {
+    id: randomUUID(),
+    goal: goalOverride ?? parentTask.goal,
+    status: 'completed',
+    phase: 'finalizing',
+    plan: [],
+    messages: clonedMessages,
+    parentTaskId: parentTask.id,
+    createdAt: now,
+    updatedAt: now,
+  };
+  taskStore.save(task);
+
+  taskEvents.publish({
+    type: 'branched',
+    taskId: task.id,
+    parentTaskId: parentTask.id,
+    messageId,
+    messageCount: clonedMessages.length,
+  });
+
+  writeTrace(task.id, 'phase', null, {
+    ok: true,
+    summary: `从任务 ${parentTask.id} 分支，克隆 ${clonedMessages.length} 条消息到消息 ${messageId}`,
+    data: { parentTaskId: parentTask.id, messageId, messageCount: clonedMessages.length },
+  });
+
+  return { task, messageCount: clonedMessages.length };
+}
+
+/**
+ * 将指定消息范围压缩为 LLM 生成的摘要（上下文窗口管理）。
+ * 替换原消息为一条 system 摘要消息，释放上下文空间。
+ * 不截断对话，仅压缩旧消息。
+ */
+export async function compactTask(
+  task: Task,
+  fromMessageId?: string,
+  toMessageId?: string,
+): Promise<{ task: Task; originalCount: number; summaryLength: number }> {
+  const messages = task.messages;
+  const fromIndex = fromMessageId
+    ? messages.findIndex((m) => m.id === fromMessageId)
+    : 0;
+  const toIndex = toMessageId
+    ? messages.findIndex((m) => m.id === toMessageId)
+    : messages.length - 1;
+
+  if (fromIndex < 0 || toIndex < 0 || fromIndex > toIndex) {
+    return { task, originalCount: 0, summaryLength: 0 };
+  }
+
+  const toCompress = messages.slice(fromIndex, toIndex + 1);
+  if (toCompress.length <= 1) {
+    return { task, originalCount: toCompress.length, summaryLength: 0 };
+  }
+
+  const transcript = toCompress
+    .map((m) => `[${m.role}]: ${m.content.slice(0, 800)}`)
+    .join('\n\n');
+
+  let summaryText = '';
+  try {
+    const promptMessages: Message[] = [
+      {
+        id: randomUUID(),
+        role: 'user',
+        content: `请将以下对话记录压缩为一段简洁的摘要（200字以内），保留关键信息、决策和结论。只输出摘要文本，不要加前缀：\n\n${transcript}`,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    for await (const chunk of getProvider().stream(promptMessages)) {
+      if (chunk.textDelta) summaryText += chunk.textDelta;
+    }
+  } catch (err) {
+    writeTrace(task.id, 'error', null, {
+      ok: false,
+      errorCategory: 'model',
+      errorMessage: err instanceof Error ? err.message : String(err),
+      summary: 'compact LLM 摘要调用失败',
+    });
+    return { task, originalCount: toCompress.length, summaryLength: 0 };
+  }
+
+  if (!summaryText.trim()) {
+    return { task, originalCount: toCompress.length, summaryLength: 0 };
+  }
+
+  const summaryMessage: Message = {
+    id: randomUUID(),
+    role: 'system',
+    content: `[上下文摘要] ${summaryText.trim()}`,
+    createdAt: new Date().toISOString(),
+  };
+
+  const before = messages.slice(0, fromIndex);
+  const after = messages.slice(toIndex + 1);
+  task.messages = [...before, summaryMessage, ...after];
+
+  const originalCount = toCompress.length;
+  const summaryLength = summaryText.trim().length;
+
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+
+  taskEvents.publish({
+    type: 'compacted',
+    taskId: task.id,
+    originalCount,
+    summaryLength,
+  });
+
+  writeTrace(task.id, 'phase', null, {
+    ok: true,
+    summary: `压缩 ${originalCount} 条消息为 ${summaryLength} 字符摘要`,
+    data: { fromIndex, toIndex, originalCount, summaryLength },
+  });
+
+  return { task, originalCount, summaryLength };
 }
 
 /**

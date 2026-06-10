@@ -122,6 +122,18 @@ API 请求响应、运行时常量（默认地址端口）。
    将其标记为 `failed` 并写入“上次进程中断”的轨迹说明；用户调用
    `POST /api/tasks/:id/resume` 后，后端先补齐可能悬空的 tool result，再用持久消息历史继续运行；
    如果存在 checkpoint，恢复 trace 会记录最近 checkpoint。
+5d. **编辑重跑（revert / unrevert）**：用户选中历史用户消息 → `POST /api/tasks/:id/revert`
+   经 `revertTask()` 将目标消息及之后归档到 `task.archivedMessages`（soft-delete），按 `mode`
+   决定是否清除 revert 点之后的 checkpoint、draft artifact 和未完成 plan 步骤。前端 Composer
+   回填 `removedContent` 供编辑；用户提交后走 `POST /api/tasks/:id/messages`（`continueGoal`）
+   以截断后的历史为上下文重新进入 Agent 循环。`unrevert` 可在 revert 后、continue 前调用，
+   从 `archivedMessages` 恢复消息。不回滚已落盘文件（applied artifact 写入的文件保留不变）。
+5e. **会话分支（branch）**：`POST /api/tasks/:id/branch` 经 `branchTask()` 克隆父任务到
+   指定消息为止的所有消息，每条消息分配新 ID（含 `toolCallId` 重映射），新任务
+   `parentTaskId` 指向原任务。分支不修改原任务，独立演进。
+5f. **上下文压缩（compact）**：`POST /api/tasks/:id/compact` 经 `compactTask()` 将
+   指定消息范围发给 LLM 生成摘要，替换为一条 `role:'system'` 摘要消息，释放上下文空间。
+   不截断对话，仅压缩旧消息，用于长会话的窗口管理。
 6. `events.ts` 把事件序列化为 SSE（`data: {json}\n\n`）推给前端；前端按事件类型增量渲染。
 7. 收到 `done`，前端与后端各自关闭 SSE 连接。
 8. 任务状态通过 `taskStore.save()` 落库，可经 `GET /api/tasks` 回看。
@@ -140,6 +152,7 @@ API 请求响应、运行时常量（默认地址端口）。
 | 加评测 | 新增可复现用例和脚本，覆盖工具/状态/安全路径 | 只靠手工试一次 |
 | 加运行设置 | `runtime/settings.ts` + `store/db.ts` + `packages/shared` API 类型 | 前端静态表单、只改 `.env.example` |
 | 改任务/事件结构 | 改 `packages/shared` 并 `build:shared` | 前后端各自重定义 |
+| 加编辑重跑/分支 | `agent/loop.ts` 的 `revertTask`/`branchTask`/`compactTask`，`store/db.ts` 加列，`shared` 加类型 | 前端直接操作消息数组 |
 | 加界面 | `apps/desktop/src` | 后端业务逻辑 |
 | 换存储/加表 | `store/db.ts` | 其它模块直接访问 DB |
 

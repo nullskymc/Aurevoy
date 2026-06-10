@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@aurevoy/shared";
 import { getPhaseLabel, getStatusLabel } from "./status";
+import { t } from "../i18n";
 
 export interface FeedItem {
   id: string;
@@ -14,43 +15,51 @@ interface AgentEventFeedProps {
 function getEventTitle(event: AgentEvent): string {
   switch (event.type) {
     case "task_created":
-      return "任务已创建";
+      return t("event.taskCreated");
     case "status":
       return getStatusLabel(event.status);
     case "phase":
       return getPhaseLabel(event.phase);
     case "plan":
-      return "计划已生成";
+      return t("event.planGenerated");
     case "step_update":
-      return "步骤状态更新";
+      return t("event.stepUpdate");
     case "token":
-      return "正在生成输出";
+      return t("event.generating");
     case "message":
-      return "完整回复";
+      return t("event.fullReply");
     case "tool_call":
-      return `调用工具：${event.call.toolName}`;
+      return `${t("event.toolCall")}${event.call.toolName}`;
     case "tool_result":
-      return event.result.ok ? "工具返回结果" : "工具调用失败";
+      return event.result.ok ? t("event.toolResultOk") : t("event.toolResultFail");
     case "approval_request":
-      return `等待确认：${event.call.toolName}`;
+      return `${t("event.approvalRequest")}${event.call.toolName}`;
     case "clarification_request":
-      return "等待补充信息";
+      return t("event.clarificationRequest");
     case "clarification_resolved":
-      return "追问已处理";
+      return t("event.clarificationResolved");
     case "artifact_created":
-      return `产物已创建：${event.artifact.name}`;
+      return `${t("event.artifactCreated")}${event.artifact.name}`;
     case "artifact_updated":
-      return `产物已更新：${event.artifact.name}`;
+      return `${t("event.artifactUpdated")}${event.artifact.name}`;
     case "checkpoint_created":
-      return `Checkpoint：${event.checkpoint.label}`;
+      return `${t("event.checkpoint")}${event.checkpoint.label}`;
     case "budget_usage":
-      return "预算使用更新";
+      return t("event.budgetUsage");
     case "token_usage":
-      return "Token 使用更新";
+      return t("event.tokenUsage");
+    case "reverted":
+      return t("event.reverted");
+    case "unreverted":
+      return t("event.unreverted");
+    case "branched":
+      return t("event.branched");
+    case "compacted":
+      return t("event.compacted");
     case "done":
-      return `任务${getStatusLabel(event.status)}`;
+      return `${t("event.taskDonePrefix")}${getStatusLabel(event.status)}`;
     case "error":
-      return "执行错误";
+      return t("event.error");
   }
 }
 
@@ -61,11 +70,11 @@ function getEventDetail(event: AgentEvent): string {
     case "phase":
       return event.detail ? `${event.phase}\n${event.detail}` : event.phase;
     case "plan":
-      return `${event.plan.length} 个计划步骤`;
+      return `${event.plan.length} ${t("event.unitPlanSteps")}`;
     case "step_update":
       return event.step.description;
     case "token":
-      return event.delta.trim() ? event.delta : "流式片段";
+      return event.delta.trim() ? event.delta : t("event.streamFragment");
     case "message":
       return event.message.content;
     case "tool_call":
@@ -73,9 +82,9 @@ function getEventDetail(event: AgentEvent): string {
     case "tool_result":
       return event.result.ok
         ? JSON.stringify(event.result.output ?? {}, null, 2)
-        : event.result.error ?? "未知错误";
+        : event.result.error ?? t("tool.unknownError");
     case "approval_request":
-      return `风险等级 ${event.riskLevel}\n${JSON.stringify(event.call.args, null, 2)}`;
+      return `${t("event.riskLevel")} ${event.riskLevel}\n${JSON.stringify(event.call.args, null, 2)}`;
     case "clarification_request":
       return event.clarification.question;
     case "clarification_resolved":
@@ -86,11 +95,19 @@ function getEventDetail(event: AgentEvent): string {
     case "checkpoint_created":
       return event.checkpoint.message ?? event.checkpoint.createdAt;
     case "budget_usage":
-      return `${event.usage.iterations} 轮 / ${event.usage.toolCalls} 工具 / ${event.usage.outputBytes} bytes`;
+      return `${event.usage.iterations} ${t("budget.unitIterations")} / ${event.usage.toolCalls} ${t("budget.tools")} / ${event.usage.outputBytes} bytes`;
     case "token_usage":
       return event.usage.available
         ? `${event.usage.totalTokens ?? 0} total`
-        : "Provider 未返回 usage";
+        : t("event.providerNoUsage");
+    case "reverted":
+      return `${event.removedCount} messages removed, ${event.archivedCount} archived`;
+    case "unreverted":
+      return `${event.restoredCount} messages restored`;
+    case "branched":
+      return `${event.messageCount} messages branched from ${event.parentTaskId.slice(0, 8)}`;
+    case "compacted":
+      return `${event.originalCount} messages → ${event.summaryLength} chars`;
     case "done":
       return event.status;
     case "error":
@@ -106,12 +123,12 @@ export function AgentEventFeed({ events }: AgentEventFeedProps) {
   return (
     <section className="inspector-section" aria-labelledby="event-title">
       <div className="inspector-label-row">
-        <p className="inspector-label" id="event-title">事件流</p>
+        <p className="inspector-label" id="event-title">{t("event.title")}</p>
         <span className="inspector-count">{events.length}</span>
       </div>
 
       {visibleEvents.length === 0 ? (
-        <p className="inspector-empty">暂无运行事件</p>
+        <p className="inspector-empty">{t("event.empty")}</p>
       ) : (
         <div className="event-feed">
           {visibleEvents.map((item) => (

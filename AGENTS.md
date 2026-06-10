@@ -91,7 +91,14 @@ npm run regression:m6  # M6 交付能力回归（追问/产物/预算/token/命�
 - ✅ M6：Agent 交付能力已落地：结构化追问、任务产物、执行预算、token usage、
   `create_artifact`/`apply_artifact`/`execute_command` 工具、前端产物与追问展示、
   `npm run regression:m6` 回归集。
-- 当前重点：M5 设置、分发、Windows 与交付质量；设置入口必须控制真实配置，不能只做静态表单。
-  Agent 功能路线进入 M7：文件/网页工具扩展、安全加固、多步计划和工作台拆分。
+- ✅ M7：工具扩展与安全加固已落地：文件工具（搜索/复制/移动/删除）、`http_fetch` SSRF 防护、
+  工具 schema validation、MCP 描述净化、多步计划与 checkpoint、前端工作台拆分、
+  `npm run regression:m7` 回归集。
+- ✅ 编辑重跑（Rewind / Edit & Regenerate）三阶段已完成：
+  revert 截断 + 多模式选择（`code_and_conv`/`conv_only`）+ unrevert 撤销 +
+  会话分支（branch）+ 上下文压缩（compact）。
+  新增 4 个端点（`revert`/`unrevert`/`branch`/`compact`）、4 个 SSE 事件、2 个 SQLite 列。
+- 当前重点：M5 设置、分发、Windows 与交付质量（macOS 打包签名、Windows 适配）。
+  Agent 功能路线进入 M8：知识库/RAG、Agent usability eval、浏览器 MCP、发布体验。
   详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)、[`docs/ROADMAP_AGENT_DELIVERY.md`](./docs/ROADMAP_AGENT_DELIVERY.md)
   与 [`docs/ENGINEERING_GOVERNANCE.md`](./docs/ENGINEERING_GOVERNANCE.md)。

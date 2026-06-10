@@ -106,6 +106,64 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
   这些任务说明上次进程中断前未正常收尾，会被标记为 `failed/failed` 并写入可解释恢复轨迹，
   之后可由该端点显式恢复。
 
+### POST `/api/tasks/:id/revert`
+编辑重跑（对话截断语义）。把目标消息及其之后的所有消息从活跃历史移除（归档到 `archivedMessages`），
+任务回到该消息发送前的状态。前端随后用 `messages` 端点把编辑后的文本作为该点的新输入。
+```json
+// 请求体 RevertTaskRequest
+{ "messageId": "<目标消息 id>", "mode": "code_and_conv" }
+```
+```json
+// 200 → RevertTaskResponse
+{ "task": { /* Task（已截断） */ }, "removedContent": "原消息文本", "removedMessageId": "<id>", "removedCount": 5 }
+```
+恢复模式 `RevertMode`：
+- `code_and_conv`（默认）：截断对话 + 清除 revert 点之后的 checkpoint、draft artifact 和未完成 plan 步骤
+- `conv_only`：仅截断对话，保留 checkpoint、artifact 和 plan（文件没问题，只想重新推理）
+
+- 任务不存在 → `404 {"error":"task not found"}`
+- 消息不存在 → `404 {"error":"message not found in task history"}`
+- 任务正在运行 → `409 {"error":"任务正在运行，请等待当前轮结束后再编辑"}`
+- 不回滚已落盘文件（applied artifact 写入的文件保留不变）
+
+### POST `/api/tasks/:id/unrevert`
+撤销上一次 revert：从 `archivedMessages` 恢复被截断的消息到活跃历史。仅在 revert 后尚未
+提交新的 continue 时可用（`archivedMessages` 非空）。
+```json
+// 200 → UnrevertTaskResponse
+{ "task": { /* Task（已恢复） */ }, "restoredCount": 5 }
+```
+- 没有可撤销的操作 → `409 {"error":"没有可撤销的编辑操作"}`
+- 任务正在运行 → `409`
+
+### POST `/api/tasks/:id/branch`
+从指定消息处分支出一个新任务（非破坏性 fork）。克隆父任务到目标消息（含）为止的所有消息，
+每条消息分配新 ID（含 `toolCallId` 重映射），新任务独立演进，原任务不受影响。
+```json
+// 请求体 BranchTaskRequest
+{ "messageId": "<分支点消息 id>", "goal": "可选的新目标" }
+```
+```json
+// 201 → BranchTaskResponse
+{ "task": { /* Task（新任务，parentTaskId 指向原任务） */ }, "streamUrl": "/api/tasks/<newId>/stream" }
+```
+- 消息不存在 → `404`
+- 缺 `messageId` → `400`
+
+### POST `/api/tasks/:id/compact`
+将指定消息范围压缩为 LLM 生成的摘要，释放上下文窗口空间。替换原消息为一条 `system` 摘要消息。
+```json
+// 请求体 CompactTaskRequest
+{ "fromMessageId": "<起始消息 id（可选）>", "toMessageId": "<结束消息 id（可选）>" }
+```
+```json
+// 200 → CompactTaskResponse
+{ "task": { /* Task（已压缩） */ }, "originalCount": 12, "summaryLength": 186 }
+```
+- 范围无效 → `400`
+- 任务正在运行 → `409`
+- `fromMessageId`/`toMessageId` 缺省时覆盖全部消息
+
 ### GET `/api/tasks/:id/stream`  (SSE)
 订阅某任务的实时事件流。
 - 响应头：`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`Connection: keep-alive`
@@ -219,6 +277,10 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `checkpoint_created` | `checkpoint: TaskCheckpoint` | 关键步骤完成后创建恢复点 |
 | `budget_usage` | `usage: BudgetUsage`, `budget?` | 预算使用量更新 |
 | `token_usage` | `usage: AggregatedTokenUsage` | Provider token usage 汇总更新 |
+| `reverted` | `messageId`, `removedCount`, `archivedCount` | 编辑重跑：消息已截断并归档 |
+| `unreverted` | `restoredCount` | 撤销编辑：归档消息已恢复 |
+| `branched` | `parentTaskId`, `messageId`, `messageCount` | 会话分支：新任务已从父任务克隆 |
+| `compacted` | `originalCount`, `summaryLength` | 上下文压缩：旧消息已替换为摘要 |
 | `done` | `status: TaskStatus` | 任务结束（completed/failed/cancelled） |
 | `error` | `message: string` | 执行出错 |
 
@@ -284,6 +346,21 @@ status(running)
   → approval_request → tool_result → artifact_updated(status=applied)
 ```
 
+编辑重跑（revert + edit + continue）：
+```
+[用户点击历史消息编辑按钮]
+  → [POST /api/tasks/:id/revert { messageId, mode }]
+  → reverted(messageId, removedCount, archivedCount)
+  → [前端 Composer 回填 removedContent]
+  → [用户编辑并提交]
+  → [POST /api/tasks/:id/messages { message: editedText }]
+  → status(running) → phase(thinking) → token × N
+  → phase(finalizing) → message → status(completed) → done(completed)
+```
+- revert 将目标消息及之后归档到 `archivedMessages`，按 `mode` 决定是否清除 checkpoint/artifact/plan。
+- `conv_only` 模式仅截断对话，保留 plan 和 checkpoint（文件改动没问题，只想重新推理）。
+- unrevert 可在 revert 后、continue 前调用，恢复归档消息。
+
 ### 前端消费示例
 ```ts
 import { streamTask, createTask } from "./lib/api";
@@ -307,6 +384,8 @@ interface Task {
   budget?: TaskBudget; budgetUsage?: BudgetUsage;
   artifacts?: TaskArtifact[]; clarifications?: ClarificationRequest[];
   checkpoints?: TaskCheckpoint[]; tokenUsage?: AggregatedTokenUsage;
+  archivedMessages?: Message[];   // revert 归档的消息（unrevert 恢复来源）
+  parentTaskId?: string;          // branch 来源的父任务 ID
   createdAt: string; updatedAt: string;   // ISO 8601
 }
 interface PlanStep { id: string; description: string; status: TaskStatus; }

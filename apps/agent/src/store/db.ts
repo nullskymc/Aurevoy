@@ -102,6 +102,8 @@ const taskColumnMigrations: Array<{ name: string; sql: string }> = [
   { name: 'budget', sql: 'ALTER TABLE tasks ADD COLUMN budget TEXT' },
   { name: 'budget_usage', sql: 'ALTER TABLE tasks ADD COLUMN budget_usage TEXT' },
   { name: 'token_usage', sql: 'ALTER TABLE tasks ADD COLUMN token_usage TEXT' },
+  { name: 'archived_messages', sql: "ALTER TABLE tasks ADD COLUMN archived_messages TEXT NOT NULL DEFAULT '[]'" },
+  { name: 'parent_task_id', sql: 'ALTER TABLE tasks ADD COLUMN parent_task_id TEXT' },
 ];
 for (const migration of taskColumnMigrations) {
   if (!taskColumns.some((column) => column.name === migration.name)) {
@@ -122,6 +124,8 @@ interface TaskRow {
   budget: string | null;
   budget_usage: string | null;
   token_usage: string | null;
+  archived_messages: string;
+  parent_task_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -163,6 +167,8 @@ function rowToTask(row: TaskRow): Task {
     budget: (parseJsonColumn(row.budget) as Task['budget']) ?? undefined,
     budgetUsage: (parseJsonColumn(row.budget_usage) as Task['budgetUsage']) ?? undefined,
     tokenUsage: (parseJsonColumn(row.token_usage) as Task['tokenUsage']) ?? undefined,
+    archivedMessages: (parseJsonColumn(row.archived_messages) as Task['archivedMessages']) ?? [],
+    parentTaskId: row.parent_task_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -212,18 +218,19 @@ export const taskStore = {
     db.prepare(
       `INSERT INTO tasks (
          id, goal, status, phase, plan, messages, artifacts, clarifications, checkpoints,
-         budget, budget_usage, token_usage, created_at, updated_at
+         budget, budget_usage, token_usage, archived_messages, parent_task_id, created_at, updated_at
        )
        VALUES (
          @id, @goal, @status, @phase, @plan, @messages, @artifacts, @clarifications,
-         @checkpoints, @budget, @budgetUsage, @tokenUsage, @createdAt, @updatedAt
+         @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
          goal=excluded.goal, status=excluded.status, phase=excluded.phase, plan=excluded.plan,
          messages=excluded.messages, artifacts=excluded.artifacts,
          clarifications=excluded.clarifications, checkpoints=excluded.checkpoints,
          budget=excluded.budget, budget_usage=excluded.budget_usage,
-         token_usage=excluded.token_usage, updated_at=excluded.updated_at`,
+         token_usage=excluded.token_usage, archived_messages=excluded.archived_messages,
+         parent_task_id=excluded.parent_task_id, updated_at=excluded.updated_at`,
     ).run({
       id: task.id,
       goal: task.goal,
@@ -237,6 +244,8 @@ export const taskStore = {
       budget: task.budget === undefined ? null : JSON.stringify(task.budget),
       budgetUsage: task.budgetUsage === undefined ? null : JSON.stringify(task.budgetUsage),
       tokenUsage: task.tokenUsage === undefined ? null : JSON.stringify(task.tokenUsage),
+      archivedMessages: JSON.stringify(task.archivedMessages ?? []),
+      parentTaskId: task.parentTaskId ?? null,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });

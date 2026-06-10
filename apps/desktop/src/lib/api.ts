@@ -1,8 +1,10 @@
 import {
   AGENT_DEFAULT_BASE_URL,
   type AgentEvent,
+  type BranchTaskResponse,
   type ClarificationAnswerResponse,
   type CleanupDataResponse,
+  type CompactTaskResponse,
   type ContinueTaskResponse,
   type CreateMemoryRequest,
   type CreateTaskResponse,
@@ -13,6 +15,9 @@ import {
   type McpStatusResponse,
   type ModelListResponse,
   type ResumeTaskResponse,
+  type RevertMode,
+  type RevertTaskResponse,
+  type UnrevertTaskResponse,
   type RuntimeSettings,
   type Task,
   type TaskArtifact,
@@ -80,6 +85,60 @@ export async function resumeTask(taskId: string): Promise<ResumeTaskResponse> {
     method: 'POST',
   });
   if (!res.ok) throw new Error(`resume task failed: ${res.status}`);
+  return res.json();
+}
+
+/** 编辑重跑（Phase 1）：截断到目标消息之前，返回被移除消息内容供回填 */
+export async function revertTask(
+  taskId: string,
+  messageId: string,
+  mode?: RevertMode,
+): Promise<RevertTaskResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/revert`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messageId, mode }),
+  });
+  if (!res.ok) throw new Error(`revert task failed: ${res.status}`);
+  return res.json();
+}
+
+/** 撤销上一次 revert：从归档恢复被截断的消息 */
+export async function unrevertTask(taskId: string): Promise<UnrevertTaskResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/unrevert`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`unrevert task failed: ${res.status}`);
+  return res.json();
+}
+
+/** 从指定消息处分支出一个新任务（非破坏性 fork） */
+export async function branchTask(
+  taskId: string,
+  messageId: string,
+  goal?: string,
+): Promise<BranchTaskResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/branch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messageId, goal }),
+  });
+  if (!res.ok) throw new Error(`branch task failed: ${res.status}`);
+  return res.json();
+}
+
+/** 将指定消息范围压缩为 LLM 摘要 */
+export async function compactTask(
+  taskId: string,
+  fromMessageId?: string,
+  toMessageId?: string,
+): Promise<CompactTaskResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/compact`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fromMessageId, toMessageId }),
+  });
+  if (!res.ok) throw new Error(`compact task failed: ${res.status}`);
   return res.json();
 }
 

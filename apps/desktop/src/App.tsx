@@ -4,6 +4,7 @@ import type {
   AgentEvent,
   HealthResponse,
   MemoryCategory,
+  RevertMode,
   Task,
   ToolDescriptor,
   UpdateRuntimeSettingsRequest,
@@ -11,9 +12,11 @@ import type {
 import {
   answerClarification,
   approveToolCall,
+  branchTask,
   cancelTask,
   checkHealth,
   cleanupData,
+  compactTask,
   continueTask,
   createMemory,
   createTask,
@@ -28,6 +31,8 @@ import {
   listTasks,
   listTools,
   resumeTask,
+  revertTask,
+  unrevertTask,
   updateArtifact,
   updateSettings,
   updateTool,
@@ -42,6 +47,7 @@ import { useTaskState } from "./hooks/useTaskState";
 import { useTools } from "./hooks/useTools";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
+import { ArtifactView } from "./components/ArtifactView";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
@@ -50,9 +56,11 @@ import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { StatusPill } from "./components/StatusPill";
 import type { FeedItem } from "./components/AgentEventFeed";
 import { getPhaseLabel, getStatusLabel } from "./components/status";
+import { t } from "./i18n";
 import "./App.css";
 
 type MainView = "chat" | "search" | "tools" | "memory" | "settings";
+type ContentMode = "conversation" | "artifacts";
 type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "tools" | "data";
 
 const MIN_SIDEBAR_WIDTH = 220;
@@ -134,6 +142,7 @@ function mergeById<T extends { id: string }>(items: T[], next: T): T[] {
 
 function App() {
   const [activeView, setActiveView] = useState<MainView>("chat");
+  const [contentMode, setContentMode] = useState<ContentMode>("conversation");
   const [events, setEvents] = useState<FeedItem[]>([]);
   const [goal, setGoal] = useState("");
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -151,6 +160,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
   const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
@@ -214,7 +224,7 @@ function App() {
         setNotice(`${status.message}：${status.error}`);
       }
     } catch (err) {
-      setNotice(`启动 Agent 引擎失败：${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`${t("notice.startEngineFailed")}${err instanceof Error ? err.message : String(err)}`);
     } finally {
       await refreshRuntime();
     }
@@ -252,7 +262,7 @@ function App() {
       setMcpServers(mcp.servers);
       setDataStatus(data);
     } catch (err) {
-      setNotice(`读取设置失败：${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`${t("notice.readSettingsFailed")}${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -278,7 +288,7 @@ function App() {
     try {
       setTraces(await listTaskTraces(taskId));
     } catch (err) {
-      setNotice(`读取任务轨迹失败：${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`${t("notice.readTracesFailed")}${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -368,6 +378,14 @@ function App() {
       case "token_usage":
         patchCurrentTask({ tokenUsage: event.usage });
         break;
+      case "reverted":
+        break;
+      case "unreverted":
+        break;
+      case "branched":
+        break;
+      case "compacted":
+        break;
       case "done":
         setStatus(event.status);
         setPhase(
@@ -404,7 +422,7 @@ function App() {
         setStatus("failed");
         setPhase("failed");
         setOutput((previous) =>
-          previous ? `${previous}\n\n[错误] ${event.message}` : `[错误] ${event.message}`,
+          previous ? `${previous}\n\n${t("notice.errorTag")}${event.message}` : `${t("notice.errorTag")}${event.message}`,
         );
         setBusy(false);
         patchCurrentTask({ status: "failed", phase: "failed" });
@@ -435,7 +453,7 @@ function App() {
       openStream(task.id, handleEvent, () => setBusy(false));
     } catch (err) {
       setStatus("failed");
-      setOutput(`无法连接 Agent 引擎：${err instanceof Error ? err.message : String(err)}`);
+      setOutput(`${t("notice.connectEngineFailed")}${err instanceof Error ? err.message : String(err)}`);
       setBusy(false);
       // 仅网络层失败才标记离线；HTTP 错误不代表引擎离线
       if (err instanceof TypeError) setOnline(false);
@@ -446,7 +464,9 @@ function App() {
     closeStream();
     setBusy(false);
     setModelDrawerOpen(false);
+    setEditingMessageId(null);
     setActiveView("chat");
+    setContentMode("conversation");
     applyTaskSnapshot(task);
   }
 
@@ -473,14 +493,17 @@ function App() {
       openStream(task.id, handleEvent, () => setBusy(false));
     } catch (err) {
       setBusy(false);
-      setNotice(`继续对话失败：${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`${t("notice.continueFailed")}${err instanceof Error ? err.message : String(err)}`);
       if (err instanceof TypeError) setOnline(false);
     }
   }
 
-  /** 输入框提交分流：已有当前任务则续聊，否则新建任务。 */
+  /** 输入框提交分流：编辑模式则续聊（带截断后的上下文），已有任务则续聊，否则新建。 */
   function handleComposerSubmit(): void {
-    if (currentTask && !busy) {
+    if (editingMessageId) {
+      setEditingMessageId(null);
+      void continueGoal(goal);
+    } else if (currentTask && !busy) {
       void continueGoal(goal);
     } else {
       void startGoal(goal);
@@ -491,7 +514,9 @@ function App() {
     closeStream();
     setBusy(false);
     setModelDrawerOpen(false);
+    setEditingMessageId(null);
     setActiveView("chat");
+    setContentMode("conversation");
     setCurrentTask(null);
     setStatus(null);
     setPhase(null);
@@ -503,9 +528,29 @@ function App() {
     resetMainScroll();
   }
 
-  function handleRetry(): void {
-    if (!currentTask) return;
-    void startGoal(currentTask.goal);
+  /** 编辑用户消息：先 revert 截断历史，再回填 Composer 等待编辑后重新提交。 */
+  async function handleRevertAndEdit(messageId: string, _content: string, mode: RevertMode): Promise<void> {
+    if (busy || !currentTask) return;
+
+    closeStream();
+    setBusy(false);
+    setEvents([]);
+    setTraces([]);
+    setOutput("");
+
+    try {
+      const response = await revertTask(currentTask.id, messageId, mode);
+      setCurrentTask(response.task);
+      setStatus(response.task.status);
+      setPhase(response.task.phase);
+      setPlan(response.task.plan);
+      updateTaskList(response.task);
+      setGoal(response.removedContent ?? _content);
+      setEditingMessageId(messageId);
+      resetMainScroll();
+    } catch (err) {
+      setNotice(`${t("notice.revertFailed")}${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /** 从后端持久历史恢复当前任务；与“重试原始目标”不同，会保留已有消息与工具轨迹。 */
@@ -529,8 +574,53 @@ function App() {
       openStream(task.id, handleEvent, () => setBusy(false));
     } catch (err) {
       setBusy(false);
-      setNotice(`恢复任务失败：${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`${t("notice.resumeFailed")}${err instanceof Error ? err.message : String(err)}`);
       if (err instanceof TypeError) setOnline(false);
+    }
+  }
+
+  /** 撤销上一次 revert：从归档恢复被截断的消息。 */
+  async function handleUnrevert(): Promise<void> {
+    if (!currentTask || busy) return;
+
+    try {
+      const response = await unrevertTask(currentTask.id);
+      setCurrentTask(response.task);
+      setStatus(response.task.status);
+      setPhase(response.task.phase);
+      setPlan(response.task.plan);
+      updateTaskList(response.task);
+      setEditingMessageId(null);
+      setGoal("");
+    } catch (err) {
+      setNotice(`${t("notice.unrevertFailed")}${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** 从指定消息处分支出新任务并切换过去。 */
+  async function handleBranch(messageId: string): Promise<void> {
+    if (!currentTask || busy) return;
+
+    try {
+      const response = await branchTask(currentTask.id, messageId);
+      updateTaskList(response.task);
+      handleSelectTask(response.task);
+    } catch (err) {
+      setNotice(`${t("notice.branchFailed")}${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** 将旧消息压缩为 LLM 摘要。 */
+  async function handleCompact(): Promise<void> {
+    if (!currentTask || busy) return;
+
+    try {
+      const response = await compactTask(currentTask.id);
+      setCurrentTask(response.task);
+      updateTaskList(response.task);
+      setNotice(`${t("notice.compacted")}${response.originalCount} ${t("notice.compactedMessages")} ${response.summaryLength} ${t("notice.compactedChars")}`);
+    } catch (err) {
+      setNotice(`${t("notice.compactFailed")}${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -541,7 +631,7 @@ function App() {
     const taskId = currentTask?.id;
     if (taskId) {
       void cancelTask(taskId).catch((err) => {
-        setNotice(`取消请求未送达后端：${err instanceof Error ? err.message : String(err)}`);
+        setNotice(`${t("notice.cancelNotDelivered")}${err instanceof Error ? err.message : String(err)}`);
       });
     }
   }
@@ -552,7 +642,7 @@ function App() {
     setNotice(null);
     void approveToolCall(taskId, callId, approved).catch((err) => {
       setNotice(
-        `提交${approved ? "批准" : "拒绝"}失败：${err instanceof Error ? err.message : String(err)}。请重试。`,
+        `${t("notice.submit")}${approved ? t("action.approve") : t("action.reject")}${t("notice.failedColon")}${err instanceof Error ? err.message : String(err)}${t("notice.pleaseRetry")}`,
       );
     });
   }
@@ -562,7 +652,7 @@ function App() {
     if (!taskId) return;
     setNotice(null);
     void answerClarification(taskId, clarificationId, answer).catch((err) => {
-      setNotice(`提交追问回复失败：${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`${t("notice.replyClarificationFailed")}${err instanceof Error ? err.message : String(err)}`);
     });
   }
 
@@ -583,7 +673,7 @@ function App() {
         });
       })
       .catch((err) => {
-        setNotice(`更新产物状态失败：${err instanceof Error ? err.message : String(err)}`);
+        setNotice(`${t("notice.updateArtifactFailed")}${err instanceof Error ? err.message : String(err)}`);
       });
   }
 
@@ -591,7 +681,7 @@ function App() {
     try {
       setMemories(await listMemories());
     } catch (err) {
-      setNotice(`读取记忆失败：${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`${t("notice.readMemoryFailed")}${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -662,10 +752,10 @@ function App() {
     void updateSettings(body)
       .then((next) => {
         setRuntimeSettings(next);
-        setNotice("设置已保存，并已应用到 Agent runtime");
+        setNotice(t("notice.settingsSaved"));
         return refreshSettings();
       })
-      .catch((err) => setNotice(`保存设置失败：${err instanceof Error ? err.message : String(err)}`))
+      .catch((err) => setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setSettingsSaving(false));
   }
 
@@ -683,10 +773,10 @@ function App() {
           previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
         );
         setModelDrawerOpen(false);
-        setNotice("模型已切换");
+        setNotice(t("notice.modelSwitched"));
         return refreshRuntime();
       })
-      .catch((err) => setNotice(`切换模型失败：${err instanceof Error ? err.message : String(err)}`))
+      .catch((err) => setNotice(`${t("notice.switchModelFailed")}${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setSettingsSaving(false));
   }
 
@@ -707,10 +797,10 @@ function App() {
       })
       .then((next) => {
         setRuntimeSettings(next);
-        setNotice(`已获取 ${next.llm.availableModels.length} 个模型，已启用 ${next.llm.enabledModels.length} 个`);
+        setNotice(`${t("notice.fetchedModelsPrefix")} ${next.llm.availableModels.length} ${t("notice.fetchedModelsMid")} ${next.llm.enabledModels.length} ${t("notice.fetchedModelsSuffix")}`);
         return refreshSettings();
       })
-      .catch((err) => setNotice(`获取模型列表失败：${err instanceof Error ? err.message : String(err)}`))
+      .catch((err) => setNotice(`${t("notice.fetchModelsFailed")}${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setFetchingModels(false));
   }
 
@@ -725,10 +815,10 @@ function App() {
     })
       .then((next) => {
         setRuntimeSettings(next);
-        setNotice(`已启用 ${next.llm.enabledModels.length} 个主界面模型`);
+        setNotice(`${t("notice.enabledModelsPrefix")} ${next.llm.enabledModels.length} ${t("notice.enabledModelsSuffix")}`);
         return refreshSettings();
       })
-      .catch((err) => setNotice(`保存模型列表失败：${err instanceof Error ? err.message : String(err)}`))
+      .catch((err) => setNotice(`${t("notice.saveModelListFailed")}${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setSettingsSaving(false));
   }
 
@@ -737,40 +827,40 @@ function App() {
       .then((updated) => {
         setTools((prev) => prev.map((tool) => (tool.name === name ? updated : tool)));
       })
-      .catch((err) => setNotice(`更新工具失败：${err instanceof Error ? err.message : String(err)}`));
+      .catch((err) => setNotice(`${t("notice.updateToolFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
 
   function handleCleanupData(olderThanDays: number): void {
     void cleanupData(olderThanDays)
       .then((result) => {
-        setNotice(`已清理 ${result.deletedTasks} 个任务、${result.deletedTraces} 条轨迹`);
+        setNotice(`${t("notice.cleanedPrefix")} ${result.deletedTasks} ${t("notice.cleanedMid")}${result.deletedTraces} ${t("notice.cleanedSuffix")}`);
         return refreshSettings();
       })
-      .catch((err) => setNotice(`清理数据失败：${err instanceof Error ? err.message : String(err)}`));
+      .catch((err) => setNotice(`${t("notice.cleanupFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
 
   function handleCreateMemory(content: string, category: MemoryCategory): void {
     void createMemory({ content, category })
       .then((created) => setMemories((prev) => [created, ...prev]))
-      .catch((err) => setNotice(`新增记忆失败：${err instanceof Error ? err.message : String(err)}`));
+      .catch((err) => setNotice(`${t("notice.addMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
 
   function handleToggleMemory(id: string, enabled: boolean): void {
     void updateMemory(id, { enabled })
       .then((updated) => setMemories((prev) => prev.map((m) => (m.id === id ? updated : m))))
-      .catch((err) => setNotice(`更新记忆失败：${err instanceof Error ? err.message : String(err)}`));
+      .catch((err) => setNotice(`${t("notice.updateMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
 
   function handleEditMemory(id: string, content: string, category: MemoryCategory): void {
     void updateMemory(id, { content, category })
       .then((updated) => setMemories((prev) => prev.map((m) => (m.id === id ? updated : m))))
-      .catch((err) => setNotice(`编辑记忆失败：${err instanceof Error ? err.message : String(err)}`));
+      .catch((err) => setNotice(`${t("notice.editMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
 
   function handleDeleteMemory(id: string): void {
     void deleteMemory(id)
       .then(() => setMemories((prev) => prev.filter((m) => m.id !== id)))
-      .catch((err) => setNotice(`删除记忆失败：${err instanceof Error ? err.message : String(err)}`));
+      .catch((err) => setNotice(`${t("notice.deleteMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
 
   function handleFontScaleChange(nextScale: number): void {
@@ -843,7 +933,7 @@ function App() {
       <div
         className="resize-handle resize-handle-left"
         role="separator"
-        aria-label="调整左侧栏宽度"
+        aria-label={t("a11y.resizeLeft")}
         onPointerDown={(event) => startResize("left", event)}
       />
 
@@ -855,7 +945,7 @@ function App() {
                 type="button"
                 className="icon-btn"
                 onClick={() => setLeftCollapsed(false)}
-                aria-label="展开左侧栏"
+                aria-label={t("nav.expand")}
               >
                 <SidebarIcon />
               </button>
@@ -868,41 +958,45 @@ function App() {
                 <div className="topbar-title-group">
                   <span className="topbar-title">{currentTask?.goal}</span>
                   <span className="topbar-subtitle">
-                    {getPhaseLabel(phase) || getStatusLabel(status)} · {currentTask?.messages.length ?? 0} 条消息
+                    {status === "completed" || status === "failed" || status === "cancelled"
+                      ? getStatusLabel(status)
+                      : getPhaseLabel(phase) || getStatusLabel(status)}{" "}
+                    · {currentTask?.messages.length ?? 0} 条消息
                   </span>
                 </div>
               </div>
               <div className="topbar-actions">
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={handleRetry}
-                  disabled={!currentTask}
-                >
-                  重试
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={() => void handleResumeTask()}
-                  disabled={!canResume}
-                >
-                  恢复
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={handleStopStream}
-                  disabled={!busy}
-                >
-                  停止
-                </button>
+                <div className="content-mode-switcher" role="tablist" aria-label={t("mode.switcherLabel")}>
+                  <button
+                    type="button"
+                    className="mode-btn"
+                    role="tab"
+                    aria-selected={contentMode === "conversation"}
+                    data-active={contentMode === "conversation"}
+                    onClick={() => setContentMode("conversation")}
+                  >
+                    {t("mode.conversation")}
+                  </button>
+                  <button
+                    type="button"
+                    className="mode-btn"
+                    role="tab"
+                    aria-selected={contentMode === "artifacts"}
+                    data-active={contentMode === "artifacts"}
+                    onClick={() => setContentMode("artifacts")}
+                  >
+                    {t("mode.artifacts")}
+                    {(currentTask?.artifacts?.length ?? 0) > 0 && (
+                      <span className="mode-badge">{currentTask?.artifacts?.length}</span>
+                    )}
+                  </button>
+                </div>
                 <button
                   type="button"
                   className="ghost-btn"
                   onClick={() => setInspectorOpen((open) => !open)}
                 >
-                  {inspectorOpen ? "隐藏详情" : "运行详情"}
+                  {inspectorOpen ? t("action.hideDetails") : t("action.runDetails")}
                 </button>
               </div>
             </>
@@ -917,7 +1011,7 @@ function App() {
                   className="ghost-btn"
                   onClick={() => setInspectorOpen((open) => !open)}
                 >
-                  {inspectorOpen ? "隐藏详情" : "运行详情"}
+                  {inspectorOpen ? t("action.hideDetails") : t("action.runDetails")}
                 </button>
               </div>
             </>
@@ -977,6 +1071,14 @@ function App() {
             onFontScaleChange={handleFontScaleChange}
           />
         ) : showConversation ? (
+          contentMode === "artifacts" ? (
+            <div className="main-scroll">
+              <ArtifactView
+                artifacts={currentTask?.artifacts ?? []}
+                onDecision={handleArtifactDecision}
+              />
+            </div>
+          ) : (
           <>
             <div className="main-scroll" ref={mainScrollRef}>
               <Conversation
@@ -990,6 +1092,14 @@ function App() {
                 onToolDecision={handleToolDecision}
                 onClarificationAnswer={handleClarificationAnswer}
                 onArtifactDecision={handleArtifactDecision}
+                canResume={canResume}
+                hasArchivedMessages={(currentTask?.archivedMessages?.length ?? 0) > 0}
+                onUserMessageEdit={(messageId, content, mode) => void handleRevertAndEdit(messageId, content, mode)}
+                onUnrevert={() => void handleUnrevert()}
+                onBranch={(messageId) => void handleBranch(messageId)}
+                onCompact={() => void handleCompact()}
+                onResume={() => void handleResumeTask()}
+                onStop={handleStopStream}
               />
             </div>
             <div className="composer-dock">
@@ -998,6 +1108,11 @@ function App() {
                 busy={busy}
                 online={online}
                 variant="docked"
+                isEditing={editingMessageId !== null}
+                onCancelEdit={() => {
+                  setEditingMessageId(null);
+                  setGoal("");
+                }}
                 provider={health?.provider}
                 onChange={setGoal}
                 onSubmit={handleComposerSubmit}
@@ -1015,9 +1130,10 @@ function App() {
               />
             </div>
           </>
+          )
         ) : (
           <div className="hero">
-            <h1 className="hero-title">我们应该在 Aurevoy 中构建什么？</h1>
+            <h1 className="hero-title">{t("hero.title")}</h1>
             <Composer
               value={goal}
               busy={busy}
@@ -1045,7 +1161,7 @@ function App() {
       <div
         className="resize-handle resize-handle-right"
         role="separator"
-        aria-label="调整右侧栏宽度"
+        aria-label={t("a11y.resizeRight")}
         onPointerDown={(event) => startResize("right", event)}
       />
 
@@ -1069,7 +1185,7 @@ function ToastNotice({ message, onClose }: { message: string; onClose: () => voi
   return createPortal(
     <div className="toast-bubble" role="status">
       <span>{message}</span>
-      <button type="button" className="toast-close" onClick={onClose} aria-label="关闭通知">
+      <button type="button" className="toast-close" onClick={onClose} aria-label={t("a11y.closeNotice")}>
         ×
       </button>
     </div>,
@@ -1092,19 +1208,19 @@ function SidebarIcon() {
 }
 
 function getMainViewTitle(view: MainView): string {
-  if (view === "search") return "搜索";
-  if (view === "tools") return "工具";
-  if (view === "memory") return "记忆";
-  if (view === "settings") return "设置";
-  return "对话";
+  if (view === "search") return t("nav.search");
+  if (view === "tools") return t("nav.tools");
+  if (view === "memory") return t("nav.memory");
+  if (view === "settings") return t("nav.settings");
+  return t("mode.conversation");
 }
 
 function getMainViewSubtitle(view: MainView): string {
-  if (view === "search") return "搜索本地对话历史";
-  if (view === "tools") return "来自后端工具注册表的真实工具";
-  if (view === "memory") return "长期记忆管理";
-  if (view === "settings") return "模型、MCP、工具、数据与字体";
-  return "目标、计划与执行结果";
+  if (view === "search") return t("view.search.subtitle");
+  if (view === "tools") return t("view.tools.subtitle");
+  if (view === "memory") return t("view.memory.subtitle");
+  if (view === "settings") return t("view.settings.subtitle");
+  return t("view.chat.subtitle");
 }
 
 function SearchPage({
@@ -1127,19 +1243,19 @@ function SearchPage({
     <section className="page-panel">
       <header className="page-panel-head">
         <div>
-          <h1>搜索</h1>
-          <p>当前搜索范围是本地任务历史，不包含未接入的全局文件索引。</p>
+          <h1>{t("nav.search")}</h1>
+          <p>{t("search.desc")}</p>
         </div>
       </header>
       <input
         className="page-search-input"
         value={query}
-        placeholder="输入目标关键词"
+        placeholder={t("search.placeholder")}
         onChange={(event) => onQueryChange(event.currentTarget.value)}
       />
       <div className="page-list">
         {filteredTasks.length === 0 ? (
-          <p className="page-empty">没有匹配的对话</p>
+          <p className="page-empty">{t("sidebar.emptyNoMatch")}</p>
         ) : (
           filteredTasks.map((task) => (
             <button key={task.id} type="button" className="page-list-row" onClick={() => onSelectTask(task)}>
@@ -1166,19 +1282,19 @@ function ToolsPage({
     <section className="page-panel">
       <header className="page-panel-head">
         <div>
-          <h1>工具</h1>
-          <p>工具列表来自 Agent 后端注册表，启停会写回运行时设置。</p>
+          <h1>{t("nav.tools")}</h1>
+          <p>{t("toolsPage.desc")}</p>
         </div>
       </header>
       <div className="tool-page-grid">
         {tools.length === 0 ? (
-          <p className="page-empty">未发现可用工具</p>
+          <p className="page-empty">{t("inspector.emptyTools")}</p>
         ) : (
           tools.map((tool) => (
             <article key={tool.name} className="tool-page-card">
               <header>
                 <strong>{tool.name}</strong>
-                <span>{tool.source?.type === "mcp" ? `MCP:${tool.source.serverName}` : "内置"}</span>
+                <span>{tool.source?.type === "mcp" ? `MCP:${tool.source.serverName}` : t("settings.builtinTool")}</span>
               </header>
               <p>{tool.description}</p>
               <label className="memory-toggle tool-page-toggle">
@@ -1188,7 +1304,7 @@ function ToolsPage({
                   onChange={(event) => onToggleTool(tool.name, event.currentTarget.checked)}
                 />
                 <span>
-                  {tool.enabled === false ? "停用" : "启用"} · {tool.riskLevel ?? "safe"}
+                  {tool.enabled === false ? t("memory.disable") : t("memory.enable")} · {tool.riskLevel ?? "safe"}
                 </span>
               </label>
             </article>

@@ -27,6 +27,11 @@
 - ✅ M6 已完成：结构化追问、任务产物、执行预算、token usage、基础命令执行和对应前端展示/回归。
 - ✅ M7 已完成：文件搜索/复制/移动/删除、`http_fetch` SSRF 与重定向防护、工具 schema validation、
   MCP 描述净化与本地风险覆盖、多步计划、checkpoint 恢复上下文、工作台拆分和 M7 回归。
+- ✅ 编辑重跑（Rewind / Edit & Regenerate）已完成三阶段：
+  Phase 1 — revert 截断 + Composer 回填 + 重新生成；
+  Phase 2 — 多模式选择（`code_and_conv`/`conv_only`）+ unrevert 撤销编辑；
+  Phase 3 — 会话分支（branch）+ 上下文压缩（compact）。
+  详见 [`ROADMAP_AGENT_DELIVERY.md`](./ROADMAP_AGENT_DELIVERY.md)。
 - 下一步进入 M8：知识库/RAG、Agent usability eval、浏览器 MCP、发布体验与更完整的打包升级路径。
 
 当前验证口径：

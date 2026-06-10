@@ -786,15 +786,15 @@ button:disabled {
 }
 
 .markdown-body h1 {
-  font-size: 20px;
+  font-size: calc(20px * var(--font-scale));
 }
 
 .markdown-body h2 {
-  font-size: 17px;
+  font-size: calc(17px * var(--font-scale));
 }
 
 .markdown-body h3 {
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale));
 }
 
 .markdown-body ul {
@@ -984,6 +984,81 @@ button:disabled {
   padding: var(--ui-space-3) 34px var(--ui-space-5);
 }
 
+.composer[data-editing="true"] .composer-box {
+  border-color: var(--accent, #6366f1);
+}
+
+.composer-edit-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  padding: var(--ui-space-2) var(--ui-space-3);
+  margin-bottom: var(--ui-space-2);
+  border-radius: var(--ui-radius);
+  background: color-mix(in srgb, var(--accent, #6366f1) 8%, transparent);
+  color: var(--accent, #6366f1);
+  font-size: 0.8rem;
+}
+
+.composer-edit-banner svg {
+  flex-shrink: 0;
+}
+
+.composer-edit-banner span {
+  flex: 1;
+}
+
+.composer-edit-cancel {
+  appearance: none;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--ui-radius);
+}
+
+.composer-edit-cancel:hover {
+  background: var(--ui-hover);
+  color: var(--text-primary);
+}
+
+.revert-mode-panel {
+  padding: var(--ui-space-2) 0;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--ui-space-2);
+}
+
+.revert-mode-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: var(--ui-space-1);
+}
+
+.revert-mode-buttons {
+  display: flex;
+  gap: var(--ui-space-2);
+}
+
+.revert-mode-buttons button {
+  flex: 1;
+  padding: var(--ui-space-1) var(--ui-space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--ui-radius);
+  background: var(--card-bg);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+
+.revert-mode-buttons button:hover {
+  background: var(--ui-hover);
+  border-color: var(--accent, #6366f1);
+}
+
 .composer-box {
   border: var(--ui-border-width) solid var(--border-strong);
   border-radius: var(--ui-radius-lg);
@@ -1148,14 +1223,24 @@ button:disabled {
 .status-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   border-radius: 999px;
   background: var(--pill-bg);
   color: var(--pill-fg);
-  font-size: 12px;
-  font-weight: 600;
-  padding: 0 10px;
-  white-space: nowrap;
+  flex: none;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-dot[data-active="true"] {
+  animation: pulse 1.2s ease-in-out infinite;
 }
 
 .status-pill[data-status="planning"],
@@ -1360,8 +1445,71 @@ button:disabled {
 
 /* ============ 工具调用内联卡片（对话流） ============ */
 .tool-activity {
-  display: grid;
-  gap: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* 完整卡片始终独占一行；chip 自然并排换行 */
+.tool-activity > .tool-card {
+  flex: 1 0 100%;
+}
+
+/* 工具调用 chip（紧凑态） */
+.tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-1);
+  height: 26px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: calc(12.5px * var(--font-scale));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.tool-chip:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+
+.tool-chip-icon {
+  font-size: 11px;
+}
+
+.tool-chip[data-status="ok"] .tool-chip-icon {
+  color: var(--online);
+}
+
+.tool-chip[data-status="error"] .tool-chip-icon {
+  color: var(--offline);
+}
+
+.tool-chip-name {
+  overflow: hidden;
+  max-width: 200px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-chip-risk {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--warn-soft-bg);
+  color: var(--warn-soft-fg);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tool-chip-risk[data-risk="dangerous"] {
+  background: var(--danger-soft-bg);
+  color: var(--danger-soft-fg);
 }
 
 .tool-card {
@@ -2915,4 +3063,543 @@ button:disabled {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* ============================================================
+   产物视图（ArtifactView，P0-2 多模式内容区）
+   ============================================================ */
+
+/* 通用主操作按钮（确认产物等） */
+.primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--ui-radius-sm);
+  background: var(--accent);
+  color: #fff;
+  font-size: var(--ui-font-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s, background 0.15s;
+}
+
+.primary-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.primary-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.artifact-view {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  height: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.artifact-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--ui-space-4) var(--ui-space-3);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.artifact-nav-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ui-space-2);
+  padding: var(--ui-space-2) var(--ui-space-3);
+  border: none;
+  border-radius: var(--ui-radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.artifact-nav-item:hover {
+  background: var(--hover);
+}
+
+.artifact-nav-item[data-active="true"] {
+  background: var(--active);
+}
+
+.artifact-nav-copy {
+  min-width: 0;
+}
+
+.artifact-nav-item strong {
+  display: block;
+  font-size: var(--ui-font-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-nav-item small {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: var(--ui-font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-nav-status {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.artifact-nav-status[data-status="confirmed"],
+.artifact-nav-status[data-status="applied"] {
+  background: var(--success-soft-bg);
+  color: var(--success-soft-fg);
+}
+
+.artifact-nav-status[data-status="draft"] {
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+}
+
+.artifact-nav-status[data-status="rejected"] {
+  background: var(--danger-soft-bg);
+  color: var(--danger-soft-fg);
+}
+
+.artifact-doc {
+  padding: var(--ui-space-6) var(--ui-space-5);
+  overflow-y: auto;
+}
+
+.artifact-doc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ui-space-3);
+  margin-bottom: var(--ui-space-5);
+  padding-bottom: var(--ui-space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.artifact-doc-head h1 {
+  margin: 0;
+  font-size: calc(20px * var(--font-scale));
+  font-weight: 700;
+}
+
+.artifact-doc-path {
+  color: var(--text-tertiary);
+  font-size: var(--ui-font-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.artifact-doc-actions {
+  display: flex;
+  gap: var(--ui-space-2);
+  margin-left: auto;
+}
+
+.artifact-doc-body {
+  max-width: 720px;
+  line-height: 1.7;
+}
+
+.artifact-view-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ui-space-2);
+  height: 100%;
+  color: var(--text-tertiary);
+}
+
+.artifact-view-empty p {
+  margin: 0;
+  font-size: var(--ui-font-md);
+  font-weight: 600;
+}
+
+.artifact-view-empty small {
+  color: var(--text-tertiary);
+}
+
+/* ============================================================
+   内容模式切换器（对话 / 产物）
+   ============================================================ */
+.content-mode-switcher {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--ui-radius-md);
+  background: var(--surface);
+}
+
+.mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-1);
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mode-btn:hover {
+  color: var(--text);
+}
+
+.mode-btn[data-active="true"] {
+  background: var(--card-bg);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.mode-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* ============================================================
+   侧边栏任务项上下文摘要（P1-1）
+   ============================================================ */
+.conv-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.conv-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-tertiary);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 500;
+  line-height: 1;
+}
+
+/* ============================================================
+   运行详情内预算可视化（P1-2，从主对话区迁入）
+   ============================================================ */
+.inspector-budget {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-3);
+  margin-top: var(--ui-space-3);
+  padding-top: var(--ui-space-3);
+  border-top: 1px solid var(--border);
+}
+
+.inspector-budget-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: var(--ui-font-xs);
+}
+
+.inspector-budget-row strong {
+  text-align: right;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.inspector-budget-track {
+  grid-column: 1 / -1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-strong);
+}
+
+.inspector-budget-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+/* ============================================================
+   Markdown 升级（P2-1）：GFM 块级元素 + highlight.js 主题
+   ============================================================ */
+.markdown-body ol {
+  margin: 0;
+  padding-left: 1.5em;
+}
+
+.markdown-body blockquote {
+  margin: 0;
+  padding: var(--ui-space-2) var(--ui-space-4);
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ui-font-sm);
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: var(--ui-space-2) var(--ui-space-3);
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.markdown-body th {
+  background: var(--surface);
+  font-weight: 650;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: var(--ui-radius-md);
+}
+
+.markdown-body hr {
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+/* highlight.js 令牌着色（跟随主题 CSS 变量，暗色模式自动适配） */
+.markdown-body pre code.hljs {
+  display: block;
+  color: var(--text);
+}
+
+.markdown-body .hljs-comment,
+.markdown-body .hljs-quote {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.markdown-body .hljs-keyword,
+.markdown-body .hljs-selector-tag,
+.markdown-body .hljs-built_in,
+.markdown-body .hljs-literal {
+  color: #c678dd;
+}
+
+.markdown-body .hljs-string,
+.markdown-body .hljs-attr,
+.markdown-body .hljs-template-string {
+  color: #98c379;
+}
+
+.markdown-body .hljs-number,
+.markdown-body .hljs-symbol,
+.markdown-body .hljs-meta {
+  color: #d19a66;
+}
+
+.markdown-body .hljs-title,
+.markdown-body .hljs-section,
+.markdown-body .hljs-function .hljs-title {
+  color: #61afef;
+}
+
+.markdown-body .hljs-name,
+.markdown-body .hljs-tag {
+  color: #e06c75;
+}
+
+.markdown-body .hljs-type,
+.markdown-body .hljs-class .hljs-title {
+  color: #e5c07b;
+}
+
+/* ============================================================
+   无障碍：键盘焦点可见性（P2-2）
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--accent-soft-fg);
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid var(--accent-soft-fg);
+  outline-offset: 1px;
+  border-radius: inherit;
+}
+
+.conv-item:focus-visible {
+  outline: 2px solid var(--accent-soft-fg);
+  outline-offset: -2px;
+}
+
+/* ============================================================
+   用户输入：右侧气泡
+   ============================================================ */
+.user-bubble-row {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.user-bubble {
+  max-width: 76%;
+  padding: 10px 14px;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+  font-size: calc(14.5px * var(--font-scale));
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ============================================================
+   当前轮次上下文操作（重试 / 恢复 / 停止）
+   ============================================================ */
+.turn-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ui-space-2);
+  margin-top: 2px;
+  padding-left: 28px;
+}
+
+.turn-actions .ghost-btn {
+  height: 28px;
+  padding: 0 12px;
+}
+
+/* ============================================================
+   消息级 icon 操作（复制 / 修改），统一图标无文字
+   ============================================================ */
+.msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Agent 消息：操作行随正文缩进，常态淡显，悬停消息块时增强 */
+.doc-block-agent .msg-actions {
+  padding-left: 28px;
+  margin-top: 2px;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.doc-block-agent:hover .msg-actions,
+.doc-block-agent:focus-within .msg-actions {
+  opacity: 1;
+}
+
+.msg-action-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.msg-action-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* 用户消息：气泡右对齐，操作行也右对齐，常态淡显 */
+.user-bubble-row .msg-actions {
+  justify-content: flex-end;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.user-bubble-row:hover .msg-actions,
+.user-bubble-row:focus-within .msg-actions {
+  opacity: 1;
+}
+
+.user-bubble-row.is-editing {
+  justify-content: flex-end;
+}
+
+.user-bubble-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-2);
+  width: 100%;
+  max-width: 76%;
+}
+
+.user-bubble-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px 16px 4px 16px;
+  background: var(--card-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(14.5px * var(--font-scale));
+  line-height: 1.55;
+  resize: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+/* 统一的聚焦态：细边框 + 柔和外发光，替代浏览器默认的粗蓝色 outline */
+.user-bubble-input:focus,
+.user-bubble-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft-bg);
+}
+
+.user-bubble-edit .msg-actions {
+  justify-content: flex-end;
+  gap: var(--ui-space-1);
+  opacity: 1;
+}
+
+/* 编辑态确认按钮用 accent 强调，取消保持中性 */
+.user-bubble-edit .msg-action-btn.is-confirm {
+  color: #fff;
+  background: var(--accent);
+}
+
+.user-bubble-edit .msg-action-btn.is-confirm:hover {
+  background: var(--accent);
+  filter: brightness(1.08);
 }

@@ -239,6 +239,37 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 
 对应请求/响应类型必须先定义在 `packages/shared/src/`。
 
+### 4.6 编辑重跑与会话控制
+
+用户可以对历史消息进行回溯、编辑、分支和压缩，所有操作基于后端真实能力，不做假入口。
+
+**编辑重跑（Revert）**：
+- 每条用户消息（`UserBubble`）旁有编辑按钮（铅笔图标）
+- 点击后进入内联编辑模式，用户修改文本后点击确认
+- 确认后出现模式选择面板：
+  - **恢复对话 + 代码**（`code_and_conv`）：截断对话历史，清除 revert 点之后的 checkpoint、artifact 和 plan
+  - **仅恢复对话**（`conv_only`）：仅截断对话，保留 checkpoint、artifact 和 plan
+- 选择后调用 `POST /api/tasks/:id/revert`，Composer 回填被移除消息的原始内容
+- 用户编辑后提交 → `POST /api/tasks/:id/messages` 以截断后的历史重新生成
+
+**撤销编辑（Unrevert）**：
+- revert 后、尚未提交新的 continue 时，turn-actions 区出现"撤销编辑"按钮
+- 调用 `POST /api/tasks/:id/unrevert`，从 `archivedMessages` 恢复被截断的消息
+
+**会话分支（Branch）**：
+- 每条用户消息旁有分支按钮（fork 图标）
+- 点击后调用 `POST /api/tasks/:id/branch`，创建新任务并自动切换
+- 新任务独立演进，原任务不受影响（`parentTaskId` 指向父任务）
+
+**上下文压缩（Compact）**：
+- 当对话消息超过 4 条时，turn-actions 区出现"压缩上下文"按钮
+- 调用 `POST /api/tasks/:id/compact`，将旧消息替换为 LLM 生成的摘要
+- 压缩后对话继续，但上下文窗口空间得到释放
+
+**Composer 编辑模式**：
+- revert 后 Composer 进入编辑模式，边框高亮，顶部显示"编辑模式"横幅和取消按钮
+- 提交时走 `continueGoal` 路径（而非创建新任务），保留截断后的上下文
+
 ## 5. 视觉系统
 
 ### 5.1 方向

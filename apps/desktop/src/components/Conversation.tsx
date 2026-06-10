@@ -3,6 +3,7 @@ import type {
   ClarificationRequest,
   Message,
   PlanStep,
+  RevertMode,
   Task,
   TaskArtifact,
   TaskPhase,
@@ -12,6 +13,7 @@ import type {
 import { StatusPill } from "./StatusPill";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { getPhaseLabel, getStatusLabel } from "./status";
+import { t } from "../i18n";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
 export interface ToolActivity {
@@ -38,6 +40,22 @@ interface ConversationProps {
   onToolDecision: (callId: string, approved: boolean) => void;
   onClarificationAnswer: (clarificationId: string, answer: string) => void;
   onArtifactDecision: (artifactId: string, status: "confirmed" | "rejected") => void;
+  /** 当前任务是否可恢复（中断/失败等可续跑状态） */
+  canResume?: boolean;
+  /** 当前任务是否有可撤销的 revert（archivedMessages 非空） */
+  hasArchivedMessages?: boolean;
+  /** 编辑某条用户消息并重新发起（编辑即等同于"重试"） */
+  onUserMessageEdit?: (messageId: string, content: string, mode: RevertMode) => void;
+  /** 撤销上一次 revert */
+  onUnrevert?: () => void;
+  /** 从指定消息处分支 */
+  onBranch?: (messageId: string) => void;
+  /** 压缩旧消息为摘要 */
+  onCompact?: () => void;
+  /** 恢复中断的任务 */
+  onResume?: () => void;
+  /** 停止当前流式生成 */
+  onStop?: () => void;
 }
 
 interface ToolResultInfo {
@@ -105,6 +123,14 @@ export function Conversation({
   onToolDecision,
   onClarificationAnswer,
   onArtifactDecision,
+  canResume = false,
+  hasArchivedMessages = false,
+  onUserMessageEdit,
+  onUnrevert,
+  onBranch,
+  onCompact,
+  onResume,
+  onStop,
 }: ConversationProps) {
   const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -151,18 +177,11 @@ export function Conversation({
     <div className="conversation">
       <div ref={topRef} />
       <div className="conversation-thread">
-        {!busy && plan.length > 0 && (
-          <RunSummaryPanel task={task} plan={plan} status={status} phase={phase} />
-        )}
+        {!busy && plan.length > 0 && <PlanCard plan={plan} defaultOpen={false} />}
 
         {historyMessages.map((message) => {
           if (message.role === "user") {
-            return (
-              <article className="doc-block doc-block-user" key={message.id}>
-                <DocumentMeta icon={<TargetIcon />} label="目标" />
-                <div className="doc-user-text">{message.content}</div>
-              </article>
-            );
+            return <UserBubble key={message.id} content={message.content} messageId={message.id} onEdit={onUserMessageEdit} onBranch={onBranch} />;
           }
           if (message.role === "assistant") {
             const tools = toolActivitiesFromAssistant(message, resultMap);
@@ -181,6 +200,7 @@ export function Conversation({
                   )}
                   {hasText && <MarkdownRenderer content={message.content} />}
                 </div>
+                {hasText && <MessageActions content={message.content} />}
               </article>
             );
           }
@@ -241,18 +261,41 @@ export function Conversation({
                   <span className="dot" />
                   <span className="dot" />
                   <span className="dot" />
-                  <span className="thinking-label">继续推进…</span>
+                  <span className="thinking-label">{t("thinking.continue")}</span>
                 </div>
               )}
             </div>
           </article>
         )}
 
-        {!busy && (
-          <div className="msg-status">
-            <StatusPill status={status} phase={phase} />
-          </div>
-        )}
+        {busy
+          ? onStop && (
+              <div className="turn-actions" aria-label={t("conv.turnActions")}>
+                <button type="button" className="ghost-btn" onClick={onStop}>
+                  {t("action.stop")}
+                </button>
+              </div>
+            )
+          : (
+            <div className="turn-actions" aria-label={t("conv.turnActions")}>
+              <StatusPill status={status} phase={phase} />
+              {hasArchivedMessages && onUnrevert && (
+                <button type="button" className="ghost-btn" onClick={onUnrevert}>
+                  {t("action.unrevert")}
+                </button>
+              )}
+              {onCompact && messages.length > 4 && (
+                <button type="button" className="ghost-btn" onClick={onCompact}>
+                  {t("action.compact")}
+                </button>
+              )}
+              {canResume && onResume && (
+                <button type="button" className="ghost-btn" onClick={onResume}>
+                  {t("action.resume")}
+                </button>
+              )}
+            </div>
+          )}
 
         <div ref={bottomRef} />
       </div>
@@ -278,10 +321,10 @@ function ClarificationCard({
   }
 
   return (
-    <section className="clarification-card" aria-label="Agent 追问">
+    <section className="clarification-card" aria-label={t("clarification.label")}>
       <div className="clarification-head">
-        <strong>需要你补充信息</strong>
-        <span>等待回复</span>
+        <strong>{t("clarification.title")}</strong>
+        <span>{t("clarification.waiting")}</span>
       </div>
       <p>{clarification.question}</p>
       {clarification.context && <small>{clarification.context}</small>}
@@ -298,14 +341,14 @@ function ClarificationCard({
           <input
             value={answer}
             disabled={submitted}
-            placeholder="输入补充信息"
+            placeholder={t("clarification.inputPlaceholder")}
             onChange={(event) => setAnswer(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") submit();
             }}
           />
           <button type="button" disabled={submitted || !answer.trim()} onClick={() => submit()}>
-            回复
+            {t("action.reply")}
           </button>
         </div>
       )}
@@ -351,17 +394,216 @@ function ArtifactCard({
           {artifact.status === "draft" && (
             <div className="artifact-actions">
               <button type="button" onClick={() => onDecision(artifact.id, "rejected")}>
-                拒绝
+                {t("action.reject")}
               </button>
               <button type="button" onClick={() => onDecision(artifact.id, "confirmed")}>
-                确认
+                {t("action.confirm")}
               </button>
             </div>
           )}
-          {artifact.appliedPath && <small>已写入：{artifact.appliedPath}</small>}
+          {artifact.appliedPath && <small>{t("artifact.written")}{artifact.appliedPath}</small>}
         </div>
       )}
     </section>
+  );
+}
+
+/** 用户消息气泡：可复制；可编辑，编辑后选择恢复模式再提交。 */
+function UserBubble({
+  content,
+  messageId,
+  onEdit,
+  onBranch,
+}: {
+  content: string;
+  messageId: string;
+  onEdit?: (messageId: string, content: string, mode: RevertMode) => void;
+  onBranch?: (messageId: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(content);
+  const [pendingSave, setPendingSave] = useState(false);
+
+  function confirmSave(): void {
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    setPendingSave(true);
+  }
+
+  function selectMode(mode: RevertMode): void {
+    const trimmed = draft.trim();
+    setEditing(false);
+    setPendingSave(false);
+    if (trimmed && trimmed !== content) onEdit?.(messageId, trimmed, mode);
+  }
+
+  function cancel(): void {
+    setDraft(content);
+    setEditing(false);
+    setPendingSave(false);
+  }
+
+  if (editing) {
+    return (
+      <div className="user-bubble-row is-editing">
+        <div className="user-bubble-edit">
+          <textarea
+            className="user-bubble-input"
+            value={draft}
+            autoFocus
+            rows={Math.min(8, Math.max(1, draft.split("\n").length))}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                confirmSave();
+              } else if (event.key === "Escape") {
+                cancel();
+              }
+            }}
+          />
+          {pendingSave && (
+            <div className="revert-mode-panel">
+              <span className="revert-mode-label">{t("revert.chooseMode")}</span>
+              <div className="revert-mode-buttons">
+                <button type="button" onClick={() => selectMode("code_and_conv")}>
+                  {t("revert.mode.codeAndConv")}
+                </button>
+                <button type="button" onClick={() => selectMode("conv_only")}>
+                  {t("revert.mode.convOnly")}
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="msg-actions">
+            <IconButton label={t("action.cancel")} onClick={cancel}>
+              <CloseIcon />
+            </IconButton>
+            {!pendingSave && (
+              <IconButton label={t("action.editAndRetry")} onClick={confirmSave} className="is-confirm">
+                <CheckIcon />
+              </IconButton>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="user-bubble-row">
+      <div className="user-bubble">{content}</div>
+      <div className="msg-actions">
+        <CopyButton content={content} />
+        {onEdit && (
+          <IconButton label={t("action.edit")} onClick={() => { setDraft(content); setEditing(true); setPendingSave(false); }}>
+            <PencilIcon />
+          </IconButton>
+        )}
+        {onBranch && (
+          <IconButton label={t("action.branch")} onClick={() => onBranch(messageId)}>
+            <ForkIcon />
+          </IconButton>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Agent 消息底部的纯 icon 操作行（当前：复制）。 */
+function MessageActions({ content }: { content: string }) {
+  return (
+    <div className="msg-actions">
+      <CopyButton content={content} />
+    </div>
+  );
+}
+
+function CopyButton({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <IconButton
+      label={copied ? t("action.copied") : t("action.copy")}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(content);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* 剪贴板不可用时静默忽略 */
+        }
+      }}
+    >
+      {copied ? <CheckIcon /> : <CopyIcon />}
+    </IconButton>
+  );
+}
+
+function IconButton({
+  label,
+  onClick,
+  children,
+  className,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={className ? `msg-action-btn ${className}` : "msg-action-btn"}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
+      <rect x="6.5" y="6.5" width="9" height="9" rx="2" stroke="currentColor" strokeWidth="1.4" fill="none" />
+      <path d="M13 6.5V5a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h1.5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
+      <path d="M4 14.5l-.6 2.6 2.6-.6L16 6.5a1.5 1.5 0 00-2.1-2.1L4 14.5z" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
+      <path d="M4.5 10.5l3.2 3.2L15.5 6" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
+      <path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ForkIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
+      <circle cx="6" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
+      <circle cx="14" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
+      <circle cx="10" cy="15" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
+      <path d="M6 7v2a4 4 0 004 4M14 7v2a4 4 0 01-4 4" stroke="currentColor" strokeWidth="1.3" fill="none" />
+    </svg>
   );
 }
 
@@ -373,15 +615,6 @@ function DocumentMeta({ icon, label }: { icon: ReactNode; label: string }) {
       </span>
       <span>{label}</span>
     </div>
-  );
-}
-
-function TargetIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-      <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.35" fill="none" />
-      <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.35" fill="none" />
-    </svg>
   );
 }
 
@@ -400,37 +633,6 @@ function AgentIcon() {
   );
 }
 
-function RunSummaryPanel({
-  task,
-  plan,
-  status,
-  phase,
-}: {
-  task: Task;
-  plan: PlanStep[];
-  status: TaskStatus | null;
-  phase: TaskPhase | null;
-}) {
-  const done = plan.filter((step) => step.status === "completed").length;
-
-  return (
-    <section className="run-summary" aria-label="Agent 执行摘要">
-      <div className="run-summary-head">
-        <div>
-          <p className="run-summary-eyebrow">Agent 工作流</p>
-          <h2>执行轨迹</h2>
-        </div>
-        <StatusPill status={status} phase={phase} />
-      </div>
-      <div className="run-summary-progress" aria-label={`已完成 ${done} / ${plan.length}`}>
-        <span style={{ width: `${plan.length ? (done / plan.length) * 100 : 0}%` }} />
-      </div>
-      <BudgetBar task={task} />
-      <PlanCard plan={plan} defaultOpen={false} />
-    </section>
-  );
-}
-
 function BudgetBar({ task }: { task: Task }) {
   const usage = task.budgetUsage;
   const budget = task.budget;
@@ -441,14 +643,14 @@ function BudgetBar({ task }: { task: Task }) {
   const outputRatio = Math.min(100, ((usage?.outputBytes ?? 0) / outputLimit) * 100);
 
   return (
-    <section className="budget-bar" aria-label="预算使用">
+    <section className="budget-bar" aria-label={t("budget.label")}>
       <div>
-        <span>工具</span>
+        <span>{t("budget.tools")}</span>
         <strong>{usage?.toolCalls ?? 0}/{toolLimit}</strong>
       </div>
       <div className="budget-track"><span style={{ width: `${toolRatio}%` }} /></div>
       <div>
-        <span>输出</span>
+        <span>{t("budget.output")}</span>
         <strong>{formatBytes(usage?.outputBytes ?? 0)}/{formatBytes(outputLimit)}</strong>
       </div>
       <div className="budget-track"><span style={{ width: `${outputRatio}%` }} /></div>
@@ -462,7 +664,7 @@ function formatBytes(bytes: number): string {
   return `${bytes}B`;
 }
 
-function ToolActivityList({
+export function ToolActivityList({
   items,
   onDecision,
 }: {
@@ -471,10 +673,62 @@ function ToolActivityList({
 }) {
   return (
     <div className="tool-activity">
-      {items.map((item) => (
-        <ToolActivityCard key={item.id} item={item} onDecision={onDecision} />
-      ))}
+      {items.map((item) =>
+        // 运行中/待确认始终展示完整卡片；已完成/已失败折叠为单行 chip。
+        item.status === "running" || item.status === "awaiting" ? (
+          <ToolActivityCard key={item.id} item={item} onDecision={onDecision} />
+        ) : (
+          <ToolChip key={item.id} item={item} onDecision={onDecision} />
+        ),
+      )}
     </div>
+  );
+}
+
+/** 紧凑态：已结束的工具调用折叠为单行 chip，点击展开为完整卡片。 */
+function ToolChip({
+  item,
+  onDecision,
+}: {
+  item: ToolActivity;
+  onDecision: (callId: string, approved: boolean) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  // 状态回到运行中/待确认时（理论上 List 已分流，这里兜底）自动升级为完整卡片。
+  useEffect(() => {
+    if (item.status === "awaiting" || item.status === "running") setExpanded(true);
+  }, [item.status]);
+
+  if (expanded) {
+    return (
+      <ToolActivityCard
+        item={item}
+        onDecision={onDecision}
+        defaultOpen
+        onCollapse={() => setExpanded(false)}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="tool-chip"
+      data-status={item.status}
+      onClick={() => setExpanded(true)}
+      aria-label={`${t("tool.viewPrefix")}${getToolKindLabel(item.name)} ${item.name} ${t("tool.viewSuffix")}`}
+    >
+      <span className="tool-chip-icon" aria-hidden="true">
+        {toolStatusIcon(item.status)}
+      </span>
+      <span className="tool-chip-name">{item.name}</span>
+      {item.riskLevel && item.riskLevel !== "safe" && (
+        <span className="tool-chip-risk" data-risk={item.riskLevel}>
+          {item.riskLevel === "dangerous" ? t("tool.risk.dangerousShort") : t("tool.risk.cautionShort")}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -493,17 +747,23 @@ function toolStatusIcon(status: ToolActivity["status"]): string {
 }
 
 function getToolKindLabel(name: string): string {
-  return /cmd|command|exec|shell|terminal/i.test(name) ? "命令" : "工具";
+  return /cmd|command|exec|shell|terminal/i.test(name) ? t("tool.kind.command") : t("tool.kind.tool");
 }
 
 function ToolActivityCard({
   item,
   onDecision,
+  onCollapse,
+  defaultOpen,
 }: {
   item: ToolActivity;
   onDecision: (callId: string, approved: boolean) => void;
+  /** 由 chip 展开时传入：点击头部收起回到 chip 形态。 */
+  onCollapse?: () => void;
+  /** chip 展开时默认打开 body（已结束工具的初始 open 否则为 false）。 */
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(item.status === "awaiting");
+  const [open, setOpen] = useState(defaultOpen ?? item.status === "awaiting");
   const [decided, setDecided] = useState(false);
 
   // 状态变为待确认时自动展开（useState 初始值不随 props 更新，需 effect 补齐）
@@ -513,17 +773,17 @@ function ToolActivityCard({
 
   const statusText =
     item.status === "awaiting"
-      ? "待确认"
+      ? t("tool.status.awaiting")
       : item.status === "running"
-        ? "执行中"
+        ? t("tool.status.running")
         : item.status === "ok"
-          ? "完成"
-          : "失败";
+          ? t("tool.status.ok")
+          : t("tool.status.error");
   const icon = toolStatusIcon(item.status);
   const kindLabel = getToolKindLabel(item.name);
   const detail =
     item.status === "error"
-      ? item.error ?? "未知错误"
+      ? item.error ?? t("tool.unknownError")
       : item.output !== undefined
         ? safeStringify(item.output)
         : null;
@@ -535,8 +795,16 @@ function ToolActivityCard({
   }
 
   return (
-    <section className="tool-card" data-open={open} data-status={item.status} aria-label={`${kindLabel}调用 ${item.name}`}>
-      <button type="button" className="tool-card-head" onClick={() => setOpen((v) => !v)}>
+    <section className="tool-card" data-open={open} data-status={item.status} aria-label={`${kindLabel}${t("tool.invoke")} ${item.name}`}>
+      <button
+        type="button"
+        className="tool-card-head"
+        onClick={() => {
+          // 由 chip 展开的卡片：再次点击头部收起回 chip；否则普通折叠切换。
+          if (open && onCollapse) onCollapse();
+          else setOpen((v) => !v);
+        }}
+      >
         <span className="tool-card-icon" aria-hidden="true">
           {icon}
         </span>
@@ -544,7 +812,7 @@ function ToolActivityCard({
         <span className="tool-card-name">{item.name}</span>
         {item.riskLevel && item.riskLevel !== "safe" && (
           <span className="tool-card-risk" data-risk={item.riskLevel}>
-            {item.riskLevel === "dangerous" ? "高风险" : "需确认"}
+            {item.riskLevel === "dangerous" ? t("tool.risk.dangerous") : t("tool.risk.caution")}
           </span>
         )}
         <span className="tool-card-status">{statusText}</span>
@@ -556,13 +824,13 @@ function ToolActivityCard({
         <div className="tool-card-body">
           {argsText !== "{}" && (
             <div className="tool-card-field">
-              <span className="tool-card-field-label">参数</span>
+              <span className="tool-card-field-label">{t("tool.field.args")}</span>
               <pre>{argsText}</pre>
             </div>
           )}
           {detail !== null && (
             <div className="tool-card-field">
-              <span className="tool-card-field-label">{item.status === "error" ? "错误" : "结果"}</span>
+              <span className="tool-card-field-label">{item.status === "error" ? t("tool.field.error") : t("tool.field.result")}</span>
               <pre>{detail}</pre>
             </div>
           )}
@@ -570,7 +838,7 @@ function ToolActivityCard({
       )}
       {item.status === "awaiting" && (
         <div className="tool-approval">
-          <span className="tool-approval-hint">该工具需要你的确认才能执行</span>
+          <span className="tool-approval-hint">{t("tool.approvalHint")}</span>
           <div className="tool-approval-actions">
             <button
               type="button"
@@ -578,7 +846,7 @@ function ToolActivityCard({
               disabled={decided}
               onClick={() => decide(false)}
             >
-              拒绝
+              {t("action.reject")}
             </button>
             <button
               type="button"
@@ -586,7 +854,7 @@ function ToolActivityCard({
               disabled={decided}
               onClick={() => decide(true)}
             >
-              批准
+              {t("action.approve")}
             </button>
           </div>
         </div>
@@ -609,9 +877,9 @@ function PlanCard({ plan, defaultOpen = true }: { plan: PlanStep[]; defaultOpen?
   const done = plan.filter((step) => step.status === "completed").length;
 
   return (
-    <section className="plan-card" aria-label="执行计划">
+    <section className="plan-card" aria-label={t("plan.title")}>
       <button type="button" className="plan-card-head" onClick={() => setOpen((value) => !value)}>
-        <span className="plan-card-title">执行计划</span>
+        <span className="plan-card-title">{t("plan.title")}</span>
         <span className="plan-card-progress">
           {done}/{plan.length}
         </span>

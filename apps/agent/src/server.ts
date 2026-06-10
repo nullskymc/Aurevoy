@@ -5,10 +5,14 @@ import type {
   AgentEvent,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
+  BranchTaskRequest,
+  BranchTaskResponse,
   ClarificationAnswerRequest,
   ClarificationAnswerResponse,
   CleanupDataRequest,
   CleanupDataResponse,
+  CompactTaskRequest,
+  CompactTaskResponse,
   ContinueTaskRequest,
   ContinueTaskResponse,
   CreateMemoryRequest,
@@ -21,6 +25,9 @@ import type {
   MemoryListResponse,
   ModelListResponse,
   ResumeTaskResponse,
+  RevertTaskRequest,
+  RevertTaskResponse,
+  UnrevertTaskResponse,
   TaskArtifactContentResponse,
   TaskArtifactListResponse,
   TaskTraceListResponse,
@@ -32,14 +39,18 @@ import type {
 import { config } from './config.js';
 import {
   addUserTurn,
+  branchTask,
   cancelTask,
+  compactTask,
   createTask,
   isTaskRunning,
   markInterruptedTasksAfterRestart,
   prepareTaskForResume,
   resolveApproval,
   resolveClarificationAnswer,
+  revertTask,
   runTask,
+  unrevertTask,
 } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
 import { taskStore, traceStore, memoryStore, toolSettingsStore } from './store/db.js';
@@ -226,6 +237,101 @@ export async function buildServer() {
     };
     return reply.code(202).send(body);
   });
+
+  // 编辑重跑（Phase 1）：截断到目标消息之前，回到该点状态；前端随后用 continue 端点
+  // 把编辑后的文本作为该点的新输入，带上下文重新生成。
+  app.post<{ Params: { id: string }; Body: RevertTaskRequest }>(
+    '/api/tasks/:id/revert',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      if (isTaskRunning(req.params.id)) {
+        return reply.code(409).send({ error: '任务正在运行，请等待当前轮结束后再编辑' });
+      }
+      const messageId = req.body?.messageId?.trim();
+      if (!messageId) return reply.code(400).send({ error: 'messageId is required' });
+      const mode = req.body?.mode ?? 'code_and_conv';
+
+      const result = revertTask(task, messageId, mode);
+      if (result.removedCount === 0) {
+        return reply.code(404).send({ error: 'message not found in task history' });
+      }
+      const body: RevertTaskResponse = {
+        task: result.task,
+        removedContent: result.removedContent,
+        removedMessageId: result.removedMessageId,
+        removedCount: result.removedCount,
+      };
+      return reply.code(200).send(body);
+    },
+  );
+
+  // 撤销上一次 revert：从归档恢复消息。仅在 revert 后尚未 continue 时可用。
+  app.post<{ Params: { id: string } }>('/api/tasks/:id/unrevert', async (req, reply) => {
+    const task = taskStore.get(req.params.id);
+    if (!task) return reply.code(404).send({ error: 'task not found' });
+    if (isTaskRunning(req.params.id)) {
+      return reply.code(409).send({ error: '任务正在运行，不能撤销编辑' });
+    }
+    const result = unrevertTask(task);
+    if (result.restoredCount === 0) {
+      return reply.code(409).send({ error: '没有可撤销的编辑操作' });
+    }
+    const body: UnrevertTaskResponse = {
+      task: result.task,
+      restoredCount: result.restoredCount,
+    };
+    return reply.code(200).send(body);
+  });
+
+  // 分支：从指定消息处克隆出一个新任务（非破坏性 fork）
+  app.post<{ Params: { id: string }; Body: BranchTaskRequest }>(
+    '/api/tasks/:id/branch',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      const messageId = req.body?.messageId?.trim();
+      if (!messageId) return reply.code(400).send({ error: 'messageId is required' });
+
+      const result = branchTask(task, messageId, req.body?.goal?.trim() || undefined);
+      if (result.messageCount === 0) {
+        return reply.code(404).send({ error: 'message not found in task history' });
+      }
+      taskEvents.publish({ type: 'task_created', taskId: result.task.id, task: result.task });
+      const body: BranchTaskResponse = {
+        task: result.task,
+        streamUrl: `/api/tasks/${result.task.id}/stream`,
+      };
+      return reply.code(201).send(body);
+    },
+  );
+
+  // 压缩：将指定消息范围压缩为 LLM 摘要，释放上下文空间
+  app.post<{ Params: { id: string }; Body: CompactTaskRequest }>(
+    '/api/tasks/:id/compact',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      if (isTaskRunning(req.params.id)) {
+        return reply.code(409).send({ error: '任务正在运行，请等待当前轮结束后再压缩' });
+      }
+
+      const result = await compactTask(
+        task,
+        req.body?.fromMessageId?.trim() || undefined,
+        req.body?.toMessageId?.trim() || undefined,
+      );
+      if (result.originalCount === 0) {
+        return reply.code(400).send({ error: '指定的消息范围无效' });
+      }
+      const body: CompactTaskResponse = {
+        task: result.task,
+        originalCount: result.originalCount,
+        summaryLength: result.summaryLength,
+      };
+      return reply.code(200).send(body);
+    },
+  );
 
   // 取消一个进行中的任务
   app.post<{ Params: { id: string } }>('/api/tasks/:id/cancel', async (req, reply) => {

@@ -59,6 +59,7 @@ M6 之后仍阻塞更高可靠性交付的缺口：
 |---|---:|---|---|
 | M6 | 2 周 | 产物、追问、预算与 token | 让 Agent 能交付可确认产物，并在信息不足时暂停追问 |
 | M7 | 1-2 月 | 工具扩展、安全加固、多步计划、UI 拆分 | 让 Agent 能更可靠地处理文件/网页/命令任务 |
+| Rewind | ✅ | 编辑重跑、撤销、分支、压缩 | 让用户能回溯历史、编辑重试、非破坏性探索 |
 | M8 | 3+ 月 | 知识库、评测、浏览器、发布体验 | 建立长期资料理解、质量门禁和普通用户交付路径 |
 
 ## M6 — 产物、追问、预算与 Token
@@ -391,6 +392,46 @@ node scripts/m6-regression.mjs
 - `http_fetch` 的 HTML 清洗是轻量实现，不等同完整浏览器 DOM 解析；复杂网页、JS 渲染和截图留给浏览器 MCP 阶段。
 - 运行时 schema validation 覆盖当前 JSON Schema 子集，未引入 Zod/Ajv 作为新直接依赖；复杂 schema 关键字需要后续扩展。
 - 多步计划采用确定性启发式生成，避免依赖 Provider strict JSON；后续可引入模型生成计划和更细粒度 step/checkpoint 映射。
+
+## Rewind / Edit & Regenerate — 编辑重跑（✅ 已完成）
+
+目标：让用户可以回溯到历史任意一点，编辑输入后重新生成，并支持非破坏性探索。
+
+### Phase 1 — 最小可用：revert + cleanup-on-prompt
+
+- `POST /api/tasks/:id/revert`：把目标消息及之后从活跃历史移除（soft-delete 归档到 `archivedMessages`），
+  清除 revert 点之后的 checkpoint、draft artifact 和未完成 plan 步骤
+- 前端 `UserBubble` 编辑按钮 → 后端 revert → Composer 回填 `removedContent` → 用户编辑提交 →
+  `POST /api/tasks/:id/messages` 以截断后的历史重新进入 Agent 循环
+- 不回滚已落盘文件（applied artifact 写入的文件保留不变）
+- 存储层新增 `archived_messages` 列，`RevertTaskResponse` 返回 `removedContent`/`removedMessageId`/`removedCount`
+- SSE 新增 `reverted` 事件
+
+### Phase 2 — 精细化：多模式 + unrevert
+
+- `RevertMode` 扩展为 `'code_and_conv' | 'conv_only'`：
+  - `code_and_conv`（默认）：截断对话 + 清除 checkpoint/artifact/plan
+  - `conv_only`：仅截断对话，保留 checkpoint/artifact/plan（文件没问题，只想重新推理）
+- `UserBubble` 编辑后显示模式选择面板（两个按钮）
+- `POST /api/tasks/:id/unrevert`：从 `archivedMessages` 恢复被截断的消息
+- 前端 turn-actions 区新增"撤销编辑"按钮（`hasArchivedMessages` 时可见）
+- SSE 新增 `unreverted` 事件
+
+### Phase 3 — 非破坏性：branch + compact
+
+- `POST /api/tasks/:id/branch`：克隆父任务到指定消息为止的所有消息，
+  每条消息分配新 ID（含 `toolCallId` 重映射），新任务 `parentTaskId` 指向原任务
+- `POST /api/tasks/:id/compact`：将指定消息范围发给 LLM 生成 ≤200 字摘要，
+  替换为一条 `role:'system'` 摘要消息，释放上下文窗口空间
+- 前端 `UserBubble` 新增分支按钮（fork 图标）；turn-actions 区消息超过 4 条时出现"压缩上下文"按钮
+- 存储层新增 `parent_task_id` 列
+- SSE 新增 `branched`、`compacted` 事件
+
+已知边界：
+
+- `code_only` 模式（仅回滚文件、保留对话）需要增强 checkpoint 系统以存储文件快照，当前未实现。
+- branch 创建的新任务在侧栏中作为独立任务显示，未实现父子分组展示。
+- compact 的摘要质量取决于 LLM 能力，不做二次校验；摘要失败时保留原消息不变。
 
 ## M8 — 知识库、评测、浏览器与交付体验
 

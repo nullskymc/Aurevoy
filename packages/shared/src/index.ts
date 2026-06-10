@@ -155,6 +155,10 @@ export interface Task {
   clarifications?: ClarificationRequest[];
   checkpoints?: TaskCheckpoint[];
   tokenUsage?: AggregatedTokenUsage;
+  /** 最近一次 revert 归档的消息（Phase 2 unrevert 钩子） */
+  archivedMessages?: Message[];
+  /** 分支来源的父任务 ID（branch 功能） */
+  parentTaskId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -296,6 +300,31 @@ export type AgentEvent =
   | { type: 'checkpoint_created'; taskId: string; checkpoint: TaskCheckpoint }
   | { type: 'budget_usage'; taskId: string; usage: BudgetUsage; budget?: TaskBudget }
   | { type: 'token_usage'; taskId: string; usage: AggregatedTokenUsage }
+  | {
+      type: 'reverted';
+      taskId: string;
+      messageId: string;
+      removedCount: number;
+      archivedCount: number;
+    }
+  | {
+      type: 'unreverted';
+      taskId: string;
+      restoredCount: number;
+    }
+  | {
+      type: 'branched';
+      taskId: string;
+      parentTaskId: string;
+      messageId: string;
+      messageCount: number;
+    }
+  | {
+      type: 'compacted';
+      taskId: string;
+      originalCount: number;
+      summaryLength: number;
+    }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string };
 
@@ -399,6 +428,86 @@ export interface ContinueTaskResponse {
 export interface ResumeTaskResponse {
   task: Task;
   streamUrl: string;
+}
+
+/** 编辑重跑的恢复模式。 */
+export type RevertMode =
+  | 'code_and_conv' // 截断对话 + 清除 checkpoint/artifact/plan
+  | 'conv_only'; // 仅截断对话，保留 plan/checkpoint/artifact（文件改动没问题，只想重新推理）
+
+/**
+ * POST /api/tasks/:id/revert — 编辑重跑（Claude Code Rewind，Phase 1：对话截断语义）。
+ *
+ * 把 messageId 及其之后的所有消息从活跃历史移除，任务回到该消息发送前的状态。
+ * 不回滚已落盘文件。返回被移除首条消息内容，供前端回填编辑框；随后前端再调用
+ * continue 端点把编辑后的文本作为该点的新输入，带上下文重新生成。
+ */
+export interface RevertTaskRequest {
+  /** 要截断到的目标消息 id（该消息及其之后都会被移除） */
+  messageId: string;
+  /** 恢复模式；Phase 1 仅支持 'code_and_conv' */
+  mode?: RevertMode;
+}
+
+export interface RevertTaskResponse {
+  task: Task;
+  /** 被移除的目标消息内容（user 消息时有值），供前端回填编辑框 */
+  removedContent: string | null;
+  /** 被移除的目标消息 id */
+  removedMessageId: string | null;
+  /** 被移除的消息总数（含目标消息及其之后的所有消息） */
+  removedCount: number;
+}
+
+/**
+ * POST /api/tasks/:id/unrevert — 撤销上一次 revert。
+ *
+ * 从 archivedMessages 恢复被截断的消息到活跃历史。
+ * 仅在没有新的 continue 操作时可用（即 revert 后尚未提交编辑）。
+ */
+export interface UnrevertTaskResponse {
+  task: Task;
+  /** 恢复的消息数量 */
+  restoredCount: number;
+}
+
+/**
+ * POST /api/tasks/:id/branch — 从指定消息处分支出一个新任务。
+ *
+ * 克隆父任务到目标消息（含）为止的所有消息，生成全新 task ID，
+ * 新任务独立演进，原任务不受影响。
+ */
+export interface BranchTaskRequest {
+  /** 分支点的消息 id（该消息包含在新任务中） */
+  messageId: string;
+  /** 可选的新目标描述；缺省沿用父任务 goal */
+  goal?: string;
+}
+
+export interface BranchTaskResponse {
+  task: Task;
+  streamUrl: string;
+}
+
+/**
+ * POST /api/tasks/:id/compact — 将指定消息范围压缩为 LLM 生成的摘要。
+ *
+ * 替换原消息为一条 system 摘要消息，释放上下文窗口空间。
+ * 不截断对话，仅压缩旧消息。
+ */
+export interface CompactTaskRequest {
+  /** 压缩起始消息 id（含）；缺省则从第一条消息开始 */
+  fromMessageId?: string;
+  /** 压缩结束消息 id（含）；缺省则到最后一条消息 */
+  toMessageId?: string;
+}
+
+export interface CompactTaskResponse {
+  task: Task;
+  /** 被压缩的原始消息数 */
+  originalCount: number;
+  /** 生成的摘要字符数 */
+  summaryLength: number;
 }
 
 // ============================================================
