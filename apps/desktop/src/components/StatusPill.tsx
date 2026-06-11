@@ -7,8 +7,8 @@ interface StatusPillProps {
 }
 
 /**
- * 状态指示：用 icon 而非汉字标签表达状态（已完成→绿色对勾、失败→叉、已取消→斜杠、
- * 进行中→脉冲圆点）。可读文案通过 aria-label/title 提供给屏幕阅读器与悬停提示。
+ * 状态指示：用 icon 表达状态（失败→叉、已取消→斜杠、进行中→脉冲圆点）。
+ * 可读文案通过 aria-label/title 提供给屏幕阅读器与悬停提示。
  */
 export function StatusPill({ status, phase = null }: StatusPillProps) {
   // 终态任务不再显示残留阶段（如"整理结果"），直接表达终态；进行中才用阶段文案。
@@ -30,26 +30,9 @@ export function StatusPill({ status, phase = null }: StatusPillProps) {
 }
 
 function StatusGlyph({ status }: { status: TaskStatus | null }) {
-  if (status === "completed") return <CheckIcon />;
   if (status === "failed") return <CrossIcon />;
   if (status === "cancelled") return <SlashIcon />;
-  const active = status === "running" || status === "planning" || status === "pending";
-  return <span className="status-dot" data-active={active} aria-hidden="true" />;
-}
-
-function CheckIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <path
-        d="M3.5 8.5l3 3 6-6.5"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
+  return null;
 }
 
 function CrossIcon() {

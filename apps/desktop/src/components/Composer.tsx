@@ -1,5 +1,14 @@
-import { useRef, type KeyboardEvent } from "react";
-import { t } from "../i18n";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { t, type TranslationKey } from "../i18n";
+
+interface SlashCommand {
+  name: string;
+  descriptionKey: TranslationKey;
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  { name: "/compact", descriptionKey: "cmd.compact" },
+];
 
 interface ComposerProps {
   value: string;
@@ -33,10 +42,59 @@ export function Composer({
   onStop,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [cmdIndex, setCmdIndex] = useState(0);
   const providerConfigured = provider !== "unconfigured";
   const canSend = value.trim().length > 0 && !busy && online !== false && providerConfigured;
 
+  const autoResize = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, []);
+
+  useEffect(() => {
+    autoResize();
+  }, [value, autoResize]);
+
+  const isTypingSlash = value.startsWith("/");
+  const filteredCommands = useMemo(() => {
+    if (!isTypingSlash) return [];
+    const query = value.toLowerCase();
+    return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(query));
+  }, [value, isTypingSlash]);
+  const showCmdPopup = isTypingSlash && filteredCommands.length > 0;
+  const displayCmdIndex = Math.min(cmdIndex, Math.max(0, filteredCommands.length - 1));
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (showCmdPopup) {
+      if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+        event.preventDefault();
+        const selected = filteredCommands[displayCmdIndex] ?? filteredCommands[0];
+        if (selected) {
+          onChange(selected.name);
+          setCmdIndex(0);
+          if (event.key === "Enter") onSubmit();
+        }
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setCmdIndex((i) => (i + 1) % filteredCommands.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setCmdIndex((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onChange("");
+        return;
+      }
+    }
+
     // Enter 提交，Shift+Enter 换行
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
@@ -56,12 +114,34 @@ export function Composer({
         </div>
       )}
       <div className="composer-box">
+        {showCmdPopup && (
+          <div className="cmd-popup" role="listbox">
+            {filteredCommands.map((cmd, i) => (
+              <button
+                type="button"
+                key={cmd.name}
+                role="option"
+                aria-selected={i === displayCmdIndex}
+                className="cmd-popup-item"
+                data-selected={i === displayCmdIndex ? "true" : undefined}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  onChange(cmd.name);
+                  setCmdIndex(0);
+                }}
+              >
+                <span className="cmd-popup-name">{cmd.name}</span>
+                <span className="cmd-popup-desc">{t(cmd.descriptionKey)}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           className="composer-input"
           value={value}
           placeholder={t("composer.placeholder")}
-          rows={variant === "hero" ? 2 : 1}
+          rows={1}
           onChange={(event) => onChange(event.currentTarget.value)}
           onKeyDown={handleKeyDown}
         />
@@ -84,10 +164,6 @@ export function Composer({
           </div>
 
           <div className="composer-tools-right">
-            <span className="composer-engine" data-online={String(online)}>
-              <span className="composer-engine-dot" />
-              {online === null ? t("composer.engineChecking") : online ? t("composer.engineOnline") : t("composer.engineOffline")}
-            </span>
             <button
               type="button"
               className="composer-send"
@@ -116,10 +192,6 @@ export function Composer({
         <span className="composer-footer-item">
           <FolderIcon />
           Aurevoy
-        </span>
-        <span className="composer-footer-item">
-          <ScreenIcon />
-          {t("composer.localMode")}
         </span>
         {provider === "unconfigured" && (
           <button
@@ -209,15 +281,6 @@ function FolderIcon() {
         fill="none"
         strokeLinejoin="round"
       />
-    </svg>
-  );
-}
-
-function ScreenIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-      <rect x="3" y="4" width="14" height="9" rx="1.4" stroke="currentColor" strokeWidth="1.3" fill="none" />
-      <path d="M7.5 16.5h5M10 13.5v3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
     </svg>
   );
 }

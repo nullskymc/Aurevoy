@@ -164,7 +164,6 @@ export function TaskHistorySidebar({
                   onClick={() => onSelectTask(task)}
                   title={task.goal}
                 >
-                  <span className="conv-status-dot" data-status={task.status} aria-hidden="true" />
                   <span className="conv-copy">
                     <span className="conv-title">{task.goal}</span>
                     {(task.artifacts?.length || task.budgetUsage?.toolCalls) ? (

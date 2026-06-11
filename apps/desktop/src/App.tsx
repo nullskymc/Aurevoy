@@ -53,7 +53,6 @@ import { MemoryPanel } from "./components/MemoryPanel";
 import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
 import { SettingsPanel, type SettingsDraft } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
-import { StatusPill } from "./components/StatusPill";
 import type { FeedItem } from "./components/AgentEventFeed";
 import { getPhaseLabel, getStatusLabel } from "./components/status";
 import { t } from "./i18n";
@@ -72,6 +71,11 @@ const MAX_FONT_SCALE = 1.08;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function formatContextK(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
 }
 
 function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
@@ -172,7 +176,6 @@ function App() {
     plan,
     status,
     tasks,
-    traces,
     setBusy,
     setCurrentTask,
     setOutput,
@@ -498,8 +501,14 @@ function App() {
     }
   }
 
-  /** 输入框提交分流：编辑模式则续聊（带截断后的上下文），已有任务则续聊，否则新建。 */
+  /** 输入框提交分流：斜杠命令 → 编辑模式续聊 → 已有任务续聊 → 新建。 */
   function handleComposerSubmit(): void {
+    const trimmed = goal.trim();
+    if (trimmed === "/compact") {
+      setGoal("");
+      void handleCompact();
+      return;
+    }
     if (editingMessageId) {
       setEditingMessageId(null);
       void continueGoal(goal);
@@ -954,7 +963,6 @@ function App() {
           {isChatView && showConversation ? (
             <>
               <div className="topbar-context">
-                <StatusPill status={status} phase={phase} />
                 <div className="topbar-title-group">
                   <span className="topbar-title">{currentTask?.goal}</span>
                   <span className="topbar-subtitle">
@@ -1097,12 +1105,16 @@ function App() {
                 onUserMessageEdit={(messageId, content, mode) => void handleRevertAndEdit(messageId, content, mode)}
                 onUnrevert={() => void handleUnrevert()}
                 onBranch={(messageId) => void handleBranch(messageId)}
-                onCompact={() => void handleCompact()}
                 onResume={() => void handleResumeTask()}
                 onStop={handleStopStream}
               />
             </div>
             <div className="composer-dock">
+              {health?.contextCharBudget != null && currentTask && currentTask.messages.length > 0 && (
+                <div className="context-hint">
+                  {t("context.label")} ~{formatContextK(currentTask.messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0))} / {formatContextK(health.contextCharBudget)} {t("context.unit")}
+                </div>
+              )}
               <Composer
                 value={goal}
                 busy={busy}
@@ -1171,8 +1183,6 @@ function App() {
         health={health}
         task={currentTask}
         phase={phase}
-        traces={traces}
-        tools={tools}
         onClose={() => setInspectorOpen(false)}
       />
 

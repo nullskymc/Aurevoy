@@ -10,7 +10,6 @@ import type {
   TaskStatus,
   ToolRiskLevel,
 } from "@aurevoy/shared";
-import { StatusPill } from "./StatusPill";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { getPhaseLabel, getStatusLabel } from "./status";
 import { t } from "../i18n";
@@ -50,8 +49,6 @@ interface ConversationProps {
   onUnrevert?: () => void;
   /** 从指定消息处分支 */
   onBranch?: (messageId: string) => void;
-  /** 压缩旧消息为摘要 */
-  onCompact?: () => void;
   /** 恢复中断的任务 */
   onResume?: () => void;
   /** 停止当前流式生成 */
@@ -128,7 +125,6 @@ export function Conversation({
   onUserMessageEdit,
   onUnrevert,
   onBranch,
-  onCompact,
   onResume,
   onStop,
 }: ConversationProps) {
@@ -216,7 +212,6 @@ export function Conversation({
             />
             <div className="doc-body">
               {plan.length > 0 && <PlanCard plan={plan} />}
-              <BudgetBar task={task} />
 
               {liveToolActivity.length > 0 && (
                 <ToolActivityList items={liveToolActivity} onDecision={onToolDecision} />
@@ -278,15 +273,9 @@ export function Conversation({
             )
           : (
             <div className="turn-actions" aria-label={t("conv.turnActions")}>
-              <StatusPill status={status} phase={phase} />
               {hasArchivedMessages && onUnrevert && (
                 <button type="button" className="ghost-btn" onClick={onUnrevert}>
                   {t("action.unrevert")}
-                </button>
-              )}
-              {onCompact && messages.length > 4 && (
-                <button type="button" className="ghost-btn" onClick={onCompact}>
-                  {t("action.compact")}
                 </button>
               )}
               {canResume && onResume && (
@@ -633,37 +622,6 @@ function AgentIcon() {
   );
 }
 
-function BudgetBar({ task }: { task: Task }) {
-  const usage = task.budgetUsage;
-  const budget = task.budget;
-  if (!usage && !budget) return null;
-  const toolLimit = budget?.maxToolCalls ?? 80;
-  const outputLimit = budget?.maxOutputBytes ?? 1024 * 1024;
-  const toolRatio = Math.min(100, ((usage?.toolCalls ?? 0) / toolLimit) * 100);
-  const outputRatio = Math.min(100, ((usage?.outputBytes ?? 0) / outputLimit) * 100);
-
-  return (
-    <section className="budget-bar" aria-label={t("budget.label")}>
-      <div>
-        <span>{t("budget.tools")}</span>
-        <strong>{usage?.toolCalls ?? 0}/{toolLimit}</strong>
-      </div>
-      <div className="budget-track"><span style={{ width: `${toolRatio}%` }} /></div>
-      <div>
-        <span>{t("budget.output")}</span>
-        <strong>{formatBytes(usage?.outputBytes ?? 0)}/{formatBytes(outputLimit)}</strong>
-      </div>
-      <div className="budget-track"><span style={{ width: `${outputRatio}%` }} /></div>
-    </section>
-  );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
-  return `${bytes}B`;
-}
-
 export function ToolActivityList({
   items,
   onDecision,
@@ -735,7 +693,7 @@ function ToolChip({
 function toolStatusIcon(status: ToolActivity["status"]): string {
   switch (status) {
     case "ok":
-      return "✓";
+      return "·";
     case "error":
       return "✕";
     case "awaiting":
@@ -893,7 +851,7 @@ function PlanCard({ plan, defaultOpen = true }: { plan: PlanStep[]; defaultOpen?
           {plan.map((step, index) => (
             <li key={step.id} className="plan-step" data-status={step.status}>
               <span className="plan-step-marker">
-                {step.status === "completed" ? "✓" : String(index + 1).padStart(2, "0")}
+                {String(index + 1).padStart(2, "0")}
               </span>
               <span className="plan-step-text">{step.description}</span>
             </li>

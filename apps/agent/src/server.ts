@@ -84,6 +84,7 @@ export async function buildServer() {
       version: '0.1.0',
       uptimeMs: Date.now() - startedAt,
       provider: getProviderName(),
+      contextCharBudget: config.agent.contextCharBudget,
     };
   });
 

@@ -71,7 +71,6 @@ export function ModelSelectorDrawer({
                 onClick={() => onSave({ model })}
               >
                 <span>{model}</span>
-                {model === currentModel && <CheckIcon />}
               </button>
             ))}
           </div>
@@ -84,14 +83,6 @@ export function ModelSelectorDrawer({
         </button>
       </div>
     </div>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <path d="M4.2 10.3l3.5 3.5 8-8.2" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" />
-    </svg>
   );
 }
 

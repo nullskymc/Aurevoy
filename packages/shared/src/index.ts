@@ -351,6 +351,8 @@ export interface HealthResponse {
   uptimeMs: number;
   /** 当前生效的 LLM Provider 名（如 'openai:gpt-4o-mini'；未配置时为 'unconfigured'） */
   provider: string;
+  /** Agent 上下文字符预算（用于前端展示当前上下文使用率） */
+  contextCharBudget?: number;
 }
 
 /** POST /api/tasks/:id/approvals — 对一次工具调用做出审批决策 */

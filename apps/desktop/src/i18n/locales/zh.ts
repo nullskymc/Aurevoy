@@ -193,6 +193,13 @@ export const zh = {
   "budget.output": "输出",
   "budget.unitIterations": "轮",
 
+  // 上下文提示
+  "context.label": "上下文",
+  "context.unit": "字符",
+
+  // 斜杠命令
+  "cmd.compact": "压缩旧消息为摘要",
+
   // 事件流标题/详情
   "event.taskCreated": "任务已创建",
   "event.planGenerated": "计划已生成",
