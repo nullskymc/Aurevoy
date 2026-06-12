@@ -17,6 +17,7 @@ interface ComposerProps {
   /** hero: 居中空状态的大输入框；docked: 对话底部的停靠输入框 */
   variant?: "hero" | "docked";
   provider?: string;
+  projectName?: string;
   /** 是否处于"编辑并重试"模式 */
   isEditing?: boolean;
   /** 取消编辑模式 */
@@ -34,6 +35,7 @@ export function Composer({
   online,
   variant = "hero",
   provider,
+  projectName,
   isEditing,
   onCancelEdit,
   onChange,
@@ -191,7 +193,7 @@ export function Composer({
       <div className="composer-footer">
         <span className="composer-footer-item">
           <FolderIcon />
-          Aurevoy
+          {projectName ?? t("projects.standalone")}
         </span>
         {provider === "unconfigured" && (
           <button

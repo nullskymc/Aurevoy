@@ -134,6 +134,13 @@ export const zh = {
   "nav.conversations": "对话",
   "nav.settings": "设置",
 
+  // 项目
+  "projects.import": "导入项目",
+  "projects.delete": "删除项目",
+  "projects.deleteConfirm": "删除项目后，相关对话不会丢失，但会变成独立对话。",
+  "projects.standalone": "独立对话",
+  "projects.all": "全部",
+
   // 侧边栏
   "sidebar.label": "导航与对话历史",
   "sidebar.searchConversations": "搜索对话",
@@ -293,6 +300,7 @@ export const zh = {
   "settings.nav.mcp": "MCP 服务器",
   "settings.nav.tools": "工具",
   "settings.nav.data": "本地数据",
+  "settings.nav.memory": "长期记忆",
   "settings.unitDays": "天",
   "settings.notConnected": "未连接",
   "settings.saving": "保存中",

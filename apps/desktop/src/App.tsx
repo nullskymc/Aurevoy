@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import type {
   AgentEvent,
@@ -20,6 +20,8 @@ import {
   continueTask,
   createMemory,
   createTask,
+  createProject,
+  deleteProject,
   deleteMemory,
   getDataStatus,
   getMcpStatus,
@@ -27,6 +29,7 @@ import {
   listProviderModels,
   getTask,
   listMemories,
+  listProjects,
   listTaskTraces,
   listTasks,
   listTools,
@@ -45,11 +48,11 @@ import { useSSEStream } from "./hooks/useSSEStream";
 import { useSettings } from "./hooks/useSettings";
 import { useTaskState } from "./hooks/useTaskState";
 import { useTools } from "./hooks/useTools";
+import { useProjects } from "./hooks/useProjects";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
 import { ArtifactView } from "./components/ArtifactView";
 import { InspectorPanel } from "./components/InspectorPanel";
-import { MemoryPanel } from "./components/MemoryPanel";
 import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
 import { SettingsPanel, type SettingsDraft } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
@@ -58,9 +61,9 @@ import { getPhaseLabel, getStatusLabel } from "./components/status";
 import { t } from "./i18n";
 import "./App.css";
 
-type MainView = "chat" | "search" | "tools" | "memory" | "settings";
+type MainView = "chat" | "search" | "tools" | "settings";
 type ContentMode = "conversation" | "artifacts";
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "tools" | "data";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "tools" | "data" | "memory";
 
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 380;
@@ -201,8 +204,21 @@ function App() {
     setFetchingModels,
   } = useSettings();
   const { tools, setTools } = useTools();
+  const { projects, setProjects } = useProjects();
   const { memories, setMemories } = useMemories();
   const { mergeArtifact } = useArtifacts(setCurrentTask, updateTaskList);
+
+  const [draftProjectId, setDraftProjectId] = useState<string | undefined>();
+
+  // Sync draftProjectId when a task is selected
+  useEffect(() => {
+    if (currentTask?.projectId) setDraftProjectId(currentTask.projectId);
+  }, [currentTask?.projectId]);
+
+  const draftProjectName = useMemo(
+    () => projects.find((p) => p.id === (draftProjectId ?? currentTask?.projectId))?.name,
+    [projects, draftProjectId, currentTask?.projectId],
+  );
 
   useEffect(() => {
     void bootstrapRuntime();
@@ -235,15 +251,17 @@ function App() {
 
   async function refreshRuntime(): Promise<void> {
     try {
-      const [nextHealth, nextTasks, nextTools] = await Promise.all([
+      const [nextHealth, nextTasks, nextTools, nextProjects] = await Promise.all([
         checkHealth(),
         listTasks(),
         listTools(),
+        listProjects(),
       ]);
       setHealth(nextHealth);
       setOnline(true);
       setTasks(nextTasks);
       setTools(nextTools);
+      setProjects(nextProjects);
     } catch (err) {
       setHealth(null);
       // 仅网络层失败(fetch 抛 TypeError)才判定引擎离线；
@@ -448,7 +466,7 @@ function App() {
     closeStream();
 
     try {
-      const { task } = await createTask(trimmed);
+      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId);
       setCurrentTask(task);
       setPhase(task.phase);
       setTraces([]);
@@ -694,13 +712,6 @@ function App() {
     }
   }
 
-  function handleOpenMemory(): void {
-    setModelDrawerOpen(false);
-    setActiveView("memory");
-    setInspectorOpen(false);
-    void refreshMemories();
-  }
-
   function handleOpenSettings(section: SettingsSectionId = "general"): void {
     setNotice(null);
     setModelDrawerOpen(false);
@@ -708,6 +719,7 @@ function App() {
     setActiveView("settings");
     setInspectorOpen(false);
     void refreshSettings();
+    if (section === "memory") void refreshMemories();
   }
 
   function handleCloseSettings(): void {
@@ -876,6 +888,28 @@ function App() {
     setFontScale(clamp(nextScale, MIN_FONT_SCALE, MAX_FONT_SCALE));
   }
 
+  async function handleImportProject(): Promise<void> {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({ directory: true, multiple: false });
+      if (!selected) return;
+      const project = await createProject({ path: selected as string });
+      setProjects(prev => [...prev, project]);
+    } catch (err) {
+      setNotice(`导入失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handleDeleteProject(projectId: string): Promise<void> {
+    if (!confirm(t('projects.deleteConfirm'))) return;
+    try {
+      await deleteProject(projectId);
+      setProjects(prev => prev.filter(p => p.id !== projectId));
+    } catch (err) {
+      setNotice(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   function startResize(panel: "left" | "right", event: PointerEvent<HTMLDivElement>): void {
     event.preventDefault();
     const startX = event.clientX;
@@ -930,13 +964,17 @@ function App() {
         activeTaskId={currentTask?.id}
         activeView={activeView}
         tasks={tasks}
+        projects={projects}
+        selectedProjectId={draftProjectId ?? currentTask?.projectId}
         onNewTask={handleNewTask}
         onSelectTask={handleSelectTask}
+        onSelectProject={setDraftProjectId}
         onCollapse={() => setLeftCollapsed(true)}
         onOpenSearch={handleOpenSearch}
         onOpenTools={handleOpenTools}
-        onOpenMemory={handleOpenMemory}
         onOpenSettings={handleOpenSettings}
+        onImportProject={handleImportProject}
+        onDeleteProject={handleDeleteProject}
       />
 
       <div
@@ -1049,22 +1087,13 @@ function App() {
           />
         ) : activeView === "tools" ? (
           <ToolsPage tools={tools} onToggleTool={handleToggleTool} />
-        ) : activeView === "memory" ? (
-          <MemoryPanel
-            open
-            memories={memories}
-            onClose={() => setActiveView("chat")}
-            onCreate={handleCreateMemory}
-            onToggle={handleToggleMemory}
-            onEdit={handleEditMemory}
-            onDelete={handleDeleteMemory}
-          />
         ) : activeView === "settings" ? (
           <SettingsPanel
             settings={runtimeSettings}
             tools={tools}
             mcpServers={mcpServers}
             dataStatus={dataStatus}
+            memories={memories}
             saving={settingsSaving}
             fetchingModels={fetchingModels}
             fontScale={fontScale}
@@ -1077,6 +1106,10 @@ function App() {
             onFetchModels={handleFetchModels}
             onSaveEnabledModels={handleSaveEnabledModels}
             onFontScaleChange={handleFontScaleChange}
+            onCreateMemory={handleCreateMemory}
+            onToggleMemory={handleToggleMemory}
+            onEditMemory={handleEditMemory}
+            onDeleteMemory={handleDeleteMemory}
           />
         ) : showConversation ? (
           contentMode === "artifacts" ? (
@@ -1120,6 +1153,7 @@ function App() {
                 busy={busy}
                 online={online}
                 variant="docked"
+                projectName={draftProjectName}
                 isEditing={editingMessageId !== null}
                 onCancelEdit={() => {
                   setEditingMessageId(null);
@@ -1151,6 +1185,7 @@ function App() {
               busy={busy}
               online={online}
               variant="hero"
+              projectName={draftProjectName}
               provider={health?.provider}
               onChange={setGoal}
               onSubmit={handleComposerSubmit}
@@ -1220,7 +1255,6 @@ function SidebarIcon() {
 function getMainViewTitle(view: MainView): string {
   if (view === "search") return t("nav.search");
   if (view === "tools") return t("nav.tools");
-  if (view === "memory") return t("nav.memory");
   if (view === "settings") return t("nav.settings");
   return t("mode.conversation");
 }
@@ -1228,7 +1262,6 @@ function getMainViewTitle(view: MainView): string {
 function getMainViewSubtitle(view: MainView): string {
   if (view === "search") return t("view.search.subtitle");
   if (view === "tools") return t("view.tools.subtitle");
-  if (view === "memory") return t("view.memory.subtitle");
   if (view === "settings") return t("view.settings.subtitle");
   return t("view.chat.subtitle");
 }

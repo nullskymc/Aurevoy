@@ -159,6 +159,18 @@ export interface Task {
   archivedMessages?: Message[];
   /** 分支来源的父任务 ID（branch 功能） */
   parentTaskId?: string;
+  /** 所属项目 ID（缺省为独立对话） */
+  projectId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 一个项目（导入的文件夹） */
+export interface Project {
+  id: string;
+  name: string;
+  /** 绝对路径 */
+  path: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -336,12 +348,31 @@ export type AgentEvent =
 export interface CreateTaskRequest {
   goal: string;
   budget?: TaskBudget;
+  projectId?: string;
 }
 
 export interface CreateTaskResponse {
   task: Task;
   /** SSE 事件流地址，前端用它订阅该任务的实时输出 */
   streamUrl: string;
+}
+
+/** POST /api/projects — 导入文件夹创建项目 */
+export interface CreateProjectRequest {
+  /** 项目名称；缺省取目录 basename */
+  name?: string;
+  /** 文件夹绝对路径 */
+  path: string;
+}
+
+/** PATCH /api/projects/:id — 更新项目 */
+export interface UpdateProjectRequest {
+  name?: string;
+}
+
+/** GET /api/projects */
+export interface ProjectListResponse {
+  projects: Project[];
 }
 
 /** GET /api/health */
@@ -650,6 +681,7 @@ export interface DataStatusResponse {
     tasks: number;
     traces: number;
     memories: number;
+    projects: number;
   };
 }
 

@@ -85,18 +85,18 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/agent/tool-call-accumulator.ts` | 流式 `tool_calls` 累积器：按 `index` 跨 chunk 拼接 `id`/`name`/`arguments`，处理并行调用与截断 |
 | `src/llm/provider.ts` | `LLMProvider` 抽象（`stream(messages, options)` 支持 tools/signal）+ `OpenAICompatibleProvider`；`getProvider()` 按配置返回，未配置即报错 |
 | `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；执行前做 JSON Schema 子集校验；`riskLevelOf()` 查风险等级 |
-| `src/tools/builtins.ts` | 内置基础工具：目录/读写/搜索/复制/移动/删除、HTTP 抓取、记忆、追问、artifact、命令执行；文件类路径限定 `config.workspaceDir` 内（防穿越） |
+| `src/tools/builtins.ts` | 内置基础工具：目录/读写/搜索/复制/移动/删除、HTTP 抓取、记忆、追问、artifact、命令执行；文件类路径从 `ToolContext.workspaceDir` 取（per-task：项目目录或 `.sessions/<taskId>/`，防穿越） |
 | `src/tools/mcp.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到 `ToolRegistry`；MCP 描述会截断/净化，本地风险覆盖优先于 annotations |
 | `src/runtime/settings.ts` | 运行设置服务：从 SQLite 加载/保存 Provider、工作区、工具边界、MCP 和清理策略；更新后影响真实 runtime |
 | `src/sandbox/command-executor.ts` | 命令/代码执行前置边界：策略、超时、输出上限、env allowlist；默认禁用，不暴露 shell |
-| `src/store/db.ts` | SQLite 持久化（`taskStore`：save/get/list；`traceStore`：append/list） |
+| `src/store/db.ts` | SQLite 持久化（`taskStore`：save/get/list/listByProject；`traceStore`：append/list；`projectStore`：CRUD/getByPath；`memoryStore`；`settingsStore`；`toolSettingsStore`） |
 
 工程治理模块保持边界：轨迹日志落在 `store/`，沙箱执行器落在 `sandbox/`，评测脚本落在 `scripts/`。
 Agent loop 只编排状态转换和写入审计点，不直接写平台特例或绕过安全策略。
 
 ### 4.3 契约层 `packages/shared`
 
-`src/index.ts` 定义全部跨进程类型：领域模型（`Task`/`Message`/`PlanStep`）、
+`src/index.ts` 定义全部跨进程类型：领域模型（`Task`/`Message`/`PlanStep`/`Project`）、
 工具（`ToolDescriptor`/`ToolCall`/`ToolResult`）、runtime 阶段（`TaskPhase`）、事件流（`AgentEvent`）、
 API 请求响应、运行时常量（默认地址端口）。
 

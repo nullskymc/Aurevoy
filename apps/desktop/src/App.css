@@ -311,6 +311,128 @@ button:disabled {
   color: var(--text-secondary);
 }
 
+.project-row-group {
+  display: flex;
+  align-items: center;
+  border-radius: var(--ui-radius-md);
+  position: relative;
+}
+
+.project-row-group > .project-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-row-group > .project-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-delete-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  border: none;
+  border-radius: var(--ui-radius-sm, 4px);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.project-row-group:hover .project-delete-btn,
+.project-row-group .project-row[data-active="true"] ~ .project-delete-btn {
+  display: flex;
+}
+
+.project-delete-btn:hover {
+  background: var(--hover);
+  color: var(--danger, #e55);
+}
+
+/* ---- Drawer accordion ---- */
+
+.drawer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.drawer-group {
+  border-radius: var(--ui-radius-md);
+}
+
+.drawer-header-row {
+  display: flex;
+  align-items: center;
+}
+
+.drawer-header {
+  flex: 1;
+  min-width: 0;
+  gap: 6px !important;
+  font-weight: 500;
+}
+
+.drawer-header[data-selected="true"] {
+  background: var(--active);
+}
+
+.drawer-chevron {
+  flex: 0 0 auto;
+  transition: transform 0.15s ease;
+}
+
+.drawer-chevron[data-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.drawer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.drawer-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--hover);
+  border-radius: 8px;
+  padding: 0 5px;
+  min-width: 18px;
+  text-align: center;
+  line-height: 18px;
+}
+
+.drawer-conv-list {
+  padding-left: 12px;
+}
+
+.drawer-conv-list .conv-item {
+  padding-left: 10px;
+}
+
+.drawer-empty {
+  padding: 4px 12px 8px 32px;
+  font-size: 12px;
+}
+
+.drawer-import {
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+.drawer-import:hover {
+  color: var(--text);
+}
+
 .sidebar-section-label {
   margin: 10px 0 6px;
   padding: 0 9px;

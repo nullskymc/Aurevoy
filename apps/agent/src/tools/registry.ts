@@ -6,6 +6,8 @@ export interface ToolContext {
   taskGoal?: string;
   task?: Task;
   abortSignal?: AbortSignal;
+  /** 本次工具调用的工作区根目录（per-task，由 Agent 循环解析） */
+  workspaceDir: string;
 }
 
 /** 一个可被 Agent 调用的工具 */

@@ -20,11 +20,14 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 const noopProps = {
   onNewTask: vi.fn(),
   onSelectTask: vi.fn(),
+  onSelectProject: vi.fn(),
   onCollapse: vi.fn(),
   onOpenSearch: vi.fn(),
   onOpenTools: vi.fn(),
-  onOpenMemory: vi.fn(),
   onOpenSettings: vi.fn(),
+  onImportProject: vi.fn(),
+  onDeleteProject: vi.fn(),
+  projects: [],
   activeView: "chat" as const,
 };
 

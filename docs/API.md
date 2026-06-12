@@ -228,6 +228,20 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 > Agent 侧通过内置 `remember` 工具写入记忆（`source.origin='agent'`，自动记录来源任务与目标），
 > 调用会留下工具轨迹可审计。删除/禁用始终由用户掌控（agent 无删除工具）。
 
+### 项目 `/api/projects`
+
+导入文件夹作为项目。项目目录即为该项目下对话的工作区（文件工具/命令执行的作用域）。
+同一目录不可重复导入（`path` 唯一索引）。删除项目时关联对话变为独立对话（软删除）。
+
+- `GET /api/projects` → `ProjectListResponse { projects: Project[] }`（按创建时间倒序）。
+- `POST /api/projects`（`CreateProjectRequest { path, name? }`）→ `201 Project`。
+  `path` 必须是已存在的目录绝对路径；缺省 `name` 取目录 basename。路径重复 → `409`；路径无效 → `400`。
+- `PATCH /api/projects/:id`（`UpdateProjectRequest { name }`）→ `200 Project`。仅支持重命名。项目不存在 → `404`。
+- `DELETE /api/projects/:id` → `200 { deleted: true, orphanedTasks: number }`。关联对话的 `project_id` 置空。项目不存在 → `404`。
+
+> 任务创建时可传 `projectId`（`POST /api/tasks`），校验项目存在。任务列表支持 `?projectId=xxx` 过滤，
+> `?projectId=standalone` 返回独立对话。
+
 ### 运行设置 `/api/settings`  (M5)
 设置来自 SQLite 持久化，启动时覆盖环境变量默认值；PATCH 后立即更新内存 runtime。
 响应不会回显 API Key，只返回 `apiKeyConfigured`。

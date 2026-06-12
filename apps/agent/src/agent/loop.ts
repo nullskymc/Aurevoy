@@ -1,3 +1,5 @@
+import { promises as fs } from 'node:fs';
+import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
   Message,
@@ -21,7 +23,7 @@ import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/p
 import { buildContextWindow, buildMemorySystemMessage } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 import { withRetry } from './retry.js';
-import { taskStore, traceStore, memoryStore } from '../store/db.js';
+import { taskStore, traceStore, memoryStore, projectStore } from '../store/db.js';
 import { config } from '../config.js';
 import {
   addTokenUsage,
@@ -252,6 +254,7 @@ export function branchTask(
       plan: [],
       messages: [],
       parentTaskId: parentTask.id,
+      projectId: parentTask.projectId,
       createdAt: now,
       updatedAt: now,
     };
@@ -291,6 +294,7 @@ export function branchTask(
     plan: [],
     messages: clonedMessages,
     parentTaskId: parentTask.id,
+    projectId: parentTask.projectId,
     createdAt: now,
     updatedAt: now,
   };
@@ -519,7 +523,7 @@ function waitForClarification(
 }
 
 /** 创建一个新任务并持久化（尚未开始执行） */
-export function createTask(goal: string, budget?: TaskBudget): Task {
+export function createTask(goal: string, budget?: TaskBudget, projectId?: string): Task {
   const now = new Date().toISOString();
   const userMsg: Message = {
     id: randomUUID(),
@@ -540,6 +544,7 @@ export function createTask(goal: string, budget?: TaskBudget): Task {
     budget: normalizeBudget(budget),
     budgetUsage: initialBudgetUsage(),
     tokenUsage: { available: false, provider: getProviderName(), model: config.llm.model },
+    projectId: projectId ?? undefined,
     createdAt: now,
     updatedAt: now,
   };
@@ -553,6 +558,21 @@ export function createTask(goal: string, budget?: TaskBudget): Task {
 }
 
 /**
+ * 解析任务的有效工作区目录。
+ * - 有项目：使用项目目录
+ * - 无项目：使用全局 workspace/.sessions/<taskId> 隔离
+ */
+export async function resolveTaskWorkspace(task: Task): Promise<string> {
+  if (task.projectId) {
+    const project = projectStore.get(task.projectId);
+    if (project) return resolve(project.path);
+  }
+  const standaloneDir = resolve(config.workspaceDir, '.sessions', task.id);
+  await fs.mkdir(standaloneDir, { recursive: true });
+  return standaloneDir;
+}
+
+/**
  * Agent 主循环（ReAct 工具调用循环）。
  *
  * 每轮调用 LLM：若模型请求工具，则执行并把结果作为 role:'tool' 消息回灌，再次请求；
@@ -563,6 +583,7 @@ export async function runTask(task: Task): Promise<void> {
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
   const taskStartedAtMs = Date.now();
+  const taskWorkspace = await resolveTaskWorkspace(task);
 
   const touch = () => {
     task.updatedAt = new Date().toISOString();
@@ -912,6 +933,7 @@ export async function runTask(task: Task): Promise<void> {
           taskGoal: task.goal,
           task,
           abortSignal: abortController.signal,
+          workspaceDir: taskWorkspace,
         });
         const enrichedResult = handleToolSideEffects(task, call, result);
         task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();

@@ -32,6 +32,9 @@
   Phase 2 — 多模式选择（`code_and_conv`/`conv_only`）+ unrevert 撤销编辑；
   Phase 3 — 会话分支（branch）+ 上下文压缩（compact）。
   详见 [`ROADMAP_AGENT_DELIVERY.md`](./ROADMAP_AGENT_DELIVERY.md)。
+- ✅ 项目（Project）功能已完成：导入文件夹作为项目、对话归属项目、per-task workspace 隔离、
+  抽屉式手风琴侧栏、项目 CRUD API、Tauri 文件夹选择器、记忆管理移入设置页、
+  Composer 项目上下文显示与新对话项目继承。
 - 下一步进入 M8：知识库/RAG、Agent usability eval、浏览器 MCP、发布体验与更完整的打包升级路径。
 
 当前验证口径：

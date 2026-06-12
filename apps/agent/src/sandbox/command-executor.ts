@@ -28,7 +28,11 @@ export interface CommandExecutionResult {
 
 export interface CommandExecutor {
   readonly policy: CommandExecutionPolicy;
-  execute(request: CommandExecutionRequest, signal?: AbortSignal): Promise<CommandExecutionResult>;
+  execute(
+    request: CommandExecutionRequest,
+    signal?: AbortSignal,
+    workspaceOverride?: string,
+  ): Promise<CommandExecutionResult>;
 }
 
 export function createCommandExecutionPolicy(): CommandExecutionPolicy {
@@ -51,7 +55,11 @@ export class DisabledCommandExecutor implements CommandExecutor {
     return createCommandExecutionPolicy();
   }
 
-  async execute(): Promise<CommandExecutionResult> {
+  async execute(
+    _request: CommandExecutionRequest,
+    _signal?: AbortSignal,
+    _workspaceOverride?: string,
+  ): Promise<CommandExecutionResult> {
     throw new Error('命令执行默认关闭。需通过设置显式启用，并接入审批、轨迹、超时和输出上限后才能使用。');
   }
 }
@@ -64,13 +72,14 @@ export class ProcessCommandExecutor implements CommandExecutor {
   async execute(
     request: CommandExecutionRequest,
     signal?: AbortSignal,
+    workspaceOverride?: string,
   ): Promise<CommandExecutionResult> {
     const policy = this.policy;
     if (!policy.enabled) {
       throw new Error('命令执行默认关闭。请先在设置页启用基础命令执行。');
     }
     if (!request.command.trim()) throw new Error('command 必须是非空字符串');
-    const cwd = resolveCommandCwd(request.cwd, policy.workspaceDir);
+    const cwd = resolveCommandCwd(request.cwd, workspaceOverride ?? policy.workspaceDir);
     const env = buildAllowedEnv(request.env, policy.envAllowlist);
 
     return new Promise<CommandExecutionResult>((resolveResult, reject) => {

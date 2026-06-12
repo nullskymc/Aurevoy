@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import type { MemoryEntry, Task, TaskTraceEntry } from '@aurevoy/shared';
+import type { MemoryEntry, Project, Task, TaskTraceEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
 
 /**
@@ -86,6 +86,17 @@ db.exec(`
     enabled    INTEGER NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS projects (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_path
+    ON projects(path);
 `);
 
 const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
@@ -104,6 +115,7 @@ const taskColumnMigrations: Array<{ name: string; sql: string }> = [
   { name: 'token_usage', sql: 'ALTER TABLE tasks ADD COLUMN token_usage TEXT' },
   { name: 'archived_messages', sql: "ALTER TABLE tasks ADD COLUMN archived_messages TEXT NOT NULL DEFAULT '[]'" },
   { name: 'parent_task_id', sql: 'ALTER TABLE tasks ADD COLUMN parent_task_id TEXT' },
+  { name: 'project_id', sql: 'ALTER TABLE tasks ADD COLUMN project_id TEXT' },
 ];
 for (const migration of taskColumnMigrations) {
   if (!taskColumns.some((column) => column.name === migration.name)) {
@@ -126,6 +138,7 @@ interface TaskRow {
   token_usage: string | null;
   archived_messages: string;
   parent_task_id: string | null;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -169,6 +182,7 @@ function rowToTask(row: TaskRow): Task {
     tokenUsage: (parseJsonColumn(row.token_usage) as Task['tokenUsage']) ?? undefined,
     archivedMessages: (parseJsonColumn(row.archived_messages) as Task['archivedMessages']) ?? [],
     parentTaskId: row.parent_task_id ?? undefined,
+    projectId: row.project_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -218,11 +232,13 @@ export const taskStore = {
     db.prepare(
       `INSERT INTO tasks (
          id, goal, status, phase, plan, messages, artifacts, clarifications, checkpoints,
-         budget, budget_usage, token_usage, archived_messages, parent_task_id, created_at, updated_at
+         budget, budget_usage, token_usage, archived_messages, parent_task_id, project_id,
+         created_at, updated_at
        )
        VALUES (
          @id, @goal, @status, @phase, @plan, @messages, @artifacts, @clarifications,
-         @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId, @createdAt, @updatedAt
+         @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId,
+         @projectId, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
          goal=excluded.goal, status=excluded.status, phase=excluded.phase, plan=excluded.plan,
@@ -230,7 +246,8 @@ export const taskStore = {
          clarifications=excluded.clarifications, checkpoints=excluded.checkpoints,
          budget=excluded.budget, budget_usage=excluded.budget_usage,
          token_usage=excluded.token_usage, archived_messages=excluded.archived_messages,
-         parent_task_id=excluded.parent_task_id, updated_at=excluded.updated_at`,
+         parent_task_id=excluded.parent_task_id, project_id=excluded.project_id,
+         updated_at=excluded.updated_at`,
     ).run({
       id: task.id,
       goal: task.goal,
@@ -246,6 +263,7 @@ export const taskStore = {
       tokenUsage: task.tokenUsage === undefined ? null : JSON.stringify(task.tokenUsage),
       archivedMessages: JSON.stringify(task.archivedMessages ?? []),
       parentTaskId: task.parentTaskId ?? null,
+      projectId: task.projectId ?? null,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });
@@ -262,6 +280,19 @@ export const taskStore = {
     const rows = db
       .prepare('SELECT * FROM tasks ORDER BY created_at DESC')
       .all() as TaskRow[];
+    return rows.map(rowToTask);
+  },
+
+  listByProject(projectId: string | null): Task[] {
+    if (projectId === null) {
+      const rows = db
+        .prepare('SELECT * FROM tasks WHERE project_id IS NULL ORDER BY created_at DESC')
+        .all() as TaskRow[];
+      return rows.map(rowToTask);
+    }
+    const rows = db
+      .prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at DESC')
+      .all(projectId) as TaskRow[];
     return rows.map(rowToTask);
   },
 
@@ -511,5 +542,87 @@ export const toolSettingsStore = {
       enabled: number;
     }>;
     return new Map(rows.map((row) => [row.name, row.enabled === 1]));
+  },
+};
+
+interface ProjectRow {
+  id: string;
+  name: string;
+  path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToProject(row: ProjectRow): Project {
+  return {
+    id: row.id,
+    name: row.name,
+    path: row.path,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export const projectStore = {
+  create(project: Project): Project {
+    db.prepare(
+      `INSERT INTO projects (id, name, path, created_at, updated_at)
+       VALUES (@id, @name, @path, @createdAt, @updatedAt)`,
+    ).run({
+      id: project.id,
+      name: project.name,
+      path: project.path,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    });
+    return project;
+  },
+
+  get(id: string): Project | undefined {
+    const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as
+      | ProjectRow
+      | undefined;
+    return row ? rowToProject(row) : undefined;
+  },
+
+  getByPath(path: string): Project | undefined {
+    const row = db.prepare('SELECT * FROM projects WHERE path = ?').get(path) as
+      | ProjectRow
+      | undefined;
+    return row ? rowToProject(row) : undefined;
+  },
+
+  list(): Project[] {
+    const rows = db
+      .prepare('SELECT * FROM projects ORDER BY created_at DESC')
+      .all() as ProjectRow[];
+    return rows.map(rowToProject);
+  },
+
+  update(id: string, patch: { name?: string }): Project | undefined {
+    const current = this.get(id);
+    if (!current) return undefined;
+    const next: Project = {
+      ...current,
+      name: patch.name ?? current.name,
+      updatedAt: new Date().toISOString(),
+    };
+    db.prepare(
+      'UPDATE projects SET name = @name, updated_at = @updatedAt WHERE id = @id',
+    ).run({ id, name: next.name, updatedAt: next.updatedAt });
+    return next;
+  },
+
+  delete(id: string): { deleted: boolean; orphanedTasks: number } {
+    const orphanedTasks = db
+      .prepare('UPDATE tasks SET project_id = NULL WHERE project_id = ?')
+      .run(id).changes;
+    const info = db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    return { deleted: info.changes > 0, orphanedTasks };
+  },
+
+  count(): number {
+    const row = db.prepare('SELECT COUNT(*) AS count FROM projects').get() as { count: number };
+    return row.count;
   },
 };

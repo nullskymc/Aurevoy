@@ -27,6 +27,10 @@ import {
   type ToolDescriptor,
   type UpdateRuntimeSettingsRequest,
   type UpdateToolRequest,
+  type Project,
+  type ProjectListResponse,
+  type CreateProjectRequest,
+  type UpdateProjectRequest,
   type UpdateMemoryRequest,
   type UpdateTaskArtifactRequest,
 } from '@aurevoy/shared';
@@ -42,11 +46,11 @@ export async function checkHealth(): Promise<HealthResponse> {
   return res.json();
 }
 
-export async function createTask(goal: string): Promise<CreateTaskResponse> {
+export async function createTask(goal: string, projectId?: string): Promise<CreateTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal }),
+    body: JSON.stringify({ goal, projectId }),
   });
   if (!res.ok) throw new Error(`create task failed: ${res.status}`);
   return res.json();
@@ -299,6 +303,40 @@ export async function updateMemory(
 export async function deleteMemory(id: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/memories/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`delete memory failed: ${res.status}`);
+}
+
+// ===== 项目 (Projects) =====
+
+export async function listProjects(): Promise<Project[]> {
+  const res = await fetch(`${BASE_URL}/api/projects`);
+  if (!res.ok) throw new Error(`list projects failed: ${res.status}`);
+  const body = (await res.json()) as ProjectListResponse;
+  return body.projects;
+}
+
+export async function createProject(body: CreateProjectRequest): Promise<Project> {
+  const res = await fetch(`${BASE_URL}/api/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`create project failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateProject(id: string, body: UpdateProjectRequest): Promise<Project> {
+  const res = await fetch(`${BASE_URL}/api/projects/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`update project failed: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/projects/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`delete project failed: ${res.status}`);
 }
 
 /**

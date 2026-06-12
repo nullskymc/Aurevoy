@@ -1,6 +1,8 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import { basename, resolve } from 'node:path';
 import type {
   AgentEvent,
   ApprovalDecisionRequest,
@@ -16,6 +18,7 @@ import type {
   ContinueTaskRequest,
   ContinueTaskResponse,
   CreateMemoryRequest,
+  CreateProjectRequest,
   CreateTaskRequest,
   CreateTaskResponse,
   DataStatusResponse,
@@ -24,6 +27,7 @@ import type {
   MemoryEntry,
   MemoryListResponse,
   ModelListResponse,
+  ProjectListResponse,
   ResumeTaskResponse,
   RevertTaskRequest,
   RevertTaskResponse,
@@ -31,6 +35,7 @@ import type {
   TaskArtifactContentResponse,
   TaskArtifactListResponse,
   TaskTraceListResponse,
+  UpdateProjectRequest,
   UpdateTaskArtifactRequest,
   UpdateRuntimeSettingsRequest,
   UpdateToolRequest,
@@ -53,7 +58,7 @@ import {
   unrevertTask,
 } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
-import { taskStore, traceStore, memoryStore, toolSettingsStore } from './store/db.js';
+import { taskStore, traceStore, memoryStore, toolSettingsStore, projectStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
 import { getProviderName, listProviderModels } from './llm/provider.js';
 import { getMcpStatuses, reloadMcpTools } from './tools/mcp.js';
@@ -146,6 +151,7 @@ export async function buildServer() {
         tasks: taskStore.count(),
         traces: traceStore.count(),
         memories: memoryStore.count(),
+        projects: projectStore.count(),
       },
     };
   });
@@ -155,8 +161,13 @@ export async function buildServer() {
     return taskStore.cleanupTerminal(olderThanDays);
   });
 
-  // 任务列表
-  app.get('/api/tasks', async () => taskStore.list());
+  // 任务列表（支持按项目过滤）
+  app.get<{ Querystring: { projectId?: string } }>('/api/tasks', async (req) => {
+    const projectId = req.query?.projectId;
+    if (projectId === 'standalone') return taskStore.listByProject(null);
+    if (projectId) return taskStore.listByProject(projectId);
+    return taskStore.list();
+  });
 
   // 单个任务详情
   app.get<{ Params: { id: string } }>('/api/tasks/:id', async (req, reply) => {
@@ -181,7 +192,13 @@ export async function buildServer() {
     const goal = req.body?.goal?.trim();
     if (!goal) return reply.code(400).send({ error: 'goal is required' });
 
-    const task = createTask(goal, req.body?.budget);
+    const projectId = req.body?.projectId;
+    if (projectId) {
+      const project = projectStore.get(projectId);
+      if (!project) return reply.code(404).send({ error: 'project not found' });
+    }
+
+    const task = createTask(goal, req.body?.budget, projectId);
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runTask(task);
 
@@ -573,6 +590,58 @@ export async function buildServer() {
       clearInterval(heartbeat);
       unsubscribe();
     });
+  });
+
+  // ---- 项目 CRUD ----
+
+  // 列出所有项目
+  app.get('/api/projects', async (): Promise<ProjectListResponse> => {
+    return { projects: projectStore.list() };
+  });
+
+  // 导入文件夹创建项目
+  app.post<{ Body: CreateProjectRequest }>('/api/projects', async (req, reply) => {
+    const rawPath = req.body?.path?.trim();
+    if (!rawPath) return reply.code(400).send({ error: 'path is required' });
+
+    const absPath = resolve(rawPath);
+    const stat = await fs.stat(absPath).catch(() => null);
+    if (!stat || !stat.isDirectory()) {
+      return reply.code(400).send({ error: 'path must be an existing directory' });
+    }
+
+    const existing = projectStore.getByPath(absPath);
+    if (existing) return reply.code(409).send({ error: 'project with this path already exists' });
+
+    const now = new Date().toISOString();
+    const name = req.body?.name?.trim() || basename(absPath);
+    const project = projectStore.create({
+      id: randomUUID(),
+      name,
+      path: absPath,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return reply.code(201).send(project);
+  });
+
+  // 重命名项目
+  app.patch<{ Params: { id: string }; Body: UpdateProjectRequest }>(
+    '/api/projects/:id',
+    async (req, reply) => {
+      const name = req.body?.name?.trim();
+      if (!name) return reply.code(400).send({ error: 'name is required' });
+      const updated = projectStore.update(req.params.id, { name });
+      if (!updated) return reply.code(404).send({ error: 'project not found' });
+      return reply.send(updated);
+    },
+  );
+
+  // 删除项目（关联对话变为独立对话）
+  app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
+    const result = projectStore.delete(req.params.id);
+    if (!result.deleted) return reply.code(404).send({ error: 'project not found' });
+    return reply.send(result);
   });
 
   return app;

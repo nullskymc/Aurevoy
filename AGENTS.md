@@ -98,6 +98,10 @@ npm run regression:m6  # M6 交付能力回归（追问/产物/预算/token/命�
   revert 截断 + 多模式选择（`code_and_conv`/`conv_only`）+ unrevert 撤销 +
   会话分支（branch）+ 上下文压缩（compact）。
   新增 4 个端点（`revert`/`unrevert`/`branch`/`compact`）、4 个 SSE 事件、2 个 SQLite 列。
+- ✅ 项目（Project）功能已落地：导入文件夹作为项目、对话按项目分组（抽屉式手风琴 UI）、
+  per-task workspace（项目目录即工作区，独立对话用 `.sessions/<taskId>/` 隔离）、
+  `projects` 表 + `task.project_id` 列、项目 CRUD API、Tauri 文件夹选择器、
+  记忆管理移入设置页、Composer 显示当前项目上下文。
 - 当前重点：M5 设置、分发、Windows 与交付质量（macOS 打包签名、Windows 适配）。
   Agent 功能路线进入 M8：知识库/RAG、Agent usability eval、浏览器 MCP、发布体验。
   详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)、[`docs/ROADMAP_AGENT_DELIVERY.md`](./docs/ROADMAP_AGENT_DELIVERY.md)
