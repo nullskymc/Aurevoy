@@ -36,8 +36,12 @@ const app = await buildServer();
 await app.listen({ host: '127.0.0.1', port: 0 });
 const address = app.server.address();
 const baseUrl = `http://127.0.0.1:${address.port}`;
+let projectId;
 
 try {
+  const project = await postJson('/api/projects', { name: 'm7-regression', path: workspaceDir });
+  projectId = project.id;
+
   await caseSearchFiles();
   await caseCopyMoveDeleteFile();
   await caseCopyApprovalRejected();
@@ -118,7 +122,7 @@ async function caseMultiStepPlan() {
 }
 
 async function caseCheckpointResume() {
-  const created = await postJson('/api/tasks', { goal: 'M7_RESUME 整理本地材料生成 Markdown 报告' });
+  const created = await postJson('/api/tasks', { goal: 'M7_RESUME 整理本地材料生成 Markdown 报告', projectId });
   await collectTaskStream(created.task.id, async (event) => {
     if (event.type === 'checkpoint_created') {
       await fetch(`${baseUrl}/api/tasks/${created.task.id}/cancel`, { method: 'POST' });
@@ -134,7 +138,9 @@ async function caseCheckpointResume() {
 }
 
 async function runTask(goal, options = {}) {
-  const created = await postJson('/api/tasks', { goal });
+  const body = { goal };
+  if (projectId) body.projectId = projectId;
+  const created = await postJson('/api/tasks', body);
   const events = await collectTaskStream(created.task.id, async (event) => {
     if (event.type !== 'approval_request') return;
     if (options.approve === 'timeout') return;

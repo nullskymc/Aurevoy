@@ -156,7 +156,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (!res.ok || !res.body) {
       const detail = await res.text().catch(() => '');
-      const err = new Error(`LLM 请求失败 (${res.status}): ${detail.slice(0, 300)}`) as Error & {
+      const maskedKey = this.opts.apiKey
+        ? `****${this.opts.apiKey.slice(-4)}`
+        : '(未设置)';
+      const hint =
+        res.status === 401
+          ? `（请求 URL: ${url}，key 以 ${maskedKey} 结尾；请检查 AUREVOY_LLM_API_KEY 和 AUREVOY_LLM_BASE_URL）`
+          : '';
+      const err = new Error(`LLM 请求失败 (${res.status}): ${detail.slice(0, 300)}${hint}`) as Error & {
         status?: number;
       };
       err.status = res.status;

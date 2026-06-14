@@ -338,7 +338,8 @@ export type AgentEvent =
       summaryLength: number;
     }
   | { type: 'done'; taskId: string; status: TaskStatus }
-  | { type: 'error'; taskId: string; message: string };
+  | { type: 'error'; taskId: string; message: string }
+  | { type: 'task_deleted'; taskId: string };
 
 // ============================================================
 // HTTP API 请求/响应
@@ -541,6 +542,12 @@ export interface CompactTaskResponse {
   originalCount: number;
   /** 生成的摘要字符数 */
   summaryLength: number;
+}
+
+/** DELETE /api/tasks/:id — 删除任务及其关联数据 */
+export interface DeleteTaskResponse {
+  taskId: string;
+  deleted: boolean;
 }
 
 // ============================================================

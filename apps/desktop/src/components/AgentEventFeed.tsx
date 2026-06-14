@@ -56,6 +56,8 @@ function getEventTitle(event: AgentEvent): string {
       return t("event.branched");
     case "compacted":
       return t("event.compacted");
+    case "task_deleted":
+      return t("event.taskDeleted");
     case "done":
       return `${t("event.taskDonePrefix")}${getStatusLabel(event.status)}`;
     case "error":
@@ -108,6 +110,8 @@ function getEventDetail(event: AgentEvent): string {
       return `${event.messageCount} messages branched from ${event.parentTaskId.slice(0, 8)}`;
     case "compacted":
       return `${event.originalCount} messages → ${event.summaryLength} chars`;
+    case "task_deleted":
+      return event.taskId;
     case "done":
       return event.status;
     case "error":

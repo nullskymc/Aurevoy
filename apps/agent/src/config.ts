@@ -14,6 +14,17 @@ export interface McpServerConfig {
 
 /** 运行时配置，可通过环境变量覆盖（开发期通过 apps/agent/.env 注入） */
 export const config = {
+  /** 日志配置 */
+  logging: {
+    /** trace | debug | info | warn | error | fatal */
+    level: (process.env.AUREVOY_LOG_LEVEL ?? 'info') as
+      | 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal',
+    /** 文件日志路径，空字符串则禁用文件输出 */
+    file: process.env.AUREVOY_LOG_FILE ?? './logs/aurevoy.log',
+    /** 开发模式美化控制台输出（生产期设 'false'） */
+    pretty: process.env.AUREVOY_LOG_PRETTY !== 'false',
+  },
+
   host: process.env.AUREVOY_HOST ?? AGENT_DEFAULT_HOST,
   port: Number(process.env.AUREVOY_PORT ?? AGENT_DEFAULT_PORT),
   /** SQLite 数据文件路径 */

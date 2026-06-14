@@ -32,13 +32,22 @@ export function loadPersistedSettings(): void {
   const entries = settingsStore.entries();
   const mcpJson = entries[SETTING_KEYS.mcpServersJson];
 
-  config.llm.provider = normalizeProvider(entries[SETTING_KEYS.llmProvider] ?? config.llm.provider);
-  config.llm.apiKey = entries[SETTING_KEYS.llmApiKey] ?? config.llm.apiKey;
-  config.llm.baseUrl = entries[SETTING_KEYS.llmBaseUrl] ?? config.llm.baseUrl;
-  config.llm.model = entries[SETTING_KEYS.llmModel] ?? config.llm.model;
+  const envKey = process.env.AUREVOY_LLM_API_KEY?.trim();
+  if (envKey) {
+    config.llm.apiKey = envKey;
+  } else {
+    const stored = entries[SETTING_KEYS.llmApiKey];
+    if (stored) {
+      config.llm.apiKey = stored;
+    }
+  }
+
+  config.llm.provider = normalizeProvider(entries[SETTING_KEYS.llmProvider] || config.llm.provider);
+  config.llm.baseUrl = entries[SETTING_KEYS.llmBaseUrl] || config.llm.baseUrl;
+  config.llm.model = entries[SETTING_KEYS.llmModel] || config.llm.model;
   config.llm.temperature = parseNumber(entries[SETTING_KEYS.llmTemperature], config.llm.temperature);
   config.llm.timeoutMs = parseNumber(entries[SETTING_KEYS.llmTimeoutMs], config.llm.timeoutMs);
-  config.workspaceDir = entries[SETTING_KEYS.workspaceDir] ?? config.workspaceDir;
+  config.workspaceDir = entries[SETTING_KEYS.workspaceDir] || config.workspaceDir;
   config.sandbox.commandExecutionEnabled =
     entries[SETTING_KEYS.commandExecutionEnabled] === undefined
       ? config.sandbox.commandExecutionEnabled
@@ -104,7 +113,11 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     }
     if (body.llm.apiKey !== undefined) {
       config.llm.apiKey = body.llm.apiKey;
-      settingsStore.set(SETTING_KEYS.llmApiKey, body.llm.apiKey, true);
+      if (body.llm.apiKey.trim().length > 0) {
+        settingsStore.set(SETTING_KEYS.llmApiKey, body.llm.apiKey, true);
+      } else {
+        settingsStore.delete(SETTING_KEYS.llmApiKey);
+      }
       providerChanged = true;
     }
   }

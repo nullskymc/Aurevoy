@@ -64,7 +64,10 @@ async function caseSettingsAffectProviderAndWorkspace() {
   assert(updated.llm.model === 'm5-updated-model', '设置响应应返回新模型');
   assert(updated.workspaceDir === nextWorkspaceDir, '设置响应应返回新工作区');
 
-  const created = await postJson('/api/tasks', { goal: 'M5_READ_WORKSPACE 读取 note.txt' });
+  const project = await postJson('/api/projects', { name: 'm5-regression', path: nextWorkspaceDir });
+  const projectId = project.id;
+
+  const created = await postJson('/api/tasks', { goal: 'M5_READ_WORKSPACE 读取 note.txt', projectId });
   await drainStream(created.task.id);
   const task = await getJson(`/api/tasks/${created.task.id}`);
   const last = task.messages[task.messages.length - 1];

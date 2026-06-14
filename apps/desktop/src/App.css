@@ -354,6 +354,43 @@ button:disabled {
   color: var(--danger, #e55);
 }
 
+/* Task row with inline delete button */
+.conv-item-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.conv-item-row .conv-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.conv-delete-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  border: none;
+  border-radius: var(--ui-radius-sm, 4px);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.conv-item-row:hover .conv-delete-btn,
+.conv-item-row:focus-within .conv-delete-btn {
+  display: flex;
+}
+
+.conv-delete-btn:hover {
+  background: var(--hover);
+  color: var(--danger, #e55);
+}
+
 /* ---- Drawer accordion ---- */
 
 .drawer-list {

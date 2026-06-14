@@ -23,7 +23,8 @@ import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/p
 import { buildContextWindow, buildMemorySystemMessage } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 import { withRetry } from './retry.js';
-import { taskStore, traceStore, memoryStore, projectStore } from '../store/db.js';
+import { taskStore, memoryStore, projectStore } from '../store/db.js';
+import { createTaskLogger } from '../logging/trace.js';
 import { config } from '../config.js';
 import {
   addTokenUsage,
@@ -1116,24 +1117,17 @@ function writeTrace(
   phase: TaskPhase | null,
   patch: TracePatch = {},
 ): void {
+  const taskLog = createTaskLogger(taskId);
   const endedAtMs = Date.now();
   const startedAtMs = patch.startedAtMs ?? endedAtMs;
-  traceStore.append({
-    id: randomUUID(),
-    taskId,
-    kind,
-    phase,
+  taskLog.trace(kind, phase, {
     iteration: patch.iteration,
     callId: patch.callId,
     toolName: patch.toolName,
     riskLevel: patch.riskLevel,
-    provider: getProviderName(),
-    model: config.llm.model,
     finishReason: patch.finishReason,
     tokenUsage: patch.tokenUsage ?? null,
-    startedAt: new Date(startedAtMs).toISOString(),
-    endedAt: new Date(endedAtMs).toISOString(),
-    durationMs: Math.max(0, endedAtMs - startedAtMs),
+    startedAtMs,
     ok: patch.ok,
     errorCategory: patch.errorCategory,
     errorMessage: patch.errorMessage,

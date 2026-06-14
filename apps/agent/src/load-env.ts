@@ -16,4 +16,12 @@ import { dirname, resolve } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const rootEnvPath = resolve(here, '../../../.env');
 
-loadEnv({ path: rootEnvPath });
+const result = loadEnv({ path: rootEnvPath });
+
+if (result.error) {
+  console.error(
+    `[aurevoy] 加载 .env 失败 (${rootEnvPath}): ${result.error.message}`,
+  );
+} else if (Object.keys(result.parsed ?? {}).length === 0) {
+  console.warn(`[aurevoy] .env 文件未找到或为空: ${rootEnvPath}`);
+}

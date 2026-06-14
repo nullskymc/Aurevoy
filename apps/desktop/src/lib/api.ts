@@ -159,6 +159,12 @@ export async function cancelTask(taskId: string): Promise<void> {
   if (!res.ok) throw new Error(`cancel task failed: ${res.status}`);
 }
 
+/** 删除任务及其关联数据（轨迹、事件等） */
+export async function deleteTask(taskId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`delete task failed: ${res.status}`);
+}
+
 /** 对一次工具调用做出审批决策（批准/拒绝） */
 export async function approveToolCall(
   taskId: string,

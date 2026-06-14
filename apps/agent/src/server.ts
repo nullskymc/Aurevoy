@@ -1,8 +1,9 @@
-import Fastify from 'fastify';
-import cors from '@fastify/cors';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { basename, resolve } from 'node:path';
+import Fastify from 'fastify';
+import pino, { type Logger } from 'pino';
+import cors from '@fastify/cors';
 import type {
   AgentEvent,
   ApprovalDecisionRequest,
@@ -22,6 +23,7 @@ import type {
   CreateTaskRequest,
   CreateTaskResponse,
   DataStatusResponse,
+  DeleteTaskResponse,
   HealthResponse,
   MemoryCategory,
   MemoryEntry,
@@ -63,7 +65,6 @@ import { toolRegistry } from './tools/registry.js';
 import { getProviderName, listProviderModels } from './llm/provider.js';
 import { getMcpStatuses, reloadMcpTools } from './tools/mcp.js';
 import {
-  loadPersistedSettings,
   readCleanupPolicyDays,
   readRuntimeSettings,
   updateRuntimeSettings,
@@ -71,13 +72,18 @@ import {
 
 const startedAt = Date.now();
 
-export async function buildServer() {
-  const app = Fastify({ logger: true });
-  loadPersistedSettings();
+export async function buildServer(externalLogger?: Logger) {
+  const log = externalLogger ?? pino({ level: 'info' }, pino.destination(1));
+  const app = Fastify({ loggerInstance: log });
+
+  app.addHook('onRequest', async (req) => {
+    (req.raw as unknown as Record<string, unknown>).requestId = randomUUID();
+  });
+
   toolRegistry.applySettings(toolSettingsStore.list());
   const recoveredTasks = markInterruptedTasksAfterRestart();
   if (recoveredTasks.length > 0) {
-    app.log.warn(`启动恢复：${recoveredTasks.length} 个未完成任务已标记为可恢复失败`);
+    log.warn(`启动恢复：${recoveredTasks.length} 个未完成任务已标记为可恢复失败`);
   }
 
   await app.register(cors, { origin: config.corsOrigins });
@@ -360,6 +366,26 @@ export async function buildServer() {
     return reply.send({ taskId: req.params.id, cancelling: cancelled, status: task.status });
   });
 
+  // 删除任务及其关联数据
+  app.delete<{ Params: { id: string } }>('/api/tasks/:id', async (req, reply) => {
+    const task = taskStore.get(req.params.id);
+    if (!task) return reply.code(404).send({ error: 'task not found' });
+
+    // 先取消进行中的任务，避免并发写入
+    cancelTask(req.params.id);
+
+    const result = taskStore.delete(req.params.id);
+
+    // 通知 SSE 订阅者该任务已删除
+    taskEvents.publish({ type: 'task_deleted', taskId: req.params.id });
+
+    const body: DeleteTaskResponse = {
+      taskId: req.params.id,
+      deleted: result.deleted,
+    };
+    return reply.send(body);
+  });
+
   // 对一次工具调用做出审批决策（批准/拒绝）
   app.post<{ Params: { id: string }; Body: ApprovalDecisionRequest }>(
     '/api/tasks/:id/approvals',
@@ -538,7 +564,7 @@ export async function buildServer() {
 
     const send = (event: AgentEvent) => {
       reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-      if (event.type === 'done') {
+      if (event.type === 'done' || event.type === 'task_deleted') {
         clearInterval(heartbeat);
         unsubscribe();
         reply.raw.end();

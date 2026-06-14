@@ -27,6 +27,7 @@ const noopProps = {
   onOpenSettings: vi.fn(),
   onImportProject: vi.fn(),
   onDeleteProject: vi.fn(),
+  onDeleteTask: vi.fn(),
   projects: [],
   activeView: "chat" as const,
 };

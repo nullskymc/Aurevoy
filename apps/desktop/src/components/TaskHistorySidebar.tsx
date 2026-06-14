@@ -20,6 +20,7 @@ interface TaskHistorySidebarProps {
   onOpenSettings: () => void;
   onImportProject: () => void;
   onDeleteProject: (projectId: string) => void;
+  onDeleteTask: (taskId: string) => void;
 }
 
 export function TaskHistorySidebar({
@@ -37,6 +38,7 @@ export function TaskHistorySidebar({
   onOpenSettings,
   onImportProject,
   onDeleteProject,
+  onDeleteTask,
 }: TaskHistorySidebarProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
     const initial = new Set<string>();
@@ -190,6 +192,7 @@ export function TaskHistorySidebar({
                       tasks={projectTasks}
                       activeTaskId={activeTaskId}
                       onSelectTask={onSelectTask}
+                      onDeleteTask={onDeleteTask}
                     />
                   )}
                 </div>
@@ -214,6 +217,7 @@ export function TaskHistorySidebar({
                     tasks={tasksByProject.standalone}
                     activeTaskId={activeTaskId}
                     onSelectTask={onSelectTask}
+                    onDeleteTask={onDeleteTask}
                   />
                 )}
               </div>
@@ -241,10 +245,12 @@ function TaskList({
   tasks,
   activeTaskId,
   onSelectTask,
+  onDeleteTask,
 }: {
   tasks: Task[];
   activeTaskId?: string;
   onSelectTask: (task: Task) => void;
+  onDeleteTask: (taskId: string) => void;
 }) {
   if (tasks.length === 0) {
     return <p className="sidebar-empty drawer-empty">{t("sidebar.emptyNoTasks")}</p>;
@@ -272,31 +278,42 @@ function TaskList({
     >
       {tasks.map((task) => (
         <li key={task.id} role="option" aria-selected={task.id === activeTaskId}>
-          <button
-            type="button"
-            className="conv-item"
-            data-active={task.id === activeTaskId}
-            onClick={() => onSelectTask(task)}
-            title={task.goal}
-          >
-            <span className="conv-copy">
-              <span className="conv-title">{task.goal}</span>
-              {(task.artifacts?.length || task.budgetUsage?.toolCalls) ? (
-                <span className="conv-summary">
-                  {task.artifacts?.length ? (
-                    <span className="conv-summary-chip">📄 {task.artifacts.length} {t("sidebar.unitArtifacts")}</span>
-                  ) : null}
-                  {task.budgetUsage?.toolCalls ? (
-                    <span className="conv-summary-chip">⚙ {task.budgetUsage.toolCalls} {t("sidebar.unitTools")}</span>
-                  ) : null}
+          <div className="conv-item-row">
+            <button
+              type="button"
+              className="conv-item"
+              data-active={task.id === activeTaskId}
+              onClick={() => onSelectTask(task)}
+              title={task.goal}
+            >
+              <span className="conv-copy">
+                <span className="conv-title">{task.goal}</span>
+                {(task.artifacts?.length || task.budgetUsage?.toolCalls) ? (
+                  <span className="conv-summary">
+                    {task.artifacts?.length ? (
+                      <span className="conv-summary-chip">📄 {task.artifacts.length} {t("sidebar.unitArtifacts")}</span>
+                    ) : null}
+                    {task.budgetUsage?.toolCalls ? (
+                      <span className="conv-summary-chip">⚙ {task.budgetUsage.toolCalls} {t("sidebar.unitTools")}</span>
+                    ) : null}
+                  </span>
+                ) : null}
+                <span className="conv-meta">
+                  <span>{task.status}</span>
+                  <span>{getRelativeTime(task.updatedAt)}</span>
                 </span>
-              ) : null}
-              <span className="conv-meta">
-                <span>{task.status}</span>
-                <span>{getRelativeTime(task.updatedAt)}</span>
               </span>
-            </span>
-          </button>
+            </button>
+            <button
+              type="button"
+              className="conv-delete-btn"
+              onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
+              title={t("sidebar.deleteTask")}
+              aria-label={t("sidebar.deleteTask")}
+            >
+              <TrashIcon />
+            </button>
+          </div>
         </li>
       ))}
     </ul>

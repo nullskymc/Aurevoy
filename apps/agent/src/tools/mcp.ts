@@ -9,6 +9,9 @@ import type { Tool as McpSdkTool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerStatus, ToolDescriptor, ToolRiskLevel } from '@aurevoy/shared';
 import { config, type McpServerConfig } from '../config.js';
 import { toolRegistry } from './registry.js';
+import { getLogger } from '../logging/logger.js';
+
+const mcpLog = getLogger('mcp');
 
 const MCP_TOOL_NAME_PREFIX = 'mcp';
 const MAX_TOOL_NAME_LENGTH = 64;
@@ -77,7 +80,7 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
         connected: true,
         registeredTools: tools.length,
       });
-      console.info(`[MCP] 已连接 ${server.name}，注册 ${tools.length} 个工具`);
+      mcpLog.info({ server: server.name, toolCount: tools.length }, 'MCP server 已连接');
     } catch (err) {
       failedServers += 1;
       const error = formatError(err);
@@ -88,7 +91,7 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
         registeredTools: 0,
         error,
       });
-      console.warn(`[MCP] 连接 ${server.name} 失败：${error}`);
+      mcpLog.warn({ server: server.name, err: error }, 'MCP server 连接失败');
     }
   }
 
@@ -130,10 +133,10 @@ async function connectStdioServer(server: McpServerConfig): Promise<Client> {
   });
 
   client.onerror = (error) => {
-    console.warn(`[MCP] ${server.name} 运行时错误：${error.message}`);
+    mcpLog.warn({ server: server.name, err: error.message }, 'MCP server 运行时错误');
   };
   client.onclose = () => {
-    console.info(`[MCP] ${server.name} 连接已关闭`);
+    mcpLog.info({ server: server.name }, 'MCP server 连接已关闭');
   };
 
   const transport = new StdioClientTransport(toStdioParameters(server));

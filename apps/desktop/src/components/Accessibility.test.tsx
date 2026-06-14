@@ -71,6 +71,7 @@ const sidebarProps = {
   projects: [],
   onImportProject: vi.fn(),
   onDeleteProject: vi.fn(),
+  onDeleteTask: vi.fn(),
 };
 
 describe("TaskHistorySidebar keyboard navigation", () => {

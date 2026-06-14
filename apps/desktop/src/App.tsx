@@ -23,6 +23,7 @@ import {
   createProject,
   deleteProject,
   deleteMemory,
+  deleteTask,
   getDataStatus,
   getMcpStatus,
   getSettings,
@@ -406,6 +407,19 @@ function App() {
       case "branched":
         break;
       case "compacted":
+        break;
+      case "task_deleted":
+        // 任务被删除（可能来自其他客户端或本端），关流并清理
+        closeStream();
+        setTasks((prev) => prev.filter((t) => t.id !== event.taskId));
+        if (currentTask?.id === event.taskId) {
+          setCurrentTask(null);
+          setOutput("");
+          setStatus(null);
+          setPhase(null);
+          setPlan([]);
+          setBusy(false);
+        }
         break;
       case "done":
         setStatus(event.status);
@@ -910,6 +924,22 @@ function App() {
     }
   }
 
+  function handleDeleteTask(taskId: string): void {
+    if (!confirm(t('sidebar.deleteTaskConfirm'))) return;
+    // 如果删除的是当前打开的任务，先清空
+    if (currentTask?.id === taskId) {
+      closeStream();
+      setCurrentTask(null);
+      setOutput("");
+      setStatus(null);
+      setPhase(null);
+      setPlan([]);
+    }
+    void deleteTask(taskId)
+      .then(() => setTasks((prev) => prev.filter((t) => t.id !== taskId)))
+      .catch((err) => setNotice(`${t("notice.deleteTaskFailed")}${err instanceof Error ? err.message : String(err)}`));
+  }
+
   function startResize(panel: "left" | "right", event: PointerEvent<HTMLDivElement>): void {
     event.preventDefault();
     const startX = event.clientX;
@@ -975,6 +1005,7 @@ function App() {
         onOpenSettings={handleOpenSettings}
         onImportProject={handleImportProject}
         onDeleteProject={handleDeleteProject}
+        onDeleteTask={handleDeleteTask}
       />
 
       <div

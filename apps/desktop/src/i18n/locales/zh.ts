@@ -151,6 +151,8 @@ export const zh = {
   "sidebar.unitArtifacts": "产物",
   "sidebar.unitTools": "工具",
   "sidebar.listLabel": "对话列表",
+  "sidebar.deleteTask": "删除对话",
+  "sidebar.deleteTaskConfirm": "确定要删除这条对话记录吗？对话的所有消息和产物的记录将被移除。",
 
   // 状态筛选
   "filter.all": "全部状态",
@@ -228,6 +230,7 @@ export const zh = {
   "event.unreverted": "撤销编辑重跑",
   "event.branched": "会话分支",
   "event.compacted": "上下文已压缩",
+  "event.taskDeleted": "对话已删除",
   "event.taskDonePrefix": "任务",
   "event.error": "执行错误",
   "event.title": "事件流",
@@ -420,6 +423,7 @@ export const zh = {
   "notice.updateMemoryFailed": "更新记忆失败：",
   "notice.editMemoryFailed": "编辑记忆失败：",
   "notice.deleteMemoryFailed": "删除记忆失败：",
+  "notice.deleteTaskFailed": "删除对话失败：",
 
   // 无障碍 / 通用 UI
   "a11y.resizeLeft": "调整左侧栏宽度",

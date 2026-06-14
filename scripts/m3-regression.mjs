@@ -46,6 +46,7 @@ const app = await buildServer();
 await app.listen({ host: '127.0.0.1', port: 0 });
 const address = app.server.address();
 const baseUrl = `http://127.0.0.1:${address.port}`;
+let projectId;
 
 try {
   assert(mcpSummary.registeredTools > 0, 'MCP 工具未被注册');
@@ -54,6 +55,9 @@ try {
     tools.some((tool) => tool.name === 'mcp_fixture_echo'),
     'MCP 工具目录缺少 mcp_fixture_echo',
   );
+
+  const project = await postJson('/api/projects', { name: 'm3-regression', path: workspaceDir });
+  projectId = project.id;
 
   await caseDirectAnswer();
   await caseReadFile();
@@ -198,6 +202,7 @@ async function caseUnconfiguredProvider() {
     ...process.env,
     AUREVOY_LLM_API_KEY: '',
     AUREVOY_MCP_SERVERS_JSON: '',
+    AUREVOY_LOG_LEVEL: 'error',
   });
   const result = JSON.parse(output);
   assert(result.status === 'failed', '未配置 Key 未进入 failed');
@@ -217,7 +222,9 @@ async function caseSandboxBoundary() {
 }
 
 async function runTask(goal, options = {}) {
-  const created = await postJson('/api/tasks', { goal });
+  const body = { goal };
+  if (projectId) body.projectId = projectId;
+  const created = await postJson('/api/tasks', body);
   await collectTaskStream(created.task.id, async (event) => {
     if (event.type !== 'approval_request') return;
     if (options.approve === 'timeout') return;

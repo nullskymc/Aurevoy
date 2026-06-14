@@ -323,6 +323,16 @@ export const taskStore = {
     });
     return deleteOne(ids.map((row) => row.id));
   },
+
+  /** 删除单个任务及其关联轨迹 */
+  delete(id: string): { deleted: boolean; deletedTraces: number } {
+    const result = db.transaction(() => {
+      const traces = db.prepare('DELETE FROM task_traces WHERE task_id = ?').run(id).changes;
+      const task = db.prepare('DELETE FROM tasks WHERE id = ?').run(id).changes;
+      return { deleted: task > 0, deletedTraces: traces };
+    })();
+    return result;
+  },
 };
 
 export const traceStore = {
@@ -518,6 +528,10 @@ export const settingsStore = {
       value: string;
     }>;
     return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  },
+
+  delete(key: string): void {
+    db.prepare('DELETE FROM app_settings WHERE key = ?').run(key);
   },
 };
 
