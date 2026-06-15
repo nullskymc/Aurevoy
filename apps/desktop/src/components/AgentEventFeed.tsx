@@ -62,6 +62,12 @@ function getEventTitle(event: AgentEvent): string {
       return `${t("event.taskDonePrefix")}${getStatusLabel(event.status)}`;
     case "error":
       return t("event.error");
+    case "scout_started":
+      return t("event.scoutStarted");
+    case "scout_report":
+      return t("event.scoutReport");
+    case "plan_generated":
+      return t("event.planGenerated");
   }
 }
 
@@ -118,6 +124,12 @@ function getEventDetail(event: AgentEvent): string {
       return event.message;
     case "task_created":
       return event.task.goal;
+    case "scout_started":
+      return t("event.scoutStartedDetail");
+    case "scout_report":
+      return `${event.report.keyFiles.length} key files, ${event.report.rounds} rounds`;
+    case "plan_generated":
+      return `${event.plan.length} steps (${event.source})`;
   }
 }
 

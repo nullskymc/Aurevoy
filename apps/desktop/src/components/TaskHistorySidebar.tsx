@@ -11,7 +11,7 @@ interface TaskHistorySidebarProps {
   tasks: Task[];
   projects: Project[];
   selectedProjectId?: string;
-  onNewTask: () => void;
+  onNewTask: (projectId?: string) => void;
   onSelectTask: (task: Task) => void;
   onSelectProject: (projectId: string) => void;
   onCollapse: () => void;
@@ -113,11 +113,11 @@ export function TaskHistorySidebar({
       <div className="sidebar-actions">
         <button
           type="button"
-          className="sidebar-action primary"
+          className="sidebar-action primary new-chat-btn"
           data-active={activeView === "chat" && !activeTaskId}
-          onClick={onNewTask}
+          onClick={() => onNewTask()}
         >
-          <EditIcon />
+          <PlusIcon />
           <span>{t("nav.newChat")}</span>
         </button>
         <button
@@ -149,81 +149,102 @@ export function TaskHistorySidebar({
       </div>
 
       <div className="sidebar-scroll">
-        {tasks.length === 0 ? (
-          <p className="sidebar-empty">{t("sidebar.emptyNoTasks")}</p>
-        ) : (
-          <div className="drawer-list">
-            <button type="button" className="sidebar-action project-row drawer-import" onClick={onImportProject}>
+        <div className="drawer-list">
+          {/* 项目标头 */}
+          <div className="sidebar-section-divider">
+            <span className="section-line-short" />
+            <span className="section-title">{t("nav.projects")}</span>
+            <span className="section-line-long" />
+            <button
+              type="button"
+              className="section-action-btn"
+              onClick={onImportProject}
+              title={t("projects.import")}
+              aria-label={t("projects.import")}
+            >
               <PlusIcon />
-              <span>{t("projects.import")}</span>
             </button>
+          </div>
 
-            {projects.map((project) => {
-              const projectTasks = tasksByProject.map.get(project.id) ?? [];
-              const expanded = expandedIds.has(project.id);
-              return (
-                <div key={project.id} className="drawer-group">
-                  <div className="drawer-header-row">
-                    <button
-                      type="button"
-                      className="sidebar-action drawer-header"
-                      data-expanded={expanded}
-                      data-selected={selectedProjectId === project.id}
-                      onClick={() => { toggleExpand(project.id); onSelectProject(project.id); }}
-                      title={project.path}
-                    >
-                      <ChevronIcon expanded={expanded} />
-                      <FolderIcon />
-                      <span className="drawer-name">{project.name}</span>
+          {projects.map((project) => {
+            const projectTasks = tasksByProject.map.get(project.id) ?? [];
+            const expanded = expandedIds.has(project.id);
+            return (
+              <div key={project.id} className="drawer-group">
+                <div className="drawer-header-row">
+                  <button
+                    type="button"
+                    className="sidebar-action drawer-header"
+                    data-expanded={expanded}
+                    data-selected={selectedProjectId === project.id}
+                    onClick={() => { toggleExpand(project.id); onSelectProject(project.id); }}
+                    title={project.path}
+                  >
+                    <FolderIcon />
+                    <span className="drawer-name">{project.name}</span>
+                    {projectTasks.length > 0 && (
                       <span className="drawer-count">{projectTasks.length}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="project-delete-btn"
-                      onClick={() => onDeleteProject(project.id)}
-                      title={t("projects.delete")}
-                      aria-label={t("projects.delete")}
-                    >
-                      <TrashIcon />
-                    </button>
-                  </div>
-                  {expanded && (
-                    <TaskList
-                      tasks={projectTasks}
-                      activeTaskId={activeTaskId}
-                      onSelectTask={onSelectTask}
-                      onDeleteTask={onDeleteTask}
-                    />
-                  )}
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="project-new-chat-btn"
+                    onClick={(e) => { e.stopPropagation(); onNewTask(project.id); }}
+                    title={t("nav.newChat")}
+                    aria-label={t("nav.newChat")}
+                  >
+                    <PlusIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="project-delete-btn"
+                    onClick={(e) => { e.stopPropagation(); onDeleteProject(project.id); }}
+                    title={t("projects.delete")}
+                    aria-label={t("projects.delete")}
+                  >
+                    <TrashIcon />
+                  </button>
                 </div>
-              );
-            })}
-
-            {tasksByProject.standalone.length > 0 && (
-              <div className="drawer-group">
-                <button
-                  type="button"
-                  className="sidebar-action drawer-header"
-                  data-expanded={expandedIds.has("__standalone__")}
-                  onClick={() => toggleExpand("__standalone__")}
-                >
-                  <ChevronIcon expanded={expandedIds.has("__standalone__")} />
-                  <FolderIcon />
-                  <span className="drawer-name">{t("projects.standalone")}</span>
-                  <span className="drawer-count">{tasksByProject.standalone.length}</span>
-                </button>
-                {expandedIds.has("__standalone__") && (
+                {expanded && (
                   <TaskList
-                    tasks={tasksByProject.standalone}
+                    tasks={projectTasks}
                     activeTaskId={activeTaskId}
                     onSelectTask={onSelectTask}
                     onDeleteTask={onDeleteTask}
+                    isChild={true}
                   />
                 )}
               </div>
-            )}
+            );
+          })}
+
+          {/* 独立对话标头 */}
+          <div className="sidebar-section-divider">
+            <span className="section-line-short" />
+            <span className="section-title">{t("nav.conversations")}</span>
+            <span className="section-line-long" />
+            <button
+              type="button"
+              className="section-action-btn"
+              onClick={() => onNewTask()}
+              title={t("nav.newChat")}
+              aria-label={t("nav.newChat")}
+            >
+              <PlusIcon />
+            </button>
           </div>
-        )}
+
+          {tasksByProject.standalone.length === 0 ? (
+            <p className="sidebar-empty">{t("sidebar.emptyNoTasks")}</p>
+          ) : (
+            <TaskList
+              tasks={tasksByProject.standalone}
+              activeTaskId={activeTaskId}
+              onSelectTask={onSelectTask}
+              onDeleteTask={onDeleteTask}
+            />
+          )}
+        </div>
       </div>
 
       <div className="sidebar-footer">
@@ -246,18 +267,20 @@ function TaskList({
   activeTaskId,
   onSelectTask,
   onDeleteTask,
+  isChild = false,
 }: {
   tasks: Task[];
   activeTaskId?: string;
   onSelectTask: (task: Task) => void;
   onDeleteTask: (taskId: string) => void;
+  isChild?: boolean;
 }) {
   if (tasks.length === 0) {
     return <p className="sidebar-empty drawer-empty">{t("sidebar.emptyNoTasks")}</p>;
   }
   return (
     <ul
-      className="conv-list drawer-conv-list"
+      className={`conv-list ${isChild ? "child-chat-list" : "drawer-conv-list"}`}
       role="listbox"
       aria-label={t("sidebar.listLabel")}
       onKeyDown={(event) => {
@@ -278,17 +301,18 @@ function TaskList({
     >
       {tasks.map((task) => (
         <li key={task.id} role="option" aria-selected={task.id === activeTaskId}>
-          <div className="conv-item-row">
+          <div className={`conv-item-row ${isChild ? "child-chat-item-row" : ""}`}>
             <button
               type="button"
-              className="conv-item"
+              className={`conv-item ${isChild ? "child-chat-item" : ""}`}
               data-active={task.id === activeTaskId}
               onClick={() => onSelectTask(task)}
               title={task.goal}
             >
+              <ChatIcon />
               <span className="conv-copy">
                 <span className="conv-title">{task.goal}</span>
-                {(task.artifacts?.length || task.budgetUsage?.toolCalls) ? (
+                {!isChild && (task.artifacts?.length || task.budgetUsage?.toolCalls) ? (
                   <span className="conv-summary">
                     {task.artifacts?.length ? (
                       <span className="conv-summary-chip">📄 {task.artifacts.length} {t("sidebar.unitArtifacts")}</span>
@@ -298,10 +322,12 @@ function TaskList({
                     ) : null}
                   </span>
                 ) : null}
-                <span className="conv-meta">
-                  <span>{task.status}</span>
-                  <span>{getRelativeTime(task.updatedAt)}</span>
-                </span>
+                {!isChild && (
+                  <span className="conv-meta">
+                    <span>{task.status}</span>
+                    <span>{getRelativeTime(task.updatedAt)}</span>
+                  </span>
+                )}
               </span>
             </button>
             <button
@@ -320,28 +346,6 @@ function TaskList({
   );
 }
 
-function ChevronIcon({ expanded }: { expanded: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      width="14"
-      height="14"
-      aria-hidden="true"
-      className="drawer-chevron"
-      data-expanded={expanded}
-    >
-      <path
-        d="M6 4l4 4-4 4"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 function CollapseIcon() {
   return (
     <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
@@ -357,15 +361,44 @@ function CollapseIcon() {
   );
 }
 
-function EditIcon() {
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+      <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.4" fill="none" />
+      <path
+        d="M10 2.8v2.2M10 15v2.2M17.2 10H15M5 10H2.8M15.1 4.9l-1.6 1.6M6.5 13.5l-1.6 1.6M15.1 15.1l-1.6-1.6M6.5 6.5L4.9 4.9"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+      <path
+        d="M5 6h10l-.8 9.3a1 1 0 01-1 .7H6.8a1 1 0 01-1-.7L5 6zM8 6V4.5a1 1 0 011-1h2a1 1 0 011 1V6M3.5 6h13"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        fill="none"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function PlusIcon() {
   return (
     <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
       <path
-        d="M4 14.5l-.6 2.6 2.6-.6L16 6.5a1.5 1.5 0 00-2.1-2.1L4 14.5z"
+        d="M10 4v12M4 10h12"
         stroke="currentColor"
-        strokeWidth="1.4"
+        strokeWidth="1.5"
         fill="none"
-        strokeLinejoin="round"
+        strokeLinecap="round"
       />
     </svg>
   );
@@ -387,6 +420,15 @@ function PluginIcon() {
       <rect x="11.5" y="3.5" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" fill="none" />
       <rect x="3.5" y="11.5" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" fill="none" />
       <rect x="11.5" y="11.5" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" fill="none" />
+    </svg>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+      <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.4" fill="none" />
+      <path d="M10 6.5V10l2.5 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   );
 }
@@ -419,50 +461,13 @@ function FolderIcon() {
   );
 }
 
-function ClockIcon() {
+function ChatIcon() {
   return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.4" fill="none" />
-      <path d="M10 6.5V10l2.5 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function GearIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.4" fill="none" />
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" className="conv-icon-svg">
       <path
-        d="M10 2.8v2.2M10 15v2.2M17.2 10H15M5 10H2.8M15.1 4.9l-1.6 1.6M6.5 13.5l-1.6 1.6M15.1 15.1l-1.6-1.6M6.5 6.5L4.9 4.9"
+        d="M3.5 5.5v7c0 .8.6 1.4 1.4 1.4h9.2l3.2 2.6V5.5c0-.8-.6-1.4-1.4-1.4H4.9c-.8 0-1.4.6-1.4 1.4z"
         stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <path
-        d="M10 4v12M4 10h12"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        fill="none"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-      <path
-        d="M5 6h10l-.8 9.3a1 1 0 01-1 .7H6.8a1 1 0 01-1-.7L5 6zM8 6V4.5a1 1 0 011-1h2a1 1 0 011 1V6M3.5 6h13"
-        stroke="currentColor"
-        strokeWidth="1.3"
+        strokeWidth="1.4"
         fill="none"
         strokeLinejoin="round"
         strokeLinecap="round"
@@ -470,3 +475,4 @@ function TrashIcon() {
     </svg>
   );
 }
+

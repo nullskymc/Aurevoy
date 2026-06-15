@@ -64,6 +64,36 @@ export const config = {
     recentMessageWindow: parseNumber(process.env.AUREVOY_RECENT_MESSAGE_WINDOW, 8),
     /** 被压缩消息的单条内容字符上限（保留可读摘要，引用而非全文）。 */
     compressedMessageCharCap: parseNumber(process.env.AUREVOY_COMPRESSED_MESSAGE_CHAR_CAP, 600),
+    /** P1: 侦查阶段最多 LLM 轮次（防止无限侦查）。 */
+    maxScoutRounds: parseNumber(process.env.AUREVOY_MAX_SCOUT_ROUNDS, 3),
+    /** P1: 是否启用 LLM 驱动规划（关闭时回退纯正则规划，用于调试）。 */
+    llmPlanningEnabled: process.env.AUREVOY_LLM_PLANNING_ENABLED !== 'false',
+    /** P2: 单个工具调用超时（毫秒），防止单个 hung 工具拖死整个任务。 */
+    toolTimeoutMs: parseNumber(process.env.AUREVOY_TOOL_TIMEOUT_MS, 30000),
+    /** P3: 单次工具输出字符上限，超出部分截断并标记 _truncated。 */
+    toolOutputMaxChars: parseNumber(
+      process.env.AUREVOY_TOOL_OUTPUT_MAX_CHARS,
+      50000,
+    ),
+    /** P4: 上下文 token 预算（优先于 contextCharBudget）。未设置时用字符预算/2.5 估算。 */
+    contextTokenBudget: parseNumber(
+      process.env.AUREVOY_CONTEXT_TOKEN_BUDGET,
+      process.env.AUREVOY_CONTEXT_CHAR_BUDGET
+        ? Math.round(
+            parseNumber(process.env.AUREVOY_CONTEXT_CHAR_BUDGET, 24000) / 2.5,
+          )
+        : 128000,
+    ),
+    /** P4: 超过 token 预算的多少比例时自动触发语义压缩（0-1）。默认 0.85。 */
+    compactThreshold: parseNumber(
+      process.env.AUREVOY_COMPACT_THRESHOLD,
+      0.85,
+    ),
+    /** P4: 压缩时保留的最近消息轮次数（不被压缩的尾部窗口）。 */
+    compactKeepRecentTurns: parseNumber(
+      process.env.AUREVOY_COMPACT_KEEP_RECENT_TURNS,
+      5,
+    ),
   },
 
   sandbox: {

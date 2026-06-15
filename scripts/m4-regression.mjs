@@ -26,6 +26,8 @@ process.env.AUREVOY_MCP_SERVERS_JSON = '';
 process.env.AUREVOY_CONTEXT_CHAR_BUDGET = '500';
 process.env.AUREVOY_RECENT_MESSAGE_WINDOW = '1';
 process.env.AUREVOY_COMPRESSED_MESSAGE_CHAR_CAP = '200';
+// 禁用 LLM 规划：fixture mock server 不处理 scout/plan 对话模式，直接用正则兜底
+process.env.AUREVOY_LLM_PLANNING_ENABLED = 'false';
 
 await import('../apps/agent/dist/tools/builtins.js');
 const { taskStore } = await import('../apps/agent/dist/store/db.js');

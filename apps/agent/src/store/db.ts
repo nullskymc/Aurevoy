@@ -123,6 +123,21 @@ for (const migration of taskColumnMigrations) {
   }
 }
 
+// P5: memory 表新增字段迁移
+const memoryColumns = db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>;
+const memoryColumnMigrations: Array<{ name: string; sql: string }> = [
+  { name: 'name_slug', sql: 'ALTER TABLE memories ADD COLUMN name_slug TEXT' },
+  { name: 'why', sql: 'ALTER TABLE memories ADD COLUMN why TEXT' },
+  { name: 'how_to_apply', sql: 'ALTER TABLE memories ADD COLUMN how_to_apply TEXT' },
+];
+for (const migration of memoryColumnMigrations) {
+  if (!memoryColumns.some((column) => column.name === migration.name)) {
+    db.exec(migration.sql);
+  }
+}
+// 确保 name_slug 索引存在（列必须在索引之前创建）
+db.exec('CREATE INDEX IF NOT EXISTS idx_memories_name_slug ON memories(name_slug)');
+
 interface TaskRow {
   id: string;
   goal: string;
@@ -396,6 +411,9 @@ interface MemoryRow {
   source_created_at: string;
   created_at: string;
   updated_at: string;
+  name_slug: string | null;
+  why: string | null;
+  how_to_apply: string | null;
 }
 
 function rowToMemory(row: MemoryRow): MemoryEntry {
@@ -413,6 +431,10 @@ function rowToMemory(row: MemoryRow): MemoryEntry {
     },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    nameSlug: row.name_slug ?? undefined,
+    why: row.why ?? undefined,
+    howToApply: row.how_to_apply ?? undefined,
+    // linkedMemoryIds 从 content 中的 [[link]] 动态解析，不持久化独立列
   };
 }
 
@@ -421,10 +443,12 @@ export const memoryStore = {
     db.prepare(
       `INSERT INTO memories (
          id, category, content, confidence, enabled, origin,
-         source_task_id, source_task_goal, source_created_at, created_at, updated_at
+         source_task_id, source_task_goal, source_created_at, created_at, updated_at,
+         name_slug, why, how_to_apply
        ) VALUES (
          @id, @category, @content, @confidence, @enabled, @origin,
-         @sourceTaskId, @sourceTaskGoal, @sourceCreatedAt, @createdAt, @updatedAt
+         @sourceTaskId, @sourceTaskGoal, @sourceCreatedAt, @createdAt, @updatedAt,
+         @nameSlug, @why, @howToApply
        )`,
     ).run({
       id: entry.id,
@@ -438,6 +462,9 @@ export const memoryStore = {
       sourceCreatedAt: entry.source.createdAt,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
+      nameSlug: entry.nameSlug ?? null,
+      why: entry.why ?? null,
+      howToApply: entry.howToApply ?? null,
     });
     return entry;
   },
@@ -462,7 +489,7 @@ export const memoryStore = {
     return rows.map(rowToMemory);
   },
 
-  update(id: string, patch: Partial<Pick<MemoryEntry, 'content' | 'category' | 'confidence' | 'enabled'>>): MemoryEntry | undefined {
+  update(id: string, patch: Partial<Pick<MemoryEntry, 'content' | 'category' | 'confidence' | 'enabled' | 'nameSlug' | 'why' | 'howToApply'>>): MemoryEntry | undefined {
     const current = this.get(id);
     if (!current) return undefined;
     const next: MemoryEntry = {
@@ -471,20 +498,35 @@ export const memoryStore = {
       category: patch.category ?? current.category,
       confidence: patch.confidence ?? current.confidence,
       enabled: patch.enabled ?? current.enabled,
+      nameSlug: patch.nameSlug !== undefined ? patch.nameSlug : current.nameSlug,
+      why: patch.why !== undefined ? patch.why : current.why,
+      howToApply: patch.howToApply !== undefined ? patch.howToApply : current.howToApply,
       updatedAt: new Date().toISOString(),
     };
     db.prepare(
       `UPDATE memories SET content=@content, category=@category, confidence=@confidence,
-         enabled=@enabled, updated_at=@updatedAt WHERE id=@id`,
+         enabled=@enabled, name_slug=@nameSlug, why=@why, how_to_apply=@howToApply,
+         updated_at=@updatedAt WHERE id=@id`,
     ).run({
       id,
       content: next.content,
       category: next.category,
       confidence: next.confidence,
       enabled: next.enabled ? 1 : 0,
+      nameSlug: next.nameSlug ?? null,
+      why: next.why ?? null,
+      howToApply: next.howToApply ?? null,
       updatedAt: next.updatedAt,
     });
     return next;
+  },
+
+  /** P5: 按 nameSlug 查找记忆（用于 [[link]] 引用解析）。 */
+  findByNameSlug(slug: string): MemoryEntry | undefined {
+    const row = db.prepare('SELECT * FROM memories WHERE name_slug = ?').get(slug) as
+      | MemoryRow
+      | undefined;
+    return row ? rowToMemory(row) : undefined;
   },
 
   delete(id: string): boolean {

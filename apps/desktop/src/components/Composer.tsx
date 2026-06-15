@@ -190,20 +190,16 @@ export function Composer({
         </div>
       </div>
 
-      <div className="composer-footer">
-        <span className="composer-footer-item">
-          <FolderIcon />
-          {projectName ?? t("projects.standalone")}
-        </span>
-        {provider === "unconfigured" && (
-          <button
-            type="button"
-            className="composer-footer-link"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={onOpenModelSelector}
-          >
-            {t("composer.configureModel")}
-          </button>
+      <div className="composer-footer-external">
+        {projectName ? (
+          <span className="composer-project-badge" title={projectName}>
+            <FolderIcon />
+            <span>{projectName}</span>
+          </span>
+        ) : (
+          <span className="composer-project-badge is-standalone" title={t("projects.standalone")}>
+            <span>{t("projects.standalone")}</span>
+          </span>
         )}
       </div>
     </div>
@@ -212,7 +208,7 @@ export function Composer({
 
 function PlusIcon() {
   return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none">
       <path
         d="M10 4.5v11M4.5 10h11"
         stroke="currentColor"
@@ -253,7 +249,7 @@ function GearIcon() {
 
 function ArrowUpIcon() {
   return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none">
       <path
         d="M10 15.5v-11M5 9.5L10 4.5l5 5"
         stroke="currentColor"

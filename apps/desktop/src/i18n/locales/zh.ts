@@ -12,6 +12,7 @@ export const zh = {
 
   // 运行阶段
   "phase.initializing": "初始化",
+  "phase.planning": "正在规划",
   "phase.thinking": "模型思考",
   "phase.calling_tool": "调用工具",
   "phase.waiting_approval": "等待确认",
@@ -239,6 +240,9 @@ export const zh = {
   "event.streamFragment": "流式片段",
   "event.riskLevel": "风险等级",
   "event.providerNoUsage": "Provider 未返回 usage",
+  "event.scoutStarted": "侦查工作区",
+  "event.scoutStartedDetail": "快速了解文件结构与关键信息",
+  "event.scoutReport": "侦查报告",
 
   // 运行详情（Inspector）
   "inspector.panelLabel": "任务检查器",

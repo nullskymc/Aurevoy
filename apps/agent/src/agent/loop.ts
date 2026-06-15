@@ -1,11 +1,14 @@
 import { promises as fs } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
+  FileSnapshot,
+  GeneratedPlan,
   Message,
   MessageToolCall,
   PlanStep,
   RevertMode,
+  ScoutReport,
   Task,
   TaskArtifact,
   TaskErrorCategory,
@@ -20,7 +23,7 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { buildContextWindow, buildMemorySystemMessage } from './context.js';
+import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 import { withRetry } from './retry.js';
 import { taskStore, memoryStore, projectStore } from '../store/db.js';
@@ -45,6 +48,8 @@ import {
 const DUPLICATE_CALL_LIMIT = 3;
 /** 单轮最多并行工具调用数 */
 const MAX_TOOL_CALLS_PER_TURN = 10;
+/** P6: 写入类工具（需要执行前文件快照） */
+const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_artifact', 'copy_file', 'move_file', 'rename_file']);
 /** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
 const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'running', 'paused'];
 /** 进行中任务的取消句柄 */
@@ -169,6 +174,18 @@ export function revertTask(
       return artifact.createdAt < revertTime;
     });
     task.plan = task.plan.filter((step) => step.status === 'completed');
+
+    // P6: 回滚被截断消息关联的文件写入（从快照恢复）
+    const removedCallIds = new Set(
+      removedMessages.flatMap((m) => m.toolCalls ?? []).map((tc) => tc.id),
+    );
+    const snapshotsToRestore = (task.fileSnapshots ?? [])
+      .filter((s) => removedCallIds.has(s.callId));
+    if (snapshotsToRestore.length > 0) {
+      restoreFilesFromSnapshots(task, snapshotsToRestore).catch(() => {
+        // 文件恢复失败不阻塞 revert 操作
+      });
+    }
   }
 
   task.status = 'paused';
@@ -573,6 +590,59 @@ export async function resolveTaskWorkspace(task: Task): Promise<string> {
   return standaloneDir;
 }
 
+/** P6: 在写操作前捕获文件快照（用于 Rewind 回滚）。 */
+async function captureFileSnapshot(
+  filePath: string,
+  taskId: string,
+  workspaceDir: string,
+): Promise<string | null> {
+  const snapshotDir = join(workspaceDir, '.aurevoy-snapshots', taskId);
+  await fs.mkdir(snapshotDir, { recursive: true });
+  const snapshotId = randomUUID();
+  const snapshotPath = join(snapshotDir, snapshotId);
+
+  try {
+    await fs.copyFile(filePath, snapshotPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // 文件不存在（即将创建），记录空快照
+      await fs.writeFile(snapshotPath, '', 'utf8');
+    } else {
+      return null; // 快照失败不阻塞操作
+    }
+  }
+
+  return snapshotId;
+}
+
+/** P6: 从快照恢复文件（Rewind 时调用）。 */
+async function restoreFilesFromSnapshots(
+  task: Task,
+  snapshots: FileSnapshot[],
+): Promise<void> {
+  const workspaceDir = await resolveTaskWorkspace(task);
+  for (const snapshot of snapshots) {
+    const snapshotPath = join(
+      workspaceDir,
+      '.aurevoy-snapshots',
+      task.id,
+      snapshot.id,
+    );
+    const targetPath = resolve(workspaceDir, snapshot.path);
+    try {
+      const stat = await fs.stat(snapshotPath);
+      if (stat.size === 0) {
+        // 空快照 = 文件在写入前不存在，删除目标文件
+        await fs.unlink(targetPath).catch(() => {});
+      } else {
+        await fs.copyFile(snapshotPath, targetPath);
+      }
+    } catch {
+      // 快照文件可能已被清理
+    }
+  }
+}
+
 /**
  * Agent 主循环（ReAct 工具调用循环）。
  *
@@ -591,7 +661,7 @@ export async function runTask(task: Task): Promise<void> {
     taskStore.save(task);
   };
 
-  task.plan = buildInitialPlan(task);
+  task.plan = await buildInitialPlan(task, taskWorkspace, abortController.signal);
   let activeStepIndex = task.plan.findIndex((step) => step.status === 'running');
   if (activeStepIndex < 0) activeStepIndex = 0;
   task.plan = task.plan.map((step, index) => ({
@@ -730,8 +800,26 @@ export async function runTask(task: Task): Promise<void> {
       let toolCalls: AccumulatedToolCall[] = [];
       const llmStartedAt = Date.now();
 
+      // P4: 自动语义压缩（token 感知，LLM 摘要旧消息）
+      const compactResult = await autoCompactIfNeeded(messages);
+      if (compactResult.compressed) {
+        writeTrace(task.id, 'phase', 'thinking', {
+          iteration: iteration + 1,
+          ok: true,
+          summary: `自动语义压缩：${compactResult.compressedGroupCount} 组消息 → 摘要，释放 ~${compactResult.savedTokens} tokens`,
+          data: {
+            originalTokens: compactResult.originalTokens,
+            finalTokens: compactResult.finalTokens,
+            compressedGroupCount: compactResult.compressedGroupCount,
+            savedTokens: compactResult.savedTokens,
+            tokenBudget: config.agent.contextTokenBudget,
+            threshold: config.agent.compactThreshold,
+          },
+        });
+      }
+
       // 会话级短期记忆：把完整历史压缩为本轮上下文窗口（非裸拼接）
-      const ctx = buildContextWindow(messages);
+      const ctx = buildContextWindow(compactResult.messages);
       if (ctx.compressed) {
         writeTrace(task.id, 'phase', 'thinking', {
           iteration: iteration + 1,
@@ -747,8 +835,16 @@ export async function runTask(task: Task): Promise<void> {
         });
       }
 
-      // 长期记忆：把启用的记忆作为 system 消息注入到上下文最前面（禁用的不注入）
-      const memoryMessage = buildMemorySystemMessage(memoryStore.listEnabled());
+      // P5: 长期记忆——按目标相关性评分 + [[link]] 展开后注入（禁用的不注入）
+      const recentTopics = messages
+        .filter((m) => m.role === 'user')
+        .slice(-3)
+        .map((m) => m.content);
+      const memoryMessage = buildMemorySystemMessage(
+        memoryStore.listEnabled(),
+        task.goal,
+        recentTopics,
+      );
       const requestMessages = memoryMessage ? [memoryMessage, ...ctx.messages] : ctx.messages;
 
       // ---------- 调用 LLM（带重试） ----------
@@ -842,128 +938,258 @@ export async function runTask(task: Task): Promise<void> {
       messages.push(assistantMsg);
       taskEvents.publish({ type: 'message', taskId: task.id, message: assistantMsg });
 
-      // 逐个执行工具并回填结果
+      // P2: 并行工具执行 —— 预校验 → 分区 → 并行/并发审批
+      // Step 1: 预校验所有 tool calls（指纹去重 + JSON 解析 + 风险查询）
+      interface ValidatedCall {
+        tc: AccumulatedToolCall;
+        call: ToolCall;
+        risk: ToolRiskLevel;
+        skipReason?: string;
+      }
+      const validatedCalls: ValidatedCall[] = [];
       for (const tc of toolCalls) {
         const name = tc.function.name;
-        setRuntimePhase('calling_tool', `准备调用工具：${name}`, 'running');
-        updateStep(`调用工具：${name}`, 'running');
-
-        // 防死循环：指纹去重
         const fingerprint = `${name}:${tc.function.arguments}`;
         const count = (callFingerprints.get(fingerprint) ?? 0) + 1;
         callFingerprints.set(fingerprint, count);
+
+        let skipReason: string | undefined;
         if (count > DUPLICATE_CALL_LIMIT) {
-          messages.push(
-            makeToolResult(tc.id, {
-              error: `工具 "${name}" 已用相同参数被调用 ${count} 次。请换一种方式，或直接给出最终答案。`,
-            }),
-          );
-          continue;
+          skipReason = `工具 "${name}" 已用相同参数被调用 ${count} 次。请换一种方式，或直接给出最终答案。`;
         }
 
-        // 解析参数
-        let args: Record<string, unknown>;
-        try {
-          args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-        } catch {
-          messages.push(
-            makeToolResult(tc.id, { error: `工具参数不是合法 JSON：${tc.function.arguments}` }),
-          );
-          continue;
-        }
-
-        const call = { id: tc.id, toolName: name, args };
-        const risk = toolRegistry.riskLevelOf(name);
-        taskEvents.publish({ type: 'tool_call', taskId: task.id, call });
-        writeToolCallTrace(task.id, call, risk, iteration + 1);
-        task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
-        task.budgetUsage.toolCalls += 1;
-        updateWallTime(task, taskStartedAtMs);
-        taskEvents.publish({
-          type: 'budget_usage',
-          taskId: task.id,
-          usage: task.budgetUsage,
-          budget: effectiveBudget(task),
-        });
-        assertBudgetWithinLimits(task);
-
-        if (name === 'ask_user') {
-          const toolMessage = await handleAskUserTool(call, iteration + 1);
-          messages.push(toolMessage);
-          if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
-          setRuntimePhase('thinking', '已收到追问回复，继续推理', 'running');
-          continue;
-        }
-
-        // 风险门：非 safe 工具执行前请求用户审批
-        if (risk !== 'safe') {
-          taskEvents.publish({ type: 'approval_request', taskId: task.id, call, riskLevel: risk });
-          updateStep(`等待确认：${name}`, 'paused');
-          setRuntimePhase('waiting_approval', `等待确认：${name}`, 'paused');
-          const approved = await waitForApproval(task.id, tc.id, abortController.signal);
-          if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
-          writeApprovalTrace(task.id, call, risk, approved, iteration + 1);
-          if (!approved) {
-            const denied = { callId: tc.id, ok: false, error: '用户拒绝了该工具调用' };
-            taskEvents.publish({ type: 'tool_result', taskId: task.id, result: denied });
-            writeTrace(task.id, 'tool_result', 'waiting_approval', {
-              iteration: iteration + 1,
-              callId: tc.id,
-              toolName: name,
-              riskLevel: risk,
-              ok: false,
-              errorCategory: 'permission',
-              errorMessage: denied.error,
-              summary: `工具被拒绝：${name}`,
-            });
-            messages.push(
-              makeToolResult(tc.id, {
-                error: '用户拒绝执行该工具。请改用其他方式，或直接给出最终答案。',
-              }),
-            );
-            setRuntimePhase('thinking', `审批被拒绝：${name}`, 'running');
-            continue;
+        let args: Record<string, unknown> = {};
+        if (!skipReason) {
+          try {
+            args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
+          } catch {
+            skipReason = `工具参数不是合法 JSON：${tc.function.arguments}`;
           }
-          setRuntimePhase('calling_tool', `审批通过，调用工具：${name}`, 'running');
-          updateStep(`调用工具：${name}`, 'running');
         }
 
-        const toolStartedAt = Date.now();
-        const result = await toolRegistry.invoke(call, {
-          taskId: task.id,
-          taskGoal: task.goal,
-          task,
-          abortSignal: abortController.signal,
-          workspaceDir: taskWorkspace,
+        validatedCalls.push({
+          tc,
+          call: { id: tc.id, toolName: name, args },
+          risk: toolRegistry.riskLevelOf(name),
+          skipReason,
         });
-        const enrichedResult = handleToolSideEffects(task, call, result);
+      }
+
+      // Step 2: 发布 tool_call 事件 + 批量更新预算
+      for (const v of validatedCalls) {
+        if (v.skipReason) continue;
+        taskEvents.publish({ type: 'tool_call', taskId: task.id, call: v.call });
+        writeToolCallTrace(task.id, v.call, v.risk, iteration + 1);
+      }
+      task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
+      task.budgetUsage.toolCalls += validatedCalls.filter((v) => !v.skipReason).length;
+      updateWallTime(task, taskStartedAtMs);
+      taskEvents.publish({
+        type: 'budget_usage',
+        taskId: task.id,
+        usage: task.budgetUsage,
+        budget: effectiveBudget(task),
+      });
+      assertBudgetWithinLimits(task);
+
+      // Step 3: ask_user 特殊处理（阻塞等待用户输入，不能并行）
+      const askUserItem = validatedCalls.find(
+        (v) => v.call.toolName === 'ask_user' && !v.skipReason,
+      );
+      if (askUserItem) {
+        setRuntimePhase('calling_tool', '等待用户补充信息', 'running');
+        const toolMessage = await handleAskUserTool(askUserItem.call, iteration + 1);
+        messages.push(toolMessage);
+        if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+        setRuntimePhase('thinking', '已收到追问回复，继续推理', 'running');
+      }
+
+      // Step 4: 分区 —— safe+可并行 vs 需审批/不可并行
+      const toExecute = validatedCalls.filter(
+        (v) => !v.skipReason && v.call.toolName !== 'ask_user',
+      );
+      const isParallelSafe = (v: ValidatedCall) =>
+        v.risk === 'safe' &&
+        toolRegistry.executionPolicyOf(v.call.toolName).parallelizable !== false;
+      const safeOnes = toExecute.filter(isParallelSafe);
+      const riskyOnes = toExecute.filter((v) => !isParallelSafe(v));
+
+      // 执行单个工具的共享逻辑（不含审批门——审批在外部处理）
+      const executeOne = async (
+        v: ValidatedCall,
+        approved = true,
+      ): Promise<{ callId: string; output: unknown }> => {
+        if (!approved) {
+          const denied = {
+            callId: v.call.id,
+            ok: false,
+            error: '用户拒绝了该工具调用',
+          };
+          taskEvents.publish({ type: 'tool_result', taskId: task.id, result: denied });
+          writeTrace(task.id, 'tool_result', 'calling_tool', {
+            iteration: iteration + 1,
+            callId: v.call.id,
+            toolName: v.call.toolName,
+            riskLevel: v.risk,
+            ok: false,
+            errorCategory: 'permission' as TaskErrorCategory,
+            errorMessage: denied.error,
+            summary: `工具被拒绝：${v.call.toolName}`,
+          });
+          return {
+            callId: v.call.id,
+            output: {
+              error: '用户拒绝执行该工具。请改用其他方式，或直接给出最终答案。',
+            },
+          };
+        }
+
+        updateStep(`调用工具：${v.call.toolName}`, 'running');
+        const toolStartedAt = Date.now();
+
+        // P6: 写入类工具执行前捕获文件快照（用于 Rewind 回滚）
+        if (WRITE_TOOLS.has(v.call.toolName) && typeof v.call.args.path === 'string') {
+          try {
+            const absPath = resolve(taskWorkspace, v.call.args.path);
+            const snapshotId = await captureFileSnapshot(absPath, task.id, taskWorkspace);
+            if (snapshotId) {
+              const snapshot: FileSnapshot = {
+                id: snapshotId,
+                path: v.call.args.path,
+                callId: v.call.id,
+                createdAt: new Date().toISOString(),
+              };
+              task.fileSnapshots = [...(task.fileSnapshots ?? []), snapshot];
+            }
+          } catch {
+            // 快照失败不阻塞工具执行
+          }
+        }
+
+        const result = await toolRegistry.invokeWithTimeout(
+          v.call,
+          {
+            taskId: task.id,
+            taskGoal: task.goal,
+            task,
+            abortSignal: abortController.signal,
+            workspaceDir: taskWorkspace,
+          },
+          config.agent.toolTimeoutMs,
+        );
+
+        // P6: 失败时附加 fallback 建议
+        const rawResult = !result.ok
+          ? { ...result, fallback: toolRegistry.fallbackFor(v.call.toolName) }
+          : result;
+        const enrichedResult = handleToolSideEffects(task, v.call, rawResult);
         task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
-        task.budgetUsage.outputBytes += estimatePayloadBytes(enrichedResult.output ?? enrichedResult.error ?? '');
+        task.budgetUsage.outputBytes += estimatePayloadBytes(
+          enrichedResult.output ?? enrichedResult.error ?? '',
+        );
         assertBudgetWithinLimits(task);
         taskEvents.publish({ type: 'tool_result', taskId: task.id, result: enrichedResult });
         writeTrace(task.id, 'tool_result', 'calling_tool', {
           iteration: iteration + 1,
           startedAtMs: toolStartedAt,
-          callId: tc.id,
-          toolName: name,
-          riskLevel: risk,
+          callId: v.call.id,
+          toolName: v.call.toolName,
+          riskLevel: v.risk,
           ok: enrichedResult.ok,
           errorCategory: enrichedResult.ok ? undefined : 'tool',
           errorMessage: enrichedResult.error,
-          summary: enrichedResult.ok ? `工具成功：${name}` : `工具失败：${name}`,
-          data: enrichedResult.ok ? { output: summarizePayload(enrichedResult.output) } : undefined,
+          summary: enrichedResult.ok
+            ? `工具成功：${v.call.toolName}`
+            : `工具失败：${v.call.toolName}`,
+          data: enrichedResult.ok
+            ? { output: summarizePayload(enrichedResult.output) }
+            : undefined,
         });
         if (enrichedResult.ok) {
-          completeCurrentStep(`工具完成：${name}`, {
-            toolName: name,
-            callId: call.id,
+          completeCurrentStep(`工具完成：${v.call.toolName}`, {
+            toolName: v.call.toolName,
+            callId: v.call.id,
             output: summarizePayload(enrichedResult.output),
           });
         }
 
-        messages.push(
-          makeToolResult(tc.id, enrichedResult.ok ? enrichedResult.output : { error: enrichedResult.error }),
+        return {
+          callId: v.call.id,
+          output: enrichedResult.ok
+            ? enrichedResult.output
+            : { error: enrichedResult.error },
+        };
+      };
+
+      // Step 5: 收集所有执行结果（按 callId 索引）
+      const resultByCallId = new Map<string, { callId: string; output: unknown }>();
+
+      // 5a: 跳过项 → 错误结果
+      for (const v of validatedCalls.filter((v) => v.skipReason)) {
+        resultByCallId.set(v.tc.id, {
+          callId: v.tc.id,
+          output: { error: v.skipReason },
+        });
+      }
+
+      // 5b: safe 工具 → 全并行，各自独立超时
+      if (safeOnes.length > 0) {
+        setRuntimePhase(
+          'calling_tool',
+          `并行执行 ${safeOnes.length} 个工具`,
+          'running',
         );
+        const safeResults = await Promise.all(safeOnes.map((v) => executeOne(v)));
+        for (const r of safeResults) resultByCallId.set(r.callId, r);
+      }
+
+      // 5c: risky 工具 → 并发发送审批请求，获批后并行执行
+      if (riskyOnes.length > 0) {
+        setRuntimePhase(
+          'waiting_approval',
+          `等待确认 ${riskyOnes.length} 个工具`,
+          'paused',
+        );
+
+        // 并发发送所有审批请求
+        const approvalResults = await Promise.all(
+          riskyOnes.map(async (v) => {
+            taskEvents.publish({
+              type: 'approval_request',
+              taskId: task.id,
+              call: v.call,
+              riskLevel: v.risk,
+            });
+            updateStep(`等待确认：${v.call.toolName}`, 'paused');
+            const approved = await waitForApproval(
+              task.id,
+              v.tc.id,
+              abortController.signal,
+            );
+            writeApprovalTrace(task.id, v.call, v.risk, approved, iteration + 1);
+            return { v, approved };
+          }),
+        );
+
+        if (abortController.signal.aborted)
+          return finishCancelled(task, updateStep, touch);
+
+        setRuntimePhase('calling_tool', '执行已批准的工具', 'running');
+
+        // 并行执行所有（批准的 + 拒绝的）risky 工具
+        const riskyResults = await Promise.all(
+          approvalResults.map(({ v, approved }) => executeOne(v, approved)),
+        );
+        for (const r of riskyResults) resultByCallId.set(r.callId, r);
+      }
+
+      // Step 6: 按原始 toolCalls 顺序将结果回填到 messages
+      for (const tc of toolCalls) {
+        const result = resultByCallId.get(tc.id);
+        if (result) {
+          messages.push(makeToolResult(tc.id, result.output));
+        }
+        // ask_user 的结果已在 Step 3 由 handleAskUserTool 推送
       }
 
       // 每轮结束持久化，保证崩溃可恢复
@@ -997,21 +1223,386 @@ export async function runTask(task: Task): Promise<void> {
 
 // ---------------- 内部辅助 ----------------
 
-function buildInitialPlan(task: Task): PlanStep[] {
+/** 侦查阶段可用的工具（仅 safe 只读工具，不经过审批门）。 */
+const SCOUT_TOOL_NAMES = new Set(['list_directory', 'read_file', 'search_files']);
+
+/**
+ * P1: 构建初始计划（异步）。
+ *
+ * 流程：
+ * 1. 如果已有 >1 个未完成步骤（resume），直接复用
+ * 2. 如果启用 LLM 规划 → 先侦查工作区，再让 LLM 生成结构化计划
+ * 3. LLM 规划失败或未启用 → 回退到正则启发式计划
+ */
+async function buildInitialPlan(
+  task: Task,
+  taskWorkspace: string,
+  signal: AbortSignal,
+): Promise<PlanStep[]> {
   const existing = task.plan.filter((step) => step.status !== 'completed');
   if (existing.length > 1) return task.plan;
 
+  if (config.agent.llmPlanningEnabled) {
+    try {
+      taskEvents.publish({ type: 'scout_started', taskId: task.id });
+      writeTrace(task.id, 'phase', 'planning', {
+        ok: true,
+        summary: '开始侦查工作区以制定计划',
+      });
+
+      const scoutReport = await runScoutPhase(task.goal, taskWorkspace, signal);
+
+      if (scoutReport && !signal.aborted) {
+        taskEvents.publish({ type: 'scout_report', taskId: task.id, report: scoutReport });
+        writeTrace(task.id, 'phase', 'planning', {
+          ok: true,
+          summary: `侦查完成：${scoutReport.keyFiles.length} 个关键文件，${scoutReport.rounds} 轮`,
+          data: { scoutReport },
+        });
+      }
+
+      if (scoutReport && !signal.aborted) {
+        const generated = await generatePlanViaLLM(task.goal, scoutReport, signal);
+        if (generated && generated.steps.length > 0 && !signal.aborted) {
+          const plan = generated.steps.map((step, index): PlanStep => ({
+            id: `step-${index + 1}`,
+            description: step.description,
+            status: index === 0 ? 'running' : 'pending',
+            toolsExpected: step.toolsExpected,
+            dependsOn: step.dependsOn,
+            verifiable: step.verifiable,
+            source: 'llm' as const,
+          }));
+          taskEvents.publish({ type: 'plan_generated', taskId: task.id, plan, source: 'llm' });
+          writeTrace(task.id, 'phase', 'planning', {
+            ok: true,
+            summary: `LLM 生成 ${plan.length} 步计划，预估 ${generated.estimatedIterations} 轮，风险 ${generated.riskLevel}`,
+            data: { generatedPlan: generated },
+          });
+          return plan;
+        }
+      }
+    } catch (err) {
+      writeTrace(task.id, 'error', 'planning', {
+        ok: false,
+        errorCategory: classifyError(err),
+        errorMessage: err instanceof Error ? err.message : String(err),
+        summary: 'LLM 规划失败，回退到启发式计划',
+      });
+    }
+  }
+
+  // 回退：正则启发式计划
   const generated = inferStructuredPlan(task.goal);
   if (generated.length === 0) {
     return [{ id: 'exec', description: '正在执行任务…', status: 'running' }];
   }
-  return generated.map((description, index): PlanStep => ({
+  const fallbackPlan = generated.map((description, index): PlanStep => ({
     id: `step-${index + 1}`,
     description,
     status: index === 0 ? 'running' : 'pending',
+    source: 'heuristic' as const,
   }));
+  taskEvents.publish({ type: 'plan_generated', taskId: task.id, plan: fallbackPlan, source: 'heuristic' });
+  writeTrace(task.id, 'phase', 'planning', {
+    ok: true,
+    summary: `使用启发式计划（${fallbackPlan.length} 步）`,
+    data: { plan: fallbackPlan },
+  });
+  return fallbackPlan;
 }
 
+// ---- 侦查阶段（P1）----
+
+/**
+ * 侦查工作区：用受限的 safe 工具快速了解文件结构、关键文件和约束。
+ * 最多 N 轮 LLM 调用，只使用 list_directory / read_file / search_files。
+ * 返回结构化侦查报告，供 plan generation 使用。
+ */
+async function runScoutPhase(
+  goal: string,
+  workspaceDir: string,
+  signal: AbortSignal,
+): Promise<ScoutReport | null> {
+  const startedAt = Date.now();
+  const maxRounds = config.agent.maxScoutRounds;
+  const scoutTools = toolRegistry.list().filter((t) => SCOUT_TOOL_NAMES.has(t.name));
+
+  const messages: Message[] = [
+    {
+      id: randomUUID(),
+      role: 'system',
+      content:
+        '你是 Aurevoy 的侦查 Agent。你的任务是快速了解工作区的文件结构和关键信息，' +
+        '为后续的任务规划提供依据。\n\n' +
+        '约束：\n' +
+        '- 只能使用 list_directory、read_file、search_files 工具\n' +
+        '- 不要修改任何文件，不要执行命令\n' +
+        '- 不要做深入分析——这是快速侦查，不是执行任务\n' +
+        '- 当你觉得已经掌握了足够信息来制定计划时，直接输出侦查报告，不再调用工具',
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: randomUUID(),
+      role: 'user',
+      content: `用户目标：${goal}\n工作区路径：${workspaceDir}\n\n请快速侦查工作区，然后输出一份侦查报告。`,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+
+  let rounds = 0;
+  for (; rounds < maxRounds; rounds++) {
+    if (signal.aborted) return null;
+
+    let textBuffer = '';
+    let toolCalls: AccumulatedToolCall[] = [];
+
+    try {
+      const stream = getProvider().stream(messages, {
+        tools: scoutTools.length > 0 ? scoutTools : undefined,
+        toolChoice: 'auto',
+        signal,
+      });
+      for await (const chunk of stream) {
+        if (chunk.textDelta) textBuffer += chunk.textDelta;
+        if (chunk.done) toolCalls = chunk.toolCallsSnapshot ?? [];
+      }
+    } catch (err) {
+      // 侦查失败不阻塞任务——回退到无侦查报告的 LLM 规划或启发式
+      return null;
+    }
+
+    if (signal.aborted) return null;
+
+    // LLM 已收集足够信息，输出最终报告
+    if (toolCalls.length === 0) {
+      const report = parseScoutReport(textBuffer, rounds + 1, Date.now() - startedAt);
+      return report;
+    }
+
+    // 添加 assistant 消息
+    const assistantMsg = makeAssistantWithToolCalls(textBuffer, '', toolCalls);
+    messages.push(assistantMsg);
+
+    // 执行工具（safe 工具，无需审批）
+    for (const tc of toolCalls) {
+      if (signal.aborted) return null;
+      const name = tc.function.name;
+
+      // 侦查阶段只允许 safe scout 工具
+      if (!SCOUT_TOOL_NAMES.has(name)) {
+        messages.push(makeToolResult(tc.id, { error: `侦查阶段不允许使用工具：${name}` }));
+        continue;
+      }
+
+      let args: Record<string, unknown>;
+      try {
+        args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
+      } catch {
+        messages.push(makeToolResult(tc.id, { error: `工具参数不是合法 JSON` }));
+        continue;
+      }
+
+      try {
+        const result = await toolRegistry.invoke(
+          { id: tc.id, toolName: name, args },
+          { taskId: undefined, workspaceDir, abortSignal: signal },
+        );
+        messages.push(
+          makeToolResult(tc.id, result.ok ? result.output : { error: result.error }),
+        );
+      } catch (err) {
+        messages.push(
+          makeToolResult(tc.id, {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
+    }
+  }
+
+  // 达到最大轮次：用最后一轮的文本解析报告
+  const report = parseScoutReport(
+    messages.filter((m) => m.role === 'assistant').map((m) => m.content).join('\n'),
+    rounds,
+    Date.now() - startedAt,
+  );
+  return report;
+}
+
+/** 从 LLM 文本输出中解析 ScoutReport。解析失败返回降级报告。 */
+function parseScoutReport(text: string, rounds: number, durationMs: number): ScoutReport {
+  try {
+    // 尝试提取 JSON 块
+    const jsonMatch = text.match(/\{[\s\S]*"keyFiles"[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        keyFiles: Array.isArray(parsed.keyFiles)
+          ? parsed.keyFiles.map((f: unknown) => {
+              if (typeof f === 'object' && f !== null) {
+                const obj = f as Record<string, unknown>;
+                return {
+                  path: String(obj.path ?? ''),
+                  reason: String(obj.reason ?? ''),
+                };
+              }
+              return { path: String(f), reason: '' };
+            })
+          : [],
+        techStack: Array.isArray(parsed.techStack)
+          ? (parsed.techStack as unknown[]).filter((item: unknown): item is string => typeof item === 'string')
+          : undefined,
+        constraints: Array.isArray(parsed.constraints)
+          ? parsed.constraints.map(String)
+          : [],
+        summary: typeof parsed.summary === 'string' ? parsed.summary : text.slice(0, 500),
+        durationMs,
+        rounds,
+      };
+    }
+  } catch {
+    // JSON 解析失败，从自由文本提取
+  }
+
+  // 降级：从自由文本里提取关键信息
+  const lines = text.split('\n').filter(Boolean);
+  const keyFiles: Array<{ path: string; reason: string }> = [];
+  const constraints: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.replace(/^[-*#\s]+/, '').trim();
+    if (/\.(ts|js|json|md|py|yaml|yml|toml|cfg|ini|env|css|html)$/i.test(trimmed)) {
+      keyFiles.push({ path: trimmed.split(/\s+/)[0], reason: '' });
+    }
+    if (/(需要|注意|约束|限制|边界|小心|不能|禁止|必须)/.test(trimmed)) {
+      constraints.push(trimmed.slice(0, 200));
+    }
+  }
+
+  return {
+    keyFiles: keyFiles.slice(0, 20),
+    constraints: constraints.slice(0, 10),
+    summary: text.slice(0, 500),
+    durationMs,
+    rounds,
+  };
+}
+
+// ---- LLM 规划生成（P1）----
+
+/**
+ * 用 LLM 根据侦查报告生成结构化执行计划。
+ * 要求 LLM 输出 JSON 格式的 GeneratedPlan。
+ * 失败返回 null → 调用方回退到启发式计划。
+ */
+async function generatePlanViaLLM(
+  goal: string,
+  scoutReport: ScoutReport,
+  signal: AbortSignal,
+): Promise<GeneratedPlan | null> {
+  const keyFilesStr = scoutReport.keyFiles
+    .map((f) => `- ${f.path}${f.reason ? ` (${f.reason})` : ''}`)
+    .join('\n');
+  const constraintsStr = scoutReport.constraints.length > 0
+    ? scoutReport.constraints.map((c) => `- ${c}`).join('\n')
+    : '（无特殊约束）';
+
+  const planMessages: Message[] = [
+    {
+      id: randomUUID(),
+      role: 'system',
+      content:
+        '你是 Aurevoy 的任务规划器。根据用户目标和侦查报告，将任务分解为 2-8 个有序执行步骤。\n\n' +
+        '输出要求：\n' +
+        '- 严格输出 JSON，不要加任何前缀或后缀文字\n' +
+        '- 每个步骤描述清晰、可独立验证\n' +
+        '- 如果步骤之间有依赖关系，在 dependsOn 中注明前置步骤序号（1-based）\n' +
+        '- 如果步骤预期产生可预览产物，标记 verifiable=true\n\n' +
+        'JSON 格式：\n' +
+        '{\n' +
+        '  "steps": [\n' +
+        '    {\n' +
+        '      "description": "步骤描述",\n' +
+        '      "toolsExpected": ["tool_name"],\n' +
+        '      "verifiable": true,\n' +
+        '      "dependsOn": []\n' +
+        '    }\n' +
+        '  ],\n' +
+        '  "estimatedIterations": 5,\n' +
+        '  "riskLevel": "low"\n' +
+        '}',
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: randomUUID(),
+      role: 'user',
+      content:
+        `用户目标：${goal}\n\n` +
+        `侦查报告：\n${scoutReport.summary}\n\n` +
+        `关键文件：\n${keyFilesStr}\n\n` +
+        `约束条件：\n${constraintsStr}\n\n` +
+        `技术栈：${scoutReport.techStack?.join(', ') ?? '未识别'}\n\n` +
+        `请输出 JSON 格式的执行计划。`,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+
+  try {
+    let textBuffer = '';
+    const stream = getProvider().stream(planMessages, {
+      toolChoice: 'none',
+      signal,
+      temperature: 0.3, // 规划用低温度，追求一致
+    });
+    for await (const chunk of stream) {
+      if (chunk.textDelta) textBuffer += chunk.textDelta;
+    }
+
+    if (signal.aborted || !textBuffer.trim()) return null;
+
+    // 从 LLM 输出中提取 JSON
+    const jsonMatch = textBuffer.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!parsed.steps || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
+      return null;
+    }
+
+    const steps = parsed.steps.slice(0, 8).map((step: unknown) => {
+      if (typeof step !== 'object' || step === null) return null;
+      const s = step as Record<string, unknown>;
+      return {
+        description: typeof s.description === 'string' ? s.description : String(s.description ?? ''),
+        toolsExpected: Array.isArray(s.toolsExpected)
+          ? s.toolsExpected.filter((item): item is string => typeof item === 'string')
+          : undefined,
+        verifiable: typeof s.verifiable === 'boolean' ? s.verifiable : undefined,
+        dependsOn: Array.isArray(s.dependsOn)
+          ? s.dependsOn.map(String)
+          : undefined,
+      };
+    }).filter(Boolean) as GeneratedPlan['steps'];
+
+    if (steps.length === 0) return null;
+
+    return {
+      steps,
+      estimatedIterations:
+        typeof parsed.estimatedIterations === 'number' && parsed.estimatedIterations > 0
+          ? Math.min(parsed.estimatedIterations, 50)
+          : steps.length * 3,
+      riskLevel:
+        parsed.riskLevel === 'low' || parsed.riskLevel === 'medium' || parsed.riskLevel === 'high'
+          ? parsed.riskLevel
+          : 'medium',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** P1 保留：正则启发式计划作为 LLM 规划失败时的兜底。 */
 function inferStructuredPlan(goal: string): string[] {
   const text = goal.toLowerCase();
   const steps: string[] = [];

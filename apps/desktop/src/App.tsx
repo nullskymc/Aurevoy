@@ -551,7 +551,7 @@ function App() {
     }
   }
 
-  function handleNewTask(): void {
+  function handleNewTask(projectId?: string): void {
     closeStream();
     setBusy(false);
     setModelDrawerOpen(false);
@@ -566,8 +566,10 @@ function App() {
     setEvents([]);
     setTraces([]);
     setGoal("");
+    setDraftProjectId(projectId);
     resetMainScroll();
   }
+
 
   /** 编辑用户消息：先 revert 截断历史，再回填 Composer 等待编辑后重新提交。 */
   async function handleRevertAndEdit(messageId: string, _content: string, mode: RevertMode): Promise<void> {
@@ -1161,6 +1163,7 @@ function App() {
                 output={output}
                 busy={busy}
                 liveToolActivity={liveToolActivity}
+                online={online}
                 onToolDecision={handleToolDecision}
                 onClarificationAnswer={handleClarificationAnswer}
                 onArtifactDecision={handleArtifactDecision}

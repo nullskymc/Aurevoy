@@ -22,6 +22,7 @@ export type TaskStatus =
 /** Agent runtime 的细粒度执行阶段；用于诊断、回放和 UI 解释。 */
 export type TaskPhase =
   | 'initializing'
+  | 'planning'
   | 'thinking'
   | 'calling_tool'
   | 'waiting_approval'
@@ -67,6 +68,44 @@ export interface PlanStep {
   id: string;
   description: string;
   status: TaskStatus;
+  /** 该步骤预期使用的工具名称 */
+  toolsExpected?: string[];
+  /** 依赖的前置步骤 ID 列表 */
+  dependsOn?: string[];
+  /** 该步骤完成后是否有可验证的产出物 */
+  verifiable?: boolean;
+  /** 步骤来源：llm（由 LLM 生成）| heuristic（正则兜底）| resume（从 checkpoint 恢复） */
+  source?: 'llm' | 'heuristic' | 'resume';
+}
+
+/** 侦查阶段产出：工作区关键信息摘要（P1 重构） */
+export interface ScoutReport {
+  /** 关键文件列表及其重要性说明 */
+  keyFiles: Array<{ path: string; reason: string }>;
+  /** 识别到的技术栈关键词 */
+  techStack?: string[];
+  /** 需要注意的约束与边界条件 */
+  constraints: string[];
+  /** 自然语言摘要 */
+  summary: string;
+  /** 侦查耗时（毫秒） */
+  durationMs: number;
+  /** 侦查使用的 LLM 轮次 */
+  rounds: number;
+}
+
+/** LLM 生成的结构化计划（P1 重构） */
+export interface GeneratedPlan {
+  steps: Array<{
+    description: string;
+    toolsExpected?: string[];
+    verifiable?: boolean;
+    dependsOn?: string[];
+  }>;
+  /** 预估需要的 LLM 轮次 */
+  estimatedIterations: number;
+  /** 任务整体风险等级 */
+  riskLevel: 'low' | 'medium' | 'high';
 }
 
 export type TaskArtifactType = 'text' | 'file' | 'diff' | 'url';
@@ -161,6 +200,8 @@ export interface Task {
   parentTaskId?: string;
   /** 所属项目 ID（缺省为独立对话） */
   projectId?: string;
+  /** P6: 文件快照列表（用于 Rewind 回滚文件）。 */
+  fileSnapshots?: FileSnapshot[];
   createdAt: string;
   updatedAt: string;
 }
@@ -240,6 +281,14 @@ export interface TaskTraceEntry {
   data?: unknown;
 }
 
+/** 工具并行执行策略（P2 重构）。未声明时默认允许并行。 */
+export interface ToolExecutionPolicy {
+  /** 是否可以和其他 safe 工具在同一批次内并行执行。默认 true。 */
+  parallelizable?: boolean;
+  /** 同一轮内该工具必须在哪些工具之后执行（工具名列表）。 */
+  waitsFor?: string[];
+}
+
 /** 工具的元信息描述 */
 export interface ToolDescriptor {
   name: string;
@@ -252,6 +301,25 @@ export interface ToolDescriptor {
   enabled?: boolean;
   /** 工具来源，用于工具管理与 MCP 诊断。 */
   source?: ToolSource;
+  /** 并行执行策略（P2）。缺省允许并行。 */
+  executionPolicy?: ToolExecutionPolicy;
+  /** P6: 失败时给 LLM 的替代方案建议。 */
+  fallback?: {
+    /** 推荐的替代工具列表 */
+    tools?: string[];
+    /** 给 LLM 的具体建议 */
+    message?: string;
+  };
+}
+
+/** P6: 文件快照记录（用于 Rewind 回滚文件）。 */
+export interface FileSnapshot {
+  id: string;
+  /** 相对工作区的文件路径 */
+  path: string;
+  /** 关联的 tool_call id */
+  callId: string;
+  createdAt: string;
 }
 
 export type ToolSource =
@@ -337,6 +405,9 @@ export type AgentEvent =
       originalCount: number;
       summaryLength: number;
     }
+  | { type: 'scout_started'; taskId: string }
+  | { type: 'scout_report'; taskId: string; report: ScoutReport }
+  | { type: 'plan_generated'; taskId: string; plan: PlanStep[]; source: 'llm' | 'heuristic' }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
   | { type: 'task_deleted'; taskId: string };
@@ -592,6 +663,14 @@ export interface MemoryEntry {
   source: MemorySource;
   createdAt: string;
   updatedAt: string;
+  /** P5: URL slug，用于 [[link]] 引用 */
+  nameSlug?: string;
+  /** P5: 为什么记录这条记忆 */
+  why?: string;
+  /** P5: 什么情况下应该使用这条记忆 */
+  howToApply?: string;
+  /** P5: 关联的记忆 ID 列表 */
+  linkedMemoryIds?: string[];
 }
 
 /** POST /api/memories — 用户手动新增一条记忆 */

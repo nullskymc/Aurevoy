@@ -79,17 +79,19 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/index.ts` | 进程入口，启动 Fastify |
 | `src/config.ts` | 运行时配置（host/port/dbPath/cors/provider/sandbox/network/MCP），全部可被环境变量覆盖 |
 | `src/server.ts` | HTTP 路由 + SSE 端点（见 `docs/API.md`） |
-| `src/agent/loop.ts` | **Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**（调 LLM → 有 tool_calls 则执行并回灌 → 直到最终答案）；含显式 runtime phase、多步计划、checkpoint、防死循环、重试、取消、任务恢复和每轮持久化 |
+| `src/agent/loop.ts` | **Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**。 P1: LLM 驱动侦查→规划（`runScoutPhase`/`generatePlanViaLLM`），失败回退正则兜底。 P2: 并行工具执行（safe 工具 `Promise.all`，risky 工具并发审批→并行执行，`invokeWithTimeout` 独立超时）。 含显式 runtime phase、多步计划、checkpoint、防死循环、重试、取消、恢复、每轮持久化。 P6: 写入前文件快照 + Rewind 文件回滚 + 失败结果 fallback 附加 |
+| `src/agent/subagent.ts` | **P7: 子代理执行引擎**。受限 ReAct 循环：仅 safe 只读工具、max 5 轮、60s 超时、不写 memory、结果 20KB 截断 |
+| `src/agent/context.ts` | **上下文窗口 + 记忆注入**。 P4: `estimateTokens()` 轻量 token 估算；`autoCompactIfNeeded()` token 预算超 85% 时 LLM 语义摘要。 P5: `scoreMemories()` 相关性评分（关键词+分类+置信度+时间衰减）；`parseMemoryLinks()`/`expandLinkedMemories()` 解析 `[[link]]` 引用；`buildMemorySystemMessage()` 按目标评分排序注入 top-20 |
 | `src/agent/m6-state.ts` | Agent 交付状态辅助：预算、token usage、追问、artifact、checkpoint 的创建与状态更新 |
 | `src/agent/events.ts` | `TaskEventBus`：按 `taskId` 发布/订阅 `AgentEvent`，桥接执行与 SSE |
 | `src/agent/tool-call-accumulator.ts` | 流式 `tool_calls` 累积器：按 `index` 跨 chunk 拼接 `id`/`name`/`arguments`，处理并行调用与截断 |
 | `src/llm/provider.ts` | `LLMProvider` 抽象（`stream(messages, options)` 支持 tools/signal）+ `OpenAICompatibleProvider`；`getProvider()` 按配置返回，未配置即报错 |
-| `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；执行前做 JSON Schema 子集校验；`riskLevelOf()` 查风险等级 |
-| `src/tools/builtins.ts` | 内置基础工具：目录/读写/搜索/复制/移动/删除、HTTP 抓取、记忆、追问、artifact、命令执行；文件类路径从 `ToolContext.workspaceDir` 取（per-task：项目目录或 `.sessions/<taskId>/`，防穿越） |
+| `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；JSON Schema 子集校验。 P2: `invokeWithTimeout()` 独立超时；`executionPolicyOf()` 并行策略。 P3: `truncateToolOutput()` 50K 字符截断。 P6: `fallbackFor()` 替代方案查询 |
+| `src/tools/builtins.ts` | 内置基础工具。 文件：目录/读写/搜索/复制/移动/删除。 **P6**: `edit_file` 精确替换（唯一匹配校验）。 网络：HTTP 抓取。 记忆：`remember`（**P5**: Jaccard 去重+`[[link]]` 引用）。 交互：`ask_user`、`create_artifact`/`apply_artifact`。 沙箱：`execute_command`（默认禁用）。 **P7**: `delegate_task` 子代理委托 |
 | `src/tools/mcp.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到 `ToolRegistry`；MCP 描述会截断/净化，本地风险覆盖优先于 annotations |
 | `src/runtime/settings.ts` | 运行设置服务：从 SQLite 加载/保存 Provider、工作区、工具边界、MCP 和清理策略；更新后影响真实 runtime |
 | `src/sandbox/command-executor.ts` | 命令/代码执行前置边界：策略、超时、输出上限、env allowlist；默认禁用，不暴露 shell |
-| `src/store/db.ts` | SQLite 持久化（`taskStore`：save/get/list/listByProject；`traceStore`：append/list；`projectStore`：CRUD/getByPath；`memoryStore`；`settingsStore`；`toolSettingsStore`） |
+| `src/store/db.ts` | SQLite 持久化。 `taskStore`：save/get/list/listByProject。 `traceStore`：append/list。 `projectStore`：CRUD/getByPath。 `memoryStore`(**P5**: +`nameSlug`/`why`/`howToApply` 列，`findByNameSlug` 查询)。 `settingsStore`；`toolSettingsStore` |
 
 工程治理模块保持边界：轨迹日志落在 `store/`，沙箱执行器落在 `sandbox/`，评测脚本落在 `scripts/`。
 Agent loop 只编排状态转换和写入审计点，不直接写平台特例或绕过安全策略。
@@ -106,38 +108,25 @@ API 请求响应、运行时常量（默认地址端口）。
 2. `server.ts` 调 `createTask()` 建 `Task` 存库 → 立即 `201` 返回 `{task, streamUrl}`；
    同时 `void runTask(task)` 异步执行（不阻塞响应）。
 3. 前端拿到 `task.id` → `EventSource(streamUrl)` 订阅 SSE。
-4. `runTask` 先按目标生成降级优先的计划：普通任务保留单步计划，文件/网页/命令/产物类目标生成多步计划。
-5. `runTask` 跑 **ReAct 工具调用循环**，逐步 emit 事件到 `TaskEventBus`：
-   `status(running)` → `phase(initializing/thinking)` →（每轮）流式 `token` →
-   若模型请求工具则 `phase(calling_tool)` → `tool_call` → 执行 → `tool_result` →
-   非 safe 工具会进入 `phase(waiting_approval)` 并等待审批；
-   把工具结果作为 `role:'tool'` 消息回灌、再请求 LLM →…直到模型给出最终答案 →
-   `phase(finalizing)` → `message` → `status(completed|failed|cancelled)` → `done`。
-   工具成功会推进 `plan`/`step_update`，并创建 `checkpoint_created` 事件，供 UI 回看和恢复说明使用。
-   每轮请求 LLM 前，`agent/context.ts` 把完整历史压成**上下文窗口**（会话级短期记忆）：
-   用户约束与最近窗口逐字保留，超预算时就地压缩旧 assistant/tool 内容，压缩留轨迹。
-5b. **多轮对话**：任务结束后 `POST /api/tasks/:id/messages` 经 `addUserTurn()` 追加 user 轮次，
-   带完整历史重新进入同一循环；前端复用同一 `streamUrl` 订阅。
-5c. **任务恢复**：Agent 启动时扫描 SQLite 中遗留的 `pending/planning/running/paused` 任务，
-   将其标记为 `failed` 并写入“上次进程中断”的轨迹说明；用户调用
-   `POST /api/tasks/:id/resume` 后，后端先补齐可能悬空的 tool result，再用持久消息历史继续运行；
-   如果存在 checkpoint，恢复 trace 会记录最近 checkpoint。
-5d. **编辑重跑（revert / unrevert）**：用户选中历史用户消息 → `POST /api/tasks/:id/revert`
-   经 `revertTask()` 将目标消息及之后归档到 `task.archivedMessages`（soft-delete），按 `mode`
-   决定是否清除 revert 点之后的 checkpoint、draft artifact 和未完成 plan 步骤。前端 Composer
-   回填 `removedContent` 供编辑；用户提交后走 `POST /api/tasks/:id/messages`（`continueGoal`）
-   以截断后的历史为上下文重新进入 Agent 循环。`unrevert` 可在 revert 后、continue 前调用，
-   从 `archivedMessages` 恢复消息。不回滚已落盘文件（applied artifact 写入的文件保留不变）。
-5e. **会话分支（branch）**：`POST /api/tasks/:id/branch` 经 `branchTask()` 克隆父任务到
-   指定消息为止的所有消息，每条消息分配新 ID（含 `toolCallId` 重映射），新任务
-   `parentTaskId` 指向原任务。分支不修改原任务，独立演进。
-5f. **上下文压缩（compact）**：`POST /api/tasks/:id/compact` 经 `compactTask()` 将
-   指定消息范围发给 LLM 生成摘要，替换为一条 `role:'system'` 摘要消息，释放上下文空间。
-   不截断对话，仅压缩旧消息，用于长会话的窗口管理。
-6. `events.ts` 把事件序列化为 SSE（`data: {json}\n\n`）推给前端；前端按事件类型增量渲染。
-7. 收到 `done`，前端与后端各自关闭 SSE 连接。
-8. 任务状态通过 `taskStore.save()` 落库，可经 `GET /api/tasks` 回看。
-   运行轨迹通过 `traceStore.append()` 落入 `task_traces`，可经 `GET /api/tasks/:id/traces` 回看。
+4. `runTask` 先执行 **侦查阶段**（P1: `runScoutPhase`——最多 3 轮 LLM、仅 safe 只读工具），产出 `ScoutReport`（关键文件、技术栈、约束）。
+5. 根据侦查报告调用 LLM 生成 **结构化计划**（P1: `generatePlanViaLLM`——JSON 输出 2-8 步、含依赖和验证标记）；失败时回退正则启发式（`inferStructuredPlan`）。
+6. `runTask` 跑 **ReAct 工具调用循环**，逐步 emit 事件到 `TaskEventBus`：
+   - 每轮开始前执行 **自动语义压缩**（P4: `autoCompactIfNeeded`——token 预算超 85% 时 LLM 摘要旧消息）和 **字符级上下文窗口压缩**（`buildContextWindow`）
+   - 注入 **相关性评分记忆**（P5: 关键词+分类+置信度+时间衰减排序，`[[link]]` 引用展开，top-20）
+   - `status(running)` → `phase(initializing/thinking)` →（每轮）流式 `token` →
+   - 若模型请求工具则进入 **并行工具执行**（P2：safe 工具 `Promise.all`，risky 工具并发审批→并行执行，`invokeWithTimeout` 独立超时，工具输出 50K 截断 P3）
+   - 非 safe 工具进入 `phase(waiting_approval)` 等待审批；失败工具附加 **fallback 建议**（P6）
+   - 写入类工具执行前 **捕获文件快照**（P6: Rewind 时回滚文件）
+   - 把工具结果作为 `role:'tool'` 消息回灌、再请求 LLM →…直到模型给出最终答案 →
+   - `phase(finalizing)` → `message` → `status(completed|failed|cancelled)` → `done`。
+   - 工具成功推进 `plan`/`step_update`，创建 `checkpoint_created` 事件。
+7. **多轮对话**：任务结束后 `POST /api/tasks/:id/messages` 经 `addUserTurn()` 追加 user 轮次。
+8. **任务恢复**：启动时扫描 SQLite 中遗留任务标记为可恢复失败；`POST /api/tasks/:id/resume` 补齐悬空 tool result 后继续运行。
+9. **编辑重跑（revert / unrevert）**：消息归档（soft-delete）→ 按 mode 清除 checkpoint/artifact/plan。 P6: `code_and_conv` 模式从文件快照回滚被截断消息关联的写入。
+10. **会话分支（branch）**：克隆父任务到指定消息，ID 重映射，独立演进。
+11. **上下文压缩（compact）**：手动 API 将消息范围压缩为 LLM 摘要。
+12. `events.ts` 序列化为 SSE 推送；前端增量渲染。
+13. `done` 事件后关闭 SSE；任务+轨迹落 SQLite 可回看。
 
 ## 6. 扩展边界（往哪里加东西）
 
@@ -153,6 +142,10 @@ API 请求响应、运行时常量（默认地址端口）。
 | 加运行设置 | `runtime/settings.ts` + `store/db.ts` + `packages/shared` API 类型 | 前端静态表单、只改 `.env.example` |
 | 改任务/事件结构 | 改 `packages/shared` 并 `build:shared` | 前后端各自重定义 |
 | 加编辑重跑/分支 | `agent/loop.ts` 的 `revertTask`/`branchTask`/`compactTask`，`store/db.ts` 加列，`shared` 加类型 | 前端直接操作消息数组 |
+| 加子代理能力 | `agent/subagent.ts` 修改约束/轮次/超时；`tools/builtins.ts` 的 `delegate_task` 描述 | 在子代理中开放写入工具 |
+| 加记忆引用/评分 | `agent/context.ts` 的 `scoreMemories`/`parseMemoryLinks`；`store/db.ts` 的 `findByNameSlug` | 直接改评分公式不跑回归 |
+| 加 Diff 编辑 | `tools/builtins.ts` 的 `edit_file` 工具 | 绕过唯一性校验直接写文件 |
+| 调上下文压缩策略 | `config.ts` 的 `contextTokenBudget`/`compactThreshold`/`compactKeepRecentTurns` | 把阈值设到 1.0 永不压缩 |
 | 加界面 | `apps/desktop/src` | 后端业务逻辑 |
 | 换存储/加表 | `store/db.ts` | 其它模块直接访问 DB |
 

@@ -1,4 +1,5 @@
-import type { ToolDescriptor, ToolCall, ToolResult, ToolRiskLevel, Task } from '@aurevoy/shared';
+import type { ToolDescriptor, ToolCall, ToolExecutionPolicy, ToolResult, ToolRiskLevel, Task } from '@aurevoy/shared';
+import { config } from '../config.js';
 
 /** 工具执行上下文：携带本次调用所属的任务等信息（如 remember 工具记录来源）。 */
 export interface ToolContext {
@@ -101,7 +102,8 @@ class ToolRegistry {
       };
     }
     try {
-      const output = await tool.execute(call.args, context);
+      const rawOutput = await tool.execute(call.args, context);
+      const output = truncateToolOutput(rawOutput);
       return { callId: call.id, ok: true, output };
     } catch (err) {
       return {
@@ -111,9 +113,75 @@ class ToolRegistry {
       };
     }
   }
+
+  /**
+   * P2: 带独立超时的工具调用。
+   * 单个工具 hung 掉不影响同批次其他工具。
+   * 超时后返回可解释错误，不抛异常。
+   */
+  async invokeWithTimeout(
+    call: ToolCall,
+    context: ToolContext,
+    timeoutMs: number,
+  ): Promise<ToolResult> {
+    const outerSignal = context.abortSignal;
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = outerSignal
+      ? AbortSignal.any([outerSignal, timeout])
+      : timeout;
+
+    try {
+      return await this.invoke(call, { ...context, abortSignal: signal });
+    } catch (err) {
+      if ((err as { name?: string })?.name === 'TimeoutError') {
+        return {
+          callId: call.id,
+          ok: false,
+          error: `工具 ${call.toolName} 执行超时 (${timeoutMs}ms)，请改用其他方式。`,
+        };
+      }
+      return {
+        callId: call.id,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /** P2: 查询工具的 executionPolicy。未声明时默认允许并行。 */
+  executionPolicyOf(name: string): ToolExecutionPolicy {
+    const policy = this.tools.get(name)?.descriptor.executionPolicy;
+    return policy ?? { parallelizable: true };
+  }
+
+  /** P6: 查询工具的 fallback 建议。无声明时返回 undefined。 */
+  fallbackFor(name: string): ToolDescriptor['fallback'] {
+    return this.tools.get(name)?.descriptor.fallback;
+  }
 }
 
 export const toolRegistry = new ToolRegistry();
+
+// ---- P3: 工具输出截断 ----
+
+/** 把过大的工具输出截断为带元信息的结构，防止撑爆 LLM 上下文。 */
+function truncateToolOutput(output: unknown): unknown {
+  const text = typeof output === 'string'
+    ? output
+    : JSON.stringify(output ?? null);
+
+  if (text.length <= config.agent.toolOutputMaxChars) {
+    return output;
+  }
+
+  const maxChars = config.agent.toolOutputMaxChars;
+  return {
+    _truncated: true,
+    _originalChars: text.length,
+    _preview: text.slice(0, maxChars),
+    _note: `输出被截断（${text.length} → ${maxChars} 字符）。如需完整内容，请用 offset/limit 分片重读。`,
+  };
+}
 
 function validateToolArgs(schema: Record<string, unknown>, args: Record<string, unknown>): string | null {
   return validateSchema(schema, args, 'args');

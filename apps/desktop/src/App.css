@@ -416,7 +416,7 @@ button:disabled {
 }
 
 .drawer-header[data-selected="true"] {
-  background: var(--active);
+  background: transparent !important;
 }
 
 .drawer-chevron {
@@ -461,14 +461,7 @@ button:disabled {
   font-size: 12px;
 }
 
-.drawer-import {
-  color: var(--text-tertiary);
-  margin-top: 4px;
-}
 
-.drawer-import:hover {
-  color: var(--text);
-}
 
 .sidebar-section-label {
   margin: 10px 0 6px;
@@ -1226,9 +1219,8 @@ button:disabled {
 }
 
 .composer-box:focus-within {
-  border-color: var(--border-strong);
-  background: var(--input-bg-focus);
-  box-shadow: 0 6px 18px rgba(31, 35, 40, 0.06);
+  background: var(--input-bg-focus, var(--card-bg));
+  box-shadow: 0 0 0 3px var(--accent-soft-bg); /* 使用设计好的淡强调色背景作为呼吸外发光 */
 }
 
 .composer-input {
@@ -1244,6 +1236,12 @@ button:disabled {
   resize: none;
   overflow-y: auto;
   padding: 2px 2px var(--ui-space-2);
+}
+
+.composer-input:focus {
+  outline: none !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
 .composer-input::placeholder {
@@ -1307,6 +1305,46 @@ button:disabled {
   color: var(--text);
 }
 
+.composer-footer-external {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 8px;
+  padding-left: 4px;
+}
+
+.composer-project-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  border-radius: var(--ui-radius-md);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 0 var(--ui-space-2);
+  font-weight: 500;
+  max-width: 200px;
+}
+
+.composer-project-badge span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-project-badge.is-standalone {
+  background: transparent;
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+
+.composer-project-badge svg {
+  width: 12px;
+  height: 12px;
+  color: var(--text-tertiary);
+  flex: 0 0 auto;
+}
+
 .composer-send {
   display: grid;
   place-items: center;
@@ -1316,42 +1354,25 @@ button:disabled {
   border-radius: 50%;
   background: var(--accent);
   color: var(--accent-contrast);
-  transition: opacity 150ms ease, background 150ms ease;
+  cursor: pointer;
+  transition: opacity 150ms ease, background 150ms ease, transform 100ms ease;
+}
+
+.composer-send:not(:disabled):hover {
+  opacity: 0.9;
+}
+
+.composer-send:not(:disabled):active {
+  transform: scale(0.95);
 }
 
 .composer-send:disabled {
-  background: #d6d6d2;
-  color: var(--accent-contrast);
-}
-
-.composer-footer {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--ui-space-4);
-  padding: var(--ui-space-2) var(--ui-space-2) 0;
-}
-
-.composer-footer-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ui-space-2);
-  color: var(--text-secondary);
-  font-size: var(--ui-font-xs);
-}
-
-.composer-footer-item svg {
-  color: var(--text-tertiary);
-}
-
-.composer-footer-link {
-  border: none;
   background: transparent;
-  color: var(--offline);
-  font-size: var(--ui-font-xs);
-  font-weight: 600;
-  padding: 0;
+  color: var(--text-tertiary);
+  opacity: 0.4;
+  cursor: not-allowed;
 }
+
 
 /* ============ 状态徽标 ============ */
 .status-pill {
@@ -2834,7 +2855,7 @@ button:disabled {
   }
 
   .composer-send:disabled {
-    background: #3a3a3c;
+    background: transparent;
   }
 
   .toast-bubble {
@@ -3560,3 +3581,804 @@ textarea:focus-visible,
   background: var(--accent);
   filter: brightness(1.08);
 }
+
+/* ============ 自定义左边栏样式 ============ */
+.sidebar-section-divider {
+  display: flex;
+  align-items: center;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 16px 8px 8px;
+}
+
+.section-title {
+  flex: 0 0 auto;
+  margin: 0 8px;
+}
+
+.section-line-short {
+  flex: 0 0 auto;
+  width: 16px;
+  border-bottom: 1px solid var(--border);
+  opacity: 0.4;
+}
+
+.section-line-long {
+  flex: 1;
+  border-bottom: 1px solid var(--border);
+  opacity: 0.4;
+}
+
+
+.section-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--ui-radius-sm, 4px);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0; /* 默认隐藏 */
+  pointer-events: none;
+  transition: opacity 0.2s ease, background 0.15s ease, color 0.15s ease;
+  flex: 0 0 auto;
+  padding: 4px; /* 轻微气泡包裹感所需 padding */
+}
+
+/* 鼠标悬停在整行 divider 时淡入显示半透明 */
+.sidebar-section-divider:hover .section-action-btn {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+/* 鼠标悬停在按钮上：颜色变深，微弱气泡底色 */
+.section-action-btn:hover {
+  background: var(--hover-active, rgba(255, 255, 255, 0.08));
+  color: var(--text) !important;
+  opacity: 1 !important;
+}
+
+.section-action-btn svg {
+  width: 14px; /* 与项目行上的 + 按钮保持统一大小 */
+  height: 14px;
+}
+
+/* 对项目卡片行进行重构 */
+.drawer-header-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+  min-height: 38px; /* 充裕的高宽 */
+  padding: 0 8px 0 12px; /* 左侧与顶部主栏文字对齐，右侧给操作区留空 */
+  margin: 2px 8px; /* 与侧栏边缘留有轻微间距，呈现浮动卡片感 */
+  border-radius: var(--ui-radius-md, 8px);
+  background: transparent;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid transparent;
+  gap: 8px;
+}
+
+/* 默认状态下项目头部透明，依靠父容器的背景 */
+.drawer-header {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 8px !important; /* 图标、名称、数量的间距 */
+  font-weight: 500;
+  font-size: var(--ui-font-sm, 13px);
+  color: var(--text);
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  min-height: 0 !important; /* 依靠父级 drawer-header-row 撑开高度 */
+  cursor: pointer;
+  text-align: left;
+}
+
+/* 状态变更：Hover 与 Active background container */
+.drawer-header-row:hover {
+  background: var(--hover, rgba(255, 255, 255, 0.04));
+  border-color: rgba(255, 255, 255, 0.03);
+}
+
+.drawer-header-row:has(.drawer-header[data-selected="true"]) {
+  background: var(--active, rgba(255, 255, 255, 0.08));
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* 左侧精致高亮指示线，只在选中时浮现 */
+.drawer-header-row:has(.drawer-header[data-selected="true"])::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  background: var(--accent, #4f46e5);
+  border-radius: 0 2px 2px 0;
+}
+
+/* 文件夹图标样式微调，使其精致协调 */
+.drawer-header svg {
+  width: 15px;
+  height: 15px;
+  color: var(--text-secondary);
+  transition: color 0.2s ease;
+  flex: 0 0 auto;
+}
+
+.drawer-header-row:hover svg {
+  color: var(--text);
+}
+
+/* 数量标签样式，使用小气泡风格，颜色稍淡 */
+.drawer-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  opacity: 0.7;
+  font-weight: 400;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 1px 5px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.02);
+  flex: 0 0 auto;
+}
+
+.drawer-header-row:has(.drawer-header[data-selected="true"]) .drawer-count {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+}
+
+/* 项目级操作按钮 (PlusIcon / TrashIcon) */
+.project-new-chat-btn,
+.project-delete-btn {
+  display: inline-flex; /* 用 opacity 代替 display: none 以便过渡 */
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--ui-radius-sm, 4px);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0; /* 默认隐藏 */
+  pointer-events: none;
+  transition: opacity 0.2s ease, background 0.15s ease, color 0.15s ease;
+  padding: 3px;
+}
+
+/* 当 Hover 容器或选中时淡入显示，变为半透明浅灰色 */
+.drawer-header-row:hover .project-new-chat-btn,
+.drawer-header-row:hover .project-delete-btn,
+.drawer-header-row:focus-within .project-new-chat-btn,
+.drawer-header-row:focus-within .project-delete-btn,
+.drawer-header-row:has(.drawer-header[data-selected="true"]) .project-new-chat-btn,
+.drawer-header-row:has(.drawer-header[data-selected="true"]) .project-delete-btn {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+/* 按钮本身的 Hover 状态：颜色变深，微弱气泡包裹底色 */
+.project-new-chat-btn:hover {
+  background: var(--hover);
+  color: var(--text) !important;
+  opacity: 1 !important;
+}
+
+.project-delete-btn:hover {
+  background: var(--hover);
+  color: var(--danger-soft-fg) !important;
+  opacity: 1 !important;
+}
+
+.project-new-chat-btn svg,
+.project-delete-btn svg {
+  width: 14px; /* 统一 14px 大小 */
+  height: 14px;
+}
+
+.new-chat-btn {
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--ui-radius-md);
+  background: var(--active) !important;
+  font-weight: 600;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.new-chat-btn:hover {
+  background: var(--hover) !important;
+  border-color: var(--text-secondary) !important;
+}
+
+.sidebar-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  font-size: 14px;
+}
+
+.conv-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+
+/* 级联树状样式 */
+.child-chat-list {
+  padding-left: 16px; /* 产生级联缩进 */
+  border-left: 1px solid var(--border); /* 纵向引导连线 */
+  opacity: 0.8;
+  margin-left: 20px; /* 保持跟父级文件夹图标对齐 */
+  margin-top: 2px;
+  margin-bottom: 6px;
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.child-chat-item-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.child-chat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px; /* 缩减高度，紧凑精致 */
+  min-height: 0 !important;
+  border: none !important;
+  background: transparent !important; /* 移除大灰色背景卡片，平时保持透明 */
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm, 13px);
+  padding: 0 8px !important;
+  border-radius: var(--ui-radius-sm, 4px) !important;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.child-chat-item:hover {
+  background: var(--hover, rgba(255, 255, 255, 0.04)) !important; /* hover 时才给一层极其轻微的底色 */
+  color: var(--text);
+}
+
+.child-chat-item[data-active="true"] {
+  background: var(--active, rgba(255, 255, 255, 0.08)) !important;
+  color: var(--text) !important;
+  font-weight: 500;
+}
+
+/* 子对话前面的 icon 样式控制 */
+.child-chat-item svg {
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary);
+  flex: 0 0 auto;
+}
+
+.child-chat-item:hover svg,
+.child-chat-item[data-active="true"] svg {
+  color: var(--text-secondary);
+}
+
+/* 子对话的标题限制单行 */
+.child-chat-item .conv-copy {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.child-chat-item .conv-title {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: inherit;
+}
+
+/* 子项删除按钮样式 */
+.child-chat-item-row .conv-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--ui-radius-sm, 4px);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0; /* 平时完全隐藏 */
+  pointer-events: none;
+  transition: opacity 0.2s ease, background 0.15s ease, color 0.15s ease;
+  margin-left: 4px;
+}
+
+/* 滑过这一行时淡入显现 */
+.child-chat-item-row:hover .conv-delete-btn {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+/* 按钮本身 hover */
+.child-chat-item-row .conv-delete-btn:hover {
+  background: var(--hover);
+  color: var(--danger-soft-fg) !important;
+  opacity: 1 !important;
+}
+
+.child-chat-item-row .conv-delete-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ============ Aurevoy Agent 智能时间线 (方案 B) ============ */
+
+.aurevoy-agent-runner-box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-2) 0;
+  margin-bottom: var(--ui-space-3);
+}
+
+/* 纵向时间轴线 */
+.aurevoy-agent-runner-box::before {
+  content: "";
+  position: absolute;
+  top: var(--ui-space-2);
+  bottom: var(--ui-space-2);
+  left: 11px; /* 对齐圆心 24px/2 - 1px = 11px */
+  width: 2px;
+  background: var(--border-strong);
+  opacity: 0.8;
+  z-index: 1;
+}
+
+/* 状态节点结构 */
+.runner-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  padding-left: 32px;
+  min-height: 24px;
+}
+
+.runner-node.is-group {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: var(--ui-space-2);
+}
+
+/* 状态圆点/图标 */
+.runner-node .node-dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-size: 14px;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px var(--bg);
+  z-index: 2;
+}
+
+.runner-node .node-dot svg {
+  flex-shrink: 0;
+}
+
+/* 节点内容 */
+.runner-node .node-content {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--ui-space-2);
+  min-width: 0;
+}
+
+.runner-node.is-group .node-content {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--ui-space-2);
+  width: 100%;
+}
+
+/* 动作类型标签 */
+.badge-thought,
+.badge-bash,
+.badge-file,
+.badge-tool,
+.badge-network {
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--ui-radius-sm);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.badge-thought {
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+}
+
+.badge-network {
+  background: var(--warn-soft-bg);
+  color: var(--warn-soft-fg);
+}
+
+.badge-file {
+  background: var(--success-soft-bg);
+  color: var(--success-soft-fg);
+}
+
+.badge-bash {
+  background: var(--hover);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+}
+
+.badge-tool {
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+}
+
+/* Dots color mapping */
+.runner-node .node-dot.is-thought {
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+}
+
+.runner-node .node-dot.is-network {
+  background: var(--warn-soft-bg);
+  color: var(--warn-soft-fg);
+}
+
+.runner-node .node-dot.is-file {
+  background: var(--success-soft-bg);
+  color: var(--success-soft-fg);
+}
+
+.runner-node .node-dot.is-bash {
+  background: var(--hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+}
+
+.runner-node .node-dot.is-tool {
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+}
+
+.runner-node .node-dot.is-loading {
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+}
+
+/* Meta text details */
+.meta-text {
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+/* Tool Header */
+.tool-header {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  width: 100%;
+  user-select: none;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: var(--ui-radius-md);
+  transition: background 150ms ease;
+}
+
+.tool-header:hover {
+  background: var(--hover);
+}
+
+.tool-header .command-name {
+  flex: 1;
+  color: var(--text-secondary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-header .status-alert {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  padding: 2px 6px;
+  border-radius: var(--ui-radius-sm);
+}
+
+.tool-header .status-alert.is-awaiting {
+  color: var(--warn-soft-fg);
+  background: var(--warn-soft-bg);
+}
+
+.tool-header .status-alert.is-running {
+  color: var(--accent-soft-fg);
+  background: var(--accent-soft-bg);
+}
+
+.tool-header .status-alert.is-ok {
+  color: var(--success-soft-fg);
+  background: var(--success-soft-bg);
+}
+
+.tool-header .status-alert.is-error {
+  color: var(--danger-soft-fg);
+  background: var(--danger-soft-bg);
+}
+
+.tool-header .expand-arrow {
+  font-size: 14px;
+  color: var(--text-tertiary);
+  width: 12px;
+  text-align: center;
+}
+
+/* Console details console container */
+.tool-io-box {
+  margin-top: var(--ui-space-1);
+  padding: var(--ui-space-3);
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-md);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.console-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ui-space-2);
+}
+
+.console-line pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  flex: 1;
+  color: var(--text);
+}
+
+.terminal-in {
+  font-weight: 700;
+  color: var(--accent-soft-fg);
+  font-size: 10px;
+  padding: 1px 4px;
+  background: var(--accent-soft-bg);
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.terminal-out {
+  font-weight: 700;
+  color: var(--success-soft-fg);
+  font-size: 10px;
+  padding: 1px 4px;
+  background: var(--success-soft-bg);
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.terminal-out.is-err {
+  color: var(--danger-soft-fg);
+  background: var(--danger-soft-bg);
+}
+
+/* Modern Approval Panel */
+.approval-panel {
+  margin-top: var(--ui-space-2);
+  padding: var(--ui-space-3) var(--ui-space-4);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--ui-radius-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-3);
+  width: 100%;
+}
+
+.approval-panel .approval-tip {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.approval-panel .approval-tip .text-danger {
+  color: var(--danger-soft-fg);
+  background: var(--danger-soft-bg);
+  padding: 1px 6px;
+  border-radius: var(--ui-radius-sm);
+  font-size: 11px;
+}
+
+.approval-panel .approval-actions {
+  display: flex;
+  gap: var(--ui-space-3);
+}
+
+.approval-panel .btn-reject,
+.approval-panel .btn-approve {
+  flex: 1;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--ui-radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 150ms ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.approval-panel .btn-reject {
+  background: var(--bg);
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.approval-panel .btn-reject:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+}
+
+.approval-panel .btn-approve {
+  background: var(--success-soft-bg);
+  border-color: var(--success-soft-fg);
+  color: var(--success-soft-fg);
+}
+
+.approval-panel .btn-approve:hover {
+  background: var(--success-soft-fg);
+  color: var(--accent-contrast);
+  border-color: var(--success-soft-fg);
+  box-shadow: 0 4px 12px rgba(46, 160, 67, 0.15);
+}
+
+/* Spinner animation */
+.spin-icon {
+  animation: spin 1.5s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Global Stop Control */
+.runner-global-controls {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--ui-space-3);
+  padding-left: 32px;
+  width: 100%;
+}
+
+.btn-stop-global {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ui-space-2);
+  padding: 8px 20px;
+  border-radius: 99px;
+  background: var(--bg);
+  color: var(--danger-soft-fg);
+  border: 1px solid var(--border-strong);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 150ms ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+}
+
+.btn-stop-global:hover {
+  background: var(--danger-soft-bg);
+  border-color: var(--danger-soft-fg);
+  box-shadow: 0 4px 12px rgba(230, 85, 85, 0.08);
+}
+
+.btn-stop-global:active {
+  transform: scale(0.97);
+}
+
+/* AI Chat Streaming reply */
+.ai-chat-bubble-reply {
+  margin-top: var(--ui-space-3);
+  padding: var(--ui-space-3) var(--ui-space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-lg);
+  color: var(--text);
+  font-size: calc(14px * var(--font-scale));
+  line-height: 1.6;
+  position: relative;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+}
+
+.ai-chat-bubble-reply .stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  background: var(--text);
+  margin-left: 4px;
+  vertical-align: middle;
+  animation: stream-blink 1s step-end infinite;
+}
+
+@keyframes stream-blink {
+  from, to { background-color: transparent }
+  50% { background-color: var(--text) }
+}
+
+/* Animations */
+.fade-in-up {
+  animation: fadeInUp 0.2s ease-out forwards;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+
+

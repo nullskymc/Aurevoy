@@ -11,7 +11,6 @@ import type {
   ToolRiskLevel,
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
-import { getPhaseLabel, getStatusLabel } from "./status";
 import { t } from "../i18n";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
@@ -35,6 +34,7 @@ interface ConversationProps {
   busy: boolean;
   /** 当前运行轮次的实时工具活动（来自事件流） */
   liveToolActivity: ToolActivity[];
+  online?: boolean | null;
   /** 工具审批决策回调（批准/拒绝） */
   onToolDecision: (callId: string, approved: boolean) => void;
   onClarificationAnswer: (clarificationId: string, answer: string) => void;
@@ -117,6 +117,7 @@ export function Conversation({
   output,
   busy,
   liveToolActivity,
+  online = null,
   onToolDecision,
   onClarificationAnswer,
   onArtifactDecision,
@@ -167,7 +168,6 @@ export function Conversation({
 
   const hasOutput = output.trim().length > 0;
   const thinking = busy && !hasOutput && liveToolActivity.length === 0;
-  const stillWorking = busy && (hasOutput || liveToolActivity.length > 0);
 
   return (
     <div className="conversation">
@@ -205,86 +205,57 @@ export function Conversation({
 
         {/* 当前运行轮次的实时尾巴 */}
         {busy && (
-          <article className="doc-block doc-block-agent">
-            <DocumentMeta
-              icon={<AgentIcon />}
-              label={getPhaseLabel(phase) || getStatusLabel(status)}
+          <div className="aurevoy-agent-runner-container">
+            <AgentRunningTimeline
+              busy={busy}
+              online={online}
+              phase={phase}
+              status={status}
+              plan={plan}
+              liveToolActivity={liveToolActivity}
+              onToolDecision={onToolDecision}
+              onStop={onStop}
             />
-            <div className="doc-body">
-              {plan.length > 0 && <PlanCard plan={plan} />}
 
-              {liveToolActivity.length > 0 && (
-                <ToolActivityList items={liveToolActivity} onDecision={onToolDecision} />
-              )}
+            {(task.clarifications ?? []).filter((item) => item.status === "pending").map((clarification) => (
+              <ClarificationCard
+                key={clarification.id}
+                clarification={clarification}
+                onAnswer={onClarificationAnswer}
+              />
+            ))}
 
-              {(task.clarifications ?? []).filter((item) => item.status === "pending").map((clarification) => (
-                <ClarificationCard
-                  key={clarification.id}
-                  clarification={clarification}
-                  onAnswer={onClarificationAnswer}
-                />
-              ))}
+            {(task.artifacts ?? []).filter((item) => item.status === "draft").map((artifact) => (
+              <ArtifactCard
+                key={artifact.id}
+                artifact={artifact}
+                onDecision={onArtifactDecision}
+              />
+            ))}
 
-              {(task.artifacts ?? []).filter((item) => item.status === "draft").map((artifact) => (
-                <ArtifactCard
-                  key={artifact.id}
-                  artifact={artifact}
-                  onDecision={onArtifactDecision}
-                />
-              ))}
-
-              {thinking ? (
-                <div className="agent-thinking">
-                  <span className="dot" />
-                  <span className="dot" />
-                  <span className="dot" />
-                  <span className="thinking-label">
-                    {getPhaseLabel(phase) || getStatusLabel(status)}…
-                  </span>
-                </div>
-              ) : (
-                hasOutput && (
-                  <div className="agent-text markdown-stream">
-                    <MarkdownRenderer content={output} />
-                    <span className="stream-caret" aria-hidden="true" />
-                  </div>
-                )
-              )}
-
-              {stillWorking && hasOutput && (
-                <div className="agent-thinking agent-thinking-inline">
-                  <span className="dot" />
-                  <span className="dot" />
-                  <span className="dot" />
-                  <span className="thinking-label">{t("thinking.continue")}</span>
-                </div>
-              )}
-            </div>
-          </article>
+            {!thinking && hasOutput && (
+              <div className="ai-chat-bubble-reply">
+                <MarkdownRenderer content={output} />
+                <span className="stream-caret" aria-hidden="true" />
+              </div>
+            )}
+          </div>
         )}
 
-        {busy
-          ? onStop && (
-              <div className="turn-actions" aria-label={t("conv.turnActions")}>
-                <button type="button" className="ghost-btn" onClick={onStop}>
-                  {t("action.stop")}
-                </button>
-              </div>
-            )
-          : (
-            <div className="turn-actions" aria-label={t("conv.turnActions")}>
-              {hasArchivedMessages && onUnrevert && (
-                <button type="button" className="ghost-btn" onClick={onUnrevert}>
-                  {t("action.unrevert")}
-                </button>
-              )}
-              {canResume && onResume && (
-                <button type="button" className="ghost-btn" onClick={onResume}>
-                  {t("action.resume")}
-                </button>
-              )}
-            </div>
-          )}
+        {!busy && (
+          <div className="turn-actions" aria-label={t("conv.turnActions")}>
+            {hasArchivedMessages && onUnrevert && (
+              <button type="button" className="ghost-btn" onClick={onUnrevert}>
+                {t("action.unrevert")}
+              </button>
+            )}
+            {canResume && onResume && (
+              <button type="button" className="ghost-btn" onClick={onResume}>
+                {t("action.resume")}
+              </button>
+            )}
+          </div>
+        )}
 
         <div ref={bottomRef} />
       </div>
@@ -859,5 +830,346 @@ function PlanCard({ plan, defaultOpen = true }: { plan: PlanStep[]; defaultOpen?
         </ol>
       )}
     </section>
+  );
+}
+
+interface AgentRunningTimelineProps {
+  busy: boolean;
+  online: boolean | null;
+  phase: TaskPhase | null;
+  status: TaskStatus | null;
+  plan: PlanStep[];
+  liveToolActivity: ToolActivity[];
+  onToolDecision: (callId: string, approved: boolean) => void;
+  onStop?: () => void;
+}
+
+export function AgentRunningTimeline({
+  busy,
+  online,
+  liveToolActivity,
+  onToolDecision,
+  onStop,
+}: AgentRunningTimelineProps) {
+  const [seconds, setSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!busy) {
+      setSeconds(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setSeconds((s) => s + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
+
+  return (
+    <div className="aurevoy-agent-runner-box">
+      {online === false && (
+        <div className="runner-node is-active fade-in-up">
+          <div className="node-dot is-warning">
+            <NetworkIcon />
+          </div>
+          <div className="node-content">
+            <span className="badge-network">NETWORK</span>
+            <span className="meta-text">正在重新连接 3/5 ...</span>
+          </div>
+        </div>
+      )}
+
+      {liveToolActivity.map((item) => {
+        const isFile = /file|dir|write|read|grep|find|artifact/i.test(item.name);
+        const isBash = /cmd|command|exec|shell|terminal/i.test(item.name);
+
+        let typeLabel = "Tool";
+        let icon = <ToolIcon />;
+        let colorClass = "is-tool";
+
+        if (isFile) {
+          typeLabel = "Read/Write";
+          icon = <FileIcon />;
+          colorClass = "is-file";
+        } else if (isBash) {
+          typeLabel = "Bash";
+          icon = <TerminalIcon />;
+          colorClass = "is-bash";
+        }
+
+        let targetDesc = item.name;
+        const argsObj = item.args as any;
+        if (argsObj) {
+          if (argsObj.TargetFile) targetDesc = getFilename(argsObj.TargetFile);
+          else if (argsObj.AbsolutePath) targetDesc = getFilename(argsObj.AbsolutePath);
+          else if (argsObj.CommandLine) targetDesc = truncateCommandLine(argsObj.CommandLine);
+          else if (argsObj.Query) targetDesc = `Search: "${argsObj.Query}"`;
+          else if (argsObj.path) targetDesc = getFilename(argsObj.path);
+        }
+
+        return (
+          <TimelineToolNode
+            key={item.id}
+            item={item}
+            icon={icon}
+            typeLabel={typeLabel}
+            colorClass={colorClass}
+            targetDesc={targetDesc}
+            isBash={isBash}
+            onDecision={onToolDecision}
+          />
+        );
+      })}
+
+      {busy && (
+        <div className="runner-node is-active fade-in-up">
+          <div className="node-dot is-loading">
+            <BrainIcon className="spin-icon" />
+          </div>
+          <div className="node-content">
+            <span className="badge-thought">THOUGHT</span>
+            <span className="meta-text">for {seconds}s...</span>
+          </div>
+        </div>
+      )}
+
+      {busy && onStop && (
+        <div className="runner-global-controls fade-in-up">
+          <button type="button" className="btn-stop-global" onClick={onStop}>
+            <StopIcon />
+            <span>{t("action.stop") || "停止"}</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimelineToolNode({
+  item,
+  icon,
+  typeLabel,
+  colorClass,
+  targetDesc,
+  isBash,
+  onDecision,
+}: {
+  item: ToolActivity;
+  icon: ReactNode;
+  typeLabel: string;
+  colorClass: string;
+  targetDesc: string;
+  isBash: boolean;
+  onDecision: (callId: string, approved: boolean) => void;
+}) {
+  const [expanded, setExpanded] = useState(item.status === "awaiting" || item.status === "running");
+  const [decided, setDecided] = useState(false);
+
+  useEffect(() => {
+    if (item.status === "awaiting") setExpanded(true);
+  }, [item.status]);
+
+  const hasDetail = item.output !== undefined || item.error !== undefined || item.args !== undefined;
+
+  function handleDecide(approved: boolean) {
+    setDecided(true);
+    onDecision(item.id, approved);
+  }
+
+  const statusText =
+    item.status === "awaiting"
+      ? "Awaiting Approval"
+      : item.status === "running"
+        ? "Running..."
+        : item.status === "ok"
+          ? "Success"
+          : "Failed";
+
+  const isRunning = item.status === "running";
+  const badgeType = colorClass.replace("is-", "");
+
+  return (
+    <div className={`runner-node is-group ${isRunning ? "is-active" : ""}`}>
+      <div className={`node-dot is-${badgeType} ${isRunning ? "is-loading" : ""}`}>
+        {isRunning ? <BrainIcon className="spin-icon" /> : icon}
+      </div>
+      <div className="node-content">
+        <div
+          className="tool-header"
+          onClick={() => hasDetail && setExpanded(!expanded)}
+          style={{ cursor: hasDetail ? "pointer" : "default" }}
+        >
+          <span className={`badge-${badgeType}`}>{typeLabel.toUpperCase()}</span>
+          <span className="command-name">{targetDesc}</span>
+          <span className={`status-alert is-${item.status}`}>{statusText}</span>
+          {hasDetail && <span className="expand-arrow">{expanded ? "⌃" : "›"}</span>}
+        </div>
+
+        {expanded && hasDetail && (
+          <div className="tool-io-box fade-in-up">
+            {isBash ? (
+              <>
+                {item.args && (
+                  <div className="console-line">
+                    <span className="terminal-in">IN</span>
+                    <pre>{(item.args as any).CommandLine ?? safeStringify(item.args)}</pre>
+                  </div>
+                )}
+                {item.status === "error" && item.error && (
+                  <div className="console-line">
+                    <span className="terminal-out is-err">ERR</span>
+                    <pre>{item.error}</pre>
+                  </div>
+                )}
+                {item.output !== undefined && (
+                  <div className="console-line">
+                    <span className="terminal-out">OUT</span>
+                    <pre>{safeStringify(item.output)}</pre>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {item.args && safeStringify(item.args) !== "{}" && (
+                  <div className="console-line">
+                    <span className="terminal-in">ARGS</span>
+                    <pre>{safeStringify(item.args)}</pre>
+                  </div>
+                )}
+                {item.status === "error" && item.error && (
+                  <div className="console-line">
+                    <span className="terminal-out is-err">ERR</span>
+                    <pre>{item.error}</pre>
+                  </div>
+                )}
+                {item.output !== undefined && (
+                  <div className="console-line">
+                    <span className="terminal-out">RESULT</span>
+                    <pre>{safeStringify(item.output)}</pre>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {item.status === "awaiting" && (
+          <div className="approval-panel">
+            <div className="approval-tip">
+              ⚠️ 确定执行该操作？风险级别: <span className="text-danger">{item.riskLevel || "unknown"}</span>
+            </div>
+            <div className="approval-actions">
+              <button
+                type="button"
+                className="btn-reject"
+                disabled={decided}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDecide(false);
+                }}
+              >
+                {t("action.reject") || "拒绝执行"}
+              </button>
+              <button
+                type="button"
+                className="btn-approve"
+                disabled={decided}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDecide(true);
+                }}
+              >
+                {t("action.approve") || "批准运行"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function getFilename(pathStr: string): string {
+  if (!pathStr) return "";
+  const parts = pathStr.split(/[/\\]/);
+  return parts[parts.length - 1] || pathStr;
+}
+
+function truncateCommandLine(cmd: string): string {
+  if (!cmd) return "";
+  if (cmd.length > 50) {
+    return cmd.slice(0, 47) + "...";
+  }
+  return cmd;
+}
+
+/* ============ Vector Icons (Premium outline SVGs, no emojis) ============ */
+
+function NetworkIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <path
+        d="M10 3.5l6.5 11.5H3.5L10 3.5z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M10 8v3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="10" cy="14" r="0.8" fill="currentColor" />
+    </svg>
+  );
+}
+
+function BrainIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="10" cy="10" r="3" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M10 3v4M10 13v4M3 10h4M13 10h4" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+function FileIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <path
+        d="M4.5 3.5h7l4 4v9a1 1 0 01-1 1h-10a1 1 0 01-1-1v-12a1 1 0 011-1z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <path d="M11.5 3.5v4h4" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TerminalIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <path
+        d="M4.5 6.5l4 3.5-4 3.5M10 13.5h5.5"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true" fill="none">
+      <rect x="5" y="5" width="10" height="10" rx="1.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ToolIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <circle cx="10" cy="10" r="3" stroke="currentColor" strokeWidth="2" />
+    </svg>
   );
 }
