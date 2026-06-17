@@ -773,11 +773,18 @@ function App() {
   }
 
   function handleSaveSettings(draft: SettingsDraft): void {
+    // Ensure current model is auto-added to quick-select list so the drawer isn't empty
+    const currentEnabled = runtimeSettings?.llm.enabledModels ?? [];
+    const mergedEnabled = currentEnabled.includes(draft.model)
+      ? currentEnabled
+      : [draft.model, ...currentEnabled];
+
     const body: UpdateRuntimeSettingsRequest = {
       llm: {
         provider: "openai",
         baseUrl: draft.baseUrl,
         model: draft.model,
+        enabledModels: mergedEnabled,
         temperature: draft.temperature,
         timeoutMs: draft.timeoutMs,
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
@@ -791,6 +798,9 @@ function App() {
     void updateSettings(body)
       .then((next) => {
         setRuntimeSettings(next);
+        setHealth((previous) =>
+          previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
+        );
         setNotice(t("notice.settingsSaved"));
         return refreshSettings();
       })
