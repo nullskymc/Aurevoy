@@ -244,7 +244,6 @@ fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
             let agent_entry = resources.join("agent-dist").join("index.js");
             if agent_entry.exists() {
                 let node = find_node().unwrap_or_else(|| PathBuf::from("node"));
-                let agent_modules = resources.join("agent-modules");
                 return Ok(AgentCommandSpec {
                     program: node.clone(),
                     args: vec![
@@ -252,9 +251,7 @@ fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
                     ],
                     cwd: resources.join("agent-dist"),
                     label: format!("{} {}", node.display(), agent_entry.display()),
-                    env: vec![
-                        ("NODE_PATH".to_string(), agent_modules.to_string_lossy().to_string()),
-                    ],
+                    env: Vec::new(),
                 });
             }
         }

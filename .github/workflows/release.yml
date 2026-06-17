@@ -51,7 +51,7 @@ jobs:
             const src = '../../node_modules/' + dep;
             const dest = 'node_modules/' + dep;
             if (fs.existsSync(src)) {
-              execSync('cp -R ' + src + ' ' + dest);
+              execSync('cp -RL ' + src + ' ' + dest);
               process.stdout.write('  copied: ' + dep + '\n');
               count++;
             } else {
