@@ -71,7 +71,11 @@ pub fn ensure_agent_process(
         .args(&spec.args)
         .current_dir(&spec.cwd)
         .env("AUREVOY_HOST", AGENT_HOST)
-        .env("AUREVOY_PORT", AGENT_PORT.to_string())
+        .env("AUREVOY_PORT", AGENT_PORT.to_string());
+    for (key, value) in &spec.env {
+        command.env(key, value);
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -195,6 +199,7 @@ struct AgentCommandSpec {
     args: Vec<String>,
     cwd: PathBuf,
     label: String,
+    env: Vec<(String, String)>,
 }
 
 fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
@@ -209,6 +214,7 @@ fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
             program,
             args: Vec::new(),
             cwd,
+            env: Vec::new(),
         });
     }
 
@@ -222,6 +228,7 @@ fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
             args: vec!["run".to_string(), "dev:agent".to_string()],
             cwd: repo_root,
             label: "npm run dev:agent".to_string(),
+            env: Vec::new(),
         });
     }
 
@@ -237,6 +244,7 @@ fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
             let agent_entry = resources.join("agent-dist").join("index.js");
             if agent_entry.exists() {
                 let node = find_node().unwrap_or_else(|| PathBuf::from("node"));
+                let agent_modules = resources.join("agent-modules");
                 return Ok(AgentCommandSpec {
                     program: node.clone(),
                     args: vec![
@@ -244,6 +252,9 @@ fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
                     ],
                     cwd: resources.join("agent-dist"),
                     label: format!("{} {}", node.display(), agent_entry.display()),
+                    env: vec![
+                        ("NODE_PATH".to_string(), agent_modules.to_string_lossy().to_string()),
+                    ],
                 });
             }
         }

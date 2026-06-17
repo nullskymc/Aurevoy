@@ -37,8 +37,29 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Strip agent dev deps
-        run: cd apps/agent && npm prune --omit=dev
+      - name: Prepare agent node_modules
+        run: |
+          cd apps/agent
+          mkdir -p node_modules
+          node -e "
+          const pkg = require('./package.json');
+          const deps = Object.keys(pkg.dependencies || {});
+          const { execSync, existsSync } = require('child_process');
+          const fs = require('fs');
+          let count = 0;
+          for (const dep of deps) {
+            const src = '../../node_modules/' + dep;
+            const dest = 'node_modules/' + dep;
+            if (fs.existsSync(src)) {
+              execSync('cp -R ' + src + ' ' + dest);
+              process.stdout.write('  copied: ' + dep + '\n');
+              count++;
+            } else {
+              process.stdout.write('  MISSING: ' + dep + '\n');
+            }
+          }
+          console.log('Copied ' + count + ' packages to agent/node_modules');
+          "
 
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli
