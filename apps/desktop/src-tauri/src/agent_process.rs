@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::{
     env,
+    io::{BufRead, BufReader},
     net::{SocketAddr, TcpStream},
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -78,11 +79,23 @@ pub fn ensure_agent_process(
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
 
-    let child = command
+    let mut child = command
         .spawn()
         .map_err(|err| format!("启动 Agent 引擎失败：{err}"))?;
+
+    // 捕获 agent 进程 stderr 便于诊断启动错误
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines() {
+                if let Ok(line) = line {
+                    eprintln!("[agent stderr] {}", line);
+                }
+            }
+        });
+    }
+
     let pid = child.id();
     let command_label = spec.label.clone();
     {
@@ -202,6 +215,22 @@ struct AgentCommandSpec {
     env: Vec<(String, String)>,
 }
 
+/// 返回打包后的 Resources 目录，平台感知。
+///
+/// macOS:   Aurevoy.app/Contents/Resources/
+/// Windows: <exe_dir>/resources/
+/// Linux:   <exe_dir>/resources/
+fn resources_dir() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    if cfg!(target_os = "macos") {
+        // Aurevoy.app/Contents/MacOS/desktop → Aurevoy.app/Contents/Resources
+        exe.parent()?.parent().map(|p| p.join("Resources"))
+    } else {
+        // Windows / Linux: resources/ 与可执行文件平级
+        exe.parent().map(|p| p.join("resources"))
+    }
+}
+
 fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
     if let Ok(path) = env::var("AUREVOY_AGENT_SIDECAR") {
         let program = PathBuf::from(path);
@@ -232,38 +261,47 @@ fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
         });
     }
 
-    // 生产模式：查找 macOS bundle 中的 Resources/agent-dist/
-    if let Ok(exe) = env::current_exe() {
-        // macOS: Aurevoy.app/Contents/MacOS/desktop
-        // Resources: Aurevoy.app/Contents/Resources/agent-dist/
-        let resources = exe
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("Resources"));
-        if let Some(resources) = resources {
-            let agent_entry = resources.join("agent-dist").join("index.js");
-            if agent_entry.exists() {
-                let node = find_node().unwrap_or_else(|| PathBuf::from("node"));
-                return Ok(AgentCommandSpec {
-                    program: node.clone(),
-                    args: vec![
-                        agent_entry.to_string_lossy().to_string(),
-                    ],
-                    cwd: resources.join("agent-dist"),
-                    label: format!("{} {}", node.display(), agent_entry.display()),
-                    env: Vec::new(),
-                });
-            }
-        }
+    // 生产模式：查找 Resources/agent-dist/index.js
+    let resources = resources_dir()
+        .ok_or_else(|| "无法定位应用资源目录".to_string())?;
+    let agent_entry = resources.join("agent-dist").join("index.js");
+    if !agent_entry.exists() {
+        return Err(
+            "未找到 Agent 引擎。请确保 Node.js 已安装，或设置 AUREVOY_AGENT_SIDECAR 指向 Agent 可执行文件。"
+                .to_string(),
+        );
     }
-
-    Err(
-        "未找到 Agent 引擎。请确保 Node.js 已安装，或设置 AUREVOY_AGENT_SIDECAR 指向 Agent 可执行文件。"
-            .to_string(),
-    )
+    let node = find_node().unwrap_or_else(|| PathBuf::from("node"));
+    Ok(AgentCommandSpec {
+        program: node.clone(),
+        args: vec![agent_entry.to_string_lossy().to_string()],
+        cwd: resources.join("agent-dist"),
+        label: format!("{} {}", node.display(), agent_entry.display()),
+        env: Vec::new(),
+    })
 }
 
+/// 查找 Node.js 可执行文件，优先使用打包内置的版本。
 fn find_node() -> Option<PathBuf> {
+    // 1. 优先使用 App 内置的 Node.js（保证 ABI 兼容）
+    if let Some(resources) = resources_dir() {
+        let node_name = if cfg!(target_os = "windows") {
+            "node.exe"
+        } else {
+            "node"
+        };
+        let bundled = resources.join("node-runtime").join("bin").join(node_name);
+        if bundled.exists() {
+            eprintln!("[agent_process] using bundled Node.js: {}", bundled.display());
+            return Some(bundled);
+        }
+    }
+    // 2. 回退到系统安装的 Node.js
+    find_system_node()
+}
+
+/// 搜索系统安装的 Node.js 可执行文件。
+fn find_system_node() -> Option<PathBuf> {
     // 常见 Node.js 安装路径
     let candidates = [
         "/opt/homebrew/bin/node",       // Homebrew ARM64

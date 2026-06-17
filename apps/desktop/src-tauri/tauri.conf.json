@@ -35,7 +35,8 @@
       "../../agent/dist": "agent-dist",
       "../../agent/package.json": "agent-pkg",
       "../../agent/node_modules": "agent-dist/node_modules",
-      "../../agent/skills/builtin": "skills/builtin"
+      "../../agent/skills/builtin": "skills/builtin",
+      "node-runtime": "node-runtime"
     }
   }
 }

@@ -20,7 +20,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
           cache: npm
 
       - name: Setup Rust
@@ -108,6 +108,13 @@ jobs:
           console.log('Copied ' + ok + ' packages to agent/node_modules');
           if (missing > 0) { console.error('WARNING: ' + missing + ' packages missing'); }
           "
+
+      - name: Bundle Node.js runtime
+        run: |
+          mkdir -p apps/desktop/src-tauri/node-runtime/bin
+          cp "$(which node)" apps/desktop/src-tauri/node-runtime/bin/node
+          chmod +x apps/desktop/src-tauri/node-runtime/bin/node
+          echo "Bundled Node.js $(node --version) to node-runtime/bin/node"
 
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli
