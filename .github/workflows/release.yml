@@ -40,8 +40,11 @@ jobs:
       - name: Strip agent dev deps
         run: cd apps/agent && npm prune --omit=dev
 
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli
+
       - name: Tauri Build (DMG)
-        run: cd apps/desktop && npx tauri build --bundles dmg
+        run: cd apps/desktop && tauri build --bundles dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
