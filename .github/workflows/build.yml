@@ -34,14 +34,8 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Build Shared
-        run: npm run build:shared
-
-      - name: Build Agent
-        run: npm run build -w @aurevoy/agent
-
-      - name: Build Desktop (Vite)
-        run: npm run build -w @aurevoy/desktop
+      - name: Build
+        run: npm run build
 
       - name: Regression M3
         run: npm run regression:m3
