@@ -4,153 +4,154 @@
 
 # Aurevoy
 
-> 告诉它做什么，而不是怎么做。
-> 你的第一个真正能**做事**的 AI 伙伴。
+> Tell it *what* you want, not *how* to do it.
+> Your first AI companion that actually **gets things done**.
+
+[中文文档](docs/README_zh-CN.md)
 
 ---
 
-Aurevoy 是一款运行在你电脑上的个人 AI Agent。它不只是聊天——
-你告诉它目标，它自己想办法，查资料、写文件、搜网页，一步一步把事做成。
+Aurevoy is a personal AI agent that runs on your computer. It's more than a chat interface —
+you give it a goal, and it figures out the rest: researching, writing files, searching the web, and working through tasks step by step.
 
-**就像有个人随时坐在你旁边，你只需要说"帮我搞定这个"。**
-
----
-
-## 它能做什么
-
-### 日常任务，直接交代
-
-```
-"帮我把 downloads 里所有的 PNG 转成 WebP"
-"搜一下 React 19 有哪些 breaking changes，写个迁移清单"
-"把这个文件夹里的代码整理成一份 README"
-```
-
-Aurevoy 自己拆任务、自己动手。你不用教它怎么做。
-
-### 写代码、改代码、查代码
-
-```
-"给这个项目加个暗色模式"
-"帮我在 src/utils 里找一个处理日期的函数，看看有没有 bug"
-"这段代码太慢了，帮我分析一下瓶颈在哪里"
-```
-
-它读得懂项目结构，改得动文件，查得出问题。改错了还能**撤回来**。
-
-### 调研 & 写作
-
-```
-"帮我调研一下市面上最好的几个 React 状态管理库，对比优缺点"
-"把这篇文章翻译成英文，保持技术术语的准确性"
-"根据这些笔记帮我写一份周报"
-```
-
-能搜索最新的网页信息，抓取链接获取详细内容，整合成你要的样子。
-
-### 越用越懂你
-
-告诉它你的偏好——"我总是用 pnpm"、"我的代码风格是函数式优先"——它会记住。
-下次自动按你的习惯来，不用反复说。
+**Like having someone sitting next to you who just says "I'll take care of it."**
 
 ---
 
-## 怎么工作的
+## What It Can Do
 
-你输入一个目标 → Aurevoy 先侦查工作区了解情况 → 制定计划 → 一步步执行：
+### Everyday Tasks, Just Ask
 
-- **需要读文件**？它打开文件看内容
-- **需要查资料**？它上网搜最新信息
-- **需要写代码**？它精确修改，不改错别的地方
-- **需要你确认**？它会停下来问，等你点头再继续
+```
+"Convert all the PNGs in my downloads folder to WebP"
+"Research React 19 breaking changes and write a migration checklist"
+"Read through this folder and turn the code into a README"
+```
 
-每一步你都看得见。不满意随时打断，改了重新来。
+Aurevoy breaks down the task and gets to work. You don't need to explain how.
+
+### Write, Edit, and Explore Code
+
+```
+"Add dark mode to this project"
+"Find the date-formatting utility in src/utils and check for bugs"
+"This code is too slow — help me find the bottleneck"
+```
+
+It understands your project structure, makes precise edits, and flags issues. If something goes wrong, you can always **undo**.
+
+### Research & Writing
+
+```
+"Survey the top React state management libraries — compare pros and cons"
+"Translate this article into English, keeping technical terms accurate"
+"Turn these meeting notes into a weekly report"
+```
+
+It searches the web for up-to-date information, fetches pages for details, and synthesizes everything into the format you need.
+
+### Learns Your Preferences
+
+Tell it how you work — "I always use pnpm," "I prefer functional style" — and it remembers. Next time it follows your conventions without being reminded.
 
 ---
 
-## 你的数据你做主
+## How It Works
 
-- **全部跑在本机**，数据不出你的电脑
-- 用你自己的 API Key，调用哪个模型你自己定
-- 代码开源，你随时知道它在做什么
+You give it a goal → Aurevoy scouts your workspace to understand the context → builds a plan → executes step by step:
 
----
+- **Need to read a file?** It opens and inspects it.
+- **Need to look something up?** It searches the web for current information.
+- **Need to write code?** It makes precise edits without touching unrelated parts.
+- **Need your input?** It pauses, asks, and waits for your go-ahead before proceeding.
 
-## 装上就用
-
-### 1. 下载
-
-从 [Releases](../../releases) 下载最新 DMG，拖进 Applications。
-
-### 2. 配置模型
-
-打开 Aurevoy，在设置里填上你的模型信息：
-
-```
-提供商：OpenAI（或任何兼容接口）
-地址：https://api.openai.com/v1
-模型：gpt-4o-mini
-密钥：sk-xxxx
-```
-
-支持 OpenAI、DeepSeek、Ollama 等所有 OpenAI 兼容接口。用你自己的 Key，没有额外费用。
-
-### 3. 开始对话
-
-在输入框里告诉它你要做什么。就像跟人说话一样。
-
-```
-/ 查看可用的技能（web-search、browser 等）
-```
+You see every step. Dislike a direction? Interrupt anytime, revise, and it picks back up.
 
 ---
 
-## 如果你想参与开发
+## Your Data, Your Rules
 
-Aurevoy 是开源项目，欢迎贡献。
+- **Everything runs locally.** Your data never leaves your machine.
+- You bring your own API key and choose whichever model you want.
+- The code is open source — you can always see exactly what it's doing.
+
+---
+
+## Get Started
+
+### 1. Download
+
+Grab the latest DMG from [Releases](../../releases) and drag it into Applications.
+
+### 2. Configure a Model
+
+Open Aurevoy and fill in your model details under Settings:
+
+```
+Provider: OpenAI (or any compatible API)
+Base URL: https://api.openai.com/v1
+Model: gpt-4o-mini
+API Key: sk-xxxx
+```
+
+Works with OpenAI, DeepSeek, Ollama, and any OpenAI-compatible endpoint. Use your own key — no extra fees.
+
+### 3. Start a Conversation
+
+Tell Aurevoy what you need in the input box. Talk to it like a person.
+
+```
+/  Browse available skills (web-search, browser, and more)
+```
+
+---
+
+## Contributing
+
+Aurevoy is open source. Contributions are welcome.
 
 ```bash
-# 环境：Node.js >= 20, Rust (stable), macOS
+# Prerequisites: Node.js >= 20, Rust (stable), macOS
 git clone https://github.com/nullskymc/Aurevoy.git
 cd Aurevoy
 npm install
-npm run dev          # 启动开发模式
-npm run typecheck    # 类型检查
-npm run build        # 构建
+npm run dev          # start dev mode
+npm run typecheck    # type check
+npm run build        # production build
 ```
 
-更多细节见 [AGENTS.md](AGENTS.md) 和 [docs/](docs/)。
+More details in [AGENTS.md](AGENTS.md) and [docs/](docs/).
 
 ---
 
-## 技术概要
+## Tech Stack
 
-| 层 | 技术 |
+| Layer | Technology |
 |---|---|
-| 桌面应用 | Tauri 2 + React + TypeScript |
-| Agent 引擎 | Node.js + Fastify + SQLite |
-| 通信方式 | 本地 HTTP + SSE 流式推送 |
-| 工具扩展 | 内置工具 + MCP 协议（可接外部工具服务器） |
-| Skill 系统 | 斜杠命令激活专业能力，支持自定义 |
+| Desktop App | Tauri 2 + React + TypeScript |
+| Agent Engine | Node.js + Fastify + SQLite |
+| Transport | Local HTTP + SSE streaming |
+| Tool Extensions | Built-in tools + MCP protocol (connect external tool servers) |
+| Skill System | Slash-command-activated capabilities, custom skills supported |
 
-详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ---
 
-## 路线图
+## Roadmap
 
-当前版本 `v0.1.0-test` 已完成核心 Agent 能力：
+Current version `v0.2.0-dev` includes the core agent capabilities:
 
-- ✅ 自主规划 & 并行工具执行
-- ✅ 文件读写/搜索/编辑（diff 精确修改）
-- ✅ 网页搜索 & 抓取
-- ✅ 浏览器自动化（通过 Playwright MCP）
-- ✅ 长期记忆（越用越懂你）
-- ✅ 多轮对话 & 编辑重来 & 分支对话
-- ✅ Skill 系统（斜杠命令、自定义技能）
-- ✅ macOS ARM64 原生桌面应用
+- ✅ Autonomous planning & parallel tool execution
+- ✅ File read/write/search/edit (diff-based precision edits)
+- ✅ Web search & page fetching
+- ✅ Browser automation (via Playwright MCP)
+- ✅ Long-term memory (learns your preferences over time)
+- ✅ Multi-turn conversations, edit & retry, branching threads
+- ✅ Skill system (slash commands, custom skills)
+- ✅ macOS ARM64 native desktop app
 
-接下来：知识库/RAG、Agent 评测体系、发布体验优化。详见 [ROADMAP](docs/ROADMAP.md)。
+Coming next: knowledge base / RAG, agent evaluation framework, release polish. See [ROADMAP](docs/ROADMAP.md).
 
 ---
 
