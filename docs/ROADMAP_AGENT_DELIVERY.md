@@ -3,8 +3,12 @@
 > 本文是 Aurevoy 的第二份路线图，聚焦一个目标：
 > **把已经完成的 Agent 技术底座，推进成普通用户能真实交付任务的个人 Agent。**
 >
-> 主路线图 `docs/ROADMAP.md` 记录 M0-M5 的工程底座；本文从 M6 开始，记录 Agent
-> 产品能力的落地顺序。本文基于 `docs/research/agent-delivery-deepresearch-report.md`
+> 主路线图 [`docs/ROADMAP.md`](./ROADMAP.md) 现在是项目**唯一的主路线图**，
+> 覆盖工程底座（M0-M5）、Agent 交付（M6-M8）、Rewind、Project 和
+> Agent 架构重构（P1-P7，全部完成）。本文保留 M6-M8 的详细交付记录供查阅。
+>
+> **2026-06 更新**：Agent 架构重构 P1-P7 全部完成（详见主路线图）。
+> 本文基于 `docs/research/agent-delivery-deepresearch-report.md`
 > 重写，所有阶段都必须结合当前代码实现推进，不能脱离现有架构另起炉灶。
 
 ## 0. 当前判断
@@ -391,7 +395,8 @@ node scripts/m6-regression.mjs
 - `search_files` 是确定性 glob/文本搜索，不做语义索引；大规模知识库索引仍属于 M8。
 - `http_fetch` 的 HTML 清洗是轻量实现，不等同完整浏览器 DOM 解析；复杂网页、JS 渲染和截图留给浏览器 MCP 阶段。
 - 运行时 schema validation 覆盖当前 JSON Schema 子集，未引入 Zod/Ajv 作为新直接依赖；复杂 schema 关键字需要后续扩展。
-- 多步计划采用确定性启发式生成，避免依赖 Provider strict JSON；后续可引入模型生成计划和更细粒度 step/checkpoint 映射。
+- 多步计划已通过 P1 升级为 LLM 驱动规划（侦查阶段 → JSON 结构化计划），启发式作为兜底；
+  更细粒度 step/checkpoint 映射和 plans 的动态调整留给后续迭代。
 
 ## Rewind / Edit & Regenerate — 编辑重跑（✅ 已完成）
 
@@ -429,7 +434,8 @@ node scripts/m6-regression.mjs
 
 已知边界：
 
-- `code_only` 模式（仅回滚文件、保留对话）需要增强 checkpoint 系统以存储文件快照，当前未实现。
+- `code_only` 模式（仅回滚文件、保留对话）的基础设施已通过 P6 文件快照机制建立；
+  `code_and_conv` 模式在 Rewind 时可从快照回滚被截断消息关联的文件写入。
 - branch 创建的新任务在侧栏中作为独立任务显示，未实现父子分组展示。
 - compact 的摘要质量取决于 LLM 能力，不做二次校验；摘要失败时保留原消息不变。
 

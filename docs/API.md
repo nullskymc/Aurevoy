@@ -277,6 +277,9 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `task_created` | `task: Task` | 任务已创建 |
 | `status` | `status: TaskStatus` | 任务状态变化 |
 | `phase` | `phase: TaskPhase`, `detail?` | Agent runtime 细粒度阶段变化 |
+| `scout_started` | — | P1：开始侦查工作区以制定计划 |
+| `scout_report` | `report: ScoutReport` | P1：侦查完成，产出关键文件与约束摘要 |
+| `plan_generated` | `plan: PlanStep[]`, `source` | P1：计划生成（`llm` 或 `heuristic`） |
 | `plan` | `plan: PlanStep[]` | 给出/更新完整计划 |
 | `step_update` | `step: PlanStep` | 单个计划步骤状态变化 |
 | `token` | `delta: string` | LLM 流式输出的增量片段 |
@@ -300,30 +303,37 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 
 `TaskStatus`：`pending | planning | running | paused | completed | failed | cancelled`
 
-`TaskPhase`：`initializing | thinking | calling_tool | waiting_approval | waiting_clarification | finalizing | failed | cancelled`
+`TaskPhase`：`initializing | planning | thinking | calling_tool | waiting_approval | waiting_clarification | finalizing | failed | cancelled`
 
 ### 典型事件序列
 
 无需工具（直接回答）：
 ```
-status(running) → phase(initializing) → phase(thinking) → token × N
+status(running) → phase(initializing)
+  → phase(planning) → scout_started → scout_report → plan_generated
+  → phase(thinking) → token × N
   → phase(finalizing) → message → status(completed) → done(completed)
 ```
 
-ReAct 工具调用循环（含一次工具调用）：
+ReAct 工具调用循环（含侦查/规划/并行工具执行）：
 ```
 status(running)
+  → phase(initializing)
+  → phase(planning)                 (P1: Scout → LLM 规划)
+  → scout_started → scout_report → plan_generated
   → phase(thinking)
   → token × N                       (模型本轮的文本/思考)
   → phase(calling_tool)
-  → tool_call                       (模型请求调用工具)
-  → tool_result                     (工具执行结果，回灌给模型)
+  → tool_call × N                   (P2: 模型请求调用工具，safe 并行执行)
+  → tool_result × N                 (工具执行结果，回灌给模型)
   → phase(thinking)
   → token × N                       (下一轮，带着工具结果)
   → phase(finalizing) → message → status(completed) → done(completed)
 ```
-- 计划以降级优先方式呈现：普通任务保留单步计划；文件/网页/命令/产物类目标会生成多步计划，
-  工具成功后推进 `step_update` 并发布 `checkpoint_created`。
+- P1: 任务启动时先侦查工作区（仅 safe 只读工具，最多 3 轮），再用 LLM 生成结构化计划。
+- P2: 同一轮内 safe 工具 `Promise.all` 全并行执行，risky 工具并发审批后并行执行。
+  每个工具有独立 `invokeWithTimeout`（默认 30s）。
+- 计划以降级优先方式呈现：LLM 规划失败时回退到正则启发式。
 - 一轮可能有多个并行 `tool_call`（各带独立 `id`），对应多个 `tool_result`。
 - 取消时以 `status(cancelled)` + `done(cancelled)` 收尾。
 - `phase` 是诊断和 UI 解释用的细粒度阶段，必须来自后端真实状态转换，不能由前端猜测。
