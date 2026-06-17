@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/desktop/src-tauri/icons/icon.png" width="128" alt="Aurevoy Logo" />
+  <img src="apps/desktop/public/aurevoy-wordmark.svg" width="320" alt="Aurevoy" />
 </p>
 
 # Aurevoy
