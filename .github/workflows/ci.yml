@@ -1,15 +1,27 @@
-name: Build
+name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.base.json'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    name: Build (macOS ARM64)
+  check:
+    name: Typecheck & Build
     runs-on: macos-latest
 
     steps:
@@ -35,18 +47,3 @@ jobs:
 
       - name: Build
         run: npm run build
-
-      - name: Tauri Build (DMG)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: apps/desktop
-          args: --bundles dmg
-
-      - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Aurevoy-macOS-ARM64
-          path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
-          if-no-files-found: warn
