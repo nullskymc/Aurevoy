@@ -88,7 +88,13 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/llm/provider.ts` | `LLMProvider` 抽象（`stream(messages, options)` 支持 tools/signal）+ `OpenAICompatibleProvider`；`getProvider()` 按配置返回，未配置即报错 |
 | `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；JSON Schema 子集校验。 P2: `invokeWithTimeout()` 独立超时；`executionPolicyOf()` 并行策略。 P3: `truncateToolOutput()` 50K 字符截断。 P6: `fallbackFor()` 替代方案查询 |
 | `src/tools/builtins.ts` | 内置基础工具。 文件：目录/读写/搜索/复制/移动/删除。 **P6**: `edit_file` 精确替换（唯一匹配校验）。 网络：HTTP 抓取。 记忆：`remember`（**P5**: Jaccard 去重+`[[link]]` 引用）。 交互：`ask_user`、`create_artifact`/`apply_artifact`。 沙箱：`execute_command`（默认禁用）。 **P7**: `delegate_task` 子代理委托 |
+| `src/tools/use-skill.ts` | **Skill**: `use_skill` 工具——LLM 可调用激活/停用 skill，发布 `skill_activated`/`skill_deactivated` SSE 事件 |
+| `src/tools/web-search.ts` | **Web 搜索**: `web_search` 工具——DuckDuckGo HTML 搜索（免费），可配置搜索后端，返回结构化结果（标题/摘要/URL） |
 | `src/tools/mcp.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到 `ToolRegistry`；MCP 描述会截断/净化，本地风险覆盖优先于 annotations |
+| `src/skills/types.ts` | **Skill 类型**：`SkillFrontmatter`、`ParsedSkill`、`SkillDescriptor` |
+| `src/skills/loader.ts` | **Skill 加载器**：解析 markdown 文件的 YAML frontmatter + body，`parseSkillFile()`/`parseSkillDirectory()` |
+| `src/skills/registry.ts` | **Skill 注册表**：`SkillRegistry` 单例——`load()`(预装→用户→工作区)、`get()`、`list()`、`getAllowedTools()`、`reload()` |
+| `skills/builtin/` | **预装 skill 文件**：`web-search.md`、`browser.md`（随 Agent 分发的 markdown skill 定义） |
 | `src/runtime/settings.ts` | 运行设置服务：从 SQLite 加载/保存 Provider、工作区、工具边界、MCP 和清理策略；更新后影响真实 runtime |
 | `src/sandbox/command-executor.ts` | 命令/代码执行前置边界：策略、超时、输出上限、env allowlist；默认禁用，不暴露 shell |
 | `src/store/db.ts` | SQLite 持久化。 `taskStore`：save/get/list/listByProject。 `traceStore`：append/list。 `projectStore`：CRUD/getByPath。 `memoryStore`(**P5**: +`nameSlug`/`why`/`howToApply` 列，`findByNameSlug` 查询)。 `settingsStore`；`toolSettingsStore` |

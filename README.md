@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="apps/desktop/src-tauri/icons/icon.png" width="128" alt="Aurevoy Logo" />
+</p>
+
 # Aurevoy
 
 > 告诉它做什么，而不是怎么做。

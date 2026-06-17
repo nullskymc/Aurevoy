@@ -20,7 +20,10 @@
 | Rewind | 编辑重跑 / 撤销 / 分支 / 压缩 | ✅ |
 | Project | 项目工作区与对话分组 | ✅ |
 | P1-P7 | Agent 架构重构（以 Claude Code 为蓝本） | ✅ |
-| M8 | 知识库、评测、浏览器与发布体验 | ⬜ |
+| Skill | 技能系统（斜杠命令、工具白名单、预装 skill） | ✅ |
+| WebSearch | 网页搜索工具与 web-search 预装 skill | ✅ |
+| CI/CD | GitHub Actions macOS ARM64 自动构建 | ✅ |
+| M8 | 知识库、评测、浏览器与发布体验 | 🚧 |
 
 ## 验证口径
 
@@ -216,7 +219,17 @@ Composer 项目上下文显示与新对话项目继承。
 
 ---
 
-## M8 — 知识库、评测、浏览器与交付体验 ⬜
+## M8 — 知识库、评测、浏览器与交付体验 🚧
+
+> 浏览器自动化已通过 browser 预装 skill + Playwright MCP 提供基础能力（配置指南见 skill 文件）。
+> 网页搜索已通过 web_search 工具 + web-search 预装 skill 落地。
+
+- [x] `web_search` 工具（DuckDuckGo，可配置搜索后端）
+- [x] `web-search` / `browser` 预装 skill
+- [ ] M8.1 知识库与 RAG
+- [ ] M8.2 Agent 评测
+- [ ] M8.3 浏览器自动化深度集成
+- [ ] M8.4 发布体验
 
 ### M8.1 知识库与 RAG
 
