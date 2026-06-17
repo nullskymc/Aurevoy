@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { t, type TranslationKey } from "../i18n";
+import type { SkillDescriptor } from "@aurevoy/shared";
 
 interface SlashCommand {
   name: string;
-  descriptionKey: TranslationKey;
+  descriptionKey?: TranslationKey;
+  description?: string;
 }
-
-const SLASH_COMMANDS: SlashCommand[] = [
-  { name: "/compact", descriptionKey: "cmd.compact" },
-];
 
 interface ComposerProps {
   value: string;
   busy: boolean;
+  /** Skill: 动态 skill 列表，用于斜杠命令自动完成。 */
+  skills?: SkillDescriptor[];
   online: boolean | null;
   /** hero: 居中空状态的大输入框；docked: 对话底部的停靠输入框 */
   variant?: "hero" | "docked";
@@ -37,6 +37,7 @@ export function Composer({
   provider,
   projectName,
   isEditing,
+  skills,
   onCancelEdit,
   onChange,
   onSubmit,
@@ -47,6 +48,22 @@ export function Composer({
   const [cmdIndex, setCmdIndex] = useState(0);
   const providerConfigured = provider !== "unconfigured";
   const canSend = value.trim().length > 0 && !busy && online !== false && providerConfigured;
+
+  const slashCommands = useMemo<SlashCommand[]>(() => {
+    const commands: SlashCommand[] = [
+      { name: "/compact", descriptionKey: "cmd.compact" as TranslationKey },
+    ];
+    if (skills) {
+      for (const skill of skills) {
+        commands.push({
+          name: `/${skill.name}`,
+          descriptionKey: undefined,
+          description: skill.description,
+        });
+      }
+    }
+    return commands;
+  }, [skills]);
 
   const autoResize = useCallback(() => {
     const el = textareaRef.current;
@@ -63,8 +80,8 @@ export function Composer({
   const filteredCommands = useMemo(() => {
     if (!isTypingSlash) return [];
     const query = value.toLowerCase();
-    return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(query));
-  }, [value, isTypingSlash]);
+    return slashCommands.filter((cmd) => cmd.name.startsWith(query));
+  }, [value, isTypingSlash, slashCommands]);
   const showCmdPopup = isTypingSlash && filteredCommands.length > 0;
   const displayCmdIndex = Math.min(cmdIndex, Math.max(0, filteredCommands.length - 1));
 
@@ -133,7 +150,7 @@ export function Composer({
                 }}
               >
                 <span className="cmd-popup-name">{cmd.name}</span>
-                <span className="cmd-popup-desc">{t(cmd.descriptionKey)}</span>
+                <span className="cmd-popup-desc">{cmd.descriptionKey ? t(cmd.descriptionKey) : (cmd.description ?? '')}</span>
               </button>
             ))}
           </div>

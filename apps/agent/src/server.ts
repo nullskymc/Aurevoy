@@ -33,6 +33,7 @@ import type {
   ResumeTaskResponse,
   RevertTaskRequest,
   RevertTaskResponse,
+  SkillListResponse,
   UnrevertTaskResponse,
   TaskArtifactContentResponse,
   TaskArtifactListResponse,
@@ -62,6 +63,7 @@ import {
 import { taskEvents } from './agent/events.js';
 import { taskStore, traceStore, memoryStore, toolSettingsStore, projectStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
+import { skillRegistry } from './skills/registry.js';
 import { getProviderName, listProviderModels } from './llm/provider.js';
 import { getMcpStatuses, reloadMcpTools } from './tools/mcp.js';
 import {
@@ -101,6 +103,10 @@ export async function buildServer(externalLogger?: Logger) {
 
   // 已注册工具列表（调试/前端展示用）
   app.get('/api/tools', async () => toolRegistry.listAll());
+
+  app.get('/api/skills', async (): Promise<SkillListResponse> => {
+    return { skills: skillRegistry.listAll() };
+  });
 
   app.patch<{ Params: { name: string }; Body: UpdateToolRequest }>(
     '/api/tools/:name',

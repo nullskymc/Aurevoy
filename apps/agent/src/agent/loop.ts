@@ -23,8 +23,9 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage } from './context.js';
+import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillSystemMessage } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
+import { skillRegistry } from '../skills/registry.js';
 import { withRetry } from './retry.js';
 import { taskStore, memoryStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
@@ -426,6 +427,16 @@ export async function compactTask(
   return { task, originalCount, summaryLength };
 }
 
+/** 解析用户输入中的斜杠命令前缀。返回 skill 名称和去除前缀后的文本。 */
+function parseSlashCommand(content: string): { skillName: string | null; text: string } {
+  const match = content.match(/^\/(\S+)(?:\s+(.*))?/s);
+  if (!match) return { skillName: null, text: content };
+  const skillName = match[1];
+  // 保留 /compact 为前端专有命令，不当作 skill
+  if (skillName === 'compact') return { skillName: null, text: content };
+  return { skillName, text: match[2]?.trim() || '' };
+}
+
 /**
  * 在同一任务内追加一轮用户输入（多轮对话）。
  *
@@ -433,10 +444,27 @@ export async function compactTask(
  * 循环会带着完整的历史 `task.messages` 作为上下文继续推进。
  */
 export function addUserTurn(task: Task, content: string): Message {
+  // Skill: 解析斜杠命令前缀
+  const parsed = parseSlashCommand(content);
+  let messageContent = content;
+  if (parsed.skillName) {
+    const skill = skillRegistry.get(parsed.skillName);
+    if (skill) {
+      task.activeSkills = [parsed.skillName];
+      messageContent = parsed.text || parsed.skillName;
+      taskEvents.publish({
+        type: 'skill_activated',
+        taskId: task.id,
+        skillName: parsed.skillName,
+        allowedTools: skill.frontmatter['allowed-tools'],
+      });
+    }
+  }
+
   const userMsg: Message = {
     id: randomUUID(),
     role: 'user',
-    content,
+    content: messageContent,
     createdAt: new Date().toISOString(),
   };
   task.messages.push(userMsg);
@@ -449,7 +477,7 @@ export function addUserTurn(task: Task, content: string): Message {
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
     summary: '收到后续输入，继续任务',
-    data: { message: content },
+    data: { message: messageContent },
   });
   return userMsg;
 }
@@ -771,7 +799,6 @@ export async function runTask(task: Task): Promise<void> {
   };
 
   const messages = task.messages;
-  const toolDescriptors = toolRegistry.list();
   const callFingerprints = new Map<string, number>();
 
   try {
@@ -845,7 +872,20 @@ export async function runTask(task: Task): Promise<void> {
         task.goal,
         recentTopics,
       );
-      const requestMessages = memoryMessage ? [memoryMessage, ...ctx.messages] : ctx.messages;
+
+      // Skill: 应用工具白名单 + 注入 skill system prompt
+      const activeSkillName = task.activeSkills?.[0];
+      const allowedToolNames = activeSkillName
+        ? skillRegistry.getAllowedTools(activeSkillName)
+        : undefined;
+      const toolDescriptors = toolRegistry.list(allowedToolNames);
+      const skillMessage = buildSkillSystemMessage(activeSkillName);
+
+      const requestMessages = [
+        memoryMessage,
+        skillMessage,
+        ...ctx.messages,
+      ].filter(Boolean) as Message[];
 
       // ---------- 调用 LLM（带重试） ----------
       try {

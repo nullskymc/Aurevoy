@@ -202,6 +202,8 @@ export interface Task {
   projectId?: string;
   /** P6: 文件快照列表（用于 Rewind 回滚文件）。 */
   fileSnapshots?: FileSnapshot[];
+  /** Skill: 当前激活的 skill 名称列表（通常最多 1 个）。 */
+  activeSkills?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -408,6 +410,8 @@ export type AgentEvent =
   | { type: 'scout_started'; taskId: string }
   | { type: 'scout_report'; taskId: string; report: ScoutReport }
   | { type: 'plan_generated'; taskId: string; plan: PlanStep[]; source: 'llm' | 'heuristic' }
+  | { type: 'skill_activated'; taskId: string; skillName: string; allowedTools?: string[] }
+  | { type: 'skill_deactivated'; taskId: string }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
   | { type: 'task_deleted'; taskId: string };
@@ -622,6 +626,15 @@ export interface DeleteTaskResponse {
 }
 
 // ============================================================
+// Skill (技能模块)
+// ============================================================
+
+/** GET /api/skills */
+export interface SkillListResponse {
+  skills: SkillDescriptor[];
+}
+
+// ============================================================
 // 长期记忆 (M4.3)
 // ============================================================
 
@@ -671,6 +684,15 @@ export interface MemoryEntry {
   howToApply?: string;
   /** P5: 关联的记忆 ID 列表 */
   linkedMemoryIds?: string[];
+}
+
+/** Skill: 暴露给前端的 skill 摘要（不含 body）。 */
+export interface SkillDescriptor {
+  name: string;
+  description: string;
+  allowedTools?: string[];
+  version?: string;
+  sourceDir: 'builtin' | 'user' | 'workspace';
 }
 
 /** POST /api/memories — 用户手动新增一条记忆 */

@@ -17,6 +17,7 @@ import {
   type ResumeTaskResponse,
   type RevertMode,
   type RevertTaskResponse,
+  type SkillDescriptor,
   type UnrevertTaskResponse,
   type RuntimeSettings,
   type Task,
@@ -212,6 +213,13 @@ export async function listTools(): Promise<ToolDescriptor[]> {
   if (!res.ok) throw new Error(`list tools failed: ${res.status}`);
   const body = (await res.json()) as ToolDescriptor[] | ToolListResponse;
   return Array.isArray(body) ? body : body.tools;
+}
+
+export async function fetchSkills(): Promise<SkillDescriptor[]> {
+  const res = await fetch(`${BASE_URL}/api/skills`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { skills: SkillDescriptor[] };
+  return data.skills ?? [];
 }
 
 export async function updateTool(

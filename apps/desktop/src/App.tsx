@@ -50,6 +50,7 @@ import { useSettings } from "./hooks/useSettings";
 import { useTaskState } from "./hooks/useTaskState";
 import { useTools } from "./hooks/useTools";
 import { useProjects } from "./hooks/useProjects";
+import { useSkills } from "./hooks/useSkills";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
 import { ArtifactView } from "./components/ArtifactView";
@@ -207,6 +208,7 @@ function App() {
   const { tools, setTools } = useTools();
   const { projects, setProjects } = useProjects();
   const { memories, setMemories } = useMemories();
+  const { skills } = useSkills();
   const { mergeArtifact } = useArtifacts(setCurrentTask, updateTaskList);
 
   const [draftProjectId, setDraftProjectId] = useState<string | undefined>();
@@ -1189,6 +1191,7 @@ function App() {
                 variant="docked"
                 projectName={draftProjectName}
                 isEditing={editingMessageId !== null}
+                skills={skills}
                 onCancelEdit={() => {
                   setEditingMessageId(null);
                   setGoal("");
@@ -1220,6 +1223,7 @@ function App() {
               online={online}
               variant="hero"
               projectName={draftProjectName}
+              skills={skills}
               provider={health?.provider}
               onChange={setGoal}
               onSubmit={handleComposerSubmit}

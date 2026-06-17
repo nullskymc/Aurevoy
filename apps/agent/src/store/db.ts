@@ -116,6 +116,7 @@ const taskColumnMigrations: Array<{ name: string; sql: string }> = [
   { name: 'archived_messages', sql: "ALTER TABLE tasks ADD COLUMN archived_messages TEXT NOT NULL DEFAULT '[]'" },
   { name: 'parent_task_id', sql: 'ALTER TABLE tasks ADD COLUMN parent_task_id TEXT' },
   { name: 'project_id', sql: 'ALTER TABLE tasks ADD COLUMN project_id TEXT' },
+  { name: 'active_skills', sql: 'ALTER TABLE tasks ADD COLUMN active_skills TEXT' },
 ];
 for (const migration of taskColumnMigrations) {
   if (!taskColumns.some((column) => column.name === migration.name)) {
@@ -154,6 +155,7 @@ interface TaskRow {
   archived_messages: string;
   parent_task_id: string | null;
   project_id: string | null;
+  active_skills: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -198,6 +200,7 @@ function rowToTask(row: TaskRow): Task {
     archivedMessages: (parseJsonColumn(row.archived_messages) as Task['archivedMessages']) ?? [],
     parentTaskId: row.parent_task_id ?? undefined,
     projectId: row.project_id ?? undefined,
+    activeSkills: (parseJsonColumn(row.active_skills) as Task['activeSkills']) ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -248,12 +251,12 @@ export const taskStore = {
       `INSERT INTO tasks (
          id, goal, status, phase, plan, messages, artifacts, clarifications, checkpoints,
          budget, budget_usage, token_usage, archived_messages, parent_task_id, project_id,
-         created_at, updated_at
+         active_skills, created_at, updated_at
        )
        VALUES (
          @id, @goal, @status, @phase, @plan, @messages, @artifacts, @clarifications,
          @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId,
-         @projectId, @createdAt, @updatedAt
+         @projectId, @activeSkills, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
          goal=excluded.goal, status=excluded.status, phase=excluded.phase, plan=excluded.plan,
@@ -262,7 +265,7 @@ export const taskStore = {
          budget=excluded.budget, budget_usage=excluded.budget_usage,
          token_usage=excluded.token_usage, archived_messages=excluded.archived_messages,
          parent_task_id=excluded.parent_task_id, project_id=excluded.project_id,
-         updated_at=excluded.updated_at`,
+         active_skills=excluded.active_skills, updated_at=excluded.updated_at`,
     ).run({
       id: task.id,
       goal: task.goal,
@@ -279,6 +282,7 @@ export const taskStore = {
       archivedMessages: JSON.stringify(task.archivedMessages ?? []),
       parentTaskId: task.parentTaskId ?? null,
       projectId: task.projectId ?? null,
+      activeSkills: task.activeSkills === undefined ? null : JSON.stringify(task.activeSkills),
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });

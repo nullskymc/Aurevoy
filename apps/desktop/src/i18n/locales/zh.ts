@@ -243,6 +243,11 @@ export const zh = {
   "event.scoutStarted": "侦查工作区",
   "event.scoutStartedDetail": "快速了解文件结构与关键信息",
   "event.scoutReport": "侦查报告",
+  "event.skillActivated": "技能已激活: ",
+  "event.skillDeactivated": "技能已停用",
+  "event.skillDeactivatedDetail": "已恢复全部工具",
+  "event.toolsRestricted": "工具已限制: ",
+  "event.allToolsAvailable": "所有工具可用",
 
   // 运行详情（Inspector）
   "inspector.panelLabel": "任务检查器",

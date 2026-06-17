@@ -1,7 +1,6 @@
 # Dependencies
 node_modules/
 .pnp.*
-.qoder
 
 # Build outputs
 dist/

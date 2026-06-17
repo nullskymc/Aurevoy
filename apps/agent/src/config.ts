@@ -1,3 +1,6 @@
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { AGENT_DEFAULT_HOST, AGENT_DEFAULT_PORT, type ToolRiskLevel } from '@aurevoy/shared';
 
 export interface McpServerConfig {
@@ -94,6 +97,17 @@ export const config = {
       process.env.AUREVOY_COMPACT_KEEP_RECENT_TURNS,
       5,
     ),
+  },
+
+  /** Skill 模块配置。Skill 是 markdown 文件（YAML frontmatter + body），
+   *  存放在用户/工作区/预装目录下。预装 skill 随 Agent 分发。 */
+  skills: {
+    /** 用户级 skill 目录（全局生效）。 */
+    userDir: process.env.AUREVOY_SKILLS_USER_DIR ?? resolveUserSkillsDir(),
+    /** 工作区级 skill 子目录名（相对于 workspaceDir）。 */
+    workspaceSubDir: process.env.AUREVOY_SKILLS_WORKSPACE_SUBDIR ?? '.aurevoy/skills',
+    /** 预装 skill 目录（随 Agent 分发，优先级最低，可被用户/工作区覆盖）。 */
+    builtinDir: process.env.AUREVOY_SKILLS_BUILTIN_DIR ?? resolveBuiltinSkillsDir(),
   },
 
   sandbox: {
@@ -214,4 +228,24 @@ function readRiskLevel(value: unknown, label: string): ToolRiskLevel | undefined
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 解析用户级 skill 目录默认路径（~/.aurevoy/skills）。 */
+function resolveUserSkillsDir(): string {
+  try {
+    return resolve(homedir(), '.aurevoy', 'skills');
+  } catch {
+    return './.aurevoy/skills';
+  }
+}
+
+/** 解析预装 skill 目录（随 Agent 分发）。 */
+function resolveBuiltinSkillsDir(): string {
+  // import.meta 在 ESM 中可用；编译后路径指向 dist/，源码在 skills/builtin/
+  try {
+    const thisDir = resolve(fileURLToPath(import.meta.url), '..');
+    return resolve(thisDir, '..', 'skills', 'builtin');
+  } catch {
+    return './apps/agent/skills/builtin';
+  }
 }

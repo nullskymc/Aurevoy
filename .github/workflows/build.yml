@@ -1,0 +1,80 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (macOS ARM64)
+    runs-on: macos-latest
+    # macos-latest 默认是 ARM64 (M1/M2/M3) runner
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Shared
+        run: npm run build:shared
+
+      - name: Build Agent
+        run: npm run build -w @aurevoy/agent
+
+      - name: Build Desktop (Vite)
+        run: npm run build -w @aurevoy/desktop
+
+      - name: Regression M3
+        run: npm run regression:m3
+
+      - name: Regression M4
+        run: npm run regression:m4
+
+      - name: Regression M5
+        run: npm run regression:m5
+
+      - name: Regression M6
+        run: npm run regression:m6
+
+      - name: Regression M7
+        run: npm run regression:m7
+
+      - name: Tauri Build (DMG)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          args: --bundles dmg
+          # 如需签名，在 repo secrets 中配置以下变量：
+          # APPLE_SIGNING_IDENTITY
+          # APPLE_CERTIFICATE (base64 p12)
+          # APPLE_CERTIFICATE_PASSWORD
+          # APPLE_API_ISSUER (App Store Connect API)
+          # APPLE_API_KEY
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aurevoy-macOS-ARM64
+          path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: warn

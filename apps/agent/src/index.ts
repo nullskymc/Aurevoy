@@ -2,9 +2,12 @@ import './load-env.js';
 import { buildServer } from './server.js';
 import { config } from './config.js';
 import './tools/builtins.js'; // 副作用导入：注册内置工具（文件/网络）
+import './tools/use-skill.js'; // 副作用导入：注册 use_skill 工具
+import './tools/web-search.js'; // 副作用导入：注册 web_search 工具
 import { closeMcpTools, initializeMcpTools } from './tools/mcp.js';
 import { loadPersistedSettings } from './runtime/settings.js';
 import { createLogger, getLogger } from './logging/logger.js';
+import { skillRegistry } from './skills/registry.js';
 
 async function main() {
   const rootLogger = createLogger(config.logging);
@@ -13,6 +16,10 @@ async function main() {
   log.info({ provider: config.llm.provider, model: config.llm.model, host: config.host, port: config.port, db: config.dbPath }, '加载配置完成');
 
   loadPersistedSettings();
+
+  skillRegistry.load();
+  log.info({ count: skillRegistry.list().length }, 'skill 模块已加载');
+
   log.info(
     {
       provider: config.llm.provider,

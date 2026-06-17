@@ -2,6 +2,7 @@ import type { MemoryEntry, Message } from '@aurevoy/shared';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 import { getProvider } from '../llm/provider.js';
+import { skillRegistry } from '../skills/registry.js';
 
 /**
  * 会话级短期记忆 —— 上下文窗口管理（M4.2）。
@@ -519,6 +520,24 @@ export function buildMemorySystemMessage(
     id: randomUUID(),
     role: 'system',
     content,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Skill: 构建当前激活 skill 的 system message。
+ *
+ * 若没有活跃 skill 则返回 null。skill 消息放在 memory 消息之后、历史消息之前，
+ * 确保 skill 指令优先级高于记忆但低于用户对话。
+ */
+export function buildSkillSystemMessage(skillName?: string): Message | null {
+  if (!skillName) return null;
+  const skill = skillRegistry.get(skillName);
+  if (!skill) return null;
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content: `[技能已激活: ${skill.frontmatter.name}]\n\n${skill.body}`,
     createdAt: new Date().toISOString(),
   };
 }

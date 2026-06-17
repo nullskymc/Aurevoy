@@ -68,7 +68,12 @@ function getEventTitle(event: AgentEvent): string {
       return t("event.scoutReport");
     case "plan_generated":
       return t("event.planGenerated");
+    case "skill_activated":
+      return `${t("event.skillActivated")}${event.skillName}`;
+    case "skill_deactivated":
+      return t("event.skillDeactivated");
   }
+  return (event as AgentEvent).type;
 }
 
 function getEventDetail(event: AgentEvent): string {
@@ -130,7 +135,14 @@ function getEventDetail(event: AgentEvent): string {
       return `${event.report.keyFiles.length} key files, ${event.report.rounds} rounds`;
     case "plan_generated":
       return `${event.plan.length} steps (${event.source})`;
+    case "skill_activated":
+      return event.allowedTools
+        ? `${t("event.toolsRestricted")}${event.allowedTools.join(', ')}`
+        : t("event.allToolsAvailable");
+    case "skill_deactivated":
+      return t("event.skillDeactivatedDetail");
   }
+  return '';
 }
 
 export function AgentEventFeed({ events }: AgentEventFeedProps) {
