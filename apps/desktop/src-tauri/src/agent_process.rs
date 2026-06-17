@@ -225,10 +225,63 @@ fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
         });
     }
 
+    // 生产模式：查找 macOS bundle 中的 Resources/agent-dist/
+    if let Ok(exe) = env::current_exe() {
+        // macOS: Aurevoy.app/Contents/MacOS/desktop
+        // Resources: Aurevoy.app/Contents/Resources/agent-dist/
+        let resources = exe
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("Resources"));
+        if let Some(resources) = resources {
+            let agent_entry = resources.join("agent-dist").join("index.js");
+            if agent_entry.exists() {
+                let node = find_node().unwrap_or_else(|| PathBuf::from("node"));
+                return Ok(AgentCommandSpec {
+                    program: node.clone(),
+                    args: vec![
+                        agent_entry.to_string_lossy().to_string(),
+                    ],
+                    cwd: resources.join("agent-dist"),
+                    label: format!("{} {}", node.display(), agent_entry.display()),
+                });
+            }
+        }
+    }
+
     Err(
-        "未配置 Agent sidecar。请设置 AUREVOY_AGENT_SIDECAR，或在打包流程中加入 sidecar 二进制。"
+        "未找到 Agent 引擎。请确保 Node.js 已安装，或设置 AUREVOY_AGENT_SIDECAR 指向 Agent 可执行文件。"
             .to_string(),
     )
+}
+
+fn find_node() -> Option<PathBuf> {
+    // 常见 Node.js 安装路径
+    let candidates = [
+        "/opt/homebrew/bin/node",       // Homebrew ARM64
+        "/usr/local/bin/node",          // Homebrew x64 / 官方 pkg
+        "/opt/local/bin/node",          // MacPorts
+    ];
+    for path in &candidates {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // 最后试着直接用 "node"（靠 PATH）
+    if let Ok(output) = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("command -v node")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(PathBuf::from(path));
+            }
+        }
+    }
+    None
 }
 
 fn wait_for_agent_port() -> bool {

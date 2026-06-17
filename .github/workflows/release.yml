@@ -37,6 +37,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Strip agent dev deps
+        run: cd apps/agent && npm prune --omit=dev
+
       - name: Tauri Build (DMG)
         uses: tauri-apps/tauri-action@v0
         env:
