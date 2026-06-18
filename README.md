@@ -8,6 +8,8 @@
 > Your first AI companion that actually **gets things done**.
 
 [中文文档](docs/README_zh-CN.md)
+[한국어 문서](docs/README_ko-KR.md)
+[日本語ドキュメント](docs/README_ja-JP.md)
 
 ---
 

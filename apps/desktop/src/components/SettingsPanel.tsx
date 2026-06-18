@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   DataStatusResponse,
   McpServerStatus,
@@ -54,10 +54,12 @@ type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
 const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory"];
 
-const SETTINGS_GROUPS: Array<{
+/** 每次调用都会重新计算 t()，确保语言切换后侧边栏标签即时更新 */
+function getSettingsGroups(): Array<{
   label: string;
   items: Array<{ id: SettingsSectionId; label: string; icon: SettingsIconName }>;
-}> = [
+}> {
+  return [
   {
     label: t("settings.group.personal"),
     items: [
@@ -80,6 +82,7 @@ const SETTINGS_GROUPS: Array<{
     ],
   },
 ];
+}
 
 type SettingsIconName = "appearance" | "database" | "memory" | "server" | "sliders" | "spark";
 
@@ -125,18 +128,18 @@ export function SettingsPanel({
     setActiveSection(normalizeSettingsSection(initialSection));
   }, [initialSection]);
 
-  const visibleGroups = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return SETTINGS_GROUPS;
-    return SETTINGS_GROUPS
+  const groups = getSettingsGroups();
+  const normalized = query.trim().toLowerCase();
+  const visibleGroups = !normalized
+    ? groups
+    : groups
       .map((group) => ({
         ...group,
         items: group.items.filter((item) => item.label.toLowerCase().includes(normalized)),
       }))
       .filter((group) => group.items.length > 0);
-  }, [query]);
 
-  const activeTitle = SETTINGS_GROUPS.flatMap((group) => group.items).find(
+  const activeTitle = getSettingsGroups().flatMap((group) => group.items).find(
     (item) => item.id === activeSection,
   )?.label;
 
@@ -477,7 +480,12 @@ function AppearanceSettings({
         title={t("settings.languageTitle")}
         description={t("settings.languageDesc")}
         value={locale}
-        options={[{ value: "zh", label: t("settings.languageZh") }]}
+        options={[
+          { value: "zh", label: t("settings.languageZh") },
+         { value: "en", label: t("settings.languageEn") },
+          { value: "ko", label: t("settings.languageKo") },
+          { value: "ja", label: t("settings.languageJa") },
+        ]}
         onChange={(value) => onLocaleChange(value as Locale)}
       />
       <SettingsActionRow

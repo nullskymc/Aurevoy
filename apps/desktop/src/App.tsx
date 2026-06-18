@@ -229,7 +229,7 @@ function App() {
     readStoredOption(THEME_MODE_KEY, "system", ["system", "light", "dark"] as const),
   );
   const [locale, setLocaleState] = useState<Locale>(() =>
-    readStoredOption(LOCALE_KEY, "zh", ["zh"] as const),
+    readStoredOption(LOCALE_KEY, "en", ["zh", "en", "ko", "ja"] as const),
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");

@@ -347,6 +347,9 @@ export const zh = {
   "settings.languageTitle": "语言",
   "settings.languageDesc": "选择界面显示语言。当前版本已接入运行时切换入口。",
   "settings.languageZh": "简体中文",
+  "settings.languageEn": "English",
+  "settings.languageKo": "한국어",
+  "settings.languageJa": "日本語",
   // 模型配置
   "settings.providerConfig": "模型配置",
   "settings.baseUrlDesc": "OpenAI-compatible API endpoint。",
