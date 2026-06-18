@@ -23,6 +23,7 @@
 | Skill | 技能系统（斜杠命令、工具白名单、预装 skill） | ✅ |
 | WebSearch | 网页搜索工具与 web-search 预装 skill | ✅ |
 | CI/CD | GitHub Actions macOS ARM64 自动构建 | ✅ |
+| Multimodal | 多模态图片/文件拖拽粘贴、视觉模型、图片查看器 | ✅ |
 | M8 | 知识库、评测、浏览器与发布体验 | 🚧 |
 
 ## 验证口径
