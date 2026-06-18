@@ -702,6 +702,27 @@ async function restoreFilesFromSnapshots(
   }
 }
 
+/**
+ * 从任务的所有用户消息附件中收集外部路径。
+ * 这些路径由用户显式提供，应绕过工作区沙箱限制。
+ */
+function collectExternalPaths(task: Task): string[] {
+  const paths: string[] = [];
+  for (const msg of task.messages) {
+    if (msg.role === 'user' && msg.attachments?.length) {
+      for (const att of msg.attachments) {
+        paths.push(att.path);
+      }
+    }
+  }
+  // 同时加入项目的路径（用户显式导入的目录）
+  if (task.projectId) {
+    const project = projectStore.get(task.projectId);
+    if (project) paths.push(project.path);
+  }
+  return [...new Set(paths)];
+}
+
 /** 已知的文本文件扩展名集合，用于判断附件是否可直接读入上下文。 */
 const TEXT_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
@@ -911,6 +932,9 @@ export async function runTask(task: Task): Promise<void> {
 
   const messages = task.messages;
   const callFingerprints = new Map<string, number>();
+
+  // 收集用户提供的文件/目录路径作为受信任外部路径（跳过沙箱）
+  const externalPaths = collectExternalPaths(task);
 
   // 构建附件上下文（仅在任务首次运行时构建一次）
   const attachmentContext = await buildAttachmentSystemMessage(task);
@@ -1239,6 +1263,7 @@ export async function runTask(task: Task): Promise<void> {
             task,
             abortSignal: abortController.signal,
             workspaceDir: taskWorkspace,
+            externalPaths,
           },
           config.agent.toolTimeoutMs,
         );

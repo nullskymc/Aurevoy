@@ -9,6 +9,8 @@ export interface ToolContext {
   abortSignal?: AbortSignal;
   /** 本次工具调用的工作区根目录（per-task，由 Agent 循环解析） */
   workspaceDir: string;
+  /** 用户拖拽/选择的文件/目录路径——这些路径不在工作区内但已获用户授权，跳过沙箱检查 */
+  externalPaths?: string[];
 }
 
 /** 一个可被 Agent 调用的工具 */
