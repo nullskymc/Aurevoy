@@ -398,11 +398,11 @@ export async function buildServer(externalLogger?: Logger) {
     async (req, reply) => {
       const task = taskStore.get(req.params.id);
       if (!task) return reply.code(404).send({ error: 'task not found' });
-      const { callId, approved } = req.body ?? {};
+      const { callId, approved, sessionApprove } = req.body ?? {};
       if (typeof callId !== 'string' || typeof approved !== 'boolean') {
         return reply.code(400).send({ error: 'callId(string) 与 approved(boolean) 必填' });
       }
-      const delivered = resolveApproval(req.params.id, callId, approved);
+      const delivered = resolveApproval(req.params.id, callId, approved, sessionApprove);
       const body: ApprovalDecisionResponse = { taskId: req.params.id, callId, delivered };
       return reply.send(body);
     },

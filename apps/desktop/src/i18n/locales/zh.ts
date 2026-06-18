@@ -39,7 +39,9 @@ export const zh = {
   // 通用操作
   "action.confirm": "确认",
   "action.reject": "拒绝",
-  "action.approve": "批准",
+  "action.approve": "允许本次",
+  "action.approveOnce": "允许本次",
+  "action.approveSession": "本次会话允许",
   "action.reply": "回复",
   "action.close": "关闭",
   "action.copy": "复制",

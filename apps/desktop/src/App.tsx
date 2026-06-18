@@ -752,11 +752,15 @@ function App() {
     }
   }
 
-  function handleToolDecision(callId: string, approved: boolean): void {
+  function handleToolDecision(
+    callId: string,
+    approved: boolean,
+    sessionApprove?: boolean,
+  ): void {
     const taskId = currentTask?.id;
     if (!taskId) return;
     setNotice(null);
-    void approveToolCall(taskId, callId, approved).catch((err) => {
+    void approveToolCall(taskId, callId, approved, sessionApprove).catch((err) => {
       setNotice(
         `${t("notice.submit")}${approved ? t("action.approve") : t("action.reject")}${t("notice.failedColon")}${err instanceof Error ? err.message : String(err)}${t("notice.pleaseRetry")}`,
       );

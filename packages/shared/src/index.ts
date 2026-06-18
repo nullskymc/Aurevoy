@@ -486,6 +486,8 @@ export interface ApprovalDecisionRequest {
   callId: string;
   /** true=批准执行，false=拒绝 */
   approved: boolean;
+  /** 本次会话内对该工具自动批准，后续不再询问 */
+  sessionApprove?: boolean;
 }
 
 export interface ApprovalDecisionResponse {

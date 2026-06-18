@@ -35,8 +35,8 @@ interface ConversationProps {
   /** 当前运行轮次的实时工具活动（来自事件流） */
   liveToolActivity: ToolActivity[];
   online?: boolean | null;
-  /** 工具审批决策回调（批准/拒绝） */
-  onToolDecision: (callId: string, approved: boolean) => void;
+  /** 工具审批决策回调（批准/拒绝），sessionApprove 表示本次会话自动批准该工具 */
+  onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
   onClarificationAnswer: (clarificationId: string, answer: string) => void;
   onArtifactDecision: (artifactId: string, status: "confirmed" | "rejected") => void;
   /** 当前任务是否可恢复（中断/失败等可续跑状态） */
@@ -598,7 +598,7 @@ export function ToolActivityList({
   onDecision,
 }: {
   items: ToolActivity[];
-  onDecision: (callId: string, approved: boolean) => void;
+  onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
 }) {
   return (
     <div className="tool-activity">
@@ -620,7 +620,7 @@ function ToolChip({
   onDecision,
 }: {
   item: ToolActivity;
-  onDecision: (callId: string, approved: boolean) => void;
+  onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -686,7 +686,7 @@ function ToolActivityCard({
   defaultOpen,
 }: {
   item: ToolActivity;
-  onDecision: (callId: string, approved: boolean) => void;
+  onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
   /** 由 chip 展开时传入：点击头部收起回到 chip 形态。 */
   onCollapse?: () => void;
   /** chip 展开时默认打开 body（已结束工具的初始 open 否则为 false）。 */
@@ -718,9 +718,9 @@ function ToolActivityCard({
         : null;
   const argsText = safeStringify(item.args);
 
-  function decide(approved: boolean) {
+  function decide(approved: boolean, sessionApprove?: boolean) {
     setDecided(true);
-    onDecision(item.id, approved);
+    onDecision(item.id, approved, sessionApprove);
   }
 
   return (
@@ -771,19 +771,27 @@ function ToolActivityCard({
           <div className="tool-approval-actions">
             <button
               type="button"
+              className="tool-approval-btn approve-once"
+              disabled={decided}
+              onClick={() => decide(true)}
+            >
+              {t("action.approveOnce")}
+            </button>
+            <button
+              type="button"
+              className="tool-approval-btn approve-session"
+              disabled={decided}
+              onClick={() => decide(true, true)}
+            >
+              {t("action.approveSession")}
+            </button>
+            <button
+              type="button"
               className="tool-approval-btn reject"
               disabled={decided}
               onClick={() => decide(false)}
             >
               {t("action.reject")}
-            </button>
-            <button
-              type="button"
-              className="tool-approval-btn approve"
-              disabled={decided}
-              onClick={() => decide(true)}
-            >
-              {t("action.approve")}
             </button>
           </div>
         </div>
@@ -959,7 +967,7 @@ function TimelineToolNode({
   colorClass: string;
   targetDesc: string;
   isBash: boolean;
-  onDecision: (callId: string, approved: boolean) => void;
+  onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState(item.status === "awaiting" || item.status === "running");
   const [decided, setDecided] = useState(false);
@@ -970,9 +978,9 @@ function TimelineToolNode({
 
   const hasDetail = item.output !== undefined || item.error !== undefined || item.args !== undefined;
 
-  function handleDecide(approved: boolean) {
+  function handleDecide(approved: boolean, sessionApprove?: boolean) {
     setDecided(true);
-    onDecision(item.id, approved);
+    onDecision(item.id, approved, sessionApprove);
   }
 
   const statusText =
@@ -1055,9 +1063,31 @@ function TimelineToolNode({
         {item.status === "awaiting" && (
           <div className="approval-panel">
             <div className="approval-tip">
-              ⚠️ 确定执行该操作？风险级别: <span className="text-danger">{item.riskLevel || "unknown"}</span>
+              ⚠️ {t("tool.approvalHint")} {item.riskLevel && `· ${item.riskLevel}`}
             </div>
             <div className="approval-actions">
+              <button
+                type="button"
+                className="btn-approve-once"
+                disabled={decided}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDecide(true);
+                }}
+              >
+                {t("action.approveOnce")}
+              </button>
+              <button
+                type="button"
+                className="btn-approve-session"
+                disabled={decided}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDecide(true, true);
+                }}
+              >
+                {t("action.approveSession")}
+              </button>
               <button
                 type="button"
                 className="btn-reject"
@@ -1067,18 +1097,7 @@ function TimelineToolNode({
                   handleDecide(false);
                 }}
               >
-                {t("action.reject") || "拒绝执行"}
-              </button>
-              <button
-                type="button"
-                className="btn-approve"
-                disabled={decided}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDecide(true);
-                }}
-              >
-                {t("action.approve") || "批准运行"}
+                {t("action.reject")}
               </button>
             </div>
           </div>

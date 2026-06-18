@@ -177,11 +177,12 @@ export async function approveToolCall(
   taskId: string,
   callId: string,
   approved: boolean,
+  sessionApprove?: boolean,
 ): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/approvals`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ callId, approved }),
+    body: JSON.stringify({ callId, approved, sessionApprove }),
   });
   if (!res.ok) throw new Error(`approve tool call failed: ${res.status}`);
 }

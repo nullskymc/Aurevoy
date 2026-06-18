@@ -58,7 +58,12 @@ const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'run
 const activeAbortControllers = new Map<string, AbortController>();
 
 /** 等待中的工具审批：taskId → (callId → 决策回调) */
-const pendingApprovals = new Map<string, Map<string, (approved: boolean) => void>>();
+const pendingApprovals = new Map<
+  string,
+  Map<string, (approved: boolean, sessionApprove?: boolean) => void>
+>();
+/** 当前任务会话内自动批准的工具名集合（会话结束即清空） */
+const sessionApprovedTools = new Set<string>();
 /** 等待中的用户追问：taskId → (clarificationId → 回复回调) */
 const pendingClarifications = new Map<string, Map<string, (answer: string | null) => void>>();
 
@@ -489,10 +494,15 @@ export function addUserTurn(
 }
 
 /** 投递一次工具审批决策（由 server 的审批端点调用）。返回是否命中等待中的请求。 */
-export function resolveApproval(taskId: string, callId: string, approved: boolean): boolean {
+export function resolveApproval(
+  taskId: string,
+  callId: string,
+  approved: boolean,
+  sessionApprove?: boolean,
+): boolean {
   const resolve = pendingApprovals.get(taskId)?.get(callId);
   if (!resolve) return false;
-  resolve(approved);
+  resolve(approved, sessionApprove);
   return true;
 }
 
@@ -509,8 +519,17 @@ export function resolveClarificationAnswer(
 }
 
 /** 等待用户对某次工具调用的审批；超时或任务取消视为拒绝。 */
-function waitForApproval(taskId: string, callId: string, signal: AbortSignal): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+interface ApprovalResult {
+  approved: boolean;
+  sessionApprove?: boolean;
+}
+
+function waitForApproval(
+  taskId: string,
+  callId: string,
+  signal: AbortSignal,
+): Promise<ApprovalResult> {
+  return new Promise<ApprovalResult>((resolve) => {
     let settled = false;
     const cleanup = () => {
       clearTimeout(timer);
@@ -519,11 +538,11 @@ function waitForApproval(taskId: string, callId: string, signal: AbortSignal): P
       map?.delete(callId);
       if (map && map.size === 0) pendingApprovals.delete(taskId);
     };
-    const finish = (approved: boolean) => {
+    const finish = (approved: boolean, sessionApprove?: boolean) => {
       if (settled) return;
       settled = true;
       cleanup();
-      resolve(approved);
+      resolve({ approved, sessionApprove });
     };
     const onAbort = () => finish(false);
     const timer = setTimeout(() => finish(false), config.agent.approvalTimeoutMs);
@@ -768,6 +787,9 @@ async function buildAttachmentSystemMessage(task: Task): Promise<string | null> 
  * 含防死循环（指纹去重）、重试（指数退避）、取消（AbortController）与每轮持久化。
  */
 export async function runTask(task: Task): Promise<void> {
+  // 新任务/恢复运行清空上轮会话的临时自动批准集
+  sessionApprovedTools.clear();
+
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
   const taskStartedAtMs = Date.now();
@@ -1144,8 +1166,11 @@ export async function runTask(task: Task): Promise<void> {
       const toExecute = validatedCalls.filter(
         (v) => !v.skipReason && v.call.toolName !== 'ask_user',
       );
-      // 自动批准：safe 风险 OR 用户在设置中开启了 auto-approve
-      const approvedTools = new Set(config.sandbox.autoApprovedTools);
+      // 自动批准：safe 风险 OR 全局设置 auto-approve OR 本次会话已允许
+      const approvedTools = new Set([
+        ...config.sandbox.autoApprovedTools,
+        ...sessionApprovedTools,
+      ]);
       const isAutoApproved = (name: string) => approvedTools.has(name);
 
       const isParallelSafe = (v: ValidatedCall) =>
@@ -1301,13 +1326,16 @@ export async function runTask(task: Task): Promise<void> {
               riskLevel: v.risk,
             });
             updateStep(`等待确认：${v.call.toolName}`, 'paused');
-            const approved = await waitForApproval(
+            const result = await waitForApproval(
               task.id,
               v.tc.id,
               abortController.signal,
             );
-            writeApprovalTrace(task.id, v.call, v.risk, approved, iteration + 1);
-            return { v, approved };
+            if (result.approved && result.sessionApprove) {
+              sessionApprovedTools.add(v.call.toolName);
+            }
+            writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
+            return { v, approved: result.approved };
           }),
         );
 

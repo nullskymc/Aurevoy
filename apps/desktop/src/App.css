@@ -1956,10 +1956,16 @@ button:disabled {
   cursor: default;
 }
 
-.tool-approval-btn.approve {
+.tool-approval-btn.approve-once {
   background: var(--accent);
   color: var(--bg);
   border-color: var(--accent);
+}
+
+.tool-approval-btn.approve-session {
+  background: var(--accent-soft-bg, rgba(99, 102, 241, 0.15));
+  color: var(--accent, #6366f1);
+  border-color: var(--accent, #6366f1);
 }
 
 .tool-approval-btn.reject:hover:not(:disabled) {
@@ -4357,10 +4363,11 @@ textarea:focus-visible,
 }
 
 .approval-panel .btn-reject,
-.approval-panel .btn-approve {
+.approval-panel .btn-approve-once,
+.approval-panel .btn-approve-session {
   flex: 1;
-  padding: 8px 16px;
-  font-size: 13px;
+  padding: 8px 12px;
+  font-size: 12px;
   font-weight: 600;
   border-radius: var(--ui-radius-md);
   border: 1px solid transparent;
@@ -4384,17 +4391,27 @@ textarea:focus-visible,
   border-color: var(--text-tertiary);
 }
 
-.approval-panel .btn-approve {
-  background: var(--success-soft-bg);
-  border-color: var(--success-soft-fg);
-  color: var(--success-soft-fg);
+.approval-panel .btn-approve-once {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
 }
 
-.approval-panel .btn-approve:hover {
-  background: var(--success-soft-fg);
-  color: var(--accent-contrast);
-  border-color: var(--success-soft-fg);
-  box-shadow: 0 4px 12px rgba(46, 160, 67, 0.15);
+.approval-panel .btn-approve-once:hover {
+  background: var(--accent-hover, #4f46e5);
+  border-color: var(--accent-hover, #4f46e5);
+}
+
+.approval-panel .btn-approve-session {
+  background: var(--accent-soft-bg, rgba(99, 102, 241, 0.15));
+  border-color: var(--accent, #6366f1);
+  color: var(--accent, #6366f1);
+}
+
+.approval-panel .btn-approve-session:hover {
+  background: var(--accent, #6366f1);
+  color: var(--bg);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
 }
 
 /* Spinner animation */
