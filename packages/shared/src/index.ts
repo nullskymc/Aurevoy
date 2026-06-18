@@ -196,6 +196,12 @@ export interface TaskCheckpoint {
   data?: unknown;
 }
 
+export interface PendingToolApproval {
+  call: ToolCall;
+  riskLevel: ToolRiskLevel;
+  createdAt: string;
+}
+
 /** 一个用户任务（Agent 的工作单元） */
 export interface Task {
   id: string;
@@ -211,6 +217,9 @@ export interface Task {
   budgetUsage?: BudgetUsage;
   artifacts?: TaskArtifact[];
   clarifications?: ClarificationRequest[];
+  pendingApprovals?: PendingToolApproval[];
+  /** 已在本对话中批准的工具审批指纹；仅由“本次会话允许”写入。 */
+  approvedApprovalKeys?: string[];
   checkpoints?: TaskCheckpoint[];
   tokenUsage?: AggregatedTokenUsage;
   /** 最近一次 revert 归档的消息（Phase 2 unrevert 钩子） */
@@ -223,6 +232,8 @@ export interface Task {
   fileSnapshots?: FileSnapshot[];
   /** Skill: 当前激活的 skill 名称列表（通常最多 1 个）。 */
   activeSkills?: string[];
+  /** Plan Agent 触发方式；manual 表示用户通过 /plan 显式请求规划。 */
+  planMode?: 'manual';
   createdAt: string;
   updatedAt: string;
 }
@@ -773,8 +784,6 @@ export interface RuntimeSettings {
   };
   workspaceDir: string;
   commandExecutionEnabled: boolean;
-  /** 自动批准的工具名列表 —— 开启后跳过审批直接执行 */
-  autoApprovedTools: string[];
   mcpServersJson: string;
   cleanupPolicyDays: number;
   dbPath: string;
@@ -796,7 +805,6 @@ export interface UpdateRuntimeSettingsRequest {
   }>;
   workspaceDir?: string;
   commandExecutionEnabled?: boolean;
-  autoApprovedTools?: string[];
   mcpServersJson?: string;
   cleanupPolicyDays?: number;
 }

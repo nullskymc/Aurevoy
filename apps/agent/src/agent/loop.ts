@@ -51,6 +51,8 @@ const DUPLICATE_CALL_LIMIT = 3;
 const MAX_TOOL_CALLS_PER_TURN = 10;
 /** P6: 写入类工具（需要执行前文件快照） */
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_artifact', 'copy_file', 'move_file', 'rename_file']);
+/** 基础只读工具免审批；其余工具仅允许当前任务会话内临时批准。 */
+const APPROVAL_FREE_TOOLS = new Set(['read_file', 'list_directory']);
 /** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
 const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'running', 'paused'];
 /** 进行中任务的取消句柄 */
@@ -61,8 +63,6 @@ const pendingApprovals = new Map<
   string,
   Map<string, (approved: boolean, sessionApprove?: boolean) => void>
 >();
-/** 当前任务会话内自动批准的工具名集合（会话结束即清空） */
-const sessionApprovedTools = new Set<string>();
 /** 等待中的用户追问：taskId → (clarificationId → 回复回调) */
 const pendingClarifications = new Map<string, Map<string, (answer: string | null) => void>>();
 
@@ -102,6 +102,7 @@ export function cancelTask(taskId: string): boolean {
   const clarifications = pendingClarifications.get(taskId);
   for (const resolve of clarifications?.values() ?? []) resolve(null);
   pendingClarifications.delete(taskId);
+  pendingApprovals.delete(taskId);
   return true;
 }
 
@@ -460,14 +461,23 @@ export async function compactTask(
   return { task, originalCount, summaryLength };
 }
 
-/** 解析用户输入中的斜杠命令前缀。返回 skill 名称和去除前缀后的文本。 */
-function parseSlashCommand(content: string): { skillName: string | null; text: string } {
+interface ParsedSlashCommand {
+  skillName: string | null;
+  planRequested: boolean;
+  text: string;
+}
+
+/** 解析用户输入中的斜杠命令前缀。/plan 只触发 Plan Agent，不作为 skill。 */
+function parseSlashCommand(content: string): ParsedSlashCommand {
   const match = content.match(/^\/(\S+)(?:\s+(.*))?/s);
-  if (!match) return { skillName: null, text: content };
+  if (!match) return { skillName: null, planRequested: false, text: content };
   const skillName = match[1];
   // 保留 /compact 为前端专有命令，不当作 skill
-  if (skillName === 'compact') return { skillName: null, text: content };
-  return { skillName, text: match[2]?.trim() || '' };
+  if (skillName === 'compact') return { skillName: null, planRequested: false, text: content };
+  if (skillName === 'plan') {
+    return { skillName: null, planRequested: true, text: match[2]?.trim() || '' };
+  }
+  return { skillName, planRequested: false, text: match[2]?.trim() || '' };
 }
 
 /**
@@ -484,6 +494,11 @@ export function addUserTurn(
   // Skill: 解析斜杠命令前缀
   const parsed = parseSlashCommand(content);
   let messageContent = content;
+  task.planMode = parsed.planRequested ? 'manual' : undefined;
+  if (parsed.planRequested) {
+    messageContent = parsed.text || task.goal;
+    task.goal = messageContent;
+  }
   if (parsed.skillName) {
     const skill = skillRegistry.get(parsed.skillName);
     if (skill) {
@@ -585,6 +600,56 @@ function waitForApproval(
   });
 }
 
+function approvalKeyForCall(call: ToolCall): string {
+  if (call.toolName !== 'execute_command') return `tool:${call.toolName}`;
+  const args = call.args as Record<string, unknown>;
+  const command = typeof args.command === 'string' ? args.command.trim() : '';
+  const commandArgs = Array.isArray(args.args)
+    ? args.args.map((item) => String(item))
+    : [];
+  const cwd = typeof args.cwd === 'string' ? args.cwd.trim() : '';
+  const envEntries =
+    args.env && typeof args.env === 'object' && !Array.isArray(args.env)
+      ? Object.entries(args.env as Record<string, unknown>)
+          .filter(([, value]) => typeof value === 'string')
+          .sort(([a], [b]) => a.localeCompare(b))
+      : [];
+  return JSON.stringify({
+    tool: call.toolName,
+    command,
+    args: commandArgs,
+    cwd,
+    env: envEntries,
+  });
+}
+
+function isApprovalFreeTool(toolName: string): boolean {
+  return APPROVAL_FREE_TOOLS.has(toolName);
+}
+
+function addPendingApproval(task: Task, call: ToolCall, riskLevel: ToolRiskLevel): void {
+  const next = (task.pendingApprovals ?? []).filter((item) => item.call.id !== call.id);
+  next.push({ call, riskLevel, createdAt: new Date().toISOString() });
+  task.pendingApprovals = next;
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+}
+
+function removePendingApproval(task: Task, callId: string): void {
+  const next = (task.pendingApprovals ?? []).filter((item) => item.call.id !== callId);
+  if (next.length === (task.pendingApprovals ?? []).length) return;
+  task.pendingApprovals = next;
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+}
+
+function rememberSessionApproval(task: Task, key: string): void {
+  const next = [...new Set([...(task.approvedApprovalKeys ?? []), key])];
+  task.approvedApprovalKeys = next;
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+}
+
 /** 等待用户回复追问；超时或任务取消返回 null，不伪造用户输入。 */
 function waitForClarification(
   taskId: string,
@@ -628,27 +693,32 @@ export function createTask(
   attachments?: MessageAttachment[],
 ): Task {
   const now = new Date().toISOString();
+  const parsed = parseSlashCommand(goal);
+  const taskGoal = parsed.planRequested ? (parsed.text || goal) : goal;
   const userMsg: Message = {
     id: randomUUID(),
     role: 'user',
-    content: goal,
+    content: taskGoal,
     createdAt: now,
     attachments,
   };
   const task: Task = {
     id: randomUUID(),
-    goal,
+    goal: taskGoal,
     status: 'pending',
     phase: 'initializing',
     plan: [],
     messages: [userMsg],
     artifacts: [],
     clarifications: [],
+    pendingApprovals: [],
+    approvedApprovalKeys: [],
     checkpoints: [],
     budget: normalizeBudget(budget),
     budgetUsage: initialBudgetUsage(),
     tokenUsage: { available: false, provider: getProviderName(), model: config.llm.model },
     projectId: projectId ?? undefined,
+    planMode: parsed.planRequested ? 'manual' : undefined,
     createdAt: now,
     updatedAt: now,
   };
@@ -656,7 +726,7 @@ export function createTask(
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
     summary: '任务已创建',
-    data: { goal },
+    data: { goal: taskGoal, planMode: task.planMode },
   });
   return task;
 }
@@ -835,8 +905,8 @@ async function buildAttachmentSystemMessage(task: Task): Promise<string | null> 
  * 含防死循环（指纹去重）、重试（指数退避）、取消（AbortController）与每轮持久化。
  */
 export async function runTask(task: Task): Promise<void> {
-  // 新任务/恢复运行清空上轮会话的临时自动批准集
-  sessionApprovedTools.clear();
+  task.pendingApprovals = [];
+  taskStore.save(task);
 
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
@@ -895,10 +965,9 @@ export async function runTask(task: Task): Promise<void> {
   // ---- 计划阶段：按需调用 Plan Agent ----
   const hasApprovedPlan = task.plan.length > 1 && task.plan.some((s) => s.status === 'running');
   if (!hasApprovedPlan) {
-    const complexity = assessComplexity(task.goal);
-    if (complexity === 'complex') {
+    if (task.planMode === 'manual') {
       // 按需启动 Plan Agent：侦查 + LLM 生成计划
-      setRuntimePhase('planning', '分析任务复杂度，启动 Plan Agent…', 'planning');
+      setRuntimePhase('planning', '用户通过 /plan 请求生成执行计划…', 'planning');
       const planOutput = await runPlanAgent({
         taskId: task.id,
         goal: task.goal,
@@ -970,7 +1039,7 @@ export async function runTask(task: Task): Promise<void> {
         });
       }
     } else {
-      // 简单任务：单步直接执行
+      // 默认任务：不自动调用 Plan Agent，单步直接进入 Default Agent。
       task.plan = [{ id: 'exec', description: '执行任务', status: 'running' }];
       taskEvents.publish({ type: 'plan_generated', taskId: task.id, plan: task.plan, source: 'heuristic' });
     }
@@ -1124,9 +1193,13 @@ export async function runTask(task: Task): Promise<void> {
 
       // Skill: 应用工具白名单 + 注入 skill system prompt
       const activeSkillName = task.activeSkills?.[0];
-      const allowedToolNames = activeSkillName
+      const skillAllowedTools = activeSkillName
         ? skillRegistry.getAllowedTools(activeSkillName)
         : undefined;
+      const allowedToolNames =
+        skillAllowedTools && config.sandbox.commandExecutionEnabled
+          ? [...new Set([...skillAllowedTools, 'execute_command'])]
+          : skillAllowedTools;
       const toolDescriptors = toolRegistry.list(allowedToolNames);
       const skillMessage = buildSkillSystemMessage(activeSkillName);
 
@@ -1301,15 +1374,14 @@ export async function runTask(task: Task): Promise<void> {
       const toExecute = validatedCalls.filter(
         (v) => !v.skipReason && v.call.toolName !== 'ask_user',
       );
-      // 自动批准：safe 风险 OR 全局设置 auto-approve OR 本次会话已允许
-      const approvedTools = new Set([
-        ...config.sandbox.autoApprovedTools,
-        ...sessionApprovedTools,
-      ]);
-      const isAutoApproved = (name: string) => approvedTools.has(name);
+      // 审批规则：read_file/list_directory 免审批；其他工具只允许本对话中已批准的指纹通过。
+      const sessionApprovedApprovalKeys = new Set(task.approvedApprovalKeys ?? []);
+      const isAutoApproved = (v: ValidatedCall) =>
+        isApprovalFreeTool(v.call.toolName) ||
+        sessionApprovedApprovalKeys.has(approvalKeyForCall(v.call));
 
       const isParallelSafe = (v: ValidatedCall) =>
-        (v.risk === 'safe' || isAutoApproved(v.call.toolName)) &&
+        isAutoApproved(v) &&
         toolRegistry.executionPolicyOf(v.call.toolName).parallelizable !== false;
       const safeOnes = toExecute.filter(isParallelSafe);
       const riskyOnes = toExecute.filter((v) => !isParallelSafe(v));
@@ -1455,6 +1527,12 @@ export async function runTask(task: Task): Promise<void> {
         // 并发发送所有审批请求
         const approvalResults = await Promise.all(
           riskyOnes.map(async (v) => {
+            addPendingApproval(task, v.call, v.risk);
+            const approval = waitForApproval(
+              task.id,
+              v.tc.id,
+              abortController.signal,
+            );
             taskEvents.publish({
               type: 'approval_request',
               taskId: task.id,
@@ -1462,14 +1540,11 @@ export async function runTask(task: Task): Promise<void> {
               riskLevel: v.risk,
             });
             updateStep(`等待确认：${v.call.toolName}`, 'paused');
-            const result = await waitForApproval(
-              task.id,
-              v.tc.id,
-              abortController.signal,
-            );
+            const result = await approval;
             if (result.approved && result.sessionApprove) {
-              sessionApprovedTools.add(v.call.toolName);
+              rememberSessionApproval(task, approvalKeyForCall(v.call));
             }
+            removePendingApproval(task, v.call.id);
             writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
             return { v, approved: result.approved };
           }),
@@ -1527,31 +1602,6 @@ export async function runTask(task: Task): Promise<void> {
 
 // ---------------- 内部辅助 ----------------
 
-
-/** 快速启发式判断任务是否需要 Plan Agent 规划（无 LLM 调用） */
-function assessComplexity(goal: string): 'simple' | 'complex' {
-  const text = goal.trim();
-  // 纯问候/短对话 → simple
-  if (text.length <= 8) return 'simple';
-  if (/^(你好|hello|hi|hey|ok|谢谢|好的|对|是|否|yes|no|thanks|bye|再见)$/i.test(text)) return 'simple';
-
-  // 显式请求计划 → complex
-  if (/(制定计划|规划|plan\s+for|create\s+a\s+plan|多步|步骤)/i.test(text)) return 'complex';
-
-  // 涉及文件/工作区操作 → complex
-  if (/(文件|目录|文件系统|文件夹|读取|写入|创建|删除|移动|复制|搜索|编辑|修改|生成|整理|总结|翻译|报告|文档|代码|项目|工作区|workspace|file|directory|read|write|create|delete|move|copy|search|edit|modify|generate|summarize|translate|report|document|code|project)/i.test(text)) return 'complex';
-
-  // 涉及命令执行 → complex
-  if (/(运行|执行|命令|command|run|execute|npm|build|test|typecheck|script)/i.test(text)) return 'complex';
-
-  // 涉及网页抓取 → complex
-  if (/(网页|抓取|fetch|http|url|网站|浏览器|browser)/i.test(text)) return 'complex';
-
-  // 长文本/多句子 → complex
-  if (text.length > 200) return 'complex';
-
-  return 'simple';
-}
 
 function resumePlanFromCheckpoint(plan: PlanStep[], checkpointStepId?: string): PlanStep[] {
   if (plan.length === 0) return plan;

@@ -4,11 +4,13 @@ import type {
   AgentEvent,
   HealthResponse,
   MemoryCategory,
+  Message,
   MessageAttachment,
+  PendingToolApproval,
   RevertMode,
+  SkillDescriptor,
   Task,
   TaskPhase,
-  ToolDescriptor,
   UpdateRuntimeSettingsRequest,
 } from "@aurevoy/shared";
 import {
@@ -25,6 +27,7 @@ import {
   createTask,
   createProject,
   deleteProject,
+  deleteTask,
   deleteMemory,
   getDataStatus,
   getMcpStatus,
@@ -35,13 +38,11 @@ import {
   listProjects,
   listTaskTraces,
   listTasks,
-  listTools,
   resumeTask,
   revertTask,
   unrevertTask,
   updateArtifact,
   updateSettings,
-  updateTool,
   updateMemory,
 } from "./lib/api";
 import { ensureDesktopAgentProcess } from "./lib/desktopAgent";
@@ -52,7 +53,6 @@ import { useMemories } from "./hooks/useMemories";
 import { useSSEStream } from "./hooks/useSSEStream";
 import { useSettings } from "./hooks/useSettings";
 import { useTaskState } from "./hooks/useTaskState";
-import { useTools } from "./hooks/useTools";
 import { useProjects } from "./hooks/useProjects";
 import { useSkills } from "./hooks/useSkills";
 import { Composer } from "./components/Composer";
@@ -64,12 +64,14 @@ import { SettingsPanel, type SettingsDraft } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import type { FeedItem } from "./components/AgentEventFeed";
 import { getPhaseLabel, getStatusLabel } from "./components/status";
-import { t } from "./i18n";
+import { setLocale, t, type Locale } from "./i18n";
 import "./App.css";
 
 type MainView = "chat" | "search" | "tools" | "settings";
 type ContentMode = "conversation" | "artifacts";
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "tools" | "data" | "memory";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory";
+type ThemeMode = "system" | "light" | "dark";
+type WorkMode = "coding" | "daily";
 
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 380;
@@ -77,6 +79,11 @@ const MIN_INSPECTOR_WIDTH = 300;
 const MAX_INSPECTOR_WIDTH = 520;
 const MIN_FONT_SCALE = 0.86;
 const MAX_FONT_SCALE = 1.08;
+const TOOL_DETAILS_OPEN_KEY = "aurevoy.defaultToolDetailsOpen";
+const THEME_MODE_KEY = "aurevoy.themeMode";
+const LOCALE_KEY = "aurevoy.locale";
+const WORK_MODE_KEY = "aurevoy.workMode";
+const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory"];
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -91,6 +98,18 @@ function readStoredNumber(key: string, fallback: number, min: number, max: numbe
   const stored = window.localStorage.getItem(key);
   const parsed = stored ? Number(stored) : Number.NaN;
   return Number.isFinite(parsed) ? clamp(parsed, min, max) : fallback;
+}
+
+function readStoredBoolean(key: string, fallback: boolean): boolean {
+  const stored = window.localStorage.getItem(key);
+  if (stored === "true") return true;
+  if (stored === "false") return false;
+  return fallback;
+}
+
+function readStoredOption<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
+  const stored = window.localStorage.getItem(key);
+  return stored && allowed.includes(stored as T) ? (stored as T) : fallback;
 }
 
 function parseProviderModel(provider?: string | null): string {
@@ -139,6 +158,35 @@ function deriveToolActivityFromEvents(events: FeedItem[]): ToolActivity[] {
   return order.map((id) => byId.get(id)!);
 }
 
+function mergePendingApprovalsIntoActivity(
+  live: ToolActivity[],
+  pendingApprovals: PendingToolApproval[],
+): ToolActivity[] {
+  if (pendingApprovals.length === 0) return live;
+  const seen = new Set(live.map((item) => item.id));
+  const merged = [...live];
+  for (const approval of pendingApprovals) {
+    if (seen.has(approval.call.id)) continue;
+    merged.push({
+      id: approval.call.id,
+      name: approval.call.toolName,
+      args: approval.call.args,
+      status: "awaiting",
+      riskLevel: approval.riskLevel,
+    });
+  }
+  return merged;
+}
+
+function filterHistoricalToolActivity(live: ToolActivity[], messages: Message[]): ToolActivity[] {
+  const historicalCallIds = new Set<string>();
+  for (const message of messages) {
+    for (const call of message.toolCalls ?? []) historicalCallIds.add(call.id);
+    if (message.toolCallId) historicalCallIds.add(message.toolCallId);
+  }
+  return live.filter((item) => !historicalCallIds.has(item.id));
+}
+
 function createFeedItem(event: AgentEvent): FeedItem {
   return {
     id: `${event.taskId}-${event.type}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -170,6 +218,18 @@ function App() {
   );
   const [fontScale, setFontScale] = useState(() =>
     readStoredNumber("aurevoy.fontScale", 0.94, MIN_FONT_SCALE, MAX_FONT_SCALE),
+  );
+  const [defaultToolDetailsOpen, setDefaultToolDetailsOpen] = useState(() =>
+    readStoredBoolean(TOOL_DETAILS_OPEN_KEY, false),
+  );
+  const [workMode, setWorkMode] = useState<WorkMode>(() =>
+    readStoredOption(WORK_MODE_KEY, defaultToolDetailsOpen ? "coding" : "daily", ["coding", "daily"] as const),
+  );
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() =>
+    readStoredOption(THEME_MODE_KEY, "system", ["system", "light", "dark"] as const),
+  );
+  const [locale, setLocaleState] = useState<Locale>(() =>
+    readStoredOption(LOCALE_KEY, "zh", ["zh"] as const),
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
@@ -212,7 +272,6 @@ function App() {
     setSettingsSaving,
     setFetchingModels,
   } = useSettings();
-  const { tools, setTools } = useTools();
   const { projects, setProjects } = useProjects();
   const { memories, setMemories } = useMemories();
   const { skills } = useSkills();
@@ -245,6 +304,28 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem("aurevoy.fontScale", String(fontScale));
   }, [fontScale]);
+
+  useEffect(() => {
+    window.localStorage.setItem(TOOL_DETAILS_OPEN_KEY, String(defaultToolDetailsOpen));
+  }, [defaultToolDetailsOpen]);
+
+  useEffect(() => {
+    window.localStorage.setItem(WORK_MODE_KEY, workMode);
+  }, [workMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(THEME_MODE_KEY, themeMode);
+    if (themeMode === "system") {
+      delete document.documentElement.dataset.theme;
+    } else {
+      document.documentElement.dataset.theme = themeMode;
+    }
+  }, [themeMode]);
+
+  useEffect(() => {
+    setLocale(locale);
+    window.localStorage.setItem(LOCALE_KEY, locale);
+  }, [locale]);
 
   // Tauri 原生拖拽事件：获取 Finder 拖入的文件绝对路径
   useEffect(() => {
@@ -353,16 +434,14 @@ function App() {
 
   async function refreshRuntime(): Promise<void> {
     try {
-      const [nextHealth, nextTasks, nextTools, nextProjects] = await Promise.all([
+      const [nextHealth, nextTasks, nextProjects] = await Promise.all([
         checkHealth(),
         listTasks(),
-        listTools(),
         listProjects(),
       ]);
       setHealth(nextHealth);
       setOnline(true);
       setTasks(nextTasks);
-      setTools(nextTools);
       setProjects(nextProjects);
     } catch (err) {
       setHealth(null);
@@ -374,14 +453,12 @@ function App() {
 
   async function refreshSettings(): Promise<void> {
     try {
-      const [settings, nextTools, mcp, data] = await Promise.all([
+      const [settings, mcp, data] = await Promise.all([
         getSettings(),
-        listTools(),
         getMcpStatus(),
         getDataStatus(),
       ]);
       setRuntimeSettings(settings);
-      setTools(nextTools);
       setMcpServers(mcp.servers);
       setDataStatus(data);
     } catch (err) {
@@ -449,6 +526,10 @@ function App() {
         setPlan(event.plan);
         patchCurrentTask({ plan: event.plan });
         break;
+      case "plan_generated":
+        setPlan(event.plan);
+        patchCurrentTask({ plan: event.plan });
+        break;
       case "step_update":
         setPlan((previous) => {
           const nextPlan = previous.map((step) =>
@@ -465,6 +546,10 @@ function App() {
         setReasoning((previous) => previous + event.delta);
         break;
       case "message":
+        if (event.message.role === "assistant") {
+          if ((event.message.reasoningContent ?? "").trim()) setReasoning("");
+          if (event.message.content.trim()) setOutput("");
+        }
         setCurrentTask((previous) => {
           const previousMessages = previous?.messages ?? [];
           const hasMessage = previousMessages.some((message) => message.id === event.message.id);
@@ -478,7 +563,37 @@ function App() {
         });
         break;
       case "tool_call":
+        break;
+      case "approval_request":
+        setStatus("paused");
+        setPhase("waiting_approval");
+        setCurrentTask((previous) => {
+          if (!previous) return previous;
+          const nextApprovals = [
+            ...(previous.pendingApprovals ?? []).filter((item) => item.call.id !== event.call.id),
+            { call: event.call, riskLevel: event.riskLevel, createdAt: new Date().toISOString() },
+          ];
+          const nextTask = {
+            ...previous,
+            status: "paused" as const,
+            phase: "waiting_approval" as const,
+            pendingApprovals: nextApprovals,
+          };
+          updateTaskList(nextTask);
+          return nextTask;
+        });
+        break;
       case "tool_result":
+        setCurrentTask((previous) => {
+          if (!previous) return previous;
+          const nextApprovals = (previous.pendingApprovals ?? []).filter(
+            (item) => item.call.id !== event.result.callId,
+          );
+          if (nextApprovals.length === (previous.pendingApprovals ?? []).length) return previous;
+          const nextTask = { ...previous, pendingApprovals: nextApprovals };
+          updateTaskList(nextTask);
+          return nextTask;
+        });
         break;
       case "clarification_request":
       case "clarification_resolved":
@@ -522,15 +637,33 @@ function App() {
       case "compacted":
         break;
       case "plan_approval_request":
-        // MVP: 自动批准 Plan Agent 生成的计划（后续改为展示 PlanApprovalCard）
-        if (currentTask?.id) {
-          void approvePlan(currentTask.id, true).catch((err) => {
-            setNotice(`${t("notice.planApprovalFailed")}${err instanceof Error ? err.message : String(err)}`);
-          });
-        }
+        setStatus("paused");
+        setPhase("waiting_approval");
+        setPlan(event.plan);
+        setCurrentTask((previous) => {
+          if (!previous) return previous;
+          const nextTask = {
+            ...previous,
+            status: "paused" as const,
+            phase: "waiting_approval" as const,
+            plan: event.plan,
+          };
+          updateTaskList(nextTask);
+          return nextTask;
+        });
         break;
       case "plan_approval_resolved":
-        patchCurrentTask({ plan: undefined as never }); // 触发 plan 刷新（由 SSE 侧推送）
+        setCurrentTask((previous) => {
+          if (!previous) return previous;
+          const nextPlan = previous.plan.map((step, index) => ({
+            ...step,
+            status: event.approved ? (index === 0 ? "running" as const : "pending" as const) : "pending" as const,
+          }));
+          setPlan(nextPlan);
+          const nextTask = { ...previous, plan: nextPlan };
+          updateTaskList(nextTask);
+          return nextTask;
+        });
         break;
       case "task_deleted":
         // 任务被删除（可能来自其他客户端或本端），关流并清理
@@ -572,6 +705,12 @@ function App() {
           .then((full) => {
             setCurrentTask((previous) => (previous?.id === full.id ? full : previous));
             updateTaskList(full);
+            if (full.messages.some((message) => message.role === "assistant" && (message.reasoningContent ?? "").trim())) {
+              setReasoning("");
+            }
+            if (full.messages.some((message) => message.role === "assistant" && message.content.trim())) {
+              setOutput("");
+            }
           })
           .catch(() => {
             /* 拉取失败不影响已显示的流式结果 */
@@ -822,6 +961,15 @@ function App() {
     });
   }
 
+  function handlePlanDecision(approved: boolean): void {
+    const taskId = currentTask?.id;
+    if (!taskId) return;
+    setNotice(null);
+    void approvePlan(taskId, approved).catch((err) => {
+      setNotice(`${t("notice.planApprovalFailed")}${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
   function handleClarificationAnswer(clarificationId: string, answer: string): void {
     const taskId = currentTask?.id;
     if (!taskId) return;
@@ -860,14 +1008,18 @@ function App() {
     }
   }
 
-  function handleOpenSettings(section: SettingsSectionId = "general"): void {
+  function handleOpenSettings(section: SettingsSectionId | unknown = "general"): void {
+    const nextSection =
+      typeof section === "string" && SETTINGS_SECTION_IDS.includes(section as SettingsSectionId)
+        ? (section as SettingsSectionId)
+        : "general";
     setNotice(null);
     setModelDrawerOpen(false);
-    setSettingsInitialSection(section);
+    setSettingsInitialSection(nextSection);
     setActiveView("settings");
     setInspectorOpen(false);
     void refreshSettings();
-    if (section === "memory") void refreshMemories();
+    if (nextSection === "memory") void refreshMemories();
   }
 
   function handleCloseSettings(): void {
@@ -887,6 +1039,12 @@ function App() {
   function handleOpenFullSettingsFromModelDrawer(): void {
     setModelDrawerOpen(false);
     handleOpenSettings("provider");
+  }
+
+  function handleWorkModeChange(mode: WorkMode): void {
+    setWorkMode(mode);
+    // 工作模式影响默认信息密度；用户仍可在外观页单独覆盖工具详情开关。
+    setDefaultToolDetailsOpen(mode === "coding");
   }
 
   function handleOpenSearch(): void {
@@ -1002,31 +1160,6 @@ function App() {
       .finally(() => setSettingsSaving(false));
   }
 
-  function handleToggleTool(name: string, enabled: boolean): void {
-    void updateTool(name, { enabled })
-      .then((updated) => {
-        setTools((prev) => prev.map((tool) => (tool.name === name ? updated : tool)));
-        // 工具被禁用时同步移除 auto-approve
-        if (!enabled) {
-          const next = (runtimeSettings?.autoApprovedTools ?? []).filter((n) => n !== name);
-          setRuntimeSettings((prev) => prev ? { ...prev, autoApprovedTools: next } : prev);
-        }
-      })
-      .catch((err) => setNotice(`${t("notice.updateToolFailed")}${err instanceof Error ? err.message : String(err)}`));
-  }
-
-  function handleToggleAutoApprove(name: string, autoApprove: boolean): void {
-    const current = runtimeSettings?.autoApprovedTools ?? [];
-    const next = autoApprove
-      ? [...new Set([...current, name])]
-      : current.filter((n) => n !== name);
-    void updateSettings({ autoApprovedTools: next })
-      .then((updated) => {
-        setRuntimeSettings(updated);
-      })
-      .catch((err) => setNotice(`${t("notice.updateToolFailed")}${err instanceof Error ? err.message : String(err)}`));
-  }
-
   function handleCleanupData(olderThanDays: number): void {
     void cleanupData(olderThanDays)
       .then((result) => {
@@ -1086,6 +1219,25 @@ function App() {
     }
   }
 
+  async function handleDeleteTask(taskId: string): Promise<void> {
+    if (!confirm(t("sidebar.deleteTaskConfirm"))) return;
+    try {
+      await deleteTask(taskId);
+      setTasks((prev) => prev.filter((task) => task.id !== taskId));
+      if (currentTask?.id === taskId) {
+        closeStream();
+        setCurrentTask(null);
+        setOutput("");
+        setStatus(null);
+        setPhase(null);
+        setPlan([]);
+        setBusy(false);
+      }
+    } catch (err) {
+      setNotice(`${t("notice.deleteTaskFailed")}${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   function startResize(panel: "left" | "right", event: PointerEvent<HTMLDivElement>): void {
     event.preventDefault();
     const startX = event.clientX;
@@ -1120,7 +1272,13 @@ function App() {
     currentTask.status !== "paused";
 
   // 当前运行轮次的实时工具活动（来自事件流）；历史轮次由 Conversation 从消息派生
-  const liveToolActivity = deriveToolActivityFromEvents(events);
+  const liveToolActivity = filterHistoricalToolActivity(
+    mergePendingApprovalsIntoActivity(
+      deriveToolActivityFromEvents(events),
+      currentTask?.pendingApprovals ?? [],
+    ),
+    currentTask?.messages ?? [],
+  );
   const shellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
     "--inspector-width": `${inspectorWidth}px`,
@@ -1134,6 +1292,7 @@ function App() {
       data-active-view={activeView}
       data-left-collapsed={leftCollapsed}
       data-inspector-open={inspectorOpen}
+      data-theme={themeMode}
       style={shellStyle}
     >
       <TaskHistorySidebar
@@ -1151,6 +1310,7 @@ function App() {
         onOpenSettings={handleOpenSettings}
         onImportProject={handleImportProject}
         onDeleteProject={handleDeleteProject}
+        onDeleteTask={handleDeleteTask}
       />
 
       <div
@@ -1262,28 +1422,30 @@ function App() {
             onSelectTask={handleSelectTask}
           />
         ) : activeView === "tools" ? (
-          <ToolsPage tools={tools} onToggleTool={handleToggleTool} />
+          <SkillsPage skills={skills} />
         ) : activeView === "settings" ? (
           <SettingsPanel
             settings={runtimeSettings}
-            tools={tools}
             mcpServers={mcpServers}
             dataStatus={dataStatus}
             memories={memories}
             saving={settingsSaving}
             fetchingModels={fetchingModels}
             fontScale={fontScale}
+            workMode={workMode}
+            themeMode={themeMode}
+            locale={locale}
             initialSection={settingsInitialSection}
             onClose={handleCloseSettings}
             onSave={handleSaveSettings}
-            onToggleTool={handleToggleTool}
-            autoApprovedTools={runtimeSettings?.autoApprovedTools ?? []}
-            onToggleAutoApprove={handleToggleAutoApprove}
             onCleanup={handleCleanupData}
             onRefresh={refreshSettings}
             onFetchModels={handleFetchModels}
             onSaveEnabledModels={handleSaveEnabledModels}
             onFontScaleChange={handleFontScaleChange}
+            onWorkModeChange={handleWorkModeChange}
+            onThemeModeChange={setThemeMode}
+            onLocaleChange={setLocaleState}
             onCreateMemory={handleCreateMemory}
             onToggleMemory={handleToggleMemory}
             onEditMemory={handleEditMemory}
@@ -1309,8 +1471,10 @@ function App() {
                 reasoning={reasoning}
                 busy={busy}
                 liveToolActivity={liveToolActivity}
+                defaultToolDetailsOpen={defaultToolDetailsOpen}
                 online={online}
                 onToolDecision={handleToolDecision}
+                onPlanDecision={handlePlanDecision}
                 onClarificationAnswer={handleClarificationAnswer}
                 onArtifactDecision={handleArtifactDecision}
                 canResume={canResume}
@@ -1442,14 +1606,14 @@ function SidebarIcon() {
 
 function getMainViewTitle(view: MainView): string {
   if (view === "search") return t("nav.search");
-  if (view === "tools") return t("nav.tools");
+  if (view === "tools") return t("nav.skills");
   if (view === "settings") return t("nav.settings");
   return t("mode.conversation");
 }
 
 function getMainViewSubtitle(view: MainView): string {
   if (view === "search") return t("view.search.subtitle");
-  if (view === "tools") return t("view.tools.subtitle");
+  if (view === "tools") return t("view.skills.subtitle");
   if (view === "settings") return t("view.settings.subtitle");
   return t("view.chat.subtitle");
 }
@@ -1502,48 +1666,47 @@ function SearchPage({
   );
 }
 
-function ToolsPage({
-  tools,
-  onToggleTool,
-}: {
-  tools: ToolDescriptor[];
-  onToggleTool: (name: string, enabled: boolean) => void;
-}) {
+function SkillsPage({ skills }: { skills: SkillDescriptor[] }) {
   return (
     <section className="page-panel">
       <header className="page-panel-head">
         <div>
-          <h1>{t("nav.tools")}</h1>
-          <p>{t("toolsPage.desc")}</p>
+          <h1>{t("nav.skills")}</h1>
+          <p>{t("skillsPage.desc")}</p>
         </div>
       </header>
-      <div className="tool-page-grid">
-        {tools.length === 0 ? (
-          <p className="page-empty">{t("inspector.emptyTools")}</p>
+      <div className="skill-page-grid">
+        {skills.length === 0 ? (
+          <p className="page-empty">{t("skillsPage.empty")}</p>
         ) : (
-          tools.map((tool) => (
-            <article key={tool.name} className="tool-page-card">
+          skills.map((skill) => (
+            <article key={skill.name} className="skill-page-card">
               <header>
-                <strong>{tool.name}</strong>
-                <span>{tool.source?.type === "mcp" ? `MCP:${tool.source.serverName}` : t("settings.builtinTool")}</span>
+                <strong>{skill.name}</strong>
+                <span>{skillSourceLabel(skill.sourceDir)}</span>
               </header>
-              <p>{tool.description}</p>
-              <label className="memory-toggle tool-page-toggle">
-                <input
-                  type="checkbox"
-                  checked={tool.enabled !== false}
-                  onChange={(event) => onToggleTool(tool.name, event.currentTarget.checked)}
-                />
-                <span>
-                  {tool.enabled === false ? t("memory.disable") : t("memory.enable")} · {tool.riskLevel ?? "safe"}
-                </span>
-              </label>
+              <p>{skill.description}</p>
+              <div className="skill-page-meta">
+                {skill.version && <span>{skill.version}</span>}
+                <span>{formatAllowedTools(skill.allowedTools)}</span>
+              </div>
             </article>
           ))
         )}
       </div>
     </section>
   );
+}
+
+function skillSourceLabel(source: SkillDescriptor["sourceDir"]): string {
+  if (source === "builtin") return t("skillsPage.sourceBuiltin");
+  if (source === "workspace") return t("skillsPage.sourceWorkspace");
+  return t("skillsPage.sourceUser");
+}
+
+function formatAllowedTools(allowedTools?: string[]): string {
+  if (!allowedTools || allowedTools.length === 0) return t("skillsPage.allTools");
+  return allowedTools.join(" · ");
 }
 
 export default App;

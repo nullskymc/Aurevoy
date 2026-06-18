@@ -25,6 +25,7 @@ function makeTask(): Task {
 
 const callbacks = {
   onToolDecision: vi.fn(),
+  onPlanDecision: vi.fn(),
   onClarificationAnswer: vi.fn(),
   onArtifactDecision: vi.fn(),
 };

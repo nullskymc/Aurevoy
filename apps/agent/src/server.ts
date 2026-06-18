@@ -86,6 +86,7 @@ export async function buildServer(externalLogger?: Logger) {
   });
 
   toolRegistry.applySettings(toolSettingsStore.list());
+  toolRegistry.setEnabled('execute_command', config.sandbox.commandExecutionEnabled);
   const recoveredTasks = markInterruptedTasksAfterRestart();
   if (recoveredTasks.length > 0) {
     log.warn(`启动恢复：${recoveredTasks.length} 个未完成任务已标记为可恢复失败`);

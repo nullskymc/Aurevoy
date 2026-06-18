@@ -5,9 +5,8 @@ import type {
   MemoryCategory,
   MemoryEntry,
   RuntimeSettings,
-  ToolDescriptor,
 } from "@aurevoy/shared";
-import { t } from "../i18n";
+import { t, type Locale } from "../i18n";
 
 interface SettingsDraft {
   baseUrl: string;
@@ -24,31 +23,36 @@ interface SettingsDraft {
 
 interface SettingsPanelProps {
   settings: RuntimeSettings | null;
-  tools: ToolDescriptor[];
   mcpServers: McpServerStatus[];
   dataStatus: DataStatusResponse | null;
   memories: MemoryEntry[];
   saving: boolean;
   fetchingModels: boolean;
   fontScale: number;
+  workMode: WorkMode;
+  themeMode: ThemeMode;
+  locale: Locale;
   initialSection?: SettingsSectionId;
   onClose: () => void;
   onSave: (draft: SettingsDraft) => void;
-  onToggleTool: (name: string, enabled: boolean) => void;
-  autoApprovedTools: string[];
-  onToggleAutoApprove: (name: string, autoApprove: boolean) => void;
   onCleanup: (olderThanDays: number) => void;
   onRefresh: () => void;
   onFetchModels: () => void;
   onSaveEnabledModels: (models: string[]) => void;
   onFontScaleChange: (scale: number) => void;
+  onWorkModeChange: (mode: WorkMode) => void;
+  onThemeModeChange: (mode: ThemeMode) => void;
+  onLocaleChange: (locale: Locale) => void;
   onCreateMemory: (content: string, category: MemoryCategory) => void;
   onToggleMemory: (id: string, enabled: boolean) => void;
   onEditMemory: (id: string, content: string, category: MemoryCategory) => void;
   onDeleteMemory: (id: string) => void;
 }
 
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "tools" | "data" | "memory";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory";
+type ThemeMode = "system" | "light" | "dark";
+type WorkMode = "coding" | "daily";
+const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory"];
 
 const SETTINGS_GROUPS: Array<{
   label: string;
@@ -66,7 +70,6 @@ const SETTINGS_GROUPS: Array<{
     label: t("settings.group.integration"),
     items: [
       { id: "mcp", label: t("settings.nav.mcp"), icon: "server" },
-      { id: "tools", label: t("settings.nav.tools"), icon: "tools" },
     ],
   },
   {
@@ -78,34 +81,37 @@ const SETTINGS_GROUPS: Array<{
   },
 ];
 
-type SettingsIconName = "appearance" | "database" | "memory" | "server" | "sliders" | "spark" | "tools";
+type SettingsIconName = "appearance" | "database" | "memory" | "server" | "sliders" | "spark";
 
 export function SettingsPanel({
   settings,
-  tools,
   mcpServers,
   dataStatus,
   memories,
   saving,
   fetchingModels,
   fontScale,
+  workMode,
+  themeMode,
+  locale,
   initialSection = "general",
   onClose,
   onSave,
-  onToggleTool,
-  autoApprovedTools,
-  onToggleAutoApprove,
   onCleanup,
   onRefresh,
   onFetchModels,
   onSaveEnabledModels,
   onFontScaleChange,
+  onWorkModeChange,
+  onThemeModeChange,
+  onLocaleChange,
   onCreateMemory,
   onToggleMemory,
   onEditMemory,
   onDeleteMemory,
 }: SettingsPanelProps) {
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
+  const safeInitialSection = normalizeSettingsSection(initialSection);
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(safeInitialSection);
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<SettingsDraft>(() => makeDraft(settings));
   const [cleanupDays, setCleanupDays] = useState(settings?.cleanupPolicyDays ?? 30);
@@ -116,7 +122,7 @@ export function SettingsPanel({
   }, [settings]);
 
   useEffect(() => {
-    setActiveSection(initialSection);
+    setActiveSection(normalizeSettingsSection(initialSection));
   }, [initialSection]);
 
   const visibleGroups = useMemo(() => {
@@ -188,13 +194,22 @@ export function SettingsPanel({
               dataStatus={dataStatus}
               settings={settings}
               saving={saving}
+              workMode={workMode}
               onDraftChange={setDraft}
+              onWorkModeChange={onWorkModeChange}
               onSave={onSave}
             />
           )}
 
           {activeSection === "appearance" && (
-            <AppearanceSettings fontScale={fontScale} onFontScaleChange={onFontScaleChange} />
+            <AppearanceSettings
+              fontScale={fontScale}
+              themeMode={themeMode}
+              locale={locale}
+              onFontScaleChange={onFontScaleChange}
+              onThemeModeChange={onThemeModeChange}
+              onLocaleChange={onLocaleChange}
+            />
           )}
 
           {activeSection === "provider" && (
@@ -217,15 +232,6 @@ export function SettingsPanel({
               saving={saving}
               onDraftChange={setDraft}
               onSave={onSave}
-            />
-          )}
-
-          {activeSection === "tools" && (
-            <ToolSettings
-              tools={tools}
-              autoApprovedTools={autoApprovedTools}
-              onToggleTool={onToggleTool}
-              onToggleAutoApprove={onToggleAutoApprove}
             />
           )}
 
@@ -252,6 +258,10 @@ export function SettingsPanel({
       </main>
     </section>
   );
+}
+
+function normalizeSettingsSection(section?: SettingsSectionId): SettingsSectionId {
+  return section && SETTINGS_SECTION_IDS.includes(section) ? section : "general";
 }
 
 function SettingsNavIcon({ name }: { name: SettingsIconName }) {
@@ -311,20 +321,6 @@ function SettingsNavIcon({ name }: { name: SettingsIconName }) {
     );
   }
 
-  if (name === "tools") {
-    return (
-      <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-        <path
-          d="M6.4 4.1l2.2 2.2-2.2 2.2-2.2-2.2 2.2-2.2zM13.6 4.1l2.2 2.2-2.2 2.2-2.2-2.2 2.2-2.2zM6.4 11.5l2.2 2.2-2.2 2.2-2.2-2.2 2.2-2.2zM13.6 11.5l2.2 2.2-2.2 2.2-2.2-2.2 2.2-2.2z"
-          stroke="currentColor"
-          strokeWidth="1.35"
-          fill="none"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
-
   if (name === "memory") {
     return (
       <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
@@ -348,33 +344,47 @@ function GeneralSettings({
   dataStatus,
   settings,
   saving,
+  workMode,
   onDraftChange,
+  onWorkModeChange,
   onSave,
 }: {
   draft: SettingsDraft;
   dataStatus: DataStatusResponse | null;
   settings: RuntimeSettings | null;
   saving: boolean;
+  workMode: WorkMode;
   onDraftChange: (draft: SettingsDraft) => void;
+  onWorkModeChange: (mode: WorkMode) => void;
   onSave: (draft: SettingsDraft) => void;
 }) {
   return (
     <>
       <SettingsChoiceGroup title={t("settings.workMode")}>
         <div className="settings-card-choice-grid">
-          <label className="settings-choice-card" data-active="true">
+          <label className="settings-choice-card" data-active={workMode === "coding"}>
             <span>
               <strong>{t("settings.workModeCodingTitle")}</strong>
               <small>{t("settings.workModeCodingDesc")}</small>
             </span>
-            <input type="radio" checked readOnly />
+            <input
+              type="radio"
+              name="work-mode"
+              checked={workMode === "coding"}
+              onChange={() => onWorkModeChange("coding")}
+            />
           </label>
-          <label className="settings-choice-card">
+          <label className="settings-choice-card" data-active={workMode === "daily"}>
             <span>
               <strong>{t("settings.workModeDailyTitle")}</strong>
               <small>{t("settings.workModeDailyDesc")}</small>
             </span>
-            <input type="radio" disabled />
+            <input
+              type="radio"
+              name="work-mode"
+              checked={workMode === "daily"}
+              onChange={() => onWorkModeChange("daily")}
+            />
           </label>
         </div>
       </SettingsChoiceGroup>
@@ -437,13 +447,39 @@ function GeneralSettings({
 
 function AppearanceSettings({
   fontScale,
+  themeMode,
+  locale,
   onFontScaleChange,
+  onThemeModeChange,
+  onLocaleChange,
 }: {
   fontScale: number;
+  themeMode: ThemeMode;
+  locale: Locale;
   onFontScaleChange: (scale: number) => void;
+  onThemeModeChange: (mode: ThemeMode) => void;
+  onLocaleChange: (locale: Locale) => void;
 }) {
   return (
     <SettingsGroup title={t("settings.appearance")}>
+      <SettingsSelectRow
+        title={t("settings.themeTitle")}
+        description={t("settings.themeDesc")}
+        value={themeMode}
+        options={[
+          { value: "system", label: t("settings.themeSystem") },
+          { value: "light", label: t("settings.themeLight") },
+          { value: "dark", label: t("settings.themeDark") },
+        ]}
+        onChange={(value) => onThemeModeChange(value as ThemeMode)}
+      />
+      <SettingsSelectRow
+        title={t("settings.languageTitle")}
+        description={t("settings.languageDesc")}
+        value={locale}
+        options={[{ value: "zh", label: t("settings.languageZh") }]}
+        onChange={(value) => onLocaleChange(value as Locale)}
+      />
       <SettingsActionRow
         title={t("settings.fontScaleTitle")}
         description={t("settings.fontScaleDesc")}
@@ -461,7 +497,6 @@ function AppearanceSettings({
           </label>
         }
       />
-      <SettingsInfoRow title={t("settings.themeTitle")} description={t("settings.themeDesc")} />
     </SettingsGroup>
   );
 }
@@ -711,58 +746,6 @@ function McpSettings({
         )}
       </SettingsGroup>
     </>
-  );
-}
-
-function ToolSettings({
-  tools,
-  autoApprovedTools,
-  onToggleTool,
-  onToggleAutoApprove,
-}: {
-  tools: ToolDescriptor[];
-  autoApprovedTools: string[];
-  onToggleTool: (name: string, enabled: boolean) => void;
-  onToggleAutoApprove: (name: string, autoApprove: boolean) => void;
-}) {
-  const approvedSet = new Set(autoApprovedTools);
-  const isNonSafe = (tool: ToolDescriptor) =>
-    tool.riskLevel === 'caution' || tool.riskLevel === 'dangerous';
-
-  return (
-    <SettingsGroup title={t("settings.toolMgmt")}>
-      {tools.length === 0 ? (
-        <SettingsInfoRow title={t("settings.toolEmptyTitle")} description={t("settings.toolEmptyDesc")} />
-      ) : (
-        tools.map((tool) => {
-          const toolEnabled = tool.enabled !== false;
-          const autoApproved = approvedSet.has(tool.name);
-          return (
-            <div key={tool.name} className="settings-tool-row">
-              <SettingsSwitchRow
-                title={tool.name}
-                description={`${tool.description} · ${tool.riskLevel ?? "safe"} · ${sourceLabel(tool)}`}
-                checked={toolEnabled}
-                onChange={(checked) => onToggleTool(tool.name, checked)}
-              />
-              {isNonSafe(tool) && (
-                <label className="settings-tool-auto-approve">
-                  <input
-                    type="checkbox"
-                    checked={autoApproved}
-                    disabled={!toolEnabled}
-                    onChange={(event) =>
-                      onToggleAutoApprove(tool.name, event.currentTarget.checked)
-                    }
-                  />
-                  <span>{t("settings.autoApproveTool")}</span>
-                </label>
-              )}
-            </div>
-          );
-        })
-      )}
-    </SettingsGroup>
   );
 }
 
@@ -1093,11 +1076,6 @@ function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
     mcpServersJson: settings?.mcpServersJson ?? "",
     cleanupPolicyDays: settings?.cleanupPolicyDays ?? 30,
   };
-}
-
-function sourceLabel(tool: ToolDescriptor): string {
-  if (tool.source?.type === "mcp") return `MCP:${tool.source.serverName}`;
-  return t("settings.builtinTool");
 }
 
 export type { SettingsDraft };

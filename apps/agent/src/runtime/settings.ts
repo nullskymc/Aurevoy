@@ -17,7 +17,6 @@ const SETTING_KEYS = {
   llmTimeoutMs: 'llm.timeoutMs',
   workspaceDir: 'workspaceDir',
   commandExecutionEnabled: 'sandbox.commandExecutionEnabled',
-  autoApprovedTools: 'sandbox.autoApprovedTools',
   mcpServersJson: 'mcpServersJson',
   cleanupPolicyDays: 'cleanupPolicyDays',
 } as const;
@@ -55,10 +54,6 @@ export function loadPersistedSettings(): void {
     entries[SETTING_KEYS.commandExecutionEnabled] === undefined
       ? config.sandbox.commandExecutionEnabled
       : entries[SETTING_KEYS.commandExecutionEnabled] === 'true';
-  const storedAutoApprove = entries[SETTING_KEYS.autoApprovedTools];
-  if (storedAutoApprove !== undefined) {
-    config.sandbox.autoApprovedTools = parseStringArray(storedAutoApprove);
-  }
   if (mcpJson !== undefined) config.mcpServers = parseMcpServers(mcpJson);
 }
 
@@ -77,7 +72,6 @@ export function readRuntimeSettings(): RuntimeSettings {
     },
     workspaceDir: config.workspaceDir,
     commandExecutionEnabled: config.sandbox.commandExecutionEnabled,
-    autoApprovedTools: [...config.sandbox.autoApprovedTools],
     mcpServersJson: settingsStore.get(SETTING_KEYS.mcpServersJson) ?? stringifyMcpServers(),
     cleanupPolicyDays: readCleanupPolicyDays(),
     dbPath: config.dbPath,
@@ -147,11 +141,6 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   if (body.commandExecutionEnabled !== undefined) {
     config.sandbox.commandExecutionEnabled = body.commandExecutionEnabled;
     settingsStore.set(SETTING_KEYS.commandExecutionEnabled, String(body.commandExecutionEnabled));
-  }
-
-  if (body.autoApprovedTools !== undefined) {
-    config.sandbox.autoApprovedTools = body.autoApprovedTools.map((s) => s.trim()).filter(Boolean);
-    settingsStore.set(SETTING_KEYS.autoApprovedTools, JSON.stringify(config.sandbox.autoApprovedTools));
   }
 
   if (body.mcpServersJson !== undefined) {
@@ -238,14 +227,4 @@ function clampNumber(value: number, min: number, max: number, label: string): nu
 function stringifyMcpServers(): string {
   if (config.mcpServers.length === 0) return '';
   return JSON.stringify({ mcpServers: Object.fromEntries(config.mcpServers.map((s) => [s.name, s])) }, null, 2);
-}
-
-function parseStringArray(raw: string): string[] {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return [...new Set(parsed.filter((item): item is string => typeof item === 'string').map((s) => s.trim()).filter(Boolean))];
-  } catch {
-    return [];
-  }
 }
