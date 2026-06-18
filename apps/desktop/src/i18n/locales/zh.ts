@@ -110,11 +110,6 @@ export const zh = {
   "composer.localMode": "本地模式",
   "composer.configureModel": "配置模型",
 
-  // 编辑重跑模式选择
-  "revert.chooseMode": "选择恢复方式",
-  "revert.mode.codeAndConv": "恢复对话 + 代码",
-  "revert.mode.convOnly": "仅恢复对话",
-
   // 模型选择器
   "model.dialogLabel": "模型选择",
   "model.label": "模型",
@@ -128,6 +123,7 @@ export const zh = {
   "nav.newChat": "新对话",
   "nav.search": "搜索",
   "nav.tools": "工具",
+  "nav.skills": "Skill",
   "nav.automation": "自动化",
   "nav.automationDisabled": "自动化尚未接入真实能力",
   "nav.sites": "站点",
@@ -215,8 +211,12 @@ export const zh = {
   // 事件流标题/详情
   "event.taskCreated": "任务已创建",
   "event.planGenerated": "计划已生成",
+  "event.planApprovalRequest": "等待计划审批",
+  "event.planApproved": "计划已批准",
+  "event.planRejected": "计划已拒绝",
   "event.stepUpdate": "步骤状态更新",
   "event.generating": "正在生成输出",
+  "event.reasoning": "模型思考链",
   "event.fullReply": "完整回复",
   "event.toolCall": "调用工具：",
   "event.toolResultOk": "工具返回结果",
@@ -312,7 +312,6 @@ export const zh = {
   "settings.nav.appearance": "外观",
   "settings.nav.provider": "模型配置",
   "settings.nav.mcp": "MCP 服务器",
-  "settings.nav.tools": "工具",
   "settings.nav.data": "本地数据",
   "settings.nav.memory": "长期记忆",
   "settings.unitDays": "天",
@@ -321,12 +320,12 @@ export const zh = {
   // 常规
   "settings.workMode": "工作模式",
   "settings.workModeCodingTitle": "适用于编程",
-  "settings.workModeCodingDesc": "保留更多技术细节、工具状态和执行轨迹",
+  "settings.workModeCodingDesc": "默认展开工具详情，保留更多技术细节和执行轨迹",
   "settings.workModeDailyTitle": "适用于日常工作",
-  "settings.workModeDailyDesc": "更少技术细节，优先展示结论",
+  "settings.workModeDailyDesc": "默认收起工具详情，优先展示结论和轻量进度",
   "settings.permissions": "权限",
   "settings.commandExecTitle": "命令执行边界",
-  "settings.commandExecDesc": "启用后，Agent 才能在沙箱策略内执行命令。默认关闭，不会伪造执行能力。",
+  "settings.commandExecDesc": "启用后，Agent 才能请求执行命令；每条具体命令仍需单独审批，本次会话允许也只对同一命令生效。",
   "settings.workspaceTitle": "工作区目录",
   "settings.workspaceDesc": "内置文件工具只应访问该目录边界内的内容。",
   "settings.general": "常规",
@@ -341,7 +340,13 @@ export const zh = {
   "settings.fontScaleTitle": "字体比例",
   "settings.fontScaleDesc": "调整对话、设置和工具界面的整体文字密度。",
   "settings.themeTitle": "主题",
-  "settings.themeDesc": "跟随系统浅色/深色模式。",
+  "settings.themeDesc": "选择浅色、深色，或跟随系统外观。",
+  "settings.themeSystem": "跟随系统",
+  "settings.themeLight": "浅色",
+  "settings.themeDark": "深色",
+  "settings.languageTitle": "语言",
+  "settings.languageDesc": "选择界面显示语言。当前版本已接入运行时切换入口。",
+  "settings.languageZh": "简体中文",
   // 模型配置
   "settings.providerConfig": "模型配置",
   "settings.baseUrlDesc": "OpenAI-compatible API endpoint。",
@@ -382,12 +387,6 @@ export const zh = {
   "settings.connected": "已连接",
   "settings.failed": "失败",
   "settings.disabled": "停用",
-  // 工具
-  "settings.toolMgmt": "工具管理",
-  "settings.toolEmptyTitle": "未发现可用工具",
-  "settings.toolEmptyDesc": "Agent 后端未返回工具目录。",
-  "settings.builtinTool": "内置",
-  "settings.autoApproveTool": "自动批准：跳过审批直接执行",
   // 数据
   "settings.localStorage": "本地存储",
   "settings.tasksTracesMemories": "任务 / 轨迹 / 记忆",
@@ -416,6 +415,7 @@ export const zh = {
   "notice.failedColon": "失败：",
   "notice.pleaseRetry": "。请重试。",
   "notice.replyClarificationFailed": "提交追问回复失败：",
+  "notice.planApprovalFailed": "计划审批失败：",
   "notice.updateArtifactFailed": "更新产物状态失败：",
   "notice.readMemoryFailed": "读取记忆失败：",
   "notice.settingsSaved": "设置已保存，并已应用到 Agent runtime",
@@ -448,15 +448,20 @@ export const zh = {
 
   // 主视图副标题
   "view.search.subtitle": "搜索本地对话历史",
-  "view.tools.subtitle": "来自后端工具注册表的真实工具",
+  "view.skills.subtitle": "管理可通过斜杠命令激活的 Agent Skill",
   "view.memory.subtitle": "长期记忆管理",
-  "view.settings.subtitle": "模型、MCP、工具、数据与字体",
+  "view.settings.subtitle": "模型、MCP、数据与字体",
   "view.chat.subtitle": "目标、计划与执行结果",
 
   // 搜索页
   "search.desc": "当前搜索范围是本地任务历史，不包含未接入的全局文件索引。",
   "search.placeholder": "输入目标关键词",
 
-  // 工具页
-  "toolsPage.desc": "工具列表来自 Agent 后端注册表，启停会写回运行时设置。",
+  // Skill 页
+  "skillsPage.desc": "Skill 会作为任务上下文注入 Agent，也可以限制可用工具；在输入框用斜杠命令激活。",
+  "skillsPage.empty": "还没有发现 Skill。",
+  "skillsPage.sourceBuiltin": "内置",
+  "skillsPage.sourceUser": "用户",
+  "skillsPage.sourceWorkspace": "工作区",
+  "skillsPage.allTools": "允许全部工具",
 } as const;

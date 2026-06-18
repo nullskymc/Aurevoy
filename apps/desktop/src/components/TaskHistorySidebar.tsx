@@ -136,7 +136,7 @@ export function TaskHistorySidebar({
           onClick={onOpenTools}
         >
           <PluginIcon />
-          <span>{t("nav.tools")}</span>
+          <span>{t("nav.skills")}</span>
         </button>
         <button type="button" className="sidebar-action" disabled title={t("nav.automationDisabled")}>
           <ClockIcon />
@@ -252,7 +252,7 @@ export function TaskHistorySidebar({
           type="button"
           className="sidebar-action"
           data-active={activeView === "settings"}
-          onClick={onOpenSettings}
+          onClick={() => onOpenSettings()}
         >
           <GearIcon />
           <span>{t("nav.settings")}</span>
@@ -333,7 +333,10 @@ function TaskList({
             <button
               type="button"
               className="conv-delete-btn"
-              onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
+              onClick={(event) => {
+                event.stopPropagation();
+                onDeleteTask(task.id);
+              }}
               title={t("sidebar.deleteTask")}
               aria-label={t("sidebar.deleteTask")}
             >
@@ -475,4 +478,3 @@ function ChatIcon() {
     </svg>
   );
 }
-

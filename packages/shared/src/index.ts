@@ -81,10 +81,12 @@ export interface Message {
 }
 
 /** 计划中的一个步骤 */
+export type PlanStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused' | 'proposed';
+
 export interface PlanStep {
   id: string;
   description: string;
-  status: TaskStatus;
+  status: PlanStepStatus;
   /** 该步骤预期使用的工具名称 */
   toolsExpected?: string[];
   /** 依赖的前置步骤 ID 列表 */
@@ -194,6 +196,12 @@ export interface TaskCheckpoint {
   data?: unknown;
 }
 
+export interface PendingToolApproval {
+  call: ToolCall;
+  riskLevel: ToolRiskLevel;
+  createdAt: string;
+}
+
 /** 一个用户任务（Agent 的工作单元） */
 export interface Task {
   id: string;
@@ -209,6 +217,9 @@ export interface Task {
   budgetUsage?: BudgetUsage;
   artifacts?: TaskArtifact[];
   clarifications?: ClarificationRequest[];
+  pendingApprovals?: PendingToolApproval[];
+  /** 已在本对话中批准的工具审批指纹；仅由“本次会话允许”写入。 */
+  approvedApprovalKeys?: string[];
   checkpoints?: TaskCheckpoint[];
   tokenUsage?: AggregatedTokenUsage;
   /** 最近一次 revert 归档的消息（Phase 2 unrevert 钩子） */
@@ -221,6 +232,8 @@ export interface Task {
   fileSnapshots?: FileSnapshot[];
   /** Skill: 当前激活的 skill 名称列表（通常最多 1 个）。 */
   activeSkills?: string[];
+  /** Plan Agent 触发方式；manual 表示用户通过 /plan 显式请求规划。 */
+  planMode?: 'manual';
   createdAt: string;
   updatedAt: string;
 }
@@ -375,6 +388,7 @@ export type AgentEvent =
   | { type: 'plan'; taskId: string; plan: PlanStep[] }
   | { type: 'step_update'; taskId: string; step: PlanStep }
   | { type: 'token'; taskId: string; delta: string } // LLM 流式 token
+  | { type: 'reasoning'; taskId: string; delta: string } // 模型思考链（DeepSeek R1/V3 等）
   | { type: 'message'; taskId: string; message: Message } // 一条完整消息
   | { type: 'tool_call'; taskId: string; call: ToolCall }
   | { type: 'tool_result'; taskId: string; result: ToolResult }
@@ -427,6 +441,8 @@ export type AgentEvent =
   | { type: 'scout_started'; taskId: string }
   | { type: 'scout_report'; taskId: string; report: ScoutReport }
   | { type: 'plan_generated'; taskId: string; plan: PlanStep[]; source: 'llm' | 'heuristic' }
+  | { type: 'plan_approval_request'; taskId: string; plan: PlanStep[]; reasoning: string; scoutReport?: ScoutReport }
+  | { type: 'plan_approval_resolved'; taskId: string; approved: boolean; reason?: string }
   | { type: 'skill_activated'; taskId: string; skillName: string; allowedTools?: string[] }
   | { type: 'skill_deactivated'; taskId: string }
   | { type: 'done'; taskId: string; status: TaskStatus }
@@ -505,6 +521,17 @@ export interface ClarificationAnswerRequest {
 export interface ClarificationAnswerResponse {
   taskId: string;
   clarificationId: string;
+  delivered: boolean;
+}
+
+/** POST /api/tasks/:id/plan-approval — 审批 Plan Agent 生成的执行计划 */
+export interface PlanApprovalRequest {
+  approved: boolean;
+  reason?: string;
+}
+
+export interface PlanApprovalResponse {
+  taskId: string;
   delivered: boolean;
 }
 
@@ -757,8 +784,6 @@ export interface RuntimeSettings {
   };
   workspaceDir: string;
   commandExecutionEnabled: boolean;
-  /** 自动批准的工具名列表 —— 开启后跳过审批直接执行 */
-  autoApprovedTools: string[];
   mcpServersJson: string;
   cleanupPolicyDays: number;
   dbPath: string;
@@ -780,7 +805,6 @@ export interface UpdateRuntimeSettingsRequest {
   }>;
   workspaceDir?: string;
   commandExecutionEnabled?: boolean;
-  autoApprovedTools?: string[];
   mcpServersJson?: string;
   cleanupPolicyDays?: number;
 }

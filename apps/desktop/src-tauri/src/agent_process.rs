@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::{
     env,
+    fs,
     io::{BufRead, BufReader},
     net::{SocketAddr, TcpStream},
     path::PathBuf,
@@ -231,6 +232,63 @@ fn resources_dir() -> Option<PathBuf> {
     }
 }
 
+/// 确保安装版数据目录存在（~/.aurevoy/ 及其子目录）。
+/// 失败不阻塞启动 —— 目录可能已存在或由 Agent 自行创建。
+fn ensure_data_dirs() {
+    let Some(home) = dirs_next() else {
+        eprintln!("[agent_process] 无法获取用户主目录，跳过数据目录创建");
+        return;
+    };
+    let base = home.join(".aurevoy");
+    let dirs = [
+        base.clone(),
+        base.join("workspace"),
+        base.join("logs"),
+        base.join("skills"),
+    ];
+    for dir in &dirs {
+        if let Err(err) = fs::create_dir_all(dir) {
+            eprintln!(
+                "[agent_process] 创建数据目录失败 {}：{err}",
+                dir.display()
+            );
+        }
+    }
+}
+
+/// 获取用户主目录
+fn dirs_next() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: 直接读 HOME 环境变量（最可靠）
+        if let Ok(home) = env::var("HOME") {
+            let p = PathBuf::from(home);
+            if p.is_dir() {
+                return Some(p);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(home) = env::var("HOME") {
+            let p = PathBuf::from(home);
+            if p.is_dir() {
+                return Some(p);
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(home) = env::var("USERPROFILE") {
+            let p = PathBuf::from(home);
+            if p.is_dir() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
     if let Ok(path) = env::var("AUREVOY_AGENT_SIDECAR") {
         let program = PathBuf::from(path);
@@ -261,7 +319,8 @@ fn resolve_agent_command() -> Result<AgentCommandSpec, String> {
         });
     }
 
-    // 生产模式：查找 Resources/agent-dist/index.js
+    // 生产模式：确保用户数据目录存在，再查找 Resources/agent-dist/index.js
+    ensure_data_dirs();
     let resources = resources_dir()
         .ok_or_else(|| "无法定位应用资源目录".to_string())?;
     let agent_entry = resources.join("agent-dist").join("index.js");

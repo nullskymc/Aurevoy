@@ -22,21 +22,21 @@ export const config = {
     /** trace | debug | info | warn | error | fatal */
     level: (process.env.AUREVOY_LOG_LEVEL ?? 'info') as
       | 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal',
-    /** 文件日志路径，空字符串则禁用文件输出 */
-    file: process.env.AUREVOY_LOG_FILE ?? './logs/aurevoy.log',
+    /** 文件日志路径（安装版默认 ~/.aurevoy/logs/），空字符串则禁用文件输出 */
+    file: process.env.AUREVOY_LOG_FILE ?? resolve(homedir(), '.aurevoy', 'logs', 'aurevoy.log'),
     /** 开发模式美化控制台输出（生产期设 'false'） */
     pretty: process.env.AUREVOY_LOG_PRETTY !== 'false',
   },
 
   host: process.env.AUREVOY_HOST ?? AGENT_DEFAULT_HOST,
   port: Number(process.env.AUREVOY_PORT ?? AGENT_DEFAULT_PORT),
-  /** SQLite 数据文件路径 */
-  dbPath: process.env.AUREVOY_DB_PATH ?? './aurevoy.sqlite',
+  /** SQLite 数据文件路径。安装版默认 ~/.aurevoy/aurevoy.sqlite，开发期通过 AUREVOY_DB_PATH 覆盖。 */
+  dbPath: process.env.AUREVOY_DB_PATH ?? resolve(homedir(), '.aurevoy', 'aurevoy.sqlite'),
   /**
    * 工具工作区根目录。文件类工具的所有路径都被限制在此目录内（防目录穿越）。
-   * 默认当前工作目录下的 ./workspace。
+   * 安装版默认 ~/.aurevoy/workspace，开发期通过 AUREVOY_WORKSPACE_DIR 覆盖。
    */
-  workspaceDir: process.env.AUREVOY_WORKSPACE_DIR ?? './workspace',
+  workspaceDir: process.env.AUREVOY_WORKSPACE_DIR ?? resolve(homedir(), '.aurevoy', 'workspace'),
   /** 允许的前端来源（开发期 Vite + 生产期 Tauri） */
   corsOrigins: (process.env.AUREVOY_CORS_ORIGINS ?? '*')
     .split(',')
@@ -121,8 +121,6 @@ export const config = {
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean),
-    /** 自动批准的工具名列表 —— 开启后跳过审批，由设置界面管理。 */
-    autoApprovedTools: [] as string[],
   },
 
   network: {

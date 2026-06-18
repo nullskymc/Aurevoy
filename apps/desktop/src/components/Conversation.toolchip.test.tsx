@@ -33,12 +33,24 @@ describe("ToolActivityList", () => {
     expect(screen.getByText("read_file").closest("button")).toHaveClass("tool-chip");
   });
 
-  it("keeps running tools as a full card", () => {
+  it("renders running tools as a compact chip by default", () => {
     const { container } = render(
       <ToolActivityList items={[makeTool({ status: "running" })]} onDecision={vi.fn()} />,
     );
+    expect(container.querySelector(".tool-chip")).toBeInTheDocument();
+    expect(container.querySelector(".tool-card")).not.toBeInTheDocument();
+  });
+
+  it("renders tool details open when the preference is enabled", () => {
+    const { container } = render(
+      <ToolActivityList
+        items={[makeTool({ status: "running", output: { ok: true } })]}
+        defaultDetailsOpen
+        onDecision={vi.fn()}
+      />,
+    );
     expect(container.querySelector(".tool-card")).toBeInTheDocument();
-    expect(container.querySelector(".tool-chip")).not.toBeInTheDocument();
+    expect(screen.getByText("参数")).toBeInTheDocument();
   });
 
   it("keeps awaiting tools as a full card with approval actions", () => {

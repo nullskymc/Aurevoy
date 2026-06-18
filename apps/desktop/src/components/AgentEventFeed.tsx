@@ -26,6 +26,8 @@ function getEventTitle(event: AgentEvent): string {
       return t("event.stepUpdate");
     case "token":
       return t("event.generating");
+    case "reasoning":
+      return t("event.reasoning");
     case "message":
       return t("event.fullReply");
     case "tool_call":
@@ -68,6 +70,10 @@ function getEventTitle(event: AgentEvent): string {
       return t("event.scoutReport");
     case "plan_generated":
       return t("event.planGenerated");
+    case "plan_approval_request":
+      return t("event.planApprovalRequest");
+    case "plan_approval_resolved":
+      return event.approved ? t("event.planApproved") : t("event.planRejected");
     case "skill_activated":
       return `${t("event.skillActivated")}${event.skillName}`;
     case "skill_deactivated":
@@ -87,6 +93,8 @@ function getEventDetail(event: AgentEvent): string {
     case "step_update":
       return event.step.description;
     case "token":
+      return event.delta.trim() ? event.delta : t("event.streamFragment");
+    case "reasoning":
       return event.delta.trim() ? event.delta : t("event.streamFragment");
     case "message":
       return event.message.content;
@@ -135,6 +143,12 @@ function getEventDetail(event: AgentEvent): string {
       return `${event.report.keyFiles.length} key files, ${event.report.rounds} rounds`;
     case "plan_generated":
       return `${event.plan.length} steps (${event.source})`;
+    case "plan_approval_request":
+      return `${event.plan.length} steps · ${event.reasoning}`;
+    case "plan_approval_resolved":
+      return event.approved
+        ? t("event.planApproved")
+        : `${t("event.planRejected")}${event.reason ? ` (${event.reason})` : ''}`;
     case "skill_activated":
       return event.allowedTools
         ? `${t("event.toolsRestricted")}${event.allowedTools.join(', ')}`

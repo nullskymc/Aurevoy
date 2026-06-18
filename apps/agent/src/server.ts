@@ -29,6 +29,8 @@ import type {
   MemoryEntry,
   MemoryListResponse,
   ModelListResponse,
+  PlanApprovalRequest,
+  PlanApprovalResponse,
   ProjectListResponse,
   ResumeTaskResponse,
   RevertTaskRequest,
@@ -56,6 +58,7 @@ import {
   prepareTaskForResume,
   resolveApproval,
   resolveClarificationAnswer,
+  resolvePlanApproval,
   revertTask,
   runTask,
   unrevertTask,
@@ -83,6 +86,7 @@ export async function buildServer(externalLogger?: Logger) {
   });
 
   toolRegistry.applySettings(toolSettingsStore.list());
+  toolRegistry.setEnabled('execute_command', config.sandbox.commandExecutionEnabled);
   const recoveredTasks = markInterruptedTasksAfterRestart();
   if (recoveredTasks.length > 0) {
     log.warn(`启动恢复：${recoveredTasks.length} 个未完成任务已标记为可恢复失败`);
@@ -404,6 +408,22 @@ export async function buildServer(externalLogger?: Logger) {
       }
       const delivered = resolveApproval(req.params.id, callId, approved, sessionApprove);
       const body: ApprovalDecisionResponse = { taskId: req.params.id, callId, delivered };
+      return reply.send(body);
+    },
+  );
+
+  // 审批 Plan Agent 生成的执行计划（批准/拒绝）
+  app.post<{ Params: { id: string }; Body: PlanApprovalRequest }>(
+    '/api/tasks/:id/plan-approval',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      const { approved, reason } = req.body ?? {};
+      if (typeof approved !== 'boolean') {
+        return reply.code(400).send({ error: 'approved(boolean) 必填' });
+      }
+      const delivered = resolvePlanApproval(req.params.id, approved, reason);
+      const body: PlanApprovalResponse = { taskId: req.params.id, delivered };
       return reply.send(body);
     },
   );

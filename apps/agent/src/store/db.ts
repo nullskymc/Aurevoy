@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import type { MemoryEntry, Project, Task, TaskTraceEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
@@ -8,6 +10,10 @@ import { config } from '../config.js';
  * 当前用单表存储任务（计划/消息以 JSON 列保存，便于早期迭代）。
  * 后续可拆分 messages / steps / memory 等表，并加入向量检索。
  */
+
+// 确保 SQLite 文件父目录存在（安装版 app bundle 内 cwd 只读，数据在 ~/.aurevoy/）
+mkdirSync(dirname(config.dbPath), { recursive: true });
+
 const db = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
@@ -22,6 +28,8 @@ db.exec(`
     messages   TEXT NOT NULL DEFAULT '[]',
     artifacts  TEXT NOT NULL DEFAULT '[]',
     clarifications TEXT NOT NULL DEFAULT '[]',
+    pending_approvals TEXT NOT NULL DEFAULT '[]',
+    approved_approval_keys TEXT NOT NULL DEFAULT '[]',
     checkpoints TEXT NOT NULL DEFAULT '[]',
     budget     TEXT,
     budget_usage TEXT,
@@ -109,6 +117,8 @@ const taskColumnMigrations: Array<{ name: string; sql: string }> = [
     name: 'clarifications',
     sql: "ALTER TABLE tasks ADD COLUMN clarifications TEXT NOT NULL DEFAULT '[]'",
   },
+  { name: 'pending_approvals', sql: "ALTER TABLE tasks ADD COLUMN pending_approvals TEXT NOT NULL DEFAULT '[]'" },
+  { name: 'approved_approval_keys', sql: "ALTER TABLE tasks ADD COLUMN approved_approval_keys TEXT NOT NULL DEFAULT '[]'" },
   { name: 'checkpoints', sql: "ALTER TABLE tasks ADD COLUMN checkpoints TEXT NOT NULL DEFAULT '[]'" },
   { name: 'budget', sql: 'ALTER TABLE tasks ADD COLUMN budget TEXT' },
   { name: 'budget_usage', sql: 'ALTER TABLE tasks ADD COLUMN budget_usage TEXT' },
@@ -117,6 +127,7 @@ const taskColumnMigrations: Array<{ name: string; sql: string }> = [
   { name: 'parent_task_id', sql: 'ALTER TABLE tasks ADD COLUMN parent_task_id TEXT' },
   { name: 'project_id', sql: 'ALTER TABLE tasks ADD COLUMN project_id TEXT' },
   { name: 'active_skills', sql: 'ALTER TABLE tasks ADD COLUMN active_skills TEXT' },
+  { name: 'plan_mode', sql: 'ALTER TABLE tasks ADD COLUMN plan_mode TEXT' },
 ];
 for (const migration of taskColumnMigrations) {
   if (!taskColumns.some((column) => column.name === migration.name)) {
@@ -148,6 +159,8 @@ interface TaskRow {
   messages: string;
   artifacts: string;
   clarifications: string;
+  pending_approvals: string;
+  approved_approval_keys: string;
   checkpoints: string;
   budget: string | null;
   budget_usage: string | null;
@@ -156,6 +169,7 @@ interface TaskRow {
   parent_task_id: string | null;
   project_id: string | null;
   active_skills: string | null;
+  plan_mode: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -193,6 +207,8 @@ function rowToTask(row: TaskRow): Task {
     messages: JSON.parse(row.messages),
     artifacts: (parseJsonColumn(row.artifacts) as Task['artifacts']) ?? [],
     clarifications: (parseJsonColumn(row.clarifications) as Task['clarifications']) ?? [],
+    pendingApprovals: (parseJsonColumn(row.pending_approvals) as Task['pendingApprovals']) ?? [],
+    approvedApprovalKeys: (parseJsonColumn(row.approved_approval_keys) as Task['approvedApprovalKeys']) ?? [],
     checkpoints: (parseJsonColumn(row.checkpoints) as Task['checkpoints']) ?? [],
     budget: (parseJsonColumn(row.budget) as Task['budget']) ?? undefined,
     budgetUsage: (parseJsonColumn(row.budget_usage) as Task['budgetUsage']) ?? undefined,
@@ -201,6 +217,7 @@ function rowToTask(row: TaskRow): Task {
     parentTaskId: row.parent_task_id ?? undefined,
     projectId: row.project_id ?? undefined,
     activeSkills: (parseJsonColumn(row.active_skills) as Task['activeSkills']) ?? undefined,
+    planMode: row.plan_mode === 'manual' ? 'manual' : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -249,23 +266,26 @@ export const taskStore = {
   save(task: Task): void {
     db.prepare(
       `INSERT INTO tasks (
-         id, goal, status, phase, plan, messages, artifacts, clarifications, checkpoints,
+         id, goal, status, phase, plan, messages, artifacts, clarifications, pending_approvals, approved_approval_keys, checkpoints,
          budget, budget_usage, token_usage, archived_messages, parent_task_id, project_id,
-         active_skills, created_at, updated_at
+         active_skills, plan_mode, created_at, updated_at
        )
        VALUES (
          @id, @goal, @status, @phase, @plan, @messages, @artifacts, @clarifications,
-         @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId,
-         @projectId, @activeSkills, @createdAt, @updatedAt
+         @pendingApprovals, @approvedApprovalKeys, @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId,
+         @projectId, @activeSkills, @planMode, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
          goal=excluded.goal, status=excluded.status, phase=excluded.phase, plan=excluded.plan,
          messages=excluded.messages, artifacts=excluded.artifacts,
-         clarifications=excluded.clarifications, checkpoints=excluded.checkpoints,
+         clarifications=excluded.clarifications, pending_approvals=excluded.pending_approvals,
+         approved_approval_keys=excluded.approved_approval_keys,
+         checkpoints=excluded.checkpoints,
          budget=excluded.budget, budget_usage=excluded.budget_usage,
          token_usage=excluded.token_usage, archived_messages=excluded.archived_messages,
          parent_task_id=excluded.parent_task_id, project_id=excluded.project_id,
-         active_skills=excluded.active_skills, updated_at=excluded.updated_at`,
+         active_skills=excluded.active_skills, plan_mode=excluded.plan_mode,
+         updated_at=excluded.updated_at`,
     ).run({
       id: task.id,
       goal: task.goal,
@@ -275,6 +295,8 @@ export const taskStore = {
       messages: JSON.stringify(task.messages),
       artifacts: JSON.stringify(task.artifacts ?? []),
       clarifications: JSON.stringify(task.clarifications ?? []),
+      pendingApprovals: JSON.stringify(task.pendingApprovals ?? []),
+      approvedApprovalKeys: JSON.stringify(task.approvedApprovalKeys ?? []),
       checkpoints: JSON.stringify(task.checkpoints ?? []),
       budget: task.budget === undefined ? null : JSON.stringify(task.budget),
       budgetUsage: task.budgetUsage === undefined ? null : JSON.stringify(task.budgetUsage),
@@ -283,6 +305,7 @@ export const taskStore = {
       parentTaskId: task.parentTaskId ?? null,
       projectId: task.projectId ?? null,
       activeSkills: task.activeSkills === undefined ? null : JSON.stringify(task.activeSkills),
+      planMode: task.planMode ?? null,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });

@@ -34,12 +34,17 @@ interface ConversationProps {
   plan: PlanStep[];
   /** 当前正在生成的这一轮的流式文本尾巴（仅运行中有值） */
   output: string;
+  /** 模型思考链流式文本（DeepSeek R1/V3 reasoning_content，仅运行中有值） */
+  reasoning: string;
   busy: boolean;
   /** 当前运行轮次的实时工具活动（来自事件流） */
   liveToolActivity: ToolActivity[];
+  /** 是否默认展开工具参数/结果详情。等待审批的工具始终展开。 */
+  defaultToolDetailsOpen?: boolean;
   online?: boolean | null;
   /** 工具审批决策回调（批准/拒绝），sessionApprove 表示本次会话自动批准该工具 */
   onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  onPlanDecision: (approved: boolean) => void;
   onClarificationAnswer: (clarificationId: string, answer: string) => void;
   onArtifactDecision: (artifactId: string, status: "confirmed" | "rejected") => void;
   /** 当前任务是否可恢复（中断/失败等可续跑状态） */
@@ -54,8 +59,6 @@ interface ConversationProps {
   onBranch?: (messageId: string) => void;
   /** 恢复中断的任务 */
   onResume?: () => void;
-  /** 停止当前流式生成 */
-  onStop?: () => void;
 }
 
 interface ToolResultInfo {
@@ -118,10 +121,13 @@ export function Conversation({
   phase,
   plan,
   output,
+  reasoning,
   busy,
   liveToolActivity,
+  defaultToolDetailsOpen = false,
   online = null,
   onToolDecision,
+  onPlanDecision,
   onClarificationAnswer,
   onArtifactDecision,
   canResume = false,
@@ -130,16 +136,18 @@ export function Conversation({
   onUnrevert,
   onBranch,
   onResume,
-  onStop,
 }: ConversationProps) {
   const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const previousTaskIdRef = useRef<string | null>(null);
 
-  // 只在实时运行时跟随最新输出；历史回看保持自然阅读位置。
+  const hasStreamingContent = output.trim().length > 0 || reasoning.trim().length > 0;
+  const hasLiveTail = busy || liveToolActivity.length > 0 || phase === "waiting_approval" || hasStreamingContent;
+
+  // 只在实时运行/等待审批时跟随最新输出；历史回看保持自然阅读位置。
   useEffect(() => {
-    if (busy) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [busy, output, phase, plan, status, liveToolActivity, task.messages.length]);
+    if (hasLiveTail) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [hasLiveTail, output, phase, plan, status, liveToolActivity, task.messages.length]);
 
   // 切换历史任务时回到任务顶部，避免复用滚动容器导致摘要被顶栏遮住。
   useEffect(() => {
@@ -160,25 +168,13 @@ export function Conversation({
   const messages = task.messages;
   const resultMap = buildToolResultMap(messages);
 
-  // 运行中时：已结束的历史渲染到“最后一条用户消息”为止，
-  // 当前轮的产出（文本/工具）走实时 live 尾巴，避免与已提交消息重复。
-  let lastUserIndex = -1;
-  messages.forEach((message, index) => {
-    if (message.role === "user") lastUserIndex = index;
-  });
-  const historyEnd = busy ? lastUserIndex : messages.length - 1;
-  const historyMessages = messages.slice(0, historyEnd + 1);
-
-  const hasOutput = output.trim().length > 0;
-  const thinking = busy && !hasOutput && liveToolActivity.length === 0;
-
   return (
     <div className="conversation">
       <div ref={topRef} />
       <div className="conversation-thread">
         {!busy && plan.length > 0 && <PlanCard plan={plan} defaultOpen={false} />}
 
-        {historyMessages.map((message) => {
+        {messages.map((message) => {
           if (message.role === "user") {
             return (
               <UserBubble
@@ -192,17 +188,22 @@ export function Conversation({
             );
           }
           if (message.role === "assistant") {
+            const hasText = message.content.trim().length > 0;
+            const hasReasoning = (message.reasoningContent ?? "").trim().length > 0;
             const tools = toolActivitiesFromAssistant(message, resultMap);
             const artifacts = (task.artifacts ?? []).filter((artifact) => artifact.sourceCallId && tools.some((tool) => tool.id === artifact.sourceCallId));
-            const hasText = message.content.trim().length > 0;
-            if (!hasText && tools.length === 0 && artifacts.length === 0) return null;
+            if (!hasText && !hasReasoning && tools.length === 0 && artifacts.length === 0) return null;
             return (
               <article className="doc-block doc-block-agent" key={message.id}>
                 <DocumentMeta icon={<AgentIcon />} label="Aurevoy" />
                 <div className="doc-body">
                   {tools.length > 0 && (
-                    <ToolActivityList items={tools} onDecision={onToolDecision} />
+                    <ToolRunSummary
+                      items={tools}
+                      defaultOpen={defaultToolDetailsOpen}
+                    />
                   )}
+                  {hasReasoning && <ReasoningBlock content={message.reasoningContent ?? ""} defaultOpen={false} />}
                   {artifacts.length > 0 && (
                     <ArtifactList artifacts={artifacts} onDecision={onArtifactDecision} />
                   )}
@@ -212,11 +213,12 @@ export function Conversation({
               </article>
             );
           }
+          if (message.role === "tool") return null;
           return null;
         })}
 
         {/* 当前运行轮次的实时尾巴 */}
-        {busy && (
+        {hasLiveTail && (
           <div className="aurevoy-agent-runner-container">
             <AgentRunningTimeline
               busy={busy}
@@ -224,9 +226,11 @@ export function Conversation({
               phase={phase}
               status={status}
               plan={plan}
+              output={output}
+              reasoning={reasoning}
               liveToolActivity={liveToolActivity}
               onToolDecision={onToolDecision}
-              onStop={onStop}
+              onPlanDecision={onPlanDecision}
             />
 
             {(task.clarifications ?? []).filter((item) => item.status === "pending").map((clarification) => (
@@ -244,17 +248,10 @@ export function Conversation({
                 onDecision={onArtifactDecision}
               />
             ))}
-
-            {!thinking && hasOutput && (
-              <div className="ai-chat-bubble-reply">
-                <MarkdownRenderer content={output} />
-                <span className="stream-caret" aria-hidden="true" />
-              </div>
-            )}
           </div>
         )}
 
-        {!busy && (
+        {!hasLiveTail && (
           <div className="turn-actions" aria-label={t("conv.turnActions")}>
             {hasArchivedMessages && onUnrevert && (
               <button type="button" className="ghost-btn" onClick={onUnrevert}>
@@ -396,26 +393,18 @@ function UserBubble({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(content);
-  const [pendingSave, setPendingSave] = useState(false);
   const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   function confirmSave(): void {
     const trimmed = draft.trim();
     if (!trimmed) return;
-    setPendingSave(true);
-  }
-
-  function selectMode(mode: RevertMode): void {
-    const trimmed = draft.trim();
     setEditing(false);
-    setPendingSave(false);
-    if (trimmed && trimmed !== content) onEdit?.(messageId, trimmed, mode);
+    if (trimmed && trimmed !== content) onEdit?.(messageId, trimmed, "code_and_conv");
   }
 
   function cancel(): void {
     setDraft(content);
     setEditing(false);
-    setPendingSave(false);
   }
 
   if (editing) {
@@ -437,28 +426,13 @@ function UserBubble({
               }
             }}
           />
-          {pendingSave && (
-            <div className="revert-mode-panel">
-              <span className="revert-mode-label">{t("revert.chooseMode")}</span>
-              <div className="revert-mode-buttons">
-                <button type="button" onClick={() => selectMode("code_and_conv")}>
-                  {t("revert.mode.codeAndConv")}
-                </button>
-                <button type="button" onClick={() => selectMode("conv_only")}>
-                  {t("revert.mode.convOnly")}
-                </button>
-              </div>
-            </div>
-          )}
           <div className="msg-actions">
             <IconButton label={t("action.cancel")} onClick={cancel}>
               <CloseIcon />
             </IconButton>
-            {!pendingSave && (
-              <IconButton label={t("action.editAndRetry")} onClick={confirmSave} className="is-confirm">
-                <CheckIcon />
-              </IconButton>
-            )}
+            <IconButton label={t("action.editAndRetry")} onClick={confirmSave} className="is-confirm">
+              <CheckIcon />
+            </IconButton>
           </div>
         </div>
       </div>
@@ -504,7 +478,7 @@ function UserBubble({
       <div className="msg-actions">
         <CopyButton content={content} />
         {onEdit && (
-          <IconButton label={t("action.edit")} onClick={() => { setDraft(content); setEditing(true); setPendingSave(false); }}>
+          <IconButton label={t("action.edit")} onClick={() => { setDraft(content); setEditing(true); }}>
             <PencilIcon />
           </IconButton>
         )}
@@ -643,17 +617,24 @@ function AgentIcon() {
 
 export function ToolActivityList({
   items,
+  defaultDetailsOpen = false,
   onDecision,
 }: {
   items: ToolActivity[];
+  defaultDetailsOpen?: boolean;
   onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
 }) {
   return (
     <div className="tool-activity">
       {items.map((item) =>
-        // 运行中/待确认始终展示完整卡片；已完成/已失败折叠为单行 chip。
-        item.status === "running" || item.status === "awaiting" ? (
-          <ToolActivityCard key={item.id} item={item} onDecision={onDecision} />
+        // 等待审批始终展示完整卡片；其他状态遵循用户的工具详情偏好。
+        item.status === "awaiting" || defaultDetailsOpen ? (
+          <ToolActivityCard
+            key={item.id}
+            item={item}
+            defaultOpen={defaultDetailsOpen || item.status === "awaiting"}
+            onDecision={onDecision}
+          />
         ) : (
           <ToolChip key={item.id} item={item} onDecision={onDecision} />
         ),
@@ -671,11 +652,6 @@ function ToolChip({
   onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-
-  // 状态回到运行中/待确认时（理论上 List 已分流，这里兜底）自动升级为完整卡片。
-  useEffect(() => {
-    if (item.status === "awaiting" || item.status === "running") setExpanded(true);
-  }, [item.status]);
 
   if (expanded) {
     return (
@@ -889,25 +865,99 @@ function PlanCard({ plan, defaultOpen = true }: { plan: PlanStep[]; defaultOpen?
   );
 }
 
+function PlanApprovalCard({
+  plan,
+  onDecision,
+}: {
+  plan: PlanStep[];
+  onDecision: (approved: boolean) => void;
+}) {
+  const [decided, setDecided] = useState(false);
+
+  function decide(approved: boolean): void {
+    setDecided(true);
+    onDecision(approved);
+  }
+
+  return (
+    <section className="plan-approval-card" aria-label={t("event.planApprovalRequest")}>
+      <div className="plan-approval-head">
+        <strong>{t("event.planApprovalRequest")}</strong>
+        <span>{plan.length} {t("event.unitPlanSteps")}</span>
+      </div>
+      <PlanCard plan={plan} defaultOpen />
+      <div className="plan-approval-actions">
+        <button type="button" disabled={decided} onClick={() => decide(true)}>
+          {t("action.approveOnce")}
+        </button>
+        <button type="button" disabled={decided} onClick={() => decide(false)}>
+          {t("action.reject")}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 interface AgentRunningTimelineProps {
   busy: boolean;
   online: boolean | null;
   phase: TaskPhase | null;
   status: TaskStatus | null;
   plan: PlanStep[];
+  output: string;
+  reasoning: string;
   liveToolActivity: ToolActivity[];
-  onToolDecision: (callId: string, approved: boolean) => void;
-  onStop?: () => void;
+  onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  onPlanDecision: (approved: boolean) => void;
+}
+
+/** 阶段 → 展示信息映射 */
+interface PhaseDisplay {
+  badge: string;
+  icon: ReactNode;
+  label: string;
+  colorClass: string;
+}
+
+function phaseDisplay(phase: TaskPhase | null): PhaseDisplay {
+  switch (phase) {
+    case "initializing":
+      return { badge: "初始化", icon: <PlayIcon />, label: "初始化中", colorClass: "is-init" };
+    case "planning":
+      return { badge: "计划", icon: <ClipboardIcon />, label: "生成执行计划", colorClass: "is-plan" };
+    case "thinking":
+      return { badge: "思考", icon: <BrainIcon className="spin-icon" />, label: "思考中", colorClass: "is-thought" };
+    case "calling_tool":
+      return { badge: "工具", icon: <ToolIcon />, label: "调用工具", colorClass: "is-tool" };
+    case "waiting_approval":
+      return { badge: "确认", icon: <ShieldIcon />, label: "等待审批", colorClass: "is-wait" };
+    case "waiting_clarification":
+      return { badge: "追问", icon: <ChatIcon />, label: "等待回复", colorClass: "is-ask" };
+    case "finalizing":
+      return { badge: "收尾", icon: <CheckIcon />, label: "整理结果", colorClass: "is-done" };
+    case "failed":
+      return { badge: "失败", icon: <ErrorIcon />, label: "任务失败", colorClass: "is-error" };
+    case "cancelled":
+      return { badge: "停止", icon: <StopIcon />, label: "已取消", colorClass: "is-stop" };
+    default:
+      return { badge: "思考", icon: <BrainIcon className="spin-icon" />, label: "思考中", colorClass: "is-thought" };
+  }
 }
 
 export function AgentRunningTimeline({
   busy,
   online,
+  phase,
+  status: _status,
+  plan,
+  output,
+  reasoning,
   liveToolActivity,
   onToolDecision,
-  onStop,
+  onPlanDecision,
 }: AgentRunningTimelineProps) {
   const [seconds, setSeconds] = useState(0);
+  const [reasoningOpen, setReasoningOpen] = useState(false);
 
   useEffect(() => {
     if (!busy) {
@@ -920,6 +970,15 @@ export function AgentRunningTimeline({
     return () => clearInterval(timer);
   }, [busy]);
 
+  const display = phaseDisplay(phase);
+  const hasOutput = output.trim().length > 0;
+  const hasReasoning = reasoning.trim().length > 0;
+  const isThinking = phase === "thinking";
+  const showStreamingReasoning = hasReasoning && (isThinking || busy);
+  const showStreamingOutput = hasOutput && (isThinking || busy);
+  const pendingApprovalTools = liveToolActivity.filter((item) => item.status === "awaiting");
+  const awaitingPlanApproval = phase === "waiting_approval" && pendingApprovalTools.length === 0 && plan.some((step) => step.status === "proposed");
+
   return (
     <div className="aurevoy-agent-runner-box">
       {online === false && (
@@ -929,230 +988,235 @@ export function AgentRunningTimeline({
           </div>
           <div className="node-content">
             <span className="badge-network">NETWORK</span>
-            <span className="meta-text">正在重新连接 3/5 ...</span>
+            <span className="meta-text">正在重新连接…</span>
           </div>
         </div>
       )}
 
-      {liveToolActivity.map((item) => {
-        const isFile = /file|dir|write|read|grep|find|artifact/i.test(item.name);
-        const isBash = /cmd|command|exec|shell|terminal/i.test(item.name);
+      {awaitingPlanApproval ? (
+        <PlanApprovalCard plan={plan} onDecision={onPlanDecision} />
+      ) : !pendingApprovalTools.length && plan.length > 0 && phase !== "planning" && phase !== "initializing" && (
+        <PlanCard plan={plan} defaultOpen={false} />
+      )}
 
-        let typeLabel = "Tool";
-        let icon = <ToolIcon />;
-        let colorClass = "is-tool";
+      {liveToolActivity.length > 0 && (
+        <ToolRunSummary items={liveToolActivity} onDecision={onToolDecision} />
+      )}
 
-        if (isFile) {
-          typeLabel = "Read/Write";
-          icon = <FileIcon />;
-          colorClass = "is-file";
-        } else if (isBash) {
-          typeLabel = "Bash";
-          icon = <TerminalIcon />;
-          colorClass = "is-bash";
-        }
-
-        let targetDesc = item.name;
-        const argsObj = item.args as any;
-        if (argsObj) {
-          if (argsObj.TargetFile) targetDesc = getFilename(argsObj.TargetFile);
-          else if (argsObj.AbsolutePath) targetDesc = getFilename(argsObj.AbsolutePath);
-          else if (argsObj.CommandLine) targetDesc = truncateCommandLine(argsObj.CommandLine);
-          else if (argsObj.Query) targetDesc = `Search: "${argsObj.Query}"`;
-          else if (argsObj.path) targetDesc = getFilename(argsObj.path);
-        }
-
-        return (
-          <TimelineToolNode
-            key={item.id}
-            item={item}
-            icon={icon}
-            typeLabel={typeLabel}
-            colorClass={colorClass}
-            targetDesc={targetDesc}
-            isBash={isBash}
-            onDecision={onToolDecision}
-          />
-        );
-      })}
-
-      {busy && (
+      {busy && liveToolActivity.length === 0 && (
         <div className="runner-node is-active fade-in-up">
-          <div className="node-dot is-loading">
-            <BrainIcon className="spin-icon" />
+          <div className={`node-dot ${isThinking ? "is-loading" : ""} ${display.colorClass}`}>
+            {display.icon}
           </div>
           <div className="node-content">
-            <span className="badge-thought">THOUGHT</span>
-            <span className="meta-text">for {seconds}s...</span>
+            <span className={`badge-thought ${display.colorClass}`}>{display.badge}</span>
+            <span className="meta-text">{display.label} · {seconds}s</span>
           </div>
         </div>
       )}
 
-      {busy && onStop && (
-        <div className="runner-global-controls fade-in-up">
-          <button type="button" className="btn-stop-global" onClick={onStop}>
-            <StopIcon />
-            <span>{t("action.stop") || "停止"}</span>
-          </button>
+      {/* 思考链（collapsible reasoning） */}
+      {showStreamingReasoning && (
+        <ReasoningBlock
+          content={reasoning}
+          defaultOpen={reasoningOpen}
+          onToggle={setReasoningOpen}
+          streaming={busy}
+        />
+      )}
+
+      {/* 流式输出文本（thinking 阶段实时打字机效果） */}
+      {showStreamingOutput && !hasReasoning && (
+        <div className="ai-chat-bubble-reply stream-preview">
+          <MarkdownRenderer content={output} />
+          {busy && <span className="stream-caret" aria-hidden="true" />}
         </div>
       )}
+
+      {/* 有思考链时，最终文本在折叠区下方展示 */}
+      {showStreamingOutput && hasReasoning && (
+        <div className="ai-chat-bubble-reply stream-preview stream-after-reasoning">
+          <MarkdownRenderer content={output} />
+          {busy && <span className="stream-caret" aria-hidden="true" />}
+        </div>
+      )}
+
     </div>
   );
 }
 
-function TimelineToolNode({
+function ToolRunSummary({
+  items,
+  defaultOpen = false,
+  onDecision,
+}: {
+  items: ToolActivity[];
+  defaultOpen?: boolean;
+  onDecision?: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+}) {
+  const awaiting = items.filter((item) => item.status === "awaiting");
+  const [open, setOpen] = useState(defaultOpen || awaiting.length > 0);
+  const running = items.filter((item) => item.status === "running").length;
+  const failed = items.filter((item) => item.status === "error").length;
+  const done = items.filter((item) => item.status === "ok").length;
+  const groupedNames = summarizeToolNames(items);
+  const statusText = awaiting.length
+    ? `等待确认 ${awaiting.length}`
+    : running
+      ? `执行中 ${running}`
+      : failed
+        ? `失败 ${failed}`
+        : `完成 ${done}`;
+
+  useEffect(() => {
+    if (awaiting.length > 0) setOpen(true);
+  }, [awaiting.length]);
+
+  return (
+    <section className="tool-run-summary" data-status={awaiting.length ? "awaiting" : running ? "running" : failed ? "error" : "ok"}>
+      <div className="tool-run-head">
+        <span className="tool-run-dot" aria-hidden="true" />
+        <span className="tool-run-title">执行工具</span>
+        <span className="tool-run-names">{groupedNames}</span>
+        <span className="tool-run-status">{statusText}</span>
+        <button type="button" className="tool-run-toggle" onClick={() => setOpen((value) => !value)}>
+          {open ? "收起" : "详情"}
+        </button>
+      </div>
+      {open && (
+        <div className="tool-run-details">
+          {items.map((item) => (
+            <div key={item.id} className="tool-run-detail-row" data-status={item.status}>
+              <span>{item.name}</span>
+              <small>{toolTargetLabel(item)}</small>
+              <em>{toolStatusLabel(item.status)}</em>
+            </div>
+          ))}
+        </div>
+      )}
+      {onDecision && awaiting.map((item) => (
+        <ApprovalInline key={item.id} item={item} onDecision={onDecision} />
+      ))}
+    </section>
+  );
+}
+
+function ReasoningBlock({
+  content,
+  defaultOpen = false,
+  streaming = false,
+  onToggle,
+}: {
+  content: string;
+  defaultOpen?: boolean;
+  streaming?: boolean;
+  onToggle?: (open: boolean) => void;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  useEffect(() => {
+    setOpen(defaultOpen);
+  }, [defaultOpen]);
+
+  function toggle(event: React.MouseEvent<HTMLElement>): void {
+    event.preventDefault();
+    const next = !open;
+    setOpen(next);
+    onToggle?.(next);
+  }
+
+  return (
+    <details className="reasoning-block" open={open}>
+      <summary className="reasoning-summary" onClick={toggle}>
+        <span className="reasoning-dot" aria-hidden="true" />
+        <span>思考过程</span>
+        <span className="reasoning-toggle">{open ? "▾" : "▸"}</span>
+      </summary>
+      <div className="reasoning-content">
+        <MarkdownRenderer content={content} />
+        {streaming && <span className="stream-caret" aria-hidden="true" />}
+      </div>
+    </details>
+  );
+}
+
+function ApprovalInline({
   item,
-  icon,
-  typeLabel,
-  colorClass,
-  targetDesc,
-  isBash,
   onDecision,
 }: {
   item: ToolActivity;
-  icon: ReactNode;
-  typeLabel: string;
-  colorClass: string;
-  targetDesc: string;
-  isBash: boolean;
   onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState(item.status === "awaiting" || item.status === "running");
   const [decided, setDecided] = useState(false);
-
-  useEffect(() => {
-    if (item.status === "awaiting") setExpanded(true);
-  }, [item.status]);
-
-  const hasDetail = item.output !== undefined || item.error !== undefined || item.args !== undefined;
 
   function handleDecide(approved: boolean, sessionApprove?: boolean) {
     setDecided(true);
     onDecision(item.id, approved, sessionApprove);
   }
 
-  const statusText =
-    item.status === "awaiting"
-      ? "Awaiting Approval"
-      : item.status === "running"
-        ? "Running..."
-        : item.status === "ok"
-          ? "Success"
-          : "Failed";
-
-  const isRunning = item.status === "running";
-  const badgeType = colorClass.replace("is-", "");
-
   return (
-    <div className={`runner-node is-group ${isRunning ? "is-active" : ""}`}>
-      <div className={`node-dot is-${badgeType} ${isRunning ? "is-loading" : ""}`}>
-        {isRunning ? <BrainIcon className="spin-icon" /> : icon}
-      </div>
-      <div className="node-content">
-        <div
-          className="tool-header"
-          onClick={() => hasDetail && setExpanded(!expanded)}
-          style={{ cursor: hasDetail ? "pointer" : "default" }}
-        >
-          <span className={`badge-${badgeType}`}>{typeLabel.toUpperCase()}</span>
-          <span className="command-name">{targetDesc}</span>
-          <span className={`status-alert is-${item.status}`}>{statusText}</span>
-          {hasDetail && <span className="expand-arrow">{expanded ? "⌃" : "›"}</span>}
-        </div>
-
-        {expanded && hasDetail && (
-          <div className="tool-io-box fade-in-up">
-            {isBash ? (
-              <>
-                {item.args && (
-                  <div className="console-line">
-                    <span className="terminal-in">IN</span>
-                    <pre>{(item.args as any).CommandLine ?? safeStringify(item.args)}</pre>
-                  </div>
-                )}
-                {item.status === "error" && item.error && (
-                  <div className="console-line">
-                    <span className="terminal-out is-err">ERR</span>
-                    <pre>{item.error}</pre>
-                  </div>
-                )}
-                {item.output !== undefined && (
-                  <div className="console-line">
-                    <span className="terminal-out">OUT</span>
-                    <pre>{safeStringify(item.output)}</pre>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                {item.args && safeStringify(item.args) !== "{}" && (
-                  <div className="console-line">
-                    <span className="terminal-in">ARGS</span>
-                    <pre>{safeStringify(item.args)}</pre>
-                  </div>
-                )}
-                {item.status === "error" && item.error && (
-                  <div className="console-line">
-                    <span className="terminal-out is-err">ERR</span>
-                    <pre>{item.error}</pre>
-                  </div>
-                )}
-                {item.output !== undefined && (
-                  <div className="console-line">
-                    <span className="terminal-out">RESULT</span>
-                    <pre>{safeStringify(item.output)}</pre>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-
-        {item.status === "awaiting" && (
-          <div className="approval-panel">
-            <div className="approval-tip">
-              ⚠️ {t("tool.approvalHint")} {item.riskLevel && `· ${item.riskLevel}`}
-            </div>
-            <div className="approval-actions">
-              <button
-                type="button"
-                className="btn-approve-once"
-                disabled={decided}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDecide(true);
-                }}
-              >
-                {t("action.approveOnce")}
-              </button>
-              <button
-                type="button"
-                className="btn-approve-session"
-                disabled={decided}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDecide(true, true);
-                }}
-              >
-                {t("action.approveSession")}
-              </button>
-              <button
-                type="button"
-                className="btn-reject"
-                disabled={decided}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDecide(false);
-                }}
-              >
-                {t("action.reject")}
-              </button>
-            </div>
-          </div>
-        )}
+    <div className="tool-run-approval">
+      <span>{t("tool.approvalHint")} · {toolApprovalLabel(item)}</span>
+      <div className="tool-run-approval-actions">
+        <button type="button" disabled={decided} onClick={() => handleDecide(true)}>
+          {t("action.approveOnce")}
+        </button>
+        <button type="button" disabled={decided} onClick={() => handleDecide(true, true)}>
+          {t("action.approveSession")}
+        </button>
+        <button type="button" disabled={decided} onClick={() => handleDecide(false)}>
+          {t("action.reject")}
+        </button>
       </div>
     </div>
   );
+}
+
+function toolApprovalLabel(item: ToolActivity): string {
+  if (item.name !== "execute_command") return item.name;
+  const argsObj = item.args as Record<string, unknown> | null;
+  if (!argsObj || typeof argsObj !== "object") return item.name;
+  const command = typeof argsObj.command === "string" ? argsObj.command : "";
+  const commandArgs = Array.isArray(argsObj.args)
+    ? argsObj.args.map((arg) => String(arg))
+    : [];
+  return truncateCommandLine([command, ...commandArgs].filter(Boolean).join(" ")) || item.name;
+}
+
+function summarizeToolNames(items: ToolActivity[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
+  const entries = [...counts.entries()];
+  const visible = entries.slice(0, 3).map(([name, count]) => (count > 1 ? `${name} x${count}` : name));
+  const hidden = entries.length - visible.length;
+  return hidden > 0 ? `${visible.join("、")} +${hidden}` : visible.join("、");
+}
+
+function toolStatusLabel(status: ToolActivity["status"]): string {
+  switch (status) {
+    case "awaiting":
+      return "待确认";
+    case "running":
+      return "执行中";
+    case "ok":
+      return "完成";
+    case "error":
+      return "失败";
+  }
+}
+
+function toolTargetLabel(item: ToolActivity): string {
+  const argsObj = item.args as Record<string, unknown> | null;
+  if (!argsObj || typeof argsObj !== "object") return "";
+  if (item.name === "execute_command") return toolApprovalLabel(item);
+  const target =
+    argsObj.TargetFile ??
+    argsObj.AbsolutePath ??
+    argsObj.path ??
+    argsObj.filePath ??
+    argsObj.CommandLine ??
+    argsObj.Query;
+  return typeof target === "string" ? truncateCommandLine(getFilename(target) || target) : "";
 }
 
 function getFilename(pathStr: string): string {
@@ -1197,34 +1261,6 @@ function BrainIcon({ className }: { className?: string }) {
   );
 }
 
-function FileIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
-      <path
-        d="M4.5 3.5h7l4 4v9a1 1 0 01-1 1h-10a1 1 0 01-1-1v-12a1 1 0 011-1z"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
-      <path d="M11.5 3.5v4h4" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function TerminalIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
-      <path
-        d="M4.5 6.5l4 3.5-4 3.5M10 13.5h5.5"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 function StopIcon() {
   return (
     <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true" fill="none">
@@ -1237,6 +1273,49 @@ function ToolIcon() {
   return (
     <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
       <circle cx="10" cy="10" r="3" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <polygon points="5,2 18,10 5,18" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ClipboardIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <rect x="6" y="2" width="10" height="14" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M4 5h2v11.5A1.5 1.5 0 007.5 18H15" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <path d="M10 2L3 5v5c0 3.5 3 7 7 8 4-1 7-4.5 7-8V5L10 2z" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <path d="M3 5h14v9H7l-4 3V5z" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ErrorIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
+      <line x1="7" y1="7" x2="13" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="13" y1="7" x2="7" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }

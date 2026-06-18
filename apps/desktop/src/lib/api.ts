@@ -360,6 +360,20 @@ export async function deleteProject(id: string): Promise<void> {
   if (!res.ok) throw new Error(`delete project failed: ${res.status}`);
 }
 
+/** 审批 Plan Agent 生成的执行计划 */
+export async function approvePlan(
+  taskId: string,
+  approved: boolean,
+  reason?: string,
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/plan-approval`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approved, reason }),
+  });
+  if (!res.ok) throw new Error(`plan approval failed: ${res.status}`);
+}
+
 /**
  * 订阅某个任务的 SSE 事件流。
  * 返回一个 EventSource，调用方可在不需要时 close()。

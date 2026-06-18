@@ -3,13 +3,11 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
   FileSnapshot,
-  GeneratedPlan,
   Message,
   MessageAttachment,
   MessageToolCall,
   PlanStep,
   RevertMode,
-  ScoutReport,
   Task,
   TaskArtifact,
   TaskErrorCategory,
@@ -27,6 +25,7 @@ import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/p
 import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillSystemMessage } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 import { skillRegistry } from '../skills/registry.js';
+import { runPlanAgent } from './plan-agent.js';
 import { withRetry } from './retry.js';
 import { taskStore, memoryStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
@@ -52,6 +51,8 @@ const DUPLICATE_CALL_LIMIT = 3;
 const MAX_TOOL_CALLS_PER_TURN = 10;
 /** P6: 写入类工具（需要执行前文件快照） */
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_artifact', 'copy_file', 'move_file', 'rename_file']);
+/** 基础只读工具免审批；其余工具仅允许当前任务会话内临时批准。 */
+const APPROVAL_FREE_TOOLS = new Set(['read_file', 'list_directory']);
 /** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
 const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'running', 'paused'];
 /** 进行中任务的取消句柄 */
@@ -62,10 +63,36 @@ const pendingApprovals = new Map<
   string,
   Map<string, (approved: boolean, sessionApprove?: boolean) => void>
 >();
-/** 当前任务会话内自动批准的工具名集合（会话结束即清空） */
-const sessionApprovedTools = new Set<string>();
 /** 等待中的用户追问：taskId → (clarificationId → 回复回调) */
 const pendingClarifications = new Map<string, Map<string, (answer: string | null) => void>>();
+
+/** 等待中的计划审批：taskId → 决策回调（approved + 可选拒绝原因） */
+const pendingPlanApprovals = new Map<string, (approved: boolean, reason?: string) => void>();
+
+/** API 层调用：投递用户的计划审批决策到等待中的 Plan Agent 循环 */
+export function resolvePlanApproval(taskId: string, approved: boolean, reason?: string): boolean {
+  const resolve = pendingPlanApprovals.get(taskId);
+  if (!resolve) return false;
+  pendingPlanApprovals.delete(taskId);
+  resolve(approved, reason);
+  return true;
+}
+
+/** 等待用户对 Plan Agent 生成的计划做出审批决策 */
+function waitForPlanApproval(taskId: string, signal: AbortSignal): Promise<{ approved: boolean; reason?: string }> {
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      pendingPlanApprovals.delete(taskId);
+      resolve({ approved: false, reason: 'cancelled' });
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    pendingPlanApprovals.set(taskId, (approved, reason) => {
+      signal.removeEventListener('abort', onAbort);
+      pendingPlanApprovals.delete(taskId);
+      resolve({ approved, reason });
+    });
+  });
+}
 
 /** 取消一个进行中的任务（hard cancel：中断 fetch 流） */
 export function cancelTask(taskId: string): boolean {
@@ -75,6 +102,7 @@ export function cancelTask(taskId: string): boolean {
   const clarifications = pendingClarifications.get(taskId);
   for (const resolve of clarifications?.values() ?? []) resolve(null);
   pendingClarifications.delete(taskId);
+  pendingApprovals.delete(taskId);
   return true;
 }
 
@@ -433,14 +461,23 @@ export async function compactTask(
   return { task, originalCount, summaryLength };
 }
 
-/** 解析用户输入中的斜杠命令前缀。返回 skill 名称和去除前缀后的文本。 */
-function parseSlashCommand(content: string): { skillName: string | null; text: string } {
+interface ParsedSlashCommand {
+  skillName: string | null;
+  planRequested: boolean;
+  text: string;
+}
+
+/** 解析用户输入中的斜杠命令前缀。/plan 只触发 Plan Agent，不作为 skill。 */
+function parseSlashCommand(content: string): ParsedSlashCommand {
   const match = content.match(/^\/(\S+)(?:\s+(.*))?/s);
-  if (!match) return { skillName: null, text: content };
+  if (!match) return { skillName: null, planRequested: false, text: content };
   const skillName = match[1];
   // 保留 /compact 为前端专有命令，不当作 skill
-  if (skillName === 'compact') return { skillName: null, text: content };
-  return { skillName, text: match[2]?.trim() || '' };
+  if (skillName === 'compact') return { skillName: null, planRequested: false, text: content };
+  if (skillName === 'plan') {
+    return { skillName: null, planRequested: true, text: match[2]?.trim() || '' };
+  }
+  return { skillName, planRequested: false, text: match[2]?.trim() || '' };
 }
 
 /**
@@ -457,6 +494,11 @@ export function addUserTurn(
   // Skill: 解析斜杠命令前缀
   const parsed = parseSlashCommand(content);
   let messageContent = content;
+  task.planMode = parsed.planRequested ? 'manual' : undefined;
+  if (parsed.planRequested) {
+    messageContent = parsed.text || task.goal;
+    task.goal = messageContent;
+  }
   if (parsed.skillName) {
     const skill = skillRegistry.get(parsed.skillName);
     if (skill) {
@@ -558,6 +600,56 @@ function waitForApproval(
   });
 }
 
+function approvalKeyForCall(call: ToolCall): string {
+  if (call.toolName !== 'execute_command') return `tool:${call.toolName}`;
+  const args = call.args as Record<string, unknown>;
+  const command = typeof args.command === 'string' ? args.command.trim() : '';
+  const commandArgs = Array.isArray(args.args)
+    ? args.args.map((item) => String(item))
+    : [];
+  const cwd = typeof args.cwd === 'string' ? args.cwd.trim() : '';
+  const envEntries =
+    args.env && typeof args.env === 'object' && !Array.isArray(args.env)
+      ? Object.entries(args.env as Record<string, unknown>)
+          .filter(([, value]) => typeof value === 'string')
+          .sort(([a], [b]) => a.localeCompare(b))
+      : [];
+  return JSON.stringify({
+    tool: call.toolName,
+    command,
+    args: commandArgs,
+    cwd,
+    env: envEntries,
+  });
+}
+
+function isApprovalFreeTool(toolName: string): boolean {
+  return APPROVAL_FREE_TOOLS.has(toolName);
+}
+
+function addPendingApproval(task: Task, call: ToolCall, riskLevel: ToolRiskLevel): void {
+  const next = (task.pendingApprovals ?? []).filter((item) => item.call.id !== call.id);
+  next.push({ call, riskLevel, createdAt: new Date().toISOString() });
+  task.pendingApprovals = next;
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+}
+
+function removePendingApproval(task: Task, callId: string): void {
+  const next = (task.pendingApprovals ?? []).filter((item) => item.call.id !== callId);
+  if (next.length === (task.pendingApprovals ?? []).length) return;
+  task.pendingApprovals = next;
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+}
+
+function rememberSessionApproval(task: Task, key: string): void {
+  const next = [...new Set([...(task.approvedApprovalKeys ?? []), key])];
+  task.approvedApprovalKeys = next;
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+}
+
 /** 等待用户回复追问；超时或任务取消返回 null，不伪造用户输入。 */
 function waitForClarification(
   taskId: string,
@@ -601,27 +693,32 @@ export function createTask(
   attachments?: MessageAttachment[],
 ): Task {
   const now = new Date().toISOString();
+  const parsed = parseSlashCommand(goal);
+  const taskGoal = parsed.planRequested ? (parsed.text || goal) : goal;
   const userMsg: Message = {
     id: randomUUID(),
     role: 'user',
-    content: goal,
+    content: taskGoal,
     createdAt: now,
     attachments,
   };
   const task: Task = {
     id: randomUUID(),
-    goal,
+    goal: taskGoal,
     status: 'pending',
     phase: 'initializing',
     plan: [],
     messages: [userMsg],
     artifacts: [],
     clarifications: [],
+    pendingApprovals: [],
+    approvedApprovalKeys: [],
     checkpoints: [],
     budget: normalizeBudget(budget),
     budgetUsage: initialBudgetUsage(),
     tokenUsage: { available: false, provider: getProviderName(), model: config.llm.model },
     projectId: projectId ?? undefined,
+    planMode: parsed.planRequested ? 'manual' : undefined,
     createdAt: now,
     updatedAt: now,
   };
@@ -629,7 +726,7 @@ export function createTask(
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
     summary: '任务已创建',
-    data: { goal },
+    data: { goal: taskGoal, planMode: task.planMode },
   });
   return task;
 }
@@ -808,8 +905,8 @@ async function buildAttachmentSystemMessage(task: Task): Promise<string | null> 
  * 含防死循环（指纹去重）、重试（指数退避）、取消（AbortController）与每轮持久化。
  */
 export async function runTask(task: Task): Promise<void> {
-  // 新任务/恢复运行清空上轮会话的临时自动批准集
-  sessionApprovedTools.clear();
+  task.pendingApprovals = [];
+  taskStore.save(task);
 
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
@@ -821,13 +918,8 @@ export async function runTask(task: Task): Promise<void> {
     taskStore.save(task);
   };
 
-  task.plan = await buildInitialPlan(task, taskWorkspace, abortController.signal);
   let activeStepIndex = task.plan.findIndex((step) => step.status === 'running');
   if (activeStepIndex < 0) activeStepIndex = 0;
-  task.plan = task.plan.map((step, index) => ({
-    ...step,
-    status: index === activeStepIndex ? 'running' : step.status,
-  }));
 
   const updateStep = (description: string, status: PlanStep['status']) => {
     const index = Math.max(0, Math.min(activeStepIndex, task.plan.length - 1));
@@ -869,6 +961,91 @@ export async function runTask(task: Task): Promise<void> {
     writeTrace(task.id, 'phase', phase, { ok: true, summary: detail });
     taskEvents.publish({ type: 'phase', taskId: task.id, phase, detail });
   };
+
+  // ---- 计划阶段：按需调用 Plan Agent ----
+  const hasApprovedPlan = task.plan.length > 1 && task.plan.some((s) => s.status === 'running');
+  if (!hasApprovedPlan) {
+    if (task.planMode === 'manual') {
+      // 按需启动 Plan Agent：侦查 + LLM 生成计划
+      setRuntimePhase('planning', '用户通过 /plan 请求生成执行计划…', 'planning');
+      const planOutput = await runPlanAgent({
+        taskId: task.id,
+        goal: task.goal,
+        workspaceDir: taskWorkspace,
+        signal: abortController.signal,
+      });
+
+      if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+
+      // 生成步骤并标记为 'proposed'（待审批）
+      const proposedPlan: PlanStep[] = planOutput.steps.map((step, index) => ({
+        id: `step-${index + 1}`,
+        description: step.description,
+        status: 'proposed' as const,
+        toolsExpected: step.toolsExpected,
+        dependsOn: step.dependsOn,
+        verifiable: step.verifiable,
+        source: planOutput.source,
+      }));
+
+      // 推送计划审批卡片到前端
+      task.plan = proposedPlan;
+      touch();
+      taskEvents.publish({
+        type: 'plan_generated',
+        taskId: task.id,
+        plan: proposedPlan,
+        source: planOutput.source,
+      });
+      taskEvents.publish({
+        type: 'plan_approval_request',
+        taskId: task.id,
+        plan: proposedPlan,
+        reasoning: `Plan Agent（${planOutput.source}）生成 ${proposedPlan.length} 步计划，预估 ${planOutput.estimatedIterations} 轮`,
+        scoutReport: planOutput.scoutReport,
+      });
+
+      // 等待用户审批
+      setRuntimePhase('waiting_approval', '等待审批执行计划…', 'paused');
+      const decision = await waitForPlanApproval(task.id, abortController.signal);
+
+      if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+
+      if (decision.approved) {
+        // 批准：将 proposed → running / pending
+        task.plan = proposedPlan.map((step, index) => ({
+          ...step,
+          status: index === 0 ? 'running' : 'pending',
+        }));
+        taskEvents.publish({
+          type: 'plan_approval_resolved',
+          taskId: task.id,
+          approved: true,
+        });
+      } else {
+        // 拒绝：换单步 plan 直接执行，拒绝原因回灌给 Default Agent
+        task.plan = [{
+          id: 'exec',
+          description: decision.reason
+            ? `用户拒绝了计划（原因：${decision.reason}），直接执行任务`
+            : '用户拒绝了计划，直接执行任务',
+          status: 'running',
+        }];
+        taskEvents.publish({
+          type: 'plan_approval_resolved',
+          taskId: task.id,
+          approved: false,
+          reason: decision.reason,
+        });
+      }
+    } else {
+      // 默认任务：不自动调用 Plan Agent，单步直接进入 Default Agent。
+      task.plan = [{ id: 'exec', description: '执行任务', status: 'running' }];
+      taskEvents.publish({ type: 'plan_generated', taskId: task.id, plan: task.plan, source: 'heuristic' });
+    }
+    touch();
+  }
+
   const handleAskUserTool = async (call: ToolCall, iteration: number): Promise<Message> => {
     const question =
       typeof call.args.question === 'string' && call.args.question.trim()
@@ -1016,9 +1193,13 @@ export async function runTask(task: Task): Promise<void> {
 
       // Skill: 应用工具白名单 + 注入 skill system prompt
       const activeSkillName = task.activeSkills?.[0];
-      const allowedToolNames = activeSkillName
+      const skillAllowedTools = activeSkillName
         ? skillRegistry.getAllowedTools(activeSkillName)
         : undefined;
+      const allowedToolNames =
+        skillAllowedTools && config.sandbox.commandExecutionEnabled
+          ? [...new Set([...skillAllowedTools, 'execute_command'])]
+          : skillAllowedTools;
       const toolDescriptors = toolRegistry.list(allowedToolNames);
       const skillMessage = buildSkillSystemMessage(activeSkillName);
 
@@ -1052,7 +1233,10 @@ export async function runTask(task: Task): Promise<void> {
                 assertBudgetWithinLimits(task);
                 taskEvents.publish({ type: 'token', taskId: task.id, delta: chunk.textDelta });
               }
-              if (chunk.reasoningContentDelta) reasoningContent += chunk.reasoningContentDelta;
+              if (chunk.reasoningContentDelta) {
+                reasoningContent += chunk.reasoningContentDelta;
+                taskEvents.publish({ type: 'reasoning', taskId: task.id, delta: chunk.reasoningContentDelta });
+              }
               if (chunk.done) {
                 finishReason = chunk.finishReason;
                 toolCalls = chunk.toolCallsSnapshot ?? [];
@@ -1190,15 +1374,14 @@ export async function runTask(task: Task): Promise<void> {
       const toExecute = validatedCalls.filter(
         (v) => !v.skipReason && v.call.toolName !== 'ask_user',
       );
-      // 自动批准：safe 风险 OR 全局设置 auto-approve OR 本次会话已允许
-      const approvedTools = new Set([
-        ...config.sandbox.autoApprovedTools,
-        ...sessionApprovedTools,
-      ]);
-      const isAutoApproved = (name: string) => approvedTools.has(name);
+      // 审批规则：read_file/list_directory 免审批；其他工具只允许本对话中已批准的指纹通过。
+      const sessionApprovedApprovalKeys = new Set(task.approvedApprovalKeys ?? []);
+      const isAutoApproved = (v: ValidatedCall) =>
+        isApprovalFreeTool(v.call.toolName) ||
+        sessionApprovedApprovalKeys.has(approvalKeyForCall(v.call));
 
       const isParallelSafe = (v: ValidatedCall) =>
-        (v.risk === 'safe' || isAutoApproved(v.call.toolName)) &&
+        isAutoApproved(v) &&
         toolRegistry.executionPolicyOf(v.call.toolName).parallelizable !== false;
       const safeOnes = toExecute.filter(isParallelSafe);
       const riskyOnes = toExecute.filter((v) => !isParallelSafe(v));
@@ -1344,6 +1527,12 @@ export async function runTask(task: Task): Promise<void> {
         // 并发发送所有审批请求
         const approvalResults = await Promise.all(
           riskyOnes.map(async (v) => {
+            addPendingApproval(task, v.call, v.risk);
+            const approval = waitForApproval(
+              task.id,
+              v.tc.id,
+              abortController.signal,
+            );
             taskEvents.publish({
               type: 'approval_request',
               taskId: task.id,
@@ -1351,14 +1540,11 @@ export async function runTask(task: Task): Promise<void> {
               riskLevel: v.risk,
             });
             updateStep(`等待确认：${v.call.toolName}`, 'paused');
-            const result = await waitForApproval(
-              task.id,
-              v.tc.id,
-              abortController.signal,
-            );
+            const result = await approval;
             if (result.approved && result.sessionApprove) {
-              sessionApprovedTools.add(v.call.toolName);
+              rememberSessionApproval(task, approvalKeyForCall(v.call));
             }
+            removePendingApproval(task, v.call.id);
             writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
             return { v, approved: result.approved };
           }),
@@ -1416,410 +1602,6 @@ export async function runTask(task: Task): Promise<void> {
 
 // ---------------- 内部辅助 ----------------
 
-/** 侦查阶段可用的工具（仅 safe 只读工具，不经过审批门）。 */
-const SCOUT_TOOL_NAMES = new Set(['list_directory', 'read_file', 'search_files']);
-
-/**
- * P1: 构建初始计划（异步）。
- *
- * 流程：
- * 1. 如果已有 >1 个未完成步骤（resume），直接复用
- * 2. 如果启用 LLM 规划 → 先侦查工作区，再让 LLM 生成结构化计划
- * 3. LLM 规划失败或未启用 → 回退到正则启发式计划
- */
-async function buildInitialPlan(
-  task: Task,
-  taskWorkspace: string,
-  signal: AbortSignal,
-): Promise<PlanStep[]> {
-  const existing = task.plan.filter((step) => step.status !== 'completed');
-  if (existing.length > 1) return task.plan;
-
-  if (config.agent.llmPlanningEnabled) {
-    try {
-      taskEvents.publish({ type: 'scout_started', taskId: task.id });
-      writeTrace(task.id, 'phase', 'planning', {
-        ok: true,
-        summary: '开始侦查工作区以制定计划',
-      });
-
-      const scoutReport = await runScoutPhase(task.goal, taskWorkspace, signal);
-
-      if (scoutReport && !signal.aborted) {
-        taskEvents.publish({ type: 'scout_report', taskId: task.id, report: scoutReport });
-        writeTrace(task.id, 'phase', 'planning', {
-          ok: true,
-          summary: `侦查完成：${scoutReport.keyFiles.length} 个关键文件，${scoutReport.rounds} 轮`,
-          data: { scoutReport },
-        });
-      }
-
-      if (scoutReport && !signal.aborted) {
-        const generated = await generatePlanViaLLM(task.goal, scoutReport, signal);
-        if (generated && generated.steps.length > 0 && !signal.aborted) {
-          const plan = generated.steps.map((step, index): PlanStep => ({
-            id: `step-${index + 1}`,
-            description: step.description,
-            status: index === 0 ? 'running' : 'pending',
-            toolsExpected: step.toolsExpected,
-            dependsOn: step.dependsOn,
-            verifiable: step.verifiable,
-            source: 'llm' as const,
-          }));
-          taskEvents.publish({ type: 'plan_generated', taskId: task.id, plan, source: 'llm' });
-          writeTrace(task.id, 'phase', 'planning', {
-            ok: true,
-            summary: `LLM 生成 ${plan.length} 步计划，预估 ${generated.estimatedIterations} 轮，风险 ${generated.riskLevel}`,
-            data: { generatedPlan: generated },
-          });
-          return plan;
-        }
-      }
-    } catch (err) {
-      writeTrace(task.id, 'error', 'planning', {
-        ok: false,
-        errorCategory: classifyError(err),
-        errorMessage: err instanceof Error ? err.message : String(err),
-        summary: 'LLM 规划失败，回退到启发式计划',
-      });
-    }
-  }
-
-  // 回退：正则启发式计划
-  const generated = inferStructuredPlan(task.goal);
-  if (generated.length === 0) {
-    return [{ id: 'exec', description: '正在执行任务…', status: 'running' }];
-  }
-  const fallbackPlan = generated.map((description, index): PlanStep => ({
-    id: `step-${index + 1}`,
-    description,
-    status: index === 0 ? 'running' : 'pending',
-    source: 'heuristic' as const,
-  }));
-  taskEvents.publish({ type: 'plan_generated', taskId: task.id, plan: fallbackPlan, source: 'heuristic' });
-  writeTrace(task.id, 'phase', 'planning', {
-    ok: true,
-    summary: `使用启发式计划（${fallbackPlan.length} 步）`,
-    data: { plan: fallbackPlan },
-  });
-  return fallbackPlan;
-}
-
-// ---- 侦查阶段（P1）----
-
-/**
- * 侦查工作区：用受限的 safe 工具快速了解文件结构、关键文件和约束。
- * 最多 N 轮 LLM 调用，只使用 list_directory / read_file / search_files。
- * 返回结构化侦查报告，供 plan generation 使用。
- */
-async function runScoutPhase(
-  goal: string,
-  workspaceDir: string,
-  signal: AbortSignal,
-): Promise<ScoutReport | null> {
-  const startedAt = Date.now();
-  const maxRounds = config.agent.maxScoutRounds;
-  const scoutTools = toolRegistry.list().filter((t) => SCOUT_TOOL_NAMES.has(t.name));
-
-  const messages: Message[] = [
-    {
-      id: randomUUID(),
-      role: 'system',
-      content:
-        '你是 Aurevoy 的侦查 Agent。你的任务是快速了解工作区的文件结构和关键信息，' +
-        '为后续的任务规划提供依据。\n\n' +
-        '约束：\n' +
-        '- 只能使用 list_directory、read_file、search_files 工具\n' +
-        '- 不要修改任何文件，不要执行命令\n' +
-        '- 不要做深入分析——这是快速侦查，不是执行任务\n' +
-        '- 当你觉得已经掌握了足够信息来制定计划时，直接输出侦查报告，不再调用工具',
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: randomUUID(),
-      role: 'user',
-      content: `用户目标：${goal}\n工作区路径：${workspaceDir}\n\n请快速侦查工作区，然后输出一份侦查报告。`,
-      createdAt: new Date().toISOString(),
-    },
-  ];
-
-  let rounds = 0;
-  for (; rounds < maxRounds; rounds++) {
-    if (signal.aborted) return null;
-
-    let textBuffer = '';
-    let toolCalls: AccumulatedToolCall[] = [];
-
-    try {
-      const stream = getProvider().stream(messages, {
-        tools: scoutTools.length > 0 ? scoutTools : undefined,
-        toolChoice: 'auto',
-        signal,
-      });
-      for await (const chunk of stream) {
-        if (chunk.textDelta) textBuffer += chunk.textDelta;
-        if (chunk.done) toolCalls = chunk.toolCallsSnapshot ?? [];
-      }
-    } catch (err) {
-      // 侦查失败不阻塞任务——回退到无侦查报告的 LLM 规划或启发式
-      return null;
-    }
-
-    if (signal.aborted) return null;
-
-    // LLM 已收集足够信息，输出最终报告
-    if (toolCalls.length === 0) {
-      const report = parseScoutReport(textBuffer, rounds + 1, Date.now() - startedAt);
-      return report;
-    }
-
-    // 添加 assistant 消息
-    const assistantMsg = makeAssistantWithToolCalls(textBuffer, '', toolCalls);
-    messages.push(assistantMsg);
-
-    // 执行工具（safe 工具，无需审批）
-    for (const tc of toolCalls) {
-      if (signal.aborted) return null;
-      const name = tc.function.name;
-
-      // 侦查阶段只允许 safe scout 工具
-      if (!SCOUT_TOOL_NAMES.has(name)) {
-        messages.push(makeToolResult(tc.id, { error: `侦查阶段不允许使用工具：${name}` }));
-        continue;
-      }
-
-      let args: Record<string, unknown>;
-      try {
-        args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-      } catch {
-        messages.push(makeToolResult(tc.id, { error: `工具参数不是合法 JSON` }));
-        continue;
-      }
-
-      try {
-        const result = await toolRegistry.invoke(
-          { id: tc.id, toolName: name, args },
-          { taskId: undefined, workspaceDir, abortSignal: signal },
-        );
-        messages.push(
-          makeToolResult(tc.id, result.ok ? result.output : { error: result.error }),
-        );
-      } catch (err) {
-        messages.push(
-          makeToolResult(tc.id, {
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        );
-      }
-    }
-  }
-
-  // 达到最大轮次：用最后一轮的文本解析报告
-  const report = parseScoutReport(
-    messages.filter((m) => m.role === 'assistant').map((m) => m.content).join('\n'),
-    rounds,
-    Date.now() - startedAt,
-  );
-  return report;
-}
-
-/** 从 LLM 文本输出中解析 ScoutReport。解析失败返回降级报告。 */
-function parseScoutReport(text: string, rounds: number, durationMs: number): ScoutReport {
-  try {
-    // 尝试提取 JSON 块
-    const jsonMatch = text.match(/\{[\s\S]*"keyFiles"[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      return {
-        keyFiles: Array.isArray(parsed.keyFiles)
-          ? parsed.keyFiles.map((f: unknown) => {
-              if (typeof f === 'object' && f !== null) {
-                const obj = f as Record<string, unknown>;
-                return {
-                  path: String(obj.path ?? ''),
-                  reason: String(obj.reason ?? ''),
-                };
-              }
-              return { path: String(f), reason: '' };
-            })
-          : [],
-        techStack: Array.isArray(parsed.techStack)
-          ? (parsed.techStack as unknown[]).filter((item: unknown): item is string => typeof item === 'string')
-          : undefined,
-        constraints: Array.isArray(parsed.constraints)
-          ? parsed.constraints.map(String)
-          : [],
-        summary: typeof parsed.summary === 'string' ? parsed.summary : text.slice(0, 500),
-        durationMs,
-        rounds,
-      };
-    }
-  } catch {
-    // JSON 解析失败，从自由文本提取
-  }
-
-  // 降级：从自由文本里提取关键信息
-  const lines = text.split('\n').filter(Boolean);
-  const keyFiles: Array<{ path: string; reason: string }> = [];
-  const constraints: string[] = [];
-  for (const line of lines) {
-    const trimmed = line.replace(/^[-*#\s]+/, '').trim();
-    if (/\.(ts|js|json|md|py|yaml|yml|toml|cfg|ini|env|css|html)$/i.test(trimmed)) {
-      keyFiles.push({ path: trimmed.split(/\s+/)[0], reason: '' });
-    }
-    if (/(需要|注意|约束|限制|边界|小心|不能|禁止|必须)/.test(trimmed)) {
-      constraints.push(trimmed.slice(0, 200));
-    }
-  }
-
-  return {
-    keyFiles: keyFiles.slice(0, 20),
-    constraints: constraints.slice(0, 10),
-    summary: text.slice(0, 500),
-    durationMs,
-    rounds,
-  };
-}
-
-// ---- LLM 规划生成（P1）----
-
-/**
- * 用 LLM 根据侦查报告生成结构化执行计划。
- * 要求 LLM 输出 JSON 格式的 GeneratedPlan。
- * 失败返回 null → 调用方回退到启发式计划。
- */
-async function generatePlanViaLLM(
-  goal: string,
-  scoutReport: ScoutReport,
-  signal: AbortSignal,
-): Promise<GeneratedPlan | null> {
-  const keyFilesStr = scoutReport.keyFiles
-    .map((f) => `- ${f.path}${f.reason ? ` (${f.reason})` : ''}`)
-    .join('\n');
-  const constraintsStr = scoutReport.constraints.length > 0
-    ? scoutReport.constraints.map((c) => `- ${c}`).join('\n')
-    : '（无特殊约束）';
-
-  const planMessages: Message[] = [
-    {
-      id: randomUUID(),
-      role: 'system',
-      content:
-        '你是 Aurevoy 的任务规划器。根据用户目标和侦查报告，将任务分解为 2-8 个有序执行步骤。\n\n' +
-        '输出要求：\n' +
-        '- 严格输出 JSON，不要加任何前缀或后缀文字\n' +
-        '- 每个步骤描述清晰、可独立验证\n' +
-        '- 如果步骤之间有依赖关系，在 dependsOn 中注明前置步骤序号（1-based）\n' +
-        '- 如果步骤预期产生可预览产物，标记 verifiable=true\n\n' +
-        'JSON 格式：\n' +
-        '{\n' +
-        '  "steps": [\n' +
-        '    {\n' +
-        '      "description": "步骤描述",\n' +
-        '      "toolsExpected": ["tool_name"],\n' +
-        '      "verifiable": true,\n' +
-        '      "dependsOn": []\n' +
-        '    }\n' +
-        '  ],\n' +
-        '  "estimatedIterations": 5,\n' +
-        '  "riskLevel": "low"\n' +
-        '}',
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: randomUUID(),
-      role: 'user',
-      content:
-        `用户目标：${goal}\n\n` +
-        `侦查报告：\n${scoutReport.summary}\n\n` +
-        `关键文件：\n${keyFilesStr}\n\n` +
-        `约束条件：\n${constraintsStr}\n\n` +
-        `技术栈：${scoutReport.techStack?.join(', ') ?? '未识别'}\n\n` +
-        `请输出 JSON 格式的执行计划。`,
-      createdAt: new Date().toISOString(),
-    },
-  ];
-
-  try {
-    let textBuffer = '';
-    const stream = getProvider().stream(planMessages, {
-      toolChoice: 'none',
-      signal,
-      temperature: 0.3, // 规划用低温度，追求一致
-    });
-    for await (const chunk of stream) {
-      if (chunk.textDelta) textBuffer += chunk.textDelta;
-    }
-
-    if (signal.aborted || !textBuffer.trim()) return null;
-
-    // 从 LLM 输出中提取 JSON
-    const jsonMatch = textBuffer.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-
-    const parsed = JSON.parse(jsonMatch[0]);
-    if (!parsed.steps || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
-      return null;
-    }
-
-    const steps = parsed.steps.slice(0, 8).map((step: unknown) => {
-      if (typeof step !== 'object' || step === null) return null;
-      const s = step as Record<string, unknown>;
-      return {
-        description: typeof s.description === 'string' ? s.description : String(s.description ?? ''),
-        toolsExpected: Array.isArray(s.toolsExpected)
-          ? s.toolsExpected.filter((item): item is string => typeof item === 'string')
-          : undefined,
-        verifiable: typeof s.verifiable === 'boolean' ? s.verifiable : undefined,
-        dependsOn: Array.isArray(s.dependsOn)
-          ? s.dependsOn.map(String)
-          : undefined,
-      };
-    }).filter(Boolean) as GeneratedPlan['steps'];
-
-    if (steps.length === 0) return null;
-
-    return {
-      steps,
-      estimatedIterations:
-        typeof parsed.estimatedIterations === 'number' && parsed.estimatedIterations > 0
-          ? Math.min(parsed.estimatedIterations, 50)
-          : steps.length * 3,
-      riskLevel:
-        parsed.riskLevel === 'low' || parsed.riskLevel === 'medium' || parsed.riskLevel === 'high'
-          ? parsed.riskLevel
-          : 'medium',
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** P1 保留：正则启发式计划作为 LLM 规划失败时的兜底。 */
-function inferStructuredPlan(goal: string): string[] {
-  const text = goal.toLowerCase();
-  const steps: string[] = [];
-  if (/(整理|总结|summary|report|材料|资料|文件|docs?|markdown|md|todo|搜索|search)/i.test(goal)) {
-    steps.push('扫描工作区材料');
-    steps.push('阅读与提取关键信息');
-  }
-  if (/(网页|url|http|fetch|抓取|网站|页面)/i.test(goal)) {
-    steps.push('抓取并清洗网页来源');
-    steps.push('提取网页正文与链接');
-  }
-  if (/(运行|执行|命令|typecheck|build|test|npm|脚本|command)/i.test(goal)) {
-    steps.push('确认命令执行边界');
-    steps.push('运行命令并收集输出');
-  }
-  if (/(生成|写入|保存|artifact|报告|summary|markdown|md|翻译|输出)/i.test(goal)) {
-    steps.push('生成可预览产物');
-    steps.push('确认后保存结果');
-  }
-  const unique = [...new Set(steps)];
-  if (unique.length < 2 || !text.trim()) return [];
-  unique.push('汇总结果并说明后续建议');
-  return unique.slice(0, 6);
-}
 
 function resumePlanFromCheckpoint(plan: PlanStep[], checkpointStepId?: string): PlanStep[] {
   if (plan.length === 0) return plan;
@@ -1874,50 +1656,6 @@ function finishCancelled(
   taskEvents.publish({ type: 'status', taskId: task.id, status: 'cancelled' });
   taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'cancelled', detail: '用户取消任务' });
   taskEvents.publish({ type: 'done', taskId: task.id, status: 'cancelled' });
-}
-
-type TracePatch = Partial<
-  Pick<
-    TaskTraceEntry,
-    | 'iteration'
-    | 'callId'
-    | 'toolName'
-    | 'riskLevel'
-    | 'finishReason'
-    | 'ok'
-    | 'errorCategory'
-    | 'errorMessage'
-    | 'summary'
-    | 'data'
-    | 'tokenUsage'
-  >
-> & {
-  startedAtMs?: number;
-};
-
-function writeTrace(
-  taskId: string,
-  kind: TaskTraceEntry['kind'],
-  phase: TaskPhase | null,
-  patch: TracePatch = {},
-): void {
-  const taskLog = createTaskLogger(taskId);
-  const endedAtMs = Date.now();
-  const startedAtMs = patch.startedAtMs ?? endedAtMs;
-  taskLog.trace(kind, phase, {
-    iteration: patch.iteration,
-    callId: patch.callId,
-    toolName: patch.toolName,
-    riskLevel: patch.riskLevel,
-    finishReason: patch.finishReason,
-    tokenUsage: patch.tokenUsage ?? null,
-    startedAtMs,
-    ok: patch.ok,
-    errorCategory: patch.errorCategory,
-    errorMessage: patch.errorMessage,
-    summary: patch.summary,
-    data: patch.data,
-  });
 }
 
 function handleToolSideEffects(task: Task, call: ToolCall, result: ToolResult): ToolResult {
@@ -2100,4 +1838,50 @@ function patchDanglingToolResults(messages: Message[]): number {
     i = insertAt + results.length - 1;
   }
   return patched;
+}
+
+// ---- 内部辅助 ----
+
+type TracePatch = Partial<
+  Pick<
+    TaskTraceEntry,
+    | 'iteration'
+    | 'callId'
+    | 'toolName'
+    | 'riskLevel'
+    | 'finishReason'
+    | 'ok'
+    | 'errorCategory'
+    | 'errorMessage'
+    | 'summary'
+    | 'data'
+    | 'tokenUsage'
+  >
+> & {
+  startedAtMs?: number;
+};
+
+function writeTrace(
+  taskId: string,
+  kind: TaskTraceEntry['kind'],
+  phase: TaskPhase | null,
+  patch: TracePatch = {},
+): void {
+  const taskLog = createTaskLogger(taskId);
+  const endedAtMs = Date.now();
+  const startedAtMs = patch.startedAtMs ?? endedAtMs;
+  taskLog.trace(kind, phase, {
+    iteration: patch.iteration,
+    callId: patch.callId,
+    toolName: patch.toolName,
+    riskLevel: patch.riskLevel,
+    finishReason: patch.finishReason,
+    tokenUsage: patch.tokenUsage ?? null,
+    startedAtMs,
+    ok: patch.ok,
+    errorCategory: patch.errorCategory,
+    errorMessage: patch.errorMessage,
+    summary: patch.summary,
+    data: patch.data,
+  });
 }

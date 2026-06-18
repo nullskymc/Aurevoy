@@ -200,6 +200,21 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 - `delivered=false`：无对应的待审批项（已超时/已决策/不存在）。
 - 字段缺失或类型错误 → `400`；任务不存在 → `404`。
 
+### POST `/api/tasks/:id/plan-approval`
+审批 Plan Agent 生成的执行计划（响应 `plan_approval_request` 事件）。
+```json
+// 请求体 PlanApprovalRequest
+{ "approved": true }
+// 拒绝时可选填理由
+{ "approved": false, "reason": "步骤 3 不需要，直接生成报告即可" }
+```
+```json
+// 200 → PlanApprovalResponse
+{ "taskId": "<id>", "delivered": true }
+```
+- `approved=false` 时计划被拒绝，Default Agent 会以单步模式直接执行，拒绝原因回灌给模型供参考。
+- `delivered=false`：无对应的待审批项；`approved` 字段缺失或类型错误 → `400`。
+
 ### POST `/api/tasks/:id/clarifications/:clarificationId`  (M6)
 回复 Agent 的结构化追问。该端点只把真实用户回复投递给当前等待中的任务，不新建任务。
 ```json
@@ -291,7 +306,9 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `phase` | `phase: TaskPhase`, `detail?` | Agent runtime 细粒度阶段变化 |
 | `scout_started` | — | P1：开始侦查工作区以制定计划 |
 | `scout_report` | `report: ScoutReport` | P1：侦查完成，产出关键文件与约束摘要 |
-| `plan_generated` | `plan: PlanStep[]`, `source` | P1：计划生成（`llm` 或 `heuristic`） |
+| `plan_generated` | `plan: PlanStep[]`, `source` | Plan Agent 生成执行计划（`llm` 或 `heuristic`） |
+| `plan_approval_request` | `plan`, `reasoning`, `scoutReport?` | 计划推送前端等待用户审批 |
+| `plan_approval_resolved` | `approved`, `reason?` | 用户审批决策（批准/拒绝） |
 | `skill_activated` | `skillName`, `allowedTools?` | Skill：用户或 LLM 激活了某个技能 |
 | `skill_deactivated` | — | Skill：当前技能已停用 |
 | `plan` | `plan: PlanStep[]` | 给出/更新完整计划 |

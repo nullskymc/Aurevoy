@@ -25,6 +25,7 @@ function makeTask(): Task {
 
 const callbacks = {
   onToolDecision: vi.fn(),
+  onPlanDecision: vi.fn(),
   onClarificationAnswer: vi.fn(),
   onArtifactDecision: vi.fn(),
 };
@@ -37,6 +38,7 @@ function renderConversation(extra: Record<string, unknown> = {}) {
       phase="finalizing"
       plan={makeTask().plan}
       output=""
+      reasoning=""
       busy={false}
       liveToolActivity={[]}
       {...callbacks}
@@ -104,23 +106,4 @@ describe("Conversation rendering tweaks", () => {
     expect(screen.queryByRole("button", { name: "恢复" })).not.toBeInTheDocument();
   });
 
-  it("shows a stop action in context while busy", async () => {
-    const user = userEvent.setup();
-    const onStop = vi.fn();
-    render(
-      <Conversation
-        task={makeTask()}
-        status="running"
-        phase="thinking"
-        plan={makeTask().plan}
-        output="生成中"
-        busy
-        liveToolActivity={[]}
-        {...callbacks}
-        onStop={onStop}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "停止" }));
-    expect(onStop).toHaveBeenCalled();
-  });
 });
