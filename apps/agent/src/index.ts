@@ -8,8 +8,14 @@ import { closeMcpTools, initializeMcpTools } from './tools/mcp.js';
 import { loadPersistedSettings } from './runtime/settings.js';
 import { createLogger, getLogger } from './logging/logger.js';
 import { skillRegistry } from './skills/registry.js';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 async function main() {
+  // 提前确保数据目录存在（安装版 app bundle 内 cwd 只读，数据在 ~/.aurevoy/）
+  mkdirSync(dirname(config.dbPath), { recursive: true });
+  mkdirSync(config.workspaceDir, { recursive: true });
+
   const rootLogger = createLogger(config.logging);
   const log = getLogger('server');
 

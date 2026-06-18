@@ -6,6 +6,9 @@
  *
  * 注意：本模块必须在 index.ts 中**最先**被 import，
  * 以保证 config.ts 读取环境变量时 .env 已生效。
+ *
+ * 开发期 .env 位于 monorepo 根目录；安装版不存在 .env（配置走 env var + SQLite），
+ * ENOENT 是正常情况，不告警。
  */
 import { config as loadEnv } from 'dotenv';
 import { fileURLToPath } from 'node:url';
@@ -19,9 +22,12 @@ const rootEnvPath = resolve(here, '../../../.env');
 const result = loadEnv({ path: rootEnvPath });
 
 if (result.error) {
-  console.error(
-    `[aurevoy] 加载 .env 失败 (${rootEnvPath}): ${result.error.message}`,
-  );
+  // dotenv 用 ENOENT 表示文件不存在；安装版无 .env 属正常。
+  if ((result.error as NodeJS.ErrnoException).code !== 'ENOENT') {
+    console.error(
+      `[aurevoy] 加载 .env 失败 (${rootEnvPath}): ${result.error.message}`,
+    );
+  }
 } else if (Object.keys(result.parsed ?? {}).length === 0) {
-  console.warn(`[aurevoy] .env 文件未找到或为空: ${rootEnvPath}`);
+  // .env 存在但为空
 }
