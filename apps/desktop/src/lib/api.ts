@@ -13,6 +13,7 @@ import {
   type MemoryEntry,
   type MemoryListResponse,
   type McpStatusResponse,
+  type MessageAttachment,
   type ModelListResponse,
   type ResumeTaskResponse,
   type RevertMode,
@@ -47,11 +48,15 @@ export async function checkHealth(): Promise<HealthResponse> {
   return res.json();
 }
 
-export async function createTask(goal: string, projectId?: string): Promise<CreateTaskResponse> {
+export async function createTask(
+  goal: string,
+  projectId?: string,
+  attachments?: MessageAttachment[],
+): Promise<CreateTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal, projectId }),
+    body: JSON.stringify({ goal, projectId, attachments }),
   });
   if (!res.ok) throw new Error(`create task failed: ${res.status}`);
   return res.json();
@@ -74,11 +79,12 @@ export async function getTask(taskId: string): Promise<Task> {
 export async function continueTask(
   taskId: string,
   message: string,
+  attachments?: MessageAttachment[],
 ): Promise<ContinueTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, attachments }),
   });
   if (!res.ok) throw new Error(`continue task failed: ${res.status}`);
   return res.json();

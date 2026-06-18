@@ -49,6 +49,21 @@ export interface MessageToolCall {
   };
 }
 
+/** 用户附加到消息的文件引用。Agent 运行在本机，通过路径直接读取文件内容。 */
+export interface MessageAttachment {
+  id: string;
+  /** 文件名（含扩展名） */
+  name: string;
+  /** 本地文件绝对路径 */
+  path: string;
+  /** MIME 类型，如 text/typescript、image/png */
+  mimeType: string;
+  /** 文件大小（字节） */
+  size: number;
+  /** 附件类型；为图片等后续扩展预留 */
+  type: 'file' | 'image';
+}
+
 /** 一条对话消息 */
 export interface Message {
   id: string;
@@ -61,6 +76,8 @@ export interface Message {
   toolCallId?: string;
   /** DeepSeek 思考模式的 reasoning_content 透传；多轮须原样回传，否则 API 报 400 */
   reasoningContent?: string;
+  /** 用户消息携带的文件附件（路径引用）；Agent 据此注入文件上下文 */
+  attachments?: MessageAttachment[];
 }
 
 /** 计划中的一个步骤 */
@@ -425,6 +442,7 @@ export interface CreateTaskRequest {
   goal: string;
   budget?: TaskBudget;
   projectId?: string;
+  attachments?: MessageAttachment[];
 }
 
 export interface CreateTaskResponse {
@@ -520,6 +538,7 @@ export interface TaskTraceListResponse {
 export interface ContinueTaskRequest {
   /** 用户的后续追问/补充 */
   message: string;
+  attachments?: MessageAttachment[];
 }
 
 export interface ContinueTaskResponse {

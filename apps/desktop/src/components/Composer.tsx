@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { t, type TranslationKey } from "../i18n";
-import type { SkillDescriptor } from "@aurevoy/shared";
+import type { MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
 
 interface SlashCommand {
   name: string;
@@ -27,6 +27,10 @@ interface ComposerProps {
   onOpenModelSelector: () => void;
   /** busy 时点击发送按钮触发停止/取消 */
   onStop?: () => void;
+  /** 拖拽/选择的附件列表 */
+  attachments?: MessageAttachment[];
+  /** 附件变更回调 */
+  onAttachmentsChange?: (attachments: MessageAttachment[]) => void;
 }
 
 export function Composer({
@@ -38,6 +42,8 @@ export function Composer({
   projectName,
   isEditing,
   skills,
+  attachments,
+  onAttachmentsChange,
   onCancelEdit,
   onChange,
   onSubmit,
@@ -46,6 +52,7 @@ export function Composer({
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [cmdIndex, setCmdIndex] = useState(0);
+  const [isDragOver, setIsDragOver] = useState(false);
   const providerConfigured = provider !== "unconfigured";
   const canSend = value.trim().length > 0 && !busy && online !== false && providerConfigured;
 
@@ -121,8 +128,41 @@ export function Composer({
     }
   }
 
+  function handleRemoveAttachment(id: string): void {
+    onAttachmentsChange?.((attachments ?? []).filter((a) => a.id !== id));
+  }
+
+  function handleDragOver(e: React.DragEvent): void {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'link';
+    setIsDragOver(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent): void {
+    // 仅在离开 composer 自身时取消高亮，进入子元素不算
+    if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragOver(false);
+    }
+  }
+
+  function handleDrop(e: React.DragEvent): void {
+    e.preventDefault();
+    setIsDragOver(false);
+    // HTML5 drop 不处理文件路径——路径由 Tauri onDragDropEvent 提供
+  }
+
+  const hasAttachments = attachments && attachments.length > 0;
+
   return (
-    <div className="composer" data-variant={variant} data-editing={isEditing ? "true" : undefined}>
+    <div
+      className="composer"
+      data-variant={variant}
+      data-editing={isEditing ? "true" : undefined}
+      data-dragover={isDragOver ? "true" : undefined}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       {isEditing && (
         <div className="composer-edit-banner">
           <PencilEditIcon />
@@ -155,6 +195,29 @@ export function Composer({
             ))}
           </div>
         )}
+
+        {/* 附件 chip 列表 */}
+        {hasAttachments && (
+          <div className="composer-attachments">
+            {attachments!.map((att) => (
+              <span key={att.id} className="composer-attachment-chip" title={att.path}>
+                <span className="composer-attachment-chip-icon">
+                  {att.type === 'image' ? <ImageFileIcon /> : <DocFileIcon />}
+                </span>
+                <span className="composer-attachment-chip-name">{att.name}</span>
+                <button
+                  type="button"
+                  className="composer-attachment-chip-remove"
+                  aria-label="Remove attachment"
+                  onClick={() => handleRemoveAttachment(att.id)}
+                >
+                  <XIcon />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
         <textarea
           ref={textareaRef}
           className="composer-input"
@@ -167,7 +230,13 @@ export function Composer({
 
         <div className="composer-toolbar">
           <div className="composer-tools-left">
-            <button type="button" className="composer-icon-btn" title={t("composer.attachmentDisabled")} aria-label={t("composer.attachment")} disabled>
+            <button
+              type="button"
+              className="composer-icon-btn"
+              title={t("composer.attachment")}
+              aria-label={t("composer.attachment")}
+              onClick={() => onAttachmentsChange?.([])}
+            >
               <PlusIcon />
             </button>
             <button
@@ -220,6 +289,33 @@ export function Composer({
         )}
       </div>
     </div>
+  );
+}
+
+function DocFileIcon() {
+  return (
+    <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none">
+      <rect x="2.5" y="1.5" width="9" height="11" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
+      <path d="M5 5h4M5 7.5h4M5 10h2.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ImageFileIcon() {
+  return (
+    <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none">
+      <rect x="1.5" y="2.5" width="11" height="9" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
+      <circle cx="5" cy="5.5" r="1.2" stroke="currentColor" strokeWidth="0.9" />
+      <path d="M2 9.5l3-3 2.5 2.5L10 6.5l2 3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function XIcon() {
+  return (
+    <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" fill="none">
+      <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
   );
 }
 

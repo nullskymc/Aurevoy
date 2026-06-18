@@ -1087,6 +1087,69 @@ button:disabled {
   padding: var(--ui-space-3) 34px var(--ui-space-5);
 }
 
+/* 拖拽悬停高亮 — Finder 拖入文件时的视觉反馈 */
+.composer[data-dragover="true"] .composer-box {
+  border-color: var(--accent, #6366f1);
+  box-shadow: 0 0 0 3px var(--accent-soft-bg, rgba(99, 102, 241, 0.15));
+  background: var(--accent-soft-bg, rgba(99, 102, 241, 0.06));
+}
+
+/* 附件 chip 容器 */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-2);
+  padding-bottom: var(--ui-space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--ui-space-2);
+}
+
+/* 单个附件 chip */
+.composer-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--ui-radius-md);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  border: 1px solid var(--border-subtle);
+  max-width: 240px;
+}
+
+.composer-attachment-chip-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.composer-attachment-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment-chip-remove {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  color: var(--card-bg);
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.composer-attachment-chip-remove:hover {
+  background: var(--text-primary);
+}
+
 .composer[data-editing="true"] .composer-box {
   border-color: var(--accent, #6366f1);
 }

@@ -4,6 +4,7 @@ import type {
   AgentEvent,
   HealthResponse,
   MemoryCategory,
+  MessageAttachment,
   RevertMode,
   Task,
   ToolDescriptor,
@@ -43,6 +44,8 @@ import {
   updateMemory,
 } from "./lib/api";
 import { ensureDesktopAgentProcess } from "./lib/desktopAgent";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { useArtifacts } from "./hooks/useArtifacts";
 import { useMemories } from "./hooks/useMemories";
 import { useSSEStream } from "./hooks/useSSEStream";
@@ -154,6 +157,7 @@ function App() {
   const [contentMode, setContentMode] = useState<ContentMode>("conversation");
   const [events, setEvents] = useState<FeedItem[]>([]);
   const [goal, setGoal] = useState("");
+  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
@@ -238,6 +242,69 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem("aurevoy.fontScale", String(fontScale));
   }, [fontScale]);
+
+  // Tauri 原生拖拽事件：获取 Finder 拖入的文件绝对路径
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === 'drop') {
+          const paths = event.payload.paths;
+          void (async () => {
+            for (const p of paths) {
+              try {
+                const meta = await invoke<{ name: string; size: number; is_dir: boolean; mime_type: string }>(
+                  'file_metadata',
+                  { path: p },
+                );
+                if (meta.is_dir) {
+                  // 拖入文件夹 → 导入为项目
+                  void handleImportProjectPath(p);
+                } else {
+                  // 拖入文件 → 添加为附件
+                  setAttachments((prev) => {
+                    // 去重
+                    if (prev.some((a) => a.path === p)) return prev;
+                    return [
+                      ...prev,
+                      {
+                        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        name: meta.name,
+                        path: p,
+                        mimeType: meta.mime_type,
+                        size: meta.size,
+                        type: meta.mime_type.startsWith('image/') ? 'image' : 'file',
+                      },
+                    ];
+                  });
+                }
+              } catch {
+                setNotice(`无法读取文件信息: ${p}`);
+              }
+            }
+          })();
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        // 非 Tauri 环境（浏览器开发模式）忽略
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  async function handleImportProjectPath(dirPath: string): Promise<void> {
+    try {
+      const project = await createProject({ path: dirPath });
+      setProjects((prev) => [...prev, project]);
+      setNotice(`已导入项目: ${project.name}`);
+    } catch (err) {
+      setNotice(`导入失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   async function bootstrapRuntime(): Promise<void> {
     try {
@@ -467,7 +534,7 @@ function App() {
     }
   }
 
-  async function startGoal(rawGoal: string): Promise<void> {
+  async function startGoal(rawGoal: string, attach?: MessageAttachment[]): Promise<void> {
     const trimmed = rawGoal.trim();
     if (!trimmed || busy) return;
 
@@ -479,10 +546,11 @@ function App() {
     setStatus("pending");
     setPhase("initializing");
     setGoal("");
+    setAttachments([]);
     closeStream();
 
     try {
-      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId);
+      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach);
       setCurrentTask(task);
       setPhase(task.phase);
       setTraces([]);
@@ -508,7 +576,7 @@ function App() {
   }
 
   /** 在当前任务内追加一轮输入并继续（多轮对话）；保留后端完整上下文。 */
-  async function continueGoal(rawMessage: string): Promise<void> {
+  async function continueGoal(rawMessage: string, attach?: MessageAttachment[]): Promise<void> {
     const trimmed = rawMessage.trim();
     if (!trimmed || busy || !currentTask) return;
 
@@ -520,10 +588,11 @@ function App() {
     setStatus("running");
     setPhase("initializing");
     setGoal("");
+    setAttachments([]);
     closeStream();
 
     try {
-      const { task } = await continueTask(currentTask.id, trimmed);
+      const { task } = await continueTask(currentTask.id, trimmed, attach);
       setCurrentTask(task);
       setPhase(task.phase);
       updateTaskList(task);
@@ -540,16 +609,18 @@ function App() {
     const trimmed = goal.trim();
     if (trimmed === "/compact") {
       setGoal("");
+      setAttachments([]);
       void handleCompact();
       return;
     }
+    const currentAttachments = attachments.length > 0 ? [...attachments] : undefined;
     if (editingMessageId) {
       setEditingMessageId(null);
-      void continueGoal(goal);
+      void continueGoal(goal, currentAttachments);
     } else if (currentTask && !busy) {
-      void continueGoal(goal);
+      void continueGoal(goal, currentAttachments);
     } else {
-      void startGoal(goal);
+      void startGoal(goal, currentAttachments);
     }
   }
 
@@ -1202,9 +1273,12 @@ function App() {
                 projectName={draftProjectName}
                 isEditing={editingMessageId !== null}
                 skills={skills}
+                attachments={attachments}
+                onAttachmentsChange={setAttachments}
                 onCancelEdit={() => {
                   setEditingMessageId(null);
                   setGoal("");
+                  setAttachments([]);
                 }}
                 provider={health?.provider}
                 onChange={setGoal}
@@ -1234,6 +1308,8 @@ function App() {
               variant="hero"
               projectName={draftProjectName}
               skills={skills}
+              attachments={attachments}
+              onAttachmentsChange={setAttachments}
               provider={health?.provider}
               onChange={setGoal}
               onSubmit={handleComposerSubmit}

@@ -5,6 +5,7 @@ import type {
   FileSnapshot,
   GeneratedPlan,
   Message,
+  MessageAttachment,
   MessageToolCall,
   PlanStep,
   RevertMode,
@@ -443,7 +444,11 @@ function parseSlashCommand(content: string): { skillName: string | null; text: s
  * 仅追加 user 消息并持久化、广播；调用方随后再 `runTask(task)`，
  * 循环会带着完整的历史 `task.messages` 作为上下文继续推进。
  */
-export function addUserTurn(task: Task, content: string): Message {
+export function addUserTurn(
+  task: Task,
+  content: string,
+  attachments?: MessageAttachment[],
+): Message {
   // Skill: 解析斜杠命令前缀
   const parsed = parseSlashCommand(content);
   let messageContent = content;
@@ -466,6 +471,7 @@ export function addUserTurn(task: Task, content: string): Message {
     role: 'user',
     content: messageContent,
     createdAt: new Date().toISOString(),
+    attachments,
   };
   task.messages.push(userMsg);
   // 复用任务时，从终态回到待运行；phase 进入 initializing
@@ -569,13 +575,19 @@ function waitForClarification(
 }
 
 /** 创建一个新任务并持久化（尚未开始执行） */
-export function createTask(goal: string, budget?: TaskBudget, projectId?: string): Task {
+export function createTask(
+  goal: string,
+  budget?: TaskBudget,
+  projectId?: string,
+  attachments?: MessageAttachment[],
+): Task {
   const now = new Date().toISOString();
   const userMsg: Message = {
     id: randomUUID(),
     role: 'user',
     content: goal,
     createdAt: now,
+    attachments,
   };
   const task: Task = {
     id: randomUUID(),
@@ -669,6 +681,80 @@ async function restoreFilesFromSnapshots(
       // 快照文件可能已被清理
     }
   }
+}
+
+/** 已知的文本文件扩展名集合，用于判断附件是否可直接读入上下文。 */
+const TEXT_EXTENSIONS = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.json', '.jsonc', '.json5',
+  '.css', '.scss', '.sass', '.less',
+  '.html', '.htm', '.xml', '.svg',
+  '.md', '.mdx', '.markdown',
+  '.txt', '.log', '.csv',
+  '.yaml', '.yml', '.toml', '.ini', '.cfg', '.env',
+  '.py', '.rb', '.go', '.rs', '.java', '.kt', '.swift',
+  '.c', '.h', '.cpp', '.hpp', '.cc', '.hh',
+  '.sh', '.bash', '.zsh', '.fish',
+  '.sql', '.graphql', '.gql',
+  '.vue', '.svelte', '.astro',
+  '.prisma', '.proto',
+  '.gitignore', '.gitattributes', '.editorconfig',
+  '.eslintrc', '.prettierrc',
+]);
+
+function isTextFile(mimeType: string, name: string): boolean {
+  if (mimeType.startsWith('text/')) return true;
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
+  return TEXT_EXTENSIONS.has(ext);
+}
+
+/** 最大注入到上下文中的单文件字符数（~8K tokens，防止单文件撑满窗口）。 */
+const MAX_ATTACHMENT_CONTENT_CHARS = 30_000;
+
+/**
+ * 为任务中带附件的用户消息构建附加上下文。
+ * 读取文本文件内容，合成为一条 system 消息，注入到 LLM 请求中。
+ */
+async function buildAttachmentSystemMessage(task: Task): Promise<string | null> {
+  // 找到所有带附件的用户消息（取最新的那条，避免多轮重复注入）
+  const messagesWithAttachments = task.messages.filter(
+    (m) => m.role === 'user' && m.attachments && m.attachments.length > 0,
+  );
+  if (messagesWithAttachments.length === 0) return null;
+
+  // 只取最后一轮（最新）带附件的消息
+  const lastMsg = messagesWithAttachments[messagesWithAttachments.length - 1];
+  if (!lastMsg.attachments) return null;
+
+  const lines: string[] = [];
+  lines.push('[Attached Files]');
+  lines.push('');
+
+  for (const att of lastMsg.attachments) {
+    if (isTextFile(att.mimeType, att.name)) {
+      try {
+        let content = await fs.readFile(att.path, 'utf8');
+        if (content.length > MAX_ATTACHMENT_CONTENT_CHARS) {
+          content = content.slice(0, MAX_ATTACHMENT_CONTENT_CHARS) +
+            `\n\n[... 文件过长，已截断。使用 read_file 工具读取完整内容，路径: ${att.path}]`;
+        }
+        lines.push(`### ${att.name} (path: ${att.path})`);
+        lines.push('');
+        lines.push(content);
+        lines.push('');
+      } catch {
+        lines.push(`### ${att.name} (path: ${att.path})`);
+        lines.push(`[无法直接读取文件内容，使用 read_file 工具读取，路径: ${att.path}]`);
+        lines.push('');
+      }
+    } else {
+      lines.push(`### ${att.name} (path: ${att.path}, type: ${att.mimeType})`);
+      lines.push(`[非文本文件，使用 read_file 工具读取，路径: ${att.path}]`);
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n');
 }
 
 /**
@@ -801,6 +887,12 @@ export async function runTask(task: Task): Promise<void> {
   const messages = task.messages;
   const callFingerprints = new Map<string, number>();
 
+  // 构建附件上下文（仅在任务首次运行时构建一次）
+  const attachmentContext = await buildAttachmentSystemMessage(task);
+  const attachmentSystemMessage: Message | null = attachmentContext
+    ? { id: `att-${randomUUID()}`, role: 'system', content: attachmentContext, createdAt: new Date().toISOString() }
+    : null;
+
   try {
     setRuntimePhase('initializing', '准备运行任务', 'running');
     taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
@@ -884,6 +976,7 @@ export async function runTask(task: Task): Promise<void> {
       const requestMessages = [
         memoryMessage,
         skillMessage,
+        attachmentSystemMessage,
         ...ctx.messages,
       ].filter(Boolean) as Message[];
 
