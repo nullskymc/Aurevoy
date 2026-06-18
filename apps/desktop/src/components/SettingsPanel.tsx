@@ -12,6 +12,7 @@ import { t } from "../i18n";
 interface SettingsDraft {
   baseUrl: string;
   model: string;
+  visionModel: string;
   apiKey: string;
   workspaceDir: string;
   temperature: number;
@@ -34,6 +35,8 @@ interface SettingsPanelProps {
   onClose: () => void;
   onSave: (draft: SettingsDraft) => void;
   onToggleTool: (name: string, enabled: boolean) => void;
+  autoApprovedTools: string[];
+  onToggleAutoApprove: (name: string, autoApprove: boolean) => void;
   onCleanup: (olderThanDays: number) => void;
   onRefresh: () => void;
   onFetchModels: () => void;
@@ -90,6 +93,8 @@ export function SettingsPanel({
   onClose,
   onSave,
   onToggleTool,
+  autoApprovedTools,
+  onToggleAutoApprove,
   onCleanup,
   onRefresh,
   onFetchModels,
@@ -215,7 +220,14 @@ export function SettingsPanel({
             />
           )}
 
-          {activeSection === "tools" && <ToolSettings tools={tools} onToggleTool={onToggleTool} />}
+          {activeSection === "tools" && (
+            <ToolSettings
+              tools={tools}
+              autoApprovedTools={autoApprovedTools}
+              onToggleTool={onToggleTool}
+              onToggleAutoApprove={onToggleAutoApprove}
+            />
+          )}
 
           {activeSection === "data" && (
             <DataSettings
@@ -525,6 +537,27 @@ function ProviderSettings({
         }
       />
       <SettingsActionRow
+        title={t("settings.visionModelTitle")}
+        description={t("settings.visionModelDesc")}
+        control={
+          <div className="settings-model-input">
+            <input
+              className="settings-inline-input"
+              list="settings-vision-model-options"
+              value={draft.visionModel}
+              placeholder={t("settings.visionModelPlaceholder")}
+              onChange={(event) => onDraftChange({ ...draft, visionModel: event.currentTarget.value })}
+            />
+            <datalist id="settings-vision-model-options">
+              <option value="" />
+              {availableModels.map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+          </div>
+        }
+      />
+      <SettingsActionRow
         title={t("settings.fetchModelsTitle")}
         description={t("settings.fetchModelsDesc")}
         control={
@@ -683,25 +716,51 @@ function McpSettings({
 
 function ToolSettings({
   tools,
+  autoApprovedTools,
   onToggleTool,
+  onToggleAutoApprove,
 }: {
   tools: ToolDescriptor[];
+  autoApprovedTools: string[];
   onToggleTool: (name: string, enabled: boolean) => void;
+  onToggleAutoApprove: (name: string, autoApprove: boolean) => void;
 }) {
+  const approvedSet = new Set(autoApprovedTools);
+  const isNonSafe = (tool: ToolDescriptor) =>
+    tool.riskLevel === 'caution' || tool.riskLevel === 'dangerous';
+
   return (
     <SettingsGroup title={t("settings.toolMgmt")}>
       {tools.length === 0 ? (
         <SettingsInfoRow title={t("settings.toolEmptyTitle")} description={t("settings.toolEmptyDesc")} />
       ) : (
-        tools.map((tool) => (
-          <SettingsSwitchRow
-            key={tool.name}
-            title={tool.name}
-            description={`${tool.description} · ${tool.riskLevel ?? "safe"} · ${sourceLabel(tool)}`}
-            checked={tool.enabled !== false}
-            onChange={(checked) => onToggleTool(tool.name, checked)}
-          />
-        ))
+        tools.map((tool) => {
+          const toolEnabled = tool.enabled !== false;
+          const autoApproved = approvedSet.has(tool.name);
+          return (
+            <div key={tool.name} className="settings-tool-row">
+              <SettingsSwitchRow
+                title={tool.name}
+                description={`${tool.description} · ${tool.riskLevel ?? "safe"} · ${sourceLabel(tool)}`}
+                checked={toolEnabled}
+                onChange={(checked) => onToggleTool(tool.name, checked)}
+              />
+              {isNonSafe(tool) && (
+                <label className="settings-tool-auto-approve">
+                  <input
+                    type="checkbox"
+                    checked={autoApproved}
+                    disabled={!toolEnabled}
+                    onChange={(event) =>
+                      onToggleAutoApprove(tool.name, event.currentTarget.checked)
+                    }
+                  />
+                  <span>{t("settings.autoApproveTool")}</span>
+                </label>
+              )}
+            </div>
+          );
+        })
       )}
     </SettingsGroup>
   );
@@ -1025,6 +1084,7 @@ function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
   return {
     baseUrl: settings?.llm.baseUrl ?? "",
     model: settings?.llm.model ?? "",
+    visionModel: settings?.llm.visionModel ?? "",
     apiKey: "",
     workspaceDir: settings?.workspaceDir ?? "",
     temperature: settings?.llm.temperature ?? 0.7,

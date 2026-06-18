@@ -5,6 +5,7 @@ import type {
   FileSnapshot,
   GeneratedPlan,
   Message,
+  MessageAttachment,
   MessageToolCall,
   PlanStep,
   RevertMode,
@@ -57,7 +58,12 @@ const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'run
 const activeAbortControllers = new Map<string, AbortController>();
 
 /** 等待中的工具审批：taskId → (callId → 决策回调) */
-const pendingApprovals = new Map<string, Map<string, (approved: boolean) => void>>();
+const pendingApprovals = new Map<
+  string,
+  Map<string, (approved: boolean, sessionApprove?: boolean) => void>
+>();
+/** 当前任务会话内自动批准的工具名集合（会话结束即清空） */
+const sessionApprovedTools = new Set<string>();
 /** 等待中的用户追问：taskId → (clarificationId → 回复回调) */
 const pendingClarifications = new Map<string, Map<string, (answer: string | null) => void>>();
 
@@ -443,7 +449,11 @@ function parseSlashCommand(content: string): { skillName: string | null; text: s
  * 仅追加 user 消息并持久化、广播；调用方随后再 `runTask(task)`，
  * 循环会带着完整的历史 `task.messages` 作为上下文继续推进。
  */
-export function addUserTurn(task: Task, content: string): Message {
+export function addUserTurn(
+  task: Task,
+  content: string,
+  attachments?: MessageAttachment[],
+): Message {
   // Skill: 解析斜杠命令前缀
   const parsed = parseSlashCommand(content);
   let messageContent = content;
@@ -466,6 +476,7 @@ export function addUserTurn(task: Task, content: string): Message {
     role: 'user',
     content: messageContent,
     createdAt: new Date().toISOString(),
+    attachments,
   };
   task.messages.push(userMsg);
   // 复用任务时，从终态回到待运行；phase 进入 initializing
@@ -483,10 +494,15 @@ export function addUserTurn(task: Task, content: string): Message {
 }
 
 /** 投递一次工具审批决策（由 server 的审批端点调用）。返回是否命中等待中的请求。 */
-export function resolveApproval(taskId: string, callId: string, approved: boolean): boolean {
+export function resolveApproval(
+  taskId: string,
+  callId: string,
+  approved: boolean,
+  sessionApprove?: boolean,
+): boolean {
   const resolve = pendingApprovals.get(taskId)?.get(callId);
   if (!resolve) return false;
-  resolve(approved);
+  resolve(approved, sessionApprove);
   return true;
 }
 
@@ -503,8 +519,17 @@ export function resolveClarificationAnswer(
 }
 
 /** 等待用户对某次工具调用的审批；超时或任务取消视为拒绝。 */
-function waitForApproval(taskId: string, callId: string, signal: AbortSignal): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+interface ApprovalResult {
+  approved: boolean;
+  sessionApprove?: boolean;
+}
+
+function waitForApproval(
+  taskId: string,
+  callId: string,
+  signal: AbortSignal,
+): Promise<ApprovalResult> {
+  return new Promise<ApprovalResult>((resolve) => {
     let settled = false;
     const cleanup = () => {
       clearTimeout(timer);
@@ -513,11 +538,11 @@ function waitForApproval(taskId: string, callId: string, signal: AbortSignal): P
       map?.delete(callId);
       if (map && map.size === 0) pendingApprovals.delete(taskId);
     };
-    const finish = (approved: boolean) => {
+    const finish = (approved: boolean, sessionApprove?: boolean) => {
       if (settled) return;
       settled = true;
       cleanup();
-      resolve(approved);
+      resolve({ approved, sessionApprove });
     };
     const onAbort = () => finish(false);
     const timer = setTimeout(() => finish(false), config.agent.approvalTimeoutMs);
@@ -569,13 +594,19 @@ function waitForClarification(
 }
 
 /** 创建一个新任务并持久化（尚未开始执行） */
-export function createTask(goal: string, budget?: TaskBudget, projectId?: string): Task {
+export function createTask(
+  goal: string,
+  budget?: TaskBudget,
+  projectId?: string,
+  attachments?: MessageAttachment[],
+): Task {
   const now = new Date().toISOString();
   const userMsg: Message = {
     id: randomUUID(),
     role: 'user',
     content: goal,
     createdAt: now,
+    attachments,
   };
   const task: Task = {
     id: randomUUID(),
@@ -672,6 +703,104 @@ async function restoreFilesFromSnapshots(
 }
 
 /**
+ * 从任务的所有用户消息附件中收集外部路径。
+ * 这些路径由用户显式提供，应绕过工作区沙箱限制。
+ */
+function collectExternalPaths(task: Task): string[] {
+  const paths: string[] = [];
+  for (const msg of task.messages) {
+    if (msg.role === 'user' && msg.attachments?.length) {
+      for (const att of msg.attachments) {
+        paths.push(att.path);
+      }
+    }
+  }
+  // 同时加入项目的路径（用户显式导入的目录）
+  if (task.projectId) {
+    const project = projectStore.get(task.projectId);
+    if (project) paths.push(project.path);
+  }
+  return [...new Set(paths)];
+}
+
+/** 已知的文本文件扩展名集合，用于判断附件是否可直接读入上下文。 */
+const TEXT_EXTENSIONS = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.json', '.jsonc', '.json5',
+  '.css', '.scss', '.sass', '.less',
+  '.html', '.htm', '.xml', '.svg',
+  '.md', '.mdx', '.markdown',
+  '.txt', '.log', '.csv',
+  '.yaml', '.yml', '.toml', '.ini', '.cfg', '.env',
+  '.py', '.rb', '.go', '.rs', '.java', '.kt', '.swift',
+  '.c', '.h', '.cpp', '.hpp', '.cc', '.hh',
+  '.sh', '.bash', '.zsh', '.fish',
+  '.sql', '.graphql', '.gql',
+  '.vue', '.svelte', '.astro',
+  '.prisma', '.proto',
+  '.gitignore', '.gitattributes', '.editorconfig',
+  '.eslintrc', '.prettierrc',
+]);
+
+function isTextFile(mimeType: string, name: string): boolean {
+  if (mimeType.startsWith('text/')) return true;
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
+  return TEXT_EXTENSIONS.has(ext);
+}
+
+/** 最大注入到上下文中的单文件字符数（~8K tokens，防止单文件撑满窗口）。 */
+const MAX_ATTACHMENT_CONTENT_CHARS = 30_000;
+
+/**
+ * 为任务中带附件的用户消息构建附加上下文。
+ * 读取文本文件内容，合成为一条 system 消息，注入到 LLM 请求中。
+ */
+async function buildAttachmentSystemMessage(task: Task): Promise<string | null> {
+  // 找到所有带附件的用户消息（取最新的那条，避免多轮重复注入）
+  const messagesWithAttachments = task.messages.filter(
+    (m) => m.role === 'user' && m.attachments && m.attachments.length > 0,
+  );
+  if (messagesWithAttachments.length === 0) return null;
+
+  // 只取最后一轮（最新）带附件的消息
+  const lastMsg = messagesWithAttachments[messagesWithAttachments.length - 1];
+  if (!lastMsg.attachments) return null;
+
+  const lines: string[] = [];
+  lines.push('[Attached Files]');
+  lines.push('');
+
+  for (const att of lastMsg.attachments) {
+    // 图片附件由 Provider 层以多模态 content block 注入，此处不处理
+    if (att.type === 'image') continue;
+
+    if (isTextFile(att.mimeType, att.name)) {
+      try {
+        let content = await fs.readFile(att.path, 'utf8');
+        if (content.length > MAX_ATTACHMENT_CONTENT_CHARS) {
+          content = content.slice(0, MAX_ATTACHMENT_CONTENT_CHARS) +
+            `\n\n[... 文件过长，已截断。使用 read_file 工具读取完整内容，路径: ${att.path}]`;
+        }
+        lines.push(`### ${att.name} (path: ${att.path})`);
+        lines.push('');
+        lines.push(content);
+        lines.push('');
+      } catch {
+        lines.push(`### ${att.name} (path: ${att.path})`);
+        lines.push(`[无法直接读取文件内容，使用 read_file 工具读取，路径: ${att.path}]`);
+        lines.push('');
+      }
+    } else {
+      lines.push(`### ${att.name} (path: ${att.path}, type: ${att.mimeType})`);
+      lines.push(`[非文本文件，使用 read_file 工具读取，路径: ${att.path}]`);
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Agent 主循环（ReAct 工具调用循环）。
  *
  * 每轮调用 LLM：若模型请求工具，则执行并把结果作为 role:'tool' 消息回灌，再次请求；
@@ -679,6 +808,9 @@ async function restoreFilesFromSnapshots(
  * 含防死循环（指纹去重）、重试（指数退避）、取消（AbortController）与每轮持久化。
  */
 export async function runTask(task: Task): Promise<void> {
+  // 新任务/恢复运行清空上轮会话的临时自动批准集
+  sessionApprovedTools.clear();
+
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
   const taskStartedAtMs = Date.now();
@@ -801,6 +933,15 @@ export async function runTask(task: Task): Promise<void> {
   const messages = task.messages;
   const callFingerprints = new Map<string, number>();
 
+  // 收集用户提供的文件/目录路径作为受信任外部路径（跳过沙箱）
+  const externalPaths = collectExternalPaths(task);
+
+  // 构建附件上下文（仅在任务首次运行时构建一次）
+  const attachmentContext = await buildAttachmentSystemMessage(task);
+  const attachmentSystemMessage: Message | null = attachmentContext
+    ? { id: `att-${randomUUID()}`, role: 'system', content: attachmentContext, createdAt: new Date().toISOString() }
+    : null;
+
   try {
     setRuntimePhase('initializing', '准备运行任务', 'running');
     taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
@@ -884,6 +1025,7 @@ export async function runTask(task: Task): Promise<void> {
       const requestMessages = [
         memoryMessage,
         skillMessage,
+        attachmentSystemMessage,
         ...ctx.messages,
       ].filter(Boolean) as Message[];
 
@@ -1048,8 +1190,15 @@ export async function runTask(task: Task): Promise<void> {
       const toExecute = validatedCalls.filter(
         (v) => !v.skipReason && v.call.toolName !== 'ask_user',
       );
+      // 自动批准：safe 风险 OR 全局设置 auto-approve OR 本次会话已允许
+      const approvedTools = new Set([
+        ...config.sandbox.autoApprovedTools,
+        ...sessionApprovedTools,
+      ]);
+      const isAutoApproved = (name: string) => approvedTools.has(name);
+
       const isParallelSafe = (v: ValidatedCall) =>
-        v.risk === 'safe' &&
+        (v.risk === 'safe' || isAutoApproved(v.call.toolName)) &&
         toolRegistry.executionPolicyOf(v.call.toolName).parallelizable !== false;
       const safeOnes = toExecute.filter(isParallelSafe);
       const riskyOnes = toExecute.filter((v) => !isParallelSafe(v));
@@ -1114,6 +1263,7 @@ export async function runTask(task: Task): Promise<void> {
             task,
             abortSignal: abortController.signal,
             workspaceDir: taskWorkspace,
+            externalPaths,
           },
           config.agent.toolTimeoutMs,
         );
@@ -1201,13 +1351,16 @@ export async function runTask(task: Task): Promise<void> {
               riskLevel: v.risk,
             });
             updateStep(`等待确认：${v.call.toolName}`, 'paused');
-            const approved = await waitForApproval(
+            const result = await waitForApproval(
               task.id,
               v.tc.id,
               abortController.signal,
             );
-            writeApprovalTrace(task.id, v.call, v.risk, approved, iteration + 1);
-            return { v, approved };
+            if (result.approved && result.sessionApprove) {
+              sessionApprovedTools.add(v.call.toolName);
+            }
+            writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
+            return { v, approved: result.approved };
           }),
         );
 

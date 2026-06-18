@@ -8,6 +8,7 @@ const SETTING_KEYS = {
   llmApiKey: 'llm.apiKey',
   llmBaseUrl: 'llm.baseUrl',
   llmModel: 'llm.model',
+  llmVisionModel: 'llm.visionModel',
   llmAvailableModels: 'llm.availableModels',
   llmEnabledModels: 'llm.enabledModels',
   /** 旧版本字段：曾同时表示“已获取列表”和“主界面可选列表”，现在只作为迁移来源。 */
@@ -16,6 +17,7 @@ const SETTING_KEYS = {
   llmTimeoutMs: 'llm.timeoutMs',
   workspaceDir: 'workspaceDir',
   commandExecutionEnabled: 'sandbox.commandExecutionEnabled',
+  autoApprovedTools: 'sandbox.autoApprovedTools',
   mcpServersJson: 'mcpServersJson',
   cleanupPolicyDays: 'cleanupPolicyDays',
 } as const;
@@ -45,6 +47,7 @@ export function loadPersistedSettings(): void {
   config.llm.provider = normalizeProvider(entries[SETTING_KEYS.llmProvider] || config.llm.provider);
   config.llm.baseUrl = entries[SETTING_KEYS.llmBaseUrl] || config.llm.baseUrl;
   config.llm.model = entries[SETTING_KEYS.llmModel] || config.llm.model;
+  config.llm.visionModel = entries[SETTING_KEYS.llmVisionModel] ?? config.llm.visionModel;
   config.llm.temperature = parseNumber(entries[SETTING_KEYS.llmTemperature], config.llm.temperature);
   config.llm.timeoutMs = parseNumber(entries[SETTING_KEYS.llmTimeoutMs], config.llm.timeoutMs);
   config.workspaceDir = entries[SETTING_KEYS.workspaceDir] || config.workspaceDir;
@@ -52,6 +55,10 @@ export function loadPersistedSettings(): void {
     entries[SETTING_KEYS.commandExecutionEnabled] === undefined
       ? config.sandbox.commandExecutionEnabled
       : entries[SETTING_KEYS.commandExecutionEnabled] === 'true';
+  const storedAutoApprove = entries[SETTING_KEYS.autoApprovedTools];
+  if (storedAutoApprove !== undefined) {
+    config.sandbox.autoApprovedTools = parseStringArray(storedAutoApprove);
+  }
   if (mcpJson !== undefined) config.mcpServers = parseMcpServers(mcpJson);
 }
 
@@ -61,6 +68,7 @@ export function readRuntimeSettings(): RuntimeSettings {
       provider: 'openai',
       baseUrl: config.llm.baseUrl,
       model: config.llm.model,
+      visionModel: config.llm.visionModel,
       availableModels: readModelList(SETTING_KEYS.llmAvailableModels),
       enabledModels: readEnabledModels(),
       temperature: config.llm.temperature,
@@ -69,6 +77,7 @@ export function readRuntimeSettings(): RuntimeSettings {
     },
     workspaceDir: config.workspaceDir,
     commandExecutionEnabled: config.sandbox.commandExecutionEnabled,
+    autoApprovedTools: [...config.sandbox.autoApprovedTools],
     mcpServersJson: settingsStore.get(SETTING_KEYS.mcpServersJson) ?? stringifyMcpServers(),
     cleanupPolicyDays: readCleanupPolicyDays(),
     dbPath: config.dbPath,
@@ -94,6 +103,14 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
       config.llm.model = requireNonEmpty(body.llm.model, 'model');
       settingsStore.set(SETTING_KEYS.llmModel, config.llm.model);
       providerChanged = true;
+    }
+    if (body.llm.visionModel !== undefined) {
+      config.llm.visionModel = body.llm.visionModel.trim();
+      if (config.llm.visionModel) {
+        settingsStore.set(SETTING_KEYS.llmVisionModel, config.llm.visionModel);
+      } else {
+        settingsStore.delete(SETTING_KEYS.llmVisionModel);
+      }
     }
     if (body.llm.availableModels !== undefined) {
       settingsStore.set(SETTING_KEYS.llmAvailableModels, stringifyModelList(body.llm.availableModels));
@@ -130,6 +147,11 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   if (body.commandExecutionEnabled !== undefined) {
     config.sandbox.commandExecutionEnabled = body.commandExecutionEnabled;
     settingsStore.set(SETTING_KEYS.commandExecutionEnabled, String(body.commandExecutionEnabled));
+  }
+
+  if (body.autoApprovedTools !== undefined) {
+    config.sandbox.autoApprovedTools = body.autoApprovedTools.map((s) => s.trim()).filter(Boolean);
+    settingsStore.set(SETTING_KEYS.autoApprovedTools, JSON.stringify(config.sandbox.autoApprovedTools));
   }
 
   if (body.mcpServersJson !== undefined) {
@@ -216,4 +238,14 @@ function clampNumber(value: number, min: number, max: number, label: string): nu
 function stringifyMcpServers(): string {
   if (config.mcpServers.length === 0) return '';
   return JSON.stringify({ mcpServers: Object.fromEntries(config.mcpServers.map((s) => [s.name, s])) }, null, 2);
+}
+
+function parseStringArray(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return [...new Set(parsed.filter((item): item is string => typeof item === 'string').map((s) => s.trim()).filter(Boolean))];
+  } catch {
+    return [];
+  }
 }

@@ -39,7 +39,9 @@ export const zh = {
   // 通用操作
   "action.confirm": "确认",
   "action.reject": "拒绝",
-  "action.approve": "批准",
+  "action.approve": "允许本次",
+  "action.approveOnce": "允许本次",
+  "action.approveSession": "本次会话允许",
   "action.reply": "回复",
   "action.close": "关闭",
   "action.copy": "复制",
@@ -347,6 +349,9 @@ export const zh = {
   "settings.modelDescFetchedMid": "个模型，主界面启用",
   "settings.modelDescFetchedSuffix": "个。",
   "settings.modelDescDefault": "Agent runtime 调用的默认模型。",
+  "settings.visionModelTitle": "视觉模型",
+  "settings.visionModelDesc": "消息包含图片时自动切换此模型（留空则用主模型，可能不支持图片识别）。",
+  "settings.visionModelPlaceholder": "留空使用主模型",
   "settings.fetchModelsTitle": "获取模型列表",
   "settings.fetchModelsDesc": "只在点击时从当前 Base URL/API Key 拉取一次，并保存为可管理的模型清单。",
   "settings.fetching": "获取中",
@@ -382,6 +387,7 @@ export const zh = {
   "settings.toolEmptyTitle": "未发现可用工具",
   "settings.toolEmptyDesc": "Agent 后端未返回工具目录。",
   "settings.builtinTool": "内置",
+  "settings.autoApproveTool": "自动批准：跳过审批直接执行",
   // 数据
   "settings.localStorage": "本地存储",
   "settings.tasksTracesMemories": "任务 / 轨迹 / 记忆",

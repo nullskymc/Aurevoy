@@ -49,6 +49,21 @@ export interface MessageToolCall {
   };
 }
 
+/** 用户附加到消息的文件引用。Agent 运行在本机，通过路径直接读取文件内容。 */
+export interface MessageAttachment {
+  id: string;
+  /** 文件名（含扩展名） */
+  name: string;
+  /** 本地文件绝对路径 */
+  path: string;
+  /** MIME 类型，如 text/typescript、image/png */
+  mimeType: string;
+  /** 文件大小（字节） */
+  size: number;
+  /** 附件类型；为图片等后续扩展预留 */
+  type: 'file' | 'image';
+}
+
 /** 一条对话消息 */
 export interface Message {
   id: string;
@@ -61,6 +76,8 @@ export interface Message {
   toolCallId?: string;
   /** DeepSeek 思考模式的 reasoning_content 透传；多轮须原样回传，否则 API 报 400 */
   reasoningContent?: string;
+  /** 用户消息携带的文件附件（路径引用）；Agent 据此注入文件上下文 */
+  attachments?: MessageAttachment[];
 }
 
 /** 计划中的一个步骤 */
@@ -425,6 +442,7 @@ export interface CreateTaskRequest {
   goal: string;
   budget?: TaskBudget;
   projectId?: string;
+  attachments?: MessageAttachment[];
 }
 
 export interface CreateTaskResponse {
@@ -468,6 +486,8 @@ export interface ApprovalDecisionRequest {
   callId: string;
   /** true=批准执行，false=拒绝 */
   approved: boolean;
+  /** 本次会话内对该工具自动批准，后续不再询问 */
+  sessionApprove?: boolean;
 }
 
 export interface ApprovalDecisionResponse {
@@ -520,6 +540,7 @@ export interface TaskTraceListResponse {
 export interface ContinueTaskRequest {
   /** 用户的后续追问/补充 */
   message: string;
+  attachments?: MessageAttachment[];
 }
 
 export interface ContinueTaskResponse {
@@ -724,6 +745,8 @@ export interface RuntimeSettings {
     provider: 'openai';
     baseUrl: string;
     model: string;
+    /** 视觉子模型：当消息带图片附件时自动切换此模型（空则用主模型） */
+    visionModel: string;
     /** 最近一次手动从当前 Provider 获取到的完整模型列表。 */
     availableModels: string[];
     /** 用户勾选后允许出现在主界面模型菜单中的模型列表。 */
@@ -734,6 +757,8 @@ export interface RuntimeSettings {
   };
   workspaceDir: string;
   commandExecutionEnabled: boolean;
+  /** 自动批准的工具名列表 —— 开启后跳过审批直接执行 */
+  autoApprovedTools: string[];
   mcpServersJson: string;
   cleanupPolicyDays: number;
   dbPath: string;
@@ -744,6 +769,8 @@ export interface UpdateRuntimeSettingsRequest {
     provider: 'openai';
     baseUrl: string;
     model: string;
+    /** 视觉子模型：空字符串表示清除 */
+    visionModel: string;
     availableModels: string[];
     enabledModels: string[];
     temperature: number;
@@ -753,6 +780,7 @@ export interface UpdateRuntimeSettingsRequest {
   }>;
   workspaceDir?: string;
   commandExecutionEnabled?: boolean;
+  autoApprovedTools?: string[];
   mcpServersJson?: string;
   cleanupPolicyDays?: number;
 }

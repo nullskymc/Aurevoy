@@ -210,7 +210,7 @@ export async function buildServer(externalLogger?: Logger) {
       if (!project) return reply.code(404).send({ error: 'project not found' });
     }
 
-    const task = createTask(goal, req.body?.budget, projectId);
+    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments);
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runTask(task);
 
@@ -235,7 +235,7 @@ export async function buildServer(externalLogger?: Logger) {
       const message = req.body?.message?.trim();
       if (!message) return reply.code(400).send({ error: 'message is required' });
 
-      addUserTurn(task, message);
+      addUserTurn(task, message, req.body?.attachments);
       // 异步带完整历史重跑循环；前端通过同一 SSE 地址订阅这一轮
       void runTask(task);
 
@@ -398,11 +398,11 @@ export async function buildServer(externalLogger?: Logger) {
     async (req, reply) => {
       const task = taskStore.get(req.params.id);
       if (!task) return reply.code(404).send({ error: 'task not found' });
-      const { callId, approved } = req.body ?? {};
+      const { callId, approved, sessionApprove } = req.body ?? {};
       if (typeof callId !== 'string' || typeof approved !== 'boolean') {
         return reply.code(400).send({ error: 'callId(string) 与 approved(boolean) 必填' });
       }
-      const delivered = resolveApproval(req.params.id, callId, approved);
+      const delivered = resolveApproval(req.params.id, callId, approved, sessionApprove);
       const body: ApprovalDecisionResponse = { taskId: req.params.id, callId, delivered };
       return reply.send(body);
     },

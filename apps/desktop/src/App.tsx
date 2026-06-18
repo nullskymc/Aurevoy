@@ -4,6 +4,7 @@ import type {
   AgentEvent,
   HealthResponse,
   MemoryCategory,
+  MessageAttachment,
   RevertMode,
   Task,
   ToolDescriptor,
@@ -43,6 +44,8 @@ import {
   updateMemory,
 } from "./lib/api";
 import { ensureDesktopAgentProcess } from "./lib/desktopAgent";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { useArtifacts } from "./hooks/useArtifacts";
 import { useMemories } from "./hooks/useMemories";
 import { useSSEStream } from "./hooks/useSSEStream";
@@ -154,6 +157,7 @@ function App() {
   const [contentMode, setContentMode] = useState<ContentMode>("conversation");
   const [events, setEvents] = useState<FeedItem[]>([]);
   const [goal, setGoal] = useState("");
+  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
@@ -238,6 +242,98 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem("aurevoy.fontScale", String(fontScale));
   }, [fontScale]);
+
+  // Tauri 原生拖拽事件：获取 Finder 拖入的文件绝对路径
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === 'drop') {
+          const paths = event.payload.paths;
+          void (async () => {
+            for (const p of paths) {
+              try {
+                const meta = await invoke<{ name: string; size: number; is_dir: boolean; mime_type: string }>(
+                  'file_metadata',
+                  { path: p },
+                );
+                if (meta.is_dir) {
+                  // 拖入文件夹 → 导入为项目
+                  void handleImportProjectPath(p);
+                } else {
+                  // 拖入文件 → 添加为附件
+                  setAttachments((prev) => {
+                    // 去重
+                    if (prev.some((a) => a.path === p)) return prev;
+                    return [
+                      ...prev,
+                      {
+                        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        name: meta.name,
+                        path: p,
+                        mimeType: meta.mime_type,
+                        size: meta.size,
+                        type: meta.mime_type.startsWith('image/') ? 'image' : 'file',
+                      },
+                    ];
+                  });
+                }
+              } catch {
+                setNotice(`无法读取文件信息: ${p}`);
+              }
+            }
+          })();
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        // 非 Tauri 环境（浏览器开发模式）忽略
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  async function handleImportProjectPath(dirPath: string): Promise<void> {
+    try {
+      const project = await createProject({ path: dirPath });
+      setProjects((prev) => [...prev, project]);
+      setNotice(`已导入项目: ${project.name}`);
+    } catch (err) {
+      setNotice(`导入失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handlePasteFiles(
+    files: Array<{ name: string; dataUrl: string; mimeType: string }>,
+  ): Promise<void> {
+    for (const f of files) {
+      try {
+        const path = await invoke<string>('save_temp_file', {
+          name: f.name,
+          data: f.dataUrl,
+        });
+        setAttachments((prev) => {
+          if (prev.some((a) => a.path === path)) return prev;
+          return [
+            ...prev,
+            {
+              id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              name: f.name,
+              path,
+              mimeType: f.mimeType,
+              size: f.dataUrl.length, // 近似——data URL 长度约 4/3 原始大小
+              type: 'image' as const,
+            },
+          ];
+        });
+      } catch (err) {
+        setNotice(`粘贴图片失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
 
   async function bootstrapRuntime(): Promise<void> {
     try {
@@ -467,7 +563,7 @@ function App() {
     }
   }
 
-  async function startGoal(rawGoal: string): Promise<void> {
+  async function startGoal(rawGoal: string, attach?: MessageAttachment[]): Promise<void> {
     const trimmed = rawGoal.trim();
     if (!trimmed || busy) return;
 
@@ -479,10 +575,11 @@ function App() {
     setStatus("pending");
     setPhase("initializing");
     setGoal("");
+    setAttachments([]);
     closeStream();
 
     try {
-      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId);
+      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach);
       setCurrentTask(task);
       setPhase(task.phase);
       setTraces([]);
@@ -508,7 +605,7 @@ function App() {
   }
 
   /** 在当前任务内追加一轮输入并继续（多轮对话）；保留后端完整上下文。 */
-  async function continueGoal(rawMessage: string): Promise<void> {
+  async function continueGoal(rawMessage: string, attach?: MessageAttachment[]): Promise<void> {
     const trimmed = rawMessage.trim();
     if (!trimmed || busy || !currentTask) return;
 
@@ -520,10 +617,11 @@ function App() {
     setStatus("running");
     setPhase("initializing");
     setGoal("");
+    setAttachments([]);
     closeStream();
 
     try {
-      const { task } = await continueTask(currentTask.id, trimmed);
+      const { task } = await continueTask(currentTask.id, trimmed, attach);
       setCurrentTask(task);
       setPhase(task.phase);
       updateTaskList(task);
@@ -540,16 +638,18 @@ function App() {
     const trimmed = goal.trim();
     if (trimmed === "/compact") {
       setGoal("");
+      setAttachments([]);
       void handleCompact();
       return;
     }
+    const currentAttachments = attachments.length > 0 ? [...attachments] : undefined;
     if (editingMessageId) {
       setEditingMessageId(null);
-      void continueGoal(goal);
+      void continueGoal(goal, currentAttachments);
     } else if (currentTask && !busy) {
-      void continueGoal(goal);
+      void continueGoal(goal, currentAttachments);
     } else {
-      void startGoal(goal);
+      void startGoal(goal, currentAttachments);
     }
   }
 
@@ -681,11 +781,15 @@ function App() {
     }
   }
 
-  function handleToolDecision(callId: string, approved: boolean): void {
+  function handleToolDecision(
+    callId: string,
+    approved: boolean,
+    sessionApprove?: boolean,
+  ): void {
     const taskId = currentTask?.id;
     if (!taskId) return;
     setNotice(null);
-    void approveToolCall(taskId, callId, approved).catch((err) => {
+    void approveToolCall(taskId, callId, approved, sessionApprove).catch((err) => {
       setNotice(
         `${t("notice.submit")}${approved ? t("action.approve") : t("action.reject")}${t("notice.failedColon")}${err instanceof Error ? err.message : String(err)}${t("notice.pleaseRetry")}`,
       );
@@ -784,6 +888,7 @@ function App() {
         provider: "openai",
         baseUrl: draft.baseUrl,
         model: draft.model,
+        visionModel: draft.visionModel,
         enabledModels: mergedEnabled,
         temperature: draft.temperature,
         timeoutMs: draft.timeoutMs,
@@ -875,6 +980,23 @@ function App() {
     void updateTool(name, { enabled })
       .then((updated) => {
         setTools((prev) => prev.map((tool) => (tool.name === name ? updated : tool)));
+        // 工具被禁用时同步移除 auto-approve
+        if (!enabled) {
+          const next = (runtimeSettings?.autoApprovedTools ?? []).filter((n) => n !== name);
+          setRuntimeSettings((prev) => prev ? { ...prev, autoApprovedTools: next } : prev);
+        }
+      })
+      .catch((err) => setNotice(`${t("notice.updateToolFailed")}${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  function handleToggleAutoApprove(name: string, autoApprove: boolean): void {
+    const current = runtimeSettings?.autoApprovedTools ?? [];
+    const next = autoApprove
+      ? [...new Set([...current, name])]
+      : current.filter((n) => n !== name);
+    void updateSettings({ autoApprovedTools: next })
+      .then((updated) => {
+        setRuntimeSettings(updated);
       })
       .catch((err) => setNotice(`${t("notice.updateToolFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
@@ -1146,6 +1268,8 @@ function App() {
             onClose={handleCloseSettings}
             onSave={handleSaveSettings}
             onToggleTool={handleToggleTool}
+            autoApprovedTools={runtimeSettings?.autoApprovedTools ?? []}
+            onToggleAutoApprove={handleToggleAutoApprove}
             onCleanup={handleCleanupData}
             onRefresh={refreshSettings}
             onFetchModels={handleFetchModels}
@@ -1202,9 +1326,13 @@ function App() {
                 projectName={draftProjectName}
                 isEditing={editingMessageId !== null}
                 skills={skills}
+                attachments={attachments}
+                onAttachmentsChange={setAttachments}
+                onPasteFiles={(files) => void handlePasteFiles(files)}
                 onCancelEdit={() => {
                   setEditingMessageId(null);
                   setGoal("");
+                  setAttachments([]);
                 }}
                 provider={health?.provider}
                 onChange={setGoal}
@@ -1234,6 +1362,9 @@ function App() {
               variant="hero"
               projectName={draftProjectName}
               skills={skills}
+              attachments={attachments}
+              onAttachmentsChange={setAttachments}
+              onPasteFiles={(files) => void handlePasteFiles(files)}
               provider={health?.provider}
               onChange={setGoal}
               onSubmit={handleComposerSubmit}

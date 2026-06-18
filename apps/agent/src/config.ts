@@ -50,6 +50,8 @@ export const config = {
     /** OpenAI 兼容端点的基础地址，不含 /chat/completions */
     baseUrl: process.env.AUREVOY_LLM_BASE_URL ?? 'https://api.openai.com/v1',
     model: process.env.AUREVOY_LLM_MODEL ?? 'gpt-4o-mini',
+    /** 视觉子模型：消息带图片附件时自动切换此模型（空则用主模型，可能不支持视觉） */
+    visionModel: process.env.AUREVOY_LLM_VISION_MODEL ?? '',
     temperature: parseNumber(process.env.AUREVOY_LLM_TEMPERATURE, 0.7),
     /** 单轮 LLM 调用超时（毫秒）；防止半开连接导致任务永久挂起 */
     timeoutMs: parseNumber(process.env.AUREVOY_LLM_TIMEOUT_MS, 120000),
@@ -119,6 +121,8 @@ export const config = {
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean),
+    /** 自动批准的工具名列表 —— 开启后跳过审批，由设置界面管理。 */
+    autoApprovedTools: [] as string[],
   },
 
   network: {

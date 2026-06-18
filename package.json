@@ -1,6 +1,6 @@
 {
   "name": "aurevoy",
-  "version": "0.1.0-test",
+  "version": "0.2.0-dev",
   "private": true,
   "description": "Aurevoy — 让每个人都拥有属于自己的 AI Agent。通用个人 AI Agent 桌面产品。",
   "workspaces": [
@@ -8,11 +8,12 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run build:shared && concurrently -n agent,desktop -c blue,green \"npm:dev:agent\" \"npm:dev:desktop\"",
+    "dev": "npm run build:shared && npm run prepare-agent-deps && concurrently -n agent,desktop -c blue,green \"npm:dev:agent\" \"npm:dev:desktop\"",
     "dev:agent": "npm run dev -w @aurevoy/agent",
     "dev:desktop": "npm run tauri:dev -w @aurevoy/desktop",
     "build": "npm run build -w @aurevoy/shared && npm run build -w @aurevoy/agent && npm run build -w @aurevoy/desktop",
     "build:shared": "npm run build -w @aurevoy/shared",
+    "prepare-agent-deps": "node scripts/prepare-agent-deps.mjs",
     "regression:m3": "node scripts/m3-regression.mjs",
     "regression:m4": "node scripts/m4-regression.mjs",
     "regression:m5": "node scripts/m5-regression.mjs",

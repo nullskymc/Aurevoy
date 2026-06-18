@@ -32,11 +32,31 @@ const DEFAULT_GREP_MATCHES = 50;
 
 // ---- 路径安全校验（Node.js 层，命令执行前）----
 
-export function resolveInWorkspace(input: unknown, workspaceRoot: string): string {
+/** 检查目标路径是否在受信任的外部路径范围内（用户拖拽/选择的文件/目录）。 */
+export function isInsideExternalPath(target: string, externalPaths?: string[]): boolean {
+  if (!externalPaths || externalPaths.length === 0) return false;
+  const resolved = resolve(target);
+  for (const ext of externalPaths) {
+    const extResolved = resolve(ext);
+    if (resolved === extResolved) return true;
+    if (resolved.startsWith(`${extResolved}/`)) return true;
+  }
+  return false;
+}
+
+export function resolveInWorkspace(
+  input: unknown,
+  workspaceRoot: string,
+  externalPaths?: string[],
+): string {
   if (typeof input !== 'string' || input.trim() === '') {
     throw new Error('path 必须是非空字符串');
   }
   const target = isAbsolute(input) ? resolve(input) : resolve(workspaceRoot, input);
+
+  // 受信任外部路径（用户拖拽文件/目录）放行
+  if (isInsideExternalPath(target, externalPaths)) return target;
+
   const rel = relative(workspaceRoot, target);
   if (rel === '') return target;
   if (rel.startsWith('..') || isAbsolute(rel)) {
@@ -63,7 +83,14 @@ async function realpathOrNearest(p: string): Promise<string> {
   }
 }
 
-export async function assertRealPathInside(target: string, workspaceRoot: string): Promise<void> {
+export async function assertRealPathInside(
+  target: string,
+  workspaceRoot: string,
+  externalPaths?: string[],
+): Promise<void> {
+  // 受信任外部路径放行
+  if (isInsideExternalPath(target, externalPaths)) return;
+
   await ensureWorkspace(workspaceRoot);
   const realRoot = await fs.realpath(workspaceRoot);
   const real = await realpathOrNearest(target);
@@ -77,8 +104,14 @@ export function workspaceRootPath(): string {
   return resolve(config.workspaceDir);
 }
 
-function rootFromContext(context?: { workspaceDir?: string }): string {
-  return context?.workspaceDir ?? workspaceRootPath();
+function rootAndExternals(context?: {
+  workspaceDir?: string;
+  externalPaths?: string[];
+}): { root: string; externalPaths: string[] | undefined } {
+  return {
+    root: context?.workspaceDir ?? workspaceRootPath(),
+    externalPaths: context?.externalPaths,
+  };
 }
 
 // ---- 系统命令执行（execFile，非 shell）----
@@ -145,10 +178,10 @@ toolRegistry.register({
     riskLevel: 'safe',
   },
   async execute(args, context) {
-    const root = rootFromContext(context);
+    const { root, externalPaths: extPaths } = rootAndExternals(context);
     await ensureWorkspace(root);
-    const dir = resolveInWorkspace((args.path as string | undefined) ?? '.', root);
-    await assertRealPathInside(dir, root);
+    const dir = resolveInWorkspace((args.path as string | undefined) ?? '.', root, extPaths);
+    await assertRealPathInside(dir, root, extPaths);
     const entries = await fs.readdir(dir, { withFileTypes: true });
     return {
       dir: relative(root, dir) || '.',
@@ -187,9 +220,9 @@ toolRegistry.register({
     riskLevel: 'safe',
   },
   async execute(args, context) {
-    const root = rootFromContext(context);
-    const file = resolveInWorkspace(args.path, root);
-    await assertRealPathInside(file, root);
+    const { root, externalPaths: extPaths } = rootAndExternals(context);
+    const file = resolveInWorkspace(args.path, root, extPaths);
+    await assertRealPathInside(file, root, extPaths);
     const stat = await fs.stat(file);
     if (!stat.isFile()) throw new Error('目标不是文件');
 
@@ -297,10 +330,10 @@ toolRegistry.register({
     riskLevel: 'safe',
   },
   async execute(args, context) {
-    const root = rootFromContext(context);
+    const { root, externalPaths: extPaths } = rootAndExternals(context);
     await ensureWorkspace(root);
-    const searchRoot = resolveInWorkspace(typeof args.path === 'string' ? args.path : '.', root);
-    await assertRealPathInside(searchRoot, root);
+    const searchRoot = resolveInWorkspace(typeof args.path === 'string' ? args.path : '.', root, extPaths);
+    await assertRealPathInside(searchRoot, root, extPaths);
     const stat = await fs.stat(searchRoot).catch(() => null);
     if (!stat?.isDirectory()) throw new Error('search_files 的 path 必须是目录');
     const glob = typeof args.glob === 'string' && args.glob.trim() ? args.glob.trim() : '**/*';
@@ -405,12 +438,12 @@ toolRegistry.register({
     riskLevel: 'caution',
   },
   async execute(args, context) {
-    const root = rootFromContext(context);
-    const source = resolveInWorkspace(args.sourcePath, root);
-    const target = resolveInWorkspace(args.targetPath, root);
-    await assertRealPathInside(source, root);
+    const { root, externalPaths: extPaths } = rootAndExternals(context);
+    const source = resolveInWorkspace(args.sourcePath, root, extPaths);
+    const target = resolveInWorkspace(args.targetPath, root, extPaths);
+    await assertRealPathInside(source, root, extPaths);
     await fs.mkdir(join(target, '..'), { recursive: true });
-    await assertRealPathInside(target, root);
+    await assertRealPathInside(target, root, extPaths);
     const sourceStat = await fs.stat(source);
     if (!sourceStat.isFile()) throw new Error('sourcePath 不是文件');
     if (args.overwrite !== true && await pathExists(target)) throw new Error('targetPath 已存在；如需覆盖请显式传 overwrite=true');
@@ -437,12 +470,12 @@ const moveFileTool = {
     riskLevel: 'caution' as const,
   },
   async execute(args: Record<string, unknown>, context?: { workspaceDir?: string }) {
-    const root = rootFromContext(context);
-    const source = resolveInWorkspace(args.sourcePath, root);
-    const target = resolveInWorkspace(args.targetPath, root);
-    await assertRealPathInside(source, root);
+    const { root, externalPaths: extPaths } = rootAndExternals(context);
+    const source = resolveInWorkspace(args.sourcePath, root, extPaths);
+    const target = resolveInWorkspace(args.targetPath, root, extPaths);
+    await assertRealPathInside(source, root, extPaths);
     await fs.mkdir(join(target, '..'), { recursive: true });
-    await assertRealPathInside(target, root);
+    await assertRealPathInside(target, root, extPaths);
     const sourceStat = await fs.stat(source);
     if (!sourceStat.isFile()) throw new Error('sourcePath 不是文件');
     if (args.overwrite !== true && await pathExists(target)) throw new Error('targetPath 已存在；如需覆盖请显式传 overwrite=true');
@@ -482,9 +515,9 @@ toolRegistry.register({
     },
   },
   async execute(args, context) {
-    const root = rootFromContext(context);
-    const file = resolveInWorkspace(args.path, root);
-    await assertRealPathInside(file, root);
+    const { root, externalPaths: extPaths } = rootAndExternals(context);
+    const file = resolveInWorkspace(args.path, root, extPaths);
+    await assertRealPathInside(file, root, extPaths);
     const oldStr = readNonEmptyString(args.oldString, 'oldString');
     const newStr = String(args.newString ?? '');
     if (oldStr === newStr) throw new Error('oldString 和 newString 相同，无需替换');
@@ -535,14 +568,14 @@ toolRegistry.register({
     riskLevel: 'dangerous',
   },
   async execute(args, context) {
-    const root = rootFromContext(context);
-    const file = resolveInWorkspace(args.path, root);
-    await assertRealPathInside(file, root);
+    const { root, externalPaths: extPaths } = rootAndExternals(context);
+    const file = resolveInWorkspace(args.path, root, extPaths);
+    await assertRealPathInside(file, root, extPaths);
     const stat = await fs.stat(file);
     if (!stat.isFile()) throw new Error('path 不是文件');
-    const trashDir = resolveInWorkspace('.aurevoy-trash', root);
+    const trashDir = resolveInWorkspace('.aurevoy-trash', root, extPaths);
     await fs.mkdir(trashDir, { recursive: true });
-    await assertRealPathInside(trashDir, root);
+    await assertRealPathInside(trashDir, root, extPaths);
     const trashName = `${Date.now()}-${relative(root, file).replace(/[/\\:]/g, '_')}`;
     const trashPath = join(trashDir, trashName);
     await fs.rename(file, trashPath);
@@ -570,11 +603,11 @@ toolRegistry.register({
     riskLevel: 'dangerous',
   },
   async execute(args, context) {
-    const root = rootFromContext(context);
-    const file = resolveInWorkspace(args.path, root);
+    const { root, externalPaths: extPaths } = rootAndExternals(context);
+    const file = resolveInWorkspace(args.path, root, extPaths);
     const content = typeof args.content === 'string' ? args.content : String(args.content ?? '');
     await fs.mkdir(join(file, '..'), { recursive: true });
-    await assertRealPathInside(file, root);
+    await assertRealPathInside(file, root, extPaths);
     if (args.mode === 'append') {
       await fs.appendFile(file, content, 'utf8');
     } else {
@@ -801,16 +834,16 @@ toolRegistry.register({
     riskLevel: 'dangerous',
   },
   async execute(args, context) {
-    const root = rootFromContext(context);
+    const { root, externalPaths: extPaths } = rootAndExternals(context);
     const artifactId = readNonEmptyString(args.artifactId, 'artifactId');
     const path = readNonEmptyString(args.path, 'path');
     const task = context?.task;
     const artifact = task?.artifacts?.find((item) => item.id === artifactId);
     if (!artifact) throw new Error(`artifact 不存在: ${artifactId}`);
     if (artifact.status === 'rejected') throw new Error('artifact 已被拒绝，不能写入文件');
-    const file = resolveInWorkspace(path, root);
+    const file = resolveInWorkspace(path, root, extPaths);
     await fs.mkdir(join(file, '..'), { recursive: true });
-    await assertRealPathInside(file, root);
+    await assertRealPathInside(file, root, extPaths);
     await fs.writeFile(file, artifact.content, 'utf8');
     return { artifactId, path: relative(root, file), bytesWritten: Buffer.byteLength(artifact.content) };
   },
