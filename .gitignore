@@ -19,6 +19,7 @@ target/
 *.db
 # 工具工作区（文件类工具的运行时沙箱目录）
 /workspace/
+/packages/shared/shared/
 .env
 .env.*
 !.env.example
