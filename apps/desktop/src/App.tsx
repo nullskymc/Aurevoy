@@ -306,6 +306,35 @@ function App() {
     }
   }
 
+  async function handlePasteFiles(
+    files: Array<{ name: string; dataUrl: string; mimeType: string }>,
+  ): Promise<void> {
+    for (const f of files) {
+      try {
+        const path = await invoke<string>('save_temp_file', {
+          name: f.name,
+          data: f.dataUrl,
+        });
+        setAttachments((prev) => {
+          if (prev.some((a) => a.path === path)) return prev;
+          return [
+            ...prev,
+            {
+              id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              name: f.name,
+              path,
+              mimeType: f.mimeType,
+              size: f.dataUrl.length, // 近似——data URL 长度约 4/3 原始大小
+              type: 'image' as const,
+            },
+          ];
+        });
+      } catch (err) {
+        setNotice(`粘贴图片失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
   async function bootstrapRuntime(): Promise<void> {
     try {
       const status = await ensureDesktopAgentProcess();
@@ -1298,6 +1327,7 @@ function App() {
                 skills={skills}
                 attachments={attachments}
                 onAttachmentsChange={setAttachments}
+                onPasteFiles={(files) => void handlePasteFiles(files)}
                 onCancelEdit={() => {
                   setEditingMessageId(null);
                   setGoal("");
@@ -1333,6 +1363,7 @@ function App() {
               skills={skills}
               attachments={attachments}
               onAttachmentsChange={setAttachments}
+              onPasteFiles={(files) => void handlePasteFiles(files)}
               provider={health?.provider}
               onChange={setGoal}
               onSubmit={handleComposerSubmit}

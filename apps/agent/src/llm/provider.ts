@@ -85,11 +85,18 @@ const VISION_MODEL_PATTERNS: RegExp[] = [
   /gpt-4-turbo/i,    // GPT-4-Turbo
   /gpt-4-vision/i,   // GPT-4-Vision (legacy)
   /gpt-5/i,          // GPT-5 series
-  /claude-3/i,       // Claude 3/3.5
-  /claude-4/i,       // Claude 4
+  /claude[- ]?[3-9]/i,  // Claude 3+
   /claude-fable|claude-opus|claude-sonnet|claude-haiku/i, // Claude by name
+  /deepseek/i,       // DeepSeek v3+, v4+ (all recent support vision)
   /gemini/i,         // Gemini (all versions support vision)
   /vision/i,         // Any model with "vision" in name
+  /qwenvl|qwen.*vl/i,   // Qwen-VL
+  /glm-4v|glm.*vision/i, // GLM-4V
+  /yi-vision|yi.*vision/i, // Yi-Vision
+  /pixtral/i,        // Mistral Pixtral
+  /llama.*vision|llava/i, // Llama Vision / LLaVA
+  /minimax/i,        // MiniMax (multimodal)
+  /step-1[.o]|step.*vision/i, // Step-1V / Step-1o
 ];
 
 function isVisionModel(model: string): boolean {

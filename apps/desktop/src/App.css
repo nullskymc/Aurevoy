@@ -3580,6 +3580,41 @@ textarea:focus-visible,
   word-break: break-word;
 }
 
+/* 用户消息中的图片附件缩略图 */
+.user-bubble-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 4px;
+}
+
+.user-bubble-image {
+  max-width: 240px;
+  max-height: 180px;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+
+.user-bubble-image:hover {
+  transform: scale(1.03);
+}
+
+.user-bubble-image-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  border: 1px solid var(--border-subtle);
+}
+
 /* ============================================================
    当前轮次上下文操作（重试 / 恢复 / 停止）
    ============================================================ */

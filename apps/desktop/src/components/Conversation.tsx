@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   ClarificationRequest,
   Message,
+  MessageAttachment,
   PlanStep,
   RevertMode,
   Task,
@@ -12,6 +13,7 @@ import type {
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { t } from "../i18n";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
 export interface ToolActivity {
@@ -177,7 +179,16 @@ export function Conversation({
 
         {historyMessages.map((message) => {
           if (message.role === "user") {
-            return <UserBubble key={message.id} content={message.content} messageId={message.id} onEdit={onUserMessageEdit} onBranch={onBranch} />;
+            return (
+              <UserBubble
+                key={message.id}
+                content={message.content}
+                messageId={message.id}
+                attachments={message.attachments}
+                onEdit={onUserMessageEdit}
+                onBranch={onBranch}
+              />
+            );
           }
           if (message.role === "assistant") {
             const tools = toolActivitiesFromAssistant(message, resultMap);
@@ -372,11 +383,13 @@ function ArtifactCard({
 function UserBubble({
   content,
   messageId,
+  attachments,
   onEdit,
   onBranch,
 }: {
   content: string;
   messageId: string;
+  attachments?: MessageAttachment[];
   onEdit?: (messageId: string, content: string, mode: RevertMode) => void;
   onBranch?: (messageId: string) => void;
 }) {
@@ -450,9 +463,33 @@ function UserBubble({
     );
   }
 
+  const imageAttachments = attachments?.filter((a) => a.type === 'image') ?? [];
+
   return (
     <div className="user-bubble-row">
       <div className="user-bubble">{content}</div>
+      {imageAttachments.length > 0 && (
+        <div className="user-bubble-images">
+          {imageAttachments.map((att) => {
+            const src = (() => {
+              try { return convertFileSrc(att.path); } catch { return null; }
+            })();
+            return src ? (
+              <img
+                key={att.id}
+                className="user-bubble-image"
+                src={src}
+                alt={att.name}
+                loading="lazy"
+              />
+            ) : (
+              <span key={att.id} className="user-bubble-image-placeholder">
+                📷 {att.name}
+              </span>
+            );
+          })}
+        </div>
+      )}
       <div className="msg-actions">
         <CopyButton content={content} />
         {onEdit && (

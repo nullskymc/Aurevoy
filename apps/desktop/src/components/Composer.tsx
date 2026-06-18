@@ -32,6 +32,8 @@ interface ComposerProps {
   attachments?: MessageAttachment[];
   /** 附件变更回调 */
   onAttachmentsChange?: (attachments: MessageAttachment[]) => void;
+  /** 粘贴文件回调：Composer 从剪贴板提取图片后通知父组件创建附件 */
+  onPasteFiles?: (files: Array<{ name: string; dataUrl: string; mimeType: string }>) => void;
 }
 
 export function Composer({
@@ -45,6 +47,7 @@ export function Composer({
   skills,
   attachments,
   onAttachmentsChange,
+  onPasteFiles,
   onCancelEdit,
   onChange,
   onSubmit,
@@ -152,6 +155,41 @@ export function Composer({
     // HTML5 drop 不处理文件路径——路径由 Tauri onDragDropEvent 提供
   }
 
+  function handlePaste(e: React.ClipboardEvent): void {
+    const items = e.clipboardData?.items;
+    if (!items || !onPasteFiles) return;
+
+    const reads: Promise<{ name: string; dataUrl: string; mimeType: string } | null>[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item.type.startsWith('image/')) continue;
+      const blob = item.getAsFile();
+      if (!blob) continue;
+      const ext = item.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+      const name = `clipboard-${Date.now()}-${i}.${ext}`;
+      reads.push(
+        new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result === 'string') {
+              resolve({ name, dataUrl: reader.result, mimeType: item.type });
+            } else {
+              resolve(null);
+            }
+          };
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(blob);
+        }),
+      );
+    }
+
+    if (reads.length === 0) return;
+    void Promise.all(reads).then((results) => {
+      const files = results.filter((r): r is NonNullable<typeof r> => r !== null);
+      if (files.length > 0) onPasteFiles(files);
+    });
+  }
+
   const hasAttachments = attachments && attachments.length > 0;
 
   return (
@@ -163,6 +201,7 @@ export function Composer({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      onPaste={handlePaste}
     >
       {isEditing && (
         <div className="composer-edit-banner">
