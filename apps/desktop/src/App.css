@@ -221,7 +221,7 @@ button:disabled {
   height: 100vh;
   border-right: var(--ui-border-width) solid var(--border);
   background: var(--sidebar-bg);
-  padding: var(--ui-space-4) var(--ui-space-3) var(--ui-space-3);
+  padding: calc(var(--ui-space-4) + 38px) var(--ui-space-3) var(--ui-space-3);
   overflow: hidden;
 }
 
@@ -654,6 +654,7 @@ button:disabled {
 
 .app-shell[data-left-collapsed="true"] .topbar-left-tools {
   justify-self: start;
+  padding-left: 80px;
 }
 
 .app-shell[data-left-collapsed="true"] .topbar-actions {

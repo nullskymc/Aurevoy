@@ -1321,7 +1321,7 @@ function App() {
       />
 
       <main className="main">
-        <header className="topbar">
+        <header className="topbar" data-tauri-drag-region>
           <div className="topbar-left-tools">
             {leftCollapsed && (
               <button

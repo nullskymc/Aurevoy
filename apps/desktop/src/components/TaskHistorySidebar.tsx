@@ -103,7 +103,7 @@ export function TaskHistorySidebar({
 
   return (
     <aside className="sidebar app-sidebar" aria-label={t("sidebar.label")}>
-      <div className="sidebar-brand">
+      <div className="sidebar-brand" data-tauri-drag-region>
         <img className="sidebar-brand-logo" src="/aurevoy-wordmark.svg" alt="Aurevoy" />
         <button type="button" className="sidebar-collapse" onClick={onCollapse} aria-label={t("nav.collapse")}>
           <CollapseIcon />
