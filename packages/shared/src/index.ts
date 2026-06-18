@@ -745,6 +745,8 @@ export interface RuntimeSettings {
     provider: 'openai';
     baseUrl: string;
     model: string;
+    /** 视觉子模型：当消息带图片附件时自动切换此模型（空则用主模型） */
+    visionModel: string;
     /** 最近一次手动从当前 Provider 获取到的完整模型列表。 */
     availableModels: string[];
     /** 用户勾选后允许出现在主界面模型菜单中的模型列表。 */
@@ -767,6 +769,8 @@ export interface UpdateRuntimeSettingsRequest {
     provider: 'openai';
     baseUrl: string;
     model: string;
+    /** 视觉子模型：空字符串表示清除 */
+    visionModel: string;
     availableModels: string[];
     enabledModels: string[];
     temperature: number;

@@ -79,28 +79,9 @@ interface OpenAIImageUrlBlock {
 
 type OpenAIContentBlock = OpenAITextBlock | OpenAIImageUrlBlock;
 
-/** 已知支持视觉（image input）的模型名称模式 */
-const VISION_MODEL_PATTERNS: RegExp[] = [
-  /gpt-4o/i,         // GPT-4o, GPT-4o-mini, GPT-4o-*
-  /gpt-4-turbo/i,    // GPT-4-Turbo
-  /gpt-4-vision/i,   // GPT-4-Vision (legacy)
-  /gpt-5/i,          // GPT-5 series
-  /claude[- ]?[3-9]/i,  // Claude 3+
-  /claude-fable|claude-opus|claude-sonnet|claude-haiku/i, // Claude by name
-  /deepseek/i,       // DeepSeek v3+, v4+ (all recent support vision)
-  /gemini/i,         // Gemini (all versions support vision)
-  /vision/i,         // Any model with "vision" in name
-  /qwenvl|qwen.*vl/i,   // Qwen-VL
-  /glm-4v|glm.*vision/i, // GLM-4V
-  /yi-vision|yi.*vision/i, // Yi-Vision
-  /pixtral/i,        // Mistral Pixtral
-  /llama.*vision|llava/i, // Llama Vision / LLaVA
-  /minimax/i,        // MiniMax (multimodal)
-  /step-1[.o]|step.*vision/i, // Step-1V / Step-1o
-];
-
-function isVisionModel(model: string): boolean {
-  return VISION_MODEL_PATTERNS.some((p) => p.test(model));
+/** 消息是否含有图片附件 */
+function hasImageAttachments(msg: Message): boolean {
+  return (msg.attachments ?? []).some((a) => a.type === 'image');
 }
 
 /**
@@ -186,8 +167,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const tools = options?.tools?.length ? toOpenAITools(options.tools) : undefined;
     const payloadMessages: OpenAIChatMessage[] = [
       { role: 'system', content: this.opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT },
-      ...(await Promise.all(messages.map((m) => toOpenAIMessage(m, this.opts.model)))),
+      ...(await Promise.all(messages.map(toOpenAIMessage))),
     ];
+
+    // 视觉子模型：用户消息含图片 + 设置了 visionModel → 切换模型
+    const needsVision = messages.some((m) => hasImageAttachments(m));
+    const effectiveModel = needsVision && config.llm.visionModel
+      ? config.llm.visionModel
+      : this.opts.model;
 
     // Ollama 带 tools 时关闭 streaming（其流式 tool_calls 不稳定）
     const useStream = !(this.isOllama && tools);
@@ -202,7 +189,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         Authorization: `Bearer ${this.opts.apiKey}`,
       },
       body: JSON.stringify({
-        model: this.opts.model,
+        model: effectiveModel,
         temperature: options?.temperature ?? this.opts.temperature,
         stream: useStream,
         ...(useStream ? { stream_options: { include_usage: true } } : {}),
@@ -342,21 +329,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
 }
 
 /** 把 Aurevoy Message 转为 OpenAI 兼容消息格式 */
-async function toOpenAIMessage(
-  msg: Message,
-  model: string,
-): Promise<OpenAIChatMessage> {
+async function toOpenAIMessage(msg: Message): Promise<OpenAIChatMessage> {
   const out: OpenAIChatMessage = {
     role: toOpenAIRole(msg.role),
     content: msg.content,
   };
 
-  // 用户消息 + 图片附件 + 视觉模型 → 多模态 content 数组
-  if (
-    msg.role === 'user' &&
-    msg.attachments?.some((a) => a.type === 'image') &&
-    isVisionModel(model)
-  ) {
+  // 用户消息 + 图片附件 → 多模态 content 数组（由调用方决定使用哪个模型）
+  if (msg.role === 'user' && hasImageAttachments(msg)) {
     const blocks: OpenAIContentBlock[] = [];
 
     // 文本部分
@@ -367,7 +347,7 @@ async function toOpenAIMessage(
     }
 
     // 图片部分
-    for (const att of msg.attachments) {
+    for (const att of msg.attachments ?? []) {
       if (att.type !== 'image') continue;
       const dataUrl = await readImageAsBase64(att.path, att.mimeType);
       if (dataUrl) {

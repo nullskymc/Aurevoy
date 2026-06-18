@@ -12,6 +12,7 @@ import { t } from "../i18n";
 interface SettingsDraft {
   baseUrl: string;
   model: string;
+  visionModel: string;
   apiKey: string;
   workspaceDir: string;
   temperature: number;
@@ -529,6 +530,27 @@ function ProviderSettings({
             />
             <datalist id="settings-model-options">
               {modelInputOptions.map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+          </div>
+        }
+      />
+      <SettingsActionRow
+        title={t("settings.visionModelTitle")}
+        description={t("settings.visionModelDesc")}
+        control={
+          <div className="settings-model-input">
+            <input
+              className="settings-inline-input"
+              list="settings-vision-model-options"
+              value={draft.visionModel}
+              placeholder={t("settings.visionModelPlaceholder")}
+              onChange={(event) => onDraftChange({ ...draft, visionModel: event.currentTarget.value })}
+            />
+            <datalist id="settings-vision-model-options">
+              <option value="" />
+              {availableModels.map((model) => (
                 <option key={model} value={model} />
               ))}
             </datalist>
@@ -1062,6 +1084,7 @@ function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
   return {
     baseUrl: settings?.llm.baseUrl ?? "",
     model: settings?.llm.model ?? "",
+    visionModel: settings?.llm.visionModel ?? "",
     apiKey: "",
     workspaceDir: settings?.workspaceDir ?? "",
     temperature: settings?.llm.temperature ?? 0.7,

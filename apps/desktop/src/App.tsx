@@ -888,6 +888,7 @@ function App() {
         provider: "openai",
         baseUrl: draft.baseUrl,
         model: draft.model,
+        visionModel: draft.visionModel,
         enabledModels: mergedEnabled,
         temperature: draft.temperature,
         timeoutMs: draft.timeoutMs,

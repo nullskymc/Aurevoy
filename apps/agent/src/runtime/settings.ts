@@ -8,6 +8,7 @@ const SETTING_KEYS = {
   llmApiKey: 'llm.apiKey',
   llmBaseUrl: 'llm.baseUrl',
   llmModel: 'llm.model',
+  llmVisionModel: 'llm.visionModel',
   llmAvailableModels: 'llm.availableModels',
   llmEnabledModels: 'llm.enabledModels',
   /** 旧版本字段：曾同时表示“已获取列表”和“主界面可选列表”，现在只作为迁移来源。 */
@@ -46,6 +47,7 @@ export function loadPersistedSettings(): void {
   config.llm.provider = normalizeProvider(entries[SETTING_KEYS.llmProvider] || config.llm.provider);
   config.llm.baseUrl = entries[SETTING_KEYS.llmBaseUrl] || config.llm.baseUrl;
   config.llm.model = entries[SETTING_KEYS.llmModel] || config.llm.model;
+  config.llm.visionModel = entries[SETTING_KEYS.llmVisionModel] ?? config.llm.visionModel;
   config.llm.temperature = parseNumber(entries[SETTING_KEYS.llmTemperature], config.llm.temperature);
   config.llm.timeoutMs = parseNumber(entries[SETTING_KEYS.llmTimeoutMs], config.llm.timeoutMs);
   config.workspaceDir = entries[SETTING_KEYS.workspaceDir] || config.workspaceDir;
@@ -66,6 +68,7 @@ export function readRuntimeSettings(): RuntimeSettings {
       provider: 'openai',
       baseUrl: config.llm.baseUrl,
       model: config.llm.model,
+      visionModel: config.llm.visionModel,
       availableModels: readModelList(SETTING_KEYS.llmAvailableModels),
       enabledModels: readEnabledModels(),
       temperature: config.llm.temperature,
@@ -100,6 +103,14 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
       config.llm.model = requireNonEmpty(body.llm.model, 'model');
       settingsStore.set(SETTING_KEYS.llmModel, config.llm.model);
       providerChanged = true;
+    }
+    if (body.llm.visionModel !== undefined) {
+      config.llm.visionModel = body.llm.visionModel.trim();
+      if (config.llm.visionModel) {
+        settingsStore.set(SETTING_KEYS.llmVisionModel, config.llm.visionModel);
+      } else {
+        settingsStore.delete(SETTING_KEYS.llmVisionModel);
+      }
     }
     if (body.llm.availableModels !== undefined) {
       settingsStore.set(SETTING_KEYS.llmAvailableModels, stringifyModelList(body.llm.availableModels));
