@@ -1,4 +1,5 @@
 import type { Message, MessageRole, TokenUsage, ToolDescriptor } from '@aurevoy/shared';
+import { promises as fs } from 'node:fs';
 import { config } from '../config.js';
 import { ToolCallAccumulator, type AccumulatedToolCall, type ToolCallDelta } from '../agent/tool-call-accumulator.js';
 
@@ -62,10 +63,60 @@ interface OpenAIProviderOptions {
   systemPrompt?: string;
 }
 
+/** OpenAI 多模态 content block 类型 */
+interface OpenAITextBlock {
+  type: 'text';
+  text: string;
+}
+
+interface OpenAIImageUrlBlock {
+  type: 'image_url';
+  image_url: {
+    url: string; // data:image/...;base64,... 或 https:// URL
+    detail?: 'low' | 'high' | 'auto';
+  };
+}
+
+type OpenAIContentBlock = OpenAITextBlock | OpenAIImageUrlBlock;
+
+/** 已知支持视觉（image input）的模型名称模式 */
+const VISION_MODEL_PATTERNS: RegExp[] = [
+  /gpt-4o/i,         // GPT-4o, GPT-4o-mini, GPT-4o-*
+  /gpt-4-turbo/i,    // GPT-4-Turbo
+  /gpt-4-vision/i,   // GPT-4-Vision (legacy)
+  /gpt-5/i,          // GPT-5 series
+  /claude-3/i,       // Claude 3/3.5
+  /claude-4/i,       // Claude 4
+  /claude-fable|claude-opus|claude-sonnet|claude-haiku/i, // Claude by name
+  /gemini/i,         // Gemini (all versions support vision)
+  /vision/i,         // Any model with "vision" in name
+];
+
+function isVisionModel(model: string): boolean {
+  return VISION_MODEL_PATTERNS.some((p) => p.test(model));
+}
+
+/**
+ * 将图片文件读取为 base64 data URL。
+ * 限制文件大小 ≤ 20MB，超过则返回错误信息。
+ */
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+async function readImageAsBase64(filePath: string, mimeType: string): Promise<string | null> {
+  try {
+    const buf = await fs.readFile(filePath);
+    if (buf.length > MAX_IMAGE_BYTES) return null;
+    const b64 = buf.toString('base64');
+    return `data:${mimeType};base64,${b64}`;
+  } catch {
+    return null;
+  }
+}
+
 /** 上游 OpenAI 兼容消息格式 */
 interface OpenAIChatMessage {
   role: string;
-  content: string | null;
+  content: string | null | OpenAIContentBlock[];
   tool_calls?: unknown;
   tool_call_id?: string;
   reasoning_content?: string;
@@ -128,7 +179,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const tools = options?.tools?.length ? toOpenAITools(options.tools) : undefined;
     const payloadMessages: OpenAIChatMessage[] = [
       { role: 'system', content: this.opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT },
-      ...messages.map(toOpenAIMessage),
+      ...(await Promise.all(messages.map((m) => toOpenAIMessage(m, this.opts.model)))),
     ];
 
     // Ollama 带 tools 时关闭 streaming（其流式 tool_calls 不稳定）
@@ -284,11 +335,51 @@ export class OpenAICompatibleProvider implements LLMProvider {
 }
 
 /** 把 Aurevoy Message 转为 OpenAI 兼容消息格式 */
-function toOpenAIMessage(msg: Message): OpenAIChatMessage {
+async function toOpenAIMessage(
+  msg: Message,
+  model: string,
+): Promise<OpenAIChatMessage> {
   const out: OpenAIChatMessage = {
     role: toOpenAIRole(msg.role),
     content: msg.content,
   };
+
+  // 用户消息 + 图片附件 + 视觉模型 → 多模态 content 数组
+  if (
+    msg.role === 'user' &&
+    msg.attachments?.some((a) => a.type === 'image') &&
+    isVisionModel(model)
+  ) {
+    const blocks: OpenAIContentBlock[] = [];
+
+    // 文本部分
+    if (msg.content.trim()) {
+      blocks.push({ type: 'text', text: msg.content });
+    } else {
+      blocks.push({ type: 'text', text: '请看以下图片：' });
+    }
+
+    // 图片部分
+    for (const att of msg.attachments) {
+      if (att.type !== 'image') continue;
+      const dataUrl = await readImageAsBase64(att.path, att.mimeType);
+      if (dataUrl) {
+        blocks.push({
+          type: 'image_url',
+          image_url: { url: dataUrl, detail: 'auto' },
+        });
+      } else {
+        // 图片读取失败时插入提示文本
+        blocks.push({
+          type: 'text',
+          text: `\n[图片 "${att.name}" (${att.path}) 无法读取或过大（>20MB）]`,
+        });
+      }
+    }
+
+    out.content = blocks;
+  }
+
   // assistant 携带 tool_calls；OpenAI 要求此时 content 可为 null
   if (msg.role === 'assistant' && msg.toolCalls?.length) {
     out.tool_calls = msg.toolCalls;

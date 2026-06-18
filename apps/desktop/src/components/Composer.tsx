@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { t, type TranslationKey } from "../i18n";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
 
 interface SlashCommand {
@@ -199,22 +200,48 @@ export function Composer({
         {/* 附件 chip 列表 */}
         {hasAttachments && (
           <div className="composer-attachments">
-            {attachments!.map((att) => (
-              <span key={att.id} className="composer-attachment-chip" title={att.path}>
-                <span className="composer-attachment-chip-icon">
-                  {att.type === 'image' ? <ImageFileIcon /> : <DocFileIcon />}
-                </span>
-                <span className="composer-attachment-chip-name">{att.name}</span>
-                <button
-                  type="button"
-                  className="composer-attachment-chip-remove"
-                  aria-label="Remove attachment"
-                  onClick={() => handleRemoveAttachment(att.id)}
+            {attachments!.map((att) => {
+              const isImage = att.type === 'image';
+              const imgSrc = isImage ? (() => {
+                try {
+                  return convertFileSrc(att.path);
+                } catch {
+                  return null;
+                }
+              })() : null;
+
+              return (
+                <span
+                  key={att.id}
+                  className={`composer-attachment-chip${isImage ? ' is-image' : ''}`}
+                  data-type={isImage ? 'image' : 'file'}
+                  title={att.path}
                 >
-                  <XIcon />
-                </button>
-              </span>
-            ))}
+                  <span className="composer-attachment-chip-icon">
+                    {isImage && imgSrc ? (
+                      <img
+                        className="composer-attachment-thumb"
+                        src={imgSrc}
+                        alt={att.name}
+                      />
+                    ) : isImage ? (
+                      <ImageFileIcon />
+                    ) : (
+                      <DocFileIcon />
+                    )}
+                  </span>
+                  <span className="composer-attachment-chip-name">{att.name}</span>
+                  <button
+                    type="button"
+                    className="composer-attachment-chip-remove"
+                    aria-label="Remove attachment"
+                    onClick={() => handleRemoveAttachment(att.id)}
+                  >
+                    <XIcon />
+                  </button>
+                </span>
+              );
+            })}
           </div>
         )}
 

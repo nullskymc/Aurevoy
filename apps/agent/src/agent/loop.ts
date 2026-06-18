@@ -731,6 +731,9 @@ async function buildAttachmentSystemMessage(task: Task): Promise<string | null> 
   lines.push('');
 
   for (const att of lastMsg.attachments) {
+    // 图片附件由 Provider 层以多模态 content block 注入，此处不处理
+    if (att.type === 'image') continue;
+
     if (isTextFile(att.mimeType, att.name)) {
       try {
         let content = await fs.readFile(att.path, 'utf8');

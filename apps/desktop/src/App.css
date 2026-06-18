@@ -1126,6 +1126,25 @@ button:disabled {
   color: var(--text-tertiary);
 }
 
+/* 图片缩略图 */
+.composer-attachment-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  object-fit: cover;
+  border: 1px solid var(--border-subtle);
+}
+
+/* 图片附件 chip 的图标容器略大 */
+.composer-attachment-chip.is-image {
+  height: 32px;
+}
+
+.composer-attachment-chip.is-image .composer-attachment-thumb {
+  width: 24px;
+  height: 24px;
+}
+
 .composer-attachment-chip-name {
   overflow: hidden;
   text-overflow: ellipsis;
