@@ -382,6 +382,7 @@ export const zh = {
   "settings.toolEmptyTitle": "未发现可用工具",
   "settings.toolEmptyDesc": "Agent 后端未返回工具目录。",
   "settings.builtinTool": "内置",
+  "settings.autoApproveTool": "自动批准：跳过审批直接执行",
   // 数据
   "settings.localStorage": "本地存储",
   "settings.tasksTracesMemories": "任务 / 轨迹 / 记忆",

@@ -2633,6 +2633,36 @@ button:disabled {
   white-space: nowrap;
 }
 
+.settings-tool-row {
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+}
+
+.settings-tool-auto-approve {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  margin-left: 0;
+  padding-left: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.settings-tool-auto-approve input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent, #6366f1);
+  cursor: pointer;
+}
+
+.settings-tool-auto-approve input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .settings-row-control {
   display: flex;
   justify-content: flex-end;

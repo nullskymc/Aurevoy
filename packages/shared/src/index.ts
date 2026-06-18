@@ -753,6 +753,8 @@ export interface RuntimeSettings {
   };
   workspaceDir: string;
   commandExecutionEnabled: boolean;
+  /** 自动批准的工具名列表 —— 开启后跳过审批直接执行 */
+  autoApprovedTools: string[];
   mcpServersJson: string;
   cleanupPolicyDays: number;
   dbPath: string;
@@ -772,6 +774,7 @@ export interface UpdateRuntimeSettingsRequest {
   }>;
   workspaceDir?: string;
   commandExecutionEnabled?: boolean;
+  autoApprovedTools?: string[];
   mcpServersJson?: string;
   cleanupPolicyDays?: number;
 }

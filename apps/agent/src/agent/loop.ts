@@ -1144,8 +1144,12 @@ export async function runTask(task: Task): Promise<void> {
       const toExecute = validatedCalls.filter(
         (v) => !v.skipReason && v.call.toolName !== 'ask_user',
       );
+      // 自动批准：safe 风险 OR 用户在设置中开启了 auto-approve
+      const approvedTools = new Set(config.sandbox.autoApprovedTools);
+      const isAutoApproved = (name: string) => approvedTools.has(name);
+
       const isParallelSafe = (v: ValidatedCall) =>
-        v.risk === 'safe' &&
+        (v.risk === 'safe' || isAutoApproved(v.call.toolName)) &&
         toolRegistry.executionPolicyOf(v.call.toolName).parallelizable !== false;
       const safeOnes = toExecute.filter(isParallelSafe);
       const riskyOnes = toExecute.filter((v) => !isParallelSafe(v));

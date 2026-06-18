@@ -946,6 +946,23 @@ function App() {
     void updateTool(name, { enabled })
       .then((updated) => {
         setTools((prev) => prev.map((tool) => (tool.name === name ? updated : tool)));
+        // 工具被禁用时同步移除 auto-approve
+        if (!enabled) {
+          const next = (runtimeSettings?.autoApprovedTools ?? []).filter((n) => n !== name);
+          setRuntimeSettings((prev) => prev ? { ...prev, autoApprovedTools: next } : prev);
+        }
+      })
+      .catch((err) => setNotice(`${t("notice.updateToolFailed")}${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  function handleToggleAutoApprove(name: string, autoApprove: boolean): void {
+    const current = runtimeSettings?.autoApprovedTools ?? [];
+    const next = autoApprove
+      ? [...new Set([...current, name])]
+      : current.filter((n) => n !== name);
+    void updateSettings({ autoApprovedTools: next })
+      .then((updated) => {
+        setRuntimeSettings(updated);
       })
       .catch((err) => setNotice(`${t("notice.updateToolFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
@@ -1217,6 +1234,8 @@ function App() {
             onClose={handleCloseSettings}
             onSave={handleSaveSettings}
             onToggleTool={handleToggleTool}
+            autoApprovedTools={runtimeSettings?.autoApprovedTools ?? []}
+            onToggleAutoApprove={handleToggleAutoApprove}
             onCleanup={handleCleanupData}
             onRefresh={refreshSettings}
             onFetchModels={handleFetchModels}

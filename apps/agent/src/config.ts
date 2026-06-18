@@ -119,6 +119,8 @@ export const config = {
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean),
+    /** 自动批准的工具名列表 —— 开启后跳过审批，由设置界面管理。 */
+    autoApprovedTools: [] as string[],
   },
 
   network: {
