@@ -4271,6 +4271,13 @@ textarea:focus-visible,
 
 /* ============ Agent 运行态（对话流内轻量呈现） ============ */
 
+.aurevoy-agent-runner-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
 .aurevoy-agent-runner-box {
   position: relative;
   display: flex;
@@ -4458,6 +4465,30 @@ textarea:focus-visible,
   font-style: normal;
 }
 
+/* 工具执行结果预览 */
+.tool-run-detail-result {
+  margin: 0 0 4px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border-radius: var(--ui-radius-sm);
+  font-size: calc(12px * var(--font-scale));
+  max-height: 80px;
+  overflow: hidden auto;
+}
+
+.tool-run-detail-result code {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.4;
+}
+
+.tool-run-detail-result--error code {
+  color: var(--danger-soft-fg);
+}
+
 .tool-run-approval {
   display: flex;
   align-items: center;
@@ -4487,6 +4518,51 @@ textarea:focus-visible,
   font-size: calc(12px * var(--font-scale));
   font-weight: 650;
   padding: 5px 9px;
+}
+
+/* ApprovalInline: 已决策确认态 */
+.tool-run-approval--decided {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  min-height: 32px;
+}
+
+.tool-run-approval-result {
+  color: var(--text-secondary);
+  font-size: calc(12.5px * var(--font-scale));
+  font-weight: 600;
+}
+
+.tool-run-approval--decided[data-decision="approve"] .tool-run-approval-result {
+  color: var(--success-soft-fg);
+}
+
+.tool-run-approval--decided[data-decision="reject"] .tool-run-approval-result {
+  color: var(--danger-soft-fg);
+}
+
+.tool-approval--decided {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+}
+
+.tool-approval-result {
+  color: var(--text-secondary);
+  font-size: calc(12.5px * var(--font-scale));
+  font-weight: 600;
+}
+
+.tool-approval--decided[data-decision="approve"] .tool-approval-result {
+  color: var(--success-soft-fg);
+}
+
+.tool-approval--decided[data-decision="reject"] .tool-approval-result {
+  color: var(--danger-soft-fg);
 }
 
 /* 动作类型标签 */

@@ -140,14 +140,31 @@ export function Conversation({
   const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const previousTaskIdRef = useRef<string | null>(null);
+  const hasScrolledToTail = useRef(false);
 
   const hasStreamingContent = output.trim().length > 0 || reasoning.trim().length > 0;
   const hasLiveTail = busy || liveToolActivity.length > 0 || phase === "waiting_approval" || hasStreamingContent;
 
   // 只在实时运行/等待审批时跟随最新输出；历史回看保持自然阅读位置。
   useEffect(() => {
-    if (hasLiveTail) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [hasLiveTail, output, phase, plan, status, liveToolActivity, task.messages.length]);
+    if (liveToolActivity.length > 0) {
+      // 有工具活动时，首次出现时滚动一次即可，避免 liveToolActivity 新引用反复触发
+      if (!hasScrolledToTail.current) {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+        hasScrolledToTail.current = true;
+      }
+    } else if (phase === "waiting_approval") {
+      // 审批态下且 liveToolActivity 仍为空，仍滚动到尾部
+      if (!hasScrolledToTail.current) {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+        hasScrolledToTail.current = true;
+      }
+    } else if (hasLiveTail) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    } else {
+      hasScrolledToTail.current = false;
+    }
+  }, [hasLiveTail, output, phase, plan, status, liveToolActivity.length, task.messages.length]);
 
   // 切换历史任务时回到任务顶部，避免复用滚动容器导致摘要被顶栏遮住。
   useEffect(() => {
@@ -232,6 +249,27 @@ export function Conversation({
               onToolDecision={onToolDecision}
               onPlanDecision={onPlanDecision}
             />
+
+            {/* 兜底审批 UI：当 liveToolActivity 尚无审批项但 task.pendingApprovals 已有数据时 */}
+            {phase === "waiting_approval" && liveToolActivity.filter((item) => item.status === "awaiting").length === 0 && (task.pendingApprovals ?? []).length > 0 && (
+              <section className="tool-run-summary" data-status="awaiting">
+                <div className="tool-run-head">
+                  <span className="tool-run-dot" aria-hidden="true" />
+                  <span className="tool-run-title">执行工具</span>
+                  <span className="tool-run-names">{(task.pendingApprovals ?? []).map(pa => pa.call.toolName).join("、")}</span>
+                  <span className="tool-run-status">等待确认 {(task.pendingApprovals ?? []).length}</span>
+                </div>
+                {(task.pendingApprovals ?? []).map(pa => ({
+                  id: pa.call.id,
+                  name: pa.call.toolName,
+                  args: pa.call.args,
+                  status: "awaiting" as const,
+                  riskLevel: pa.riskLevel,
+                })).map(item => (
+                  <ApprovalInline key={item.id} item={item} onDecision={onToolDecision} />
+                ))}
+              </section>
+            )}
 
             {(task.clarifications ?? []).filter((item) => item.status === "pending").map((clarification) => (
               <ClarificationCard
@@ -717,7 +755,7 @@ function ToolActivityCard({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen ?? item.status === "awaiting");
-  const [decided, setDecided] = useState(false);
+  const [decided, setDecided] = useState<'approve' | 'reject' | null>(null);
 
   // 状态变为待确认时自动展开（useState 初始值不随 props 更新，需 effect 补齐）
   useEffect(() => {
@@ -743,7 +781,7 @@ function ToolActivityCard({
   const argsText = safeStringify(item.args);
 
   function decide(approved: boolean, sessionApprove?: boolean) {
-    setDecided(true);
+    setDecided(approved ? 'approve' : 'reject');
     onDecision(item.id, approved, sessionApprove);
   }
 
@@ -789,14 +827,13 @@ function ToolActivityCard({
           )}
         </div>
       )}
-      {item.status === "awaiting" && (
+      {!decided && item.status === "awaiting" && (
         <div className="tool-approval">
           <span className="tool-approval-hint">{t("tool.approvalHint")}</span>
           <div className="tool-approval-actions">
             <button
               type="button"
               className="tool-approval-btn approve-once"
-              disabled={decided}
               onClick={() => decide(true)}
             >
               {t("action.approveOnce")}
@@ -804,7 +841,6 @@ function ToolActivityCard({
             <button
               type="button"
               className="tool-approval-btn approve-session"
-              disabled={decided}
               onClick={() => decide(true, true)}
             >
               {t("action.approveSession")}
@@ -812,12 +848,18 @@ function ToolActivityCard({
             <button
               type="button"
               className="tool-approval-btn reject"
-              disabled={decided}
               onClick={() => decide(false)}
             >
               {t("action.reject")}
             </button>
           </div>
+        </div>
+      )}
+      {decided && item.status === "awaiting" && (
+        <div className="tool-approval tool-approval--decided" data-decision={decided}>
+          <span className="tool-approval-result">
+            {decided === 'approve' ? '✓ 已批准' : '✕ 已拒绝'}
+          </span>
         </div>
       )}
     </section>
@@ -1086,10 +1128,22 @@ function ToolRunSummary({
       {open && (
         <div className="tool-run-details">
           {items.map((item) => (
-            <div key={item.id} className="tool-run-detail-row" data-status={item.status}>
-              <span>{item.name}</span>
-              <small>{toolTargetLabel(item)}</small>
-              <em>{toolStatusLabel(item.status)}</em>
+            <div key={item.id}>
+              <div className="tool-run-detail-row" data-status={item.status}>
+                <span>{item.name}</span>
+                <small>{toolTargetLabel(item)}</small>
+                <em>{toolStatusLabel(item.status)}</em>
+              </div>
+              {item.status === "ok" && item.output != null && (
+                <div className="tool-run-detail-result">
+                  <code>{formatToolResult(item)}</code>
+                </div>
+              )}
+              {item.status === "error" && item.error && (
+                <div className="tool-run-detail-result tool-run-detail-result--error">
+                  <code>{item.error}</code>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1147,24 +1201,34 @@ function ApprovalInline({
   item: ToolActivity;
   onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
 }) {
-  const [decided, setDecided] = useState(false);
+  const [decided, setDecided] = useState<'approve' | 'reject' | null>(null);
 
   function handleDecide(approved: boolean, sessionApprove?: boolean) {
-    setDecided(true);
+    setDecided(approved ? 'approve' : 'reject');
     onDecision(item.id, approved, sessionApprove);
+  }
+
+  if (decided) {
+    return (
+      <div className="tool-run-approval tool-run-approval--decided" data-decision={decided}>
+        <span className="tool-run-approval-result">
+          {decided === 'approve' ? '✓ 已批准' : '✕ 已拒绝'} · {toolApprovalLabel(item)}
+        </span>
+      </div>
+    );
   }
 
   return (
     <div className="tool-run-approval">
       <span>{t("tool.approvalHint")} · {toolApprovalLabel(item)}</span>
       <div className="tool-run-approval-actions">
-        <button type="button" disabled={decided} onClick={() => handleDecide(true)}>
+        <button type="button" onClick={() => handleDecide(true)}>
           {t("action.approveOnce")}
         </button>
-        <button type="button" disabled={decided} onClick={() => handleDecide(true, true)}>
+        <button type="button" onClick={() => handleDecide(true, true)}>
           {t("action.approveSession")}
         </button>
-        <button type="button" disabled={decided} onClick={() => handleDecide(false)}>
+        <button type="button" onClick={() => handleDecide(false)}>
           {t("action.reject")}
         </button>
       </div>
@@ -1202,6 +1266,17 @@ function toolStatusLabel(status: ToolActivity["status"]): string {
       return "完成";
     case "error":
       return "失败";
+  }
+}
+
+function formatToolResult(item: ToolActivity): string {
+  if (item.output == null) return "";
+  if (typeof item.output === "string") return item.output;
+  try {
+    const text = JSON.stringify(item.output, null, 2);
+    return text.length > 2000 ? text.slice(0, 1997) + "..." : text;
+  } catch {
+    return String(item.output);
   }
 }
 

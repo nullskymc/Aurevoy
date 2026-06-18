@@ -1516,29 +1516,34 @@ export async function runTask(task: Task): Promise<void> {
         for (const r of safeResults) resultByCallId.set(r.callId, r);
       }
 
-      // 5c: risky 工具 → 并发发送审批请求，获批后并行执行
+      // 5c: risky 工具 → 先发布审批事件，再改 phase，最后等待决策
       if (riskyOnes.length > 0) {
+        // Step 1: 先发布所有 approval_request 事件，让前端先拿到审批数据
+        for (const v of riskyOnes) {
+          addPendingApproval(task, v.call, v.risk);
+          taskEvents.publish({
+            type: 'approval_request',
+            taskId: task.id,
+            call: v.call,
+            riskLevel: v.risk,
+          });
+        }
+
+        // Step 2: 再更新 phase，此时前端 events feed 已包含审批数据，可一次渲染
         setRuntimePhase(
           'waiting_approval',
           `等待确认 ${riskyOnes.length} 个工具`,
           'paused',
         );
 
-        // 并发发送所有审批请求
+        // Step 3: 并发等待所有审批决策
         const approvalResults = await Promise.all(
           riskyOnes.map(async (v) => {
-            addPendingApproval(task, v.call, v.risk);
             const approval = waitForApproval(
               task.id,
               v.tc.id,
               abortController.signal,
             );
-            taskEvents.publish({
-              type: 'approval_request',
-              taskId: task.id,
-              call: v.call,
-              riskLevel: v.risk,
-            });
             updateStep(`等待确认：${v.call.toolName}`, 'paused');
             const result = await approval;
             if (result.approved && result.sessionApprove) {
