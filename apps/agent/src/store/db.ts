@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import type { MemoryEntry, Project, Task, TaskTraceEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
@@ -8,6 +10,10 @@ import { config } from '../config.js';
  * 当前用单表存储任务（计划/消息以 JSON 列保存，便于早期迭代）。
  * 后续可拆分 messages / steps / memory 等表，并加入向量检索。
  */
+
+// 确保 SQLite 文件父目录存在（安装版 app bundle 内 cwd 只读，数据在 ~/.aurevoy/）
+mkdirSync(dirname(config.dbPath), { recursive: true });
+
 const db = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');

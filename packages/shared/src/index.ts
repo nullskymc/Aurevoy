@@ -81,10 +81,12 @@ export interface Message {
 }
 
 /** 计划中的一个步骤 */
+export type PlanStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused' | 'proposed';
+
 export interface PlanStep {
   id: string;
   description: string;
-  status: TaskStatus;
+  status: PlanStepStatus;
   /** 该步骤预期使用的工具名称 */
   toolsExpected?: string[];
   /** 依赖的前置步骤 ID 列表 */
@@ -375,6 +377,7 @@ export type AgentEvent =
   | { type: 'plan'; taskId: string; plan: PlanStep[] }
   | { type: 'step_update'; taskId: string; step: PlanStep }
   | { type: 'token'; taskId: string; delta: string } // LLM 流式 token
+  | { type: 'reasoning'; taskId: string; delta: string } // 模型思考链（DeepSeek R1/V3 等）
   | { type: 'message'; taskId: string; message: Message } // 一条完整消息
   | { type: 'tool_call'; taskId: string; call: ToolCall }
   | { type: 'tool_result'; taskId: string; result: ToolResult }
@@ -427,6 +430,8 @@ export type AgentEvent =
   | { type: 'scout_started'; taskId: string }
   | { type: 'scout_report'; taskId: string; report: ScoutReport }
   | { type: 'plan_generated'; taskId: string; plan: PlanStep[]; source: 'llm' | 'heuristic' }
+  | { type: 'plan_approval_request'; taskId: string; plan: PlanStep[]; reasoning: string; scoutReport?: ScoutReport }
+  | { type: 'plan_approval_resolved'; taskId: string; approved: boolean; reason?: string }
   | { type: 'skill_activated'; taskId: string; skillName: string; allowedTools?: string[] }
   | { type: 'skill_deactivated'; taskId: string }
   | { type: 'done'; taskId: string; status: TaskStatus }
@@ -505,6 +510,17 @@ export interface ClarificationAnswerRequest {
 export interface ClarificationAnswerResponse {
   taskId: string;
   clarificationId: string;
+  delivered: boolean;
+}
+
+/** POST /api/tasks/:id/plan-approval — 审批 Plan Agent 生成的执行计划 */
+export interface PlanApprovalRequest {
+  approved: boolean;
+  reason?: string;
+}
+
+export interface PlanApprovalResponse {
+  taskId: string;
   delivered: boolean;
 }
 

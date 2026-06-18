@@ -7,11 +7,13 @@ import type {
   MessageAttachment,
   RevertMode,
   Task,
+  TaskPhase,
   ToolDescriptor,
   UpdateRuntimeSettingsRequest,
 } from "@aurevoy/shared";
 import {
   answerClarification,
+  approvePlan,
   approveToolCall,
   branchTask,
   cancelTask,
@@ -24,7 +26,6 @@ import {
   createProject,
   deleteProject,
   deleteMemory,
-  deleteTask,
   getDataStatus,
   getMcpStatus,
   getSettings,
@@ -196,6 +197,8 @@ function App() {
     patchCurrentTask,
     updateTaskList,
   } = useTaskState();
+  const [reasoning, setReasoning] = useState("");
+  const previousPhaseRef = useRef<TaskPhase | null>(null);
   const { closeStream, openStream } = useSSEStream();
   const {
     runtimeSettings,
@@ -422,6 +425,7 @@ function App() {
         setPhase(event.task.phase);
         setPlan(event.task.plan);
         setOutput("");
+        setReasoning("");
         setTraces([]);
         updateTaskList(event.task);
         break;
@@ -432,6 +436,14 @@ function App() {
       case "phase":
         setPhase(event.phase);
         patchCurrentTask({ phase: event.phase });
+        // 进入新一轮思考时清空流式缓存，每轮独立展示
+        if (event.phase !== previousPhaseRef.current) {
+          previousPhaseRef.current = event.phase;
+          if (event.phase === "thinking") {
+            setOutput("");
+            setReasoning("");
+          }
+        }
         break;
       case "plan":
         setPlan(event.plan);
@@ -448,6 +460,9 @@ function App() {
         break;
       case "token":
         setOutput((previous) => previous + event.delta);
+        break;
+      case "reasoning":
+        setReasoning((previous) => previous + event.delta);
         break;
       case "message":
         setCurrentTask((previous) => {
@@ -505,6 +520,17 @@ function App() {
       case "branched":
         break;
       case "compacted":
+        break;
+      case "plan_approval_request":
+        // MVP: 自动批准 Plan Agent 生成的计划（后续改为展示 PlanApprovalCard）
+        if (currentTask?.id) {
+          void approvePlan(currentTask.id, true).catch((err) => {
+            setNotice(`${t("notice.planApprovalFailed")}${err instanceof Error ? err.message : String(err)}`);
+          });
+        }
+        break;
+      case "plan_approval_resolved":
+        patchCurrentTask({ plan: undefined as never }); // 触发 plan 刷新（由 SSE 侧推送）
         break;
       case "task_deleted":
         // 任务被删除（可能来自其他客户端或本端），关流并清理
@@ -1060,22 +1086,6 @@ function App() {
     }
   }
 
-  function handleDeleteTask(taskId: string): void {
-    if (!confirm(t('sidebar.deleteTaskConfirm'))) return;
-    // 如果删除的是当前打开的任务，先清空
-    if (currentTask?.id === taskId) {
-      closeStream();
-      setCurrentTask(null);
-      setOutput("");
-      setStatus(null);
-      setPhase(null);
-      setPlan([]);
-    }
-    void deleteTask(taskId)
-      .then(() => setTasks((prev) => prev.filter((t) => t.id !== taskId)))
-      .catch((err) => setNotice(`${t("notice.deleteTaskFailed")}${err instanceof Error ? err.message : String(err)}`));
-  }
-
   function startResize(panel: "left" | "right", event: PointerEvent<HTMLDivElement>): void {
     event.preventDefault();
     const startX = event.clientX;
@@ -1141,7 +1151,6 @@ function App() {
         onOpenSettings={handleOpenSettings}
         onImportProject={handleImportProject}
         onDeleteProject={handleDeleteProject}
-        onDeleteTask={handleDeleteTask}
       />
 
       <div
@@ -1297,6 +1306,7 @@ function App() {
                 phase={phase}
                 plan={plan}
                 output={output}
+                reasoning={reasoning}
                 busy={busy}
                 liveToolActivity={liveToolActivity}
                 online={online}
@@ -1309,7 +1319,6 @@ function App() {
                 onUnrevert={() => void handleUnrevert()}
                 onBranch={(messageId) => void handleBranch(messageId)}
                 onResume={() => void handleResumeTask()}
-                onStop={handleStopStream}
               />
             </div>
             <div className="composer-dock">

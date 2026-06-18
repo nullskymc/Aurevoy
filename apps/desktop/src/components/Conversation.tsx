@@ -34,6 +34,8 @@ interface ConversationProps {
   plan: PlanStep[];
   /** 当前正在生成的这一轮的流式文本尾巴（仅运行中有值） */
   output: string;
+  /** 模型思考链流式文本（DeepSeek R1/V3 reasoning_content，仅运行中有值） */
+  reasoning: string;
   busy: boolean;
   /** 当前运行轮次的实时工具活动（来自事件流） */
   liveToolActivity: ToolActivity[];
@@ -54,8 +56,6 @@ interface ConversationProps {
   onBranch?: (messageId: string) => void;
   /** 恢复中断的任务 */
   onResume?: () => void;
-  /** 停止当前流式生成 */
-  onStop?: () => void;
 }
 
 interface ToolResultInfo {
@@ -118,6 +118,7 @@ export function Conversation({
   phase,
   plan,
   output,
+  reasoning,
   busy,
   liveToolActivity,
   online = null,
@@ -130,7 +131,6 @@ export function Conversation({
   onUnrevert,
   onBranch,
   onResume,
-  onStop,
 }: ConversationProps) {
   const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -170,7 +170,6 @@ export function Conversation({
   const historyMessages = messages.slice(0, historyEnd + 1);
 
   const hasOutput = output.trim().length > 0;
-  const thinking = busy && !hasOutput && liveToolActivity.length === 0;
 
   return (
     <div className="conversation">
@@ -224,9 +223,10 @@ export function Conversation({
               phase={phase}
               status={status}
               plan={plan}
+              output={output}
+              reasoning={reasoning}
               liveToolActivity={liveToolActivity}
               onToolDecision={onToolDecision}
-              onStop={onStop}
             />
 
             {(task.clarifications ?? []).filter((item) => item.status === "pending").map((clarification) => (
@@ -245,10 +245,10 @@ export function Conversation({
               />
             ))}
 
-            {!thinking && hasOutput && (
+            {/* 任务结束后展示最终输出（运行中由 AgentRunningTimeline 负责流式渲染） */}
+            {!busy && hasOutput && (
               <div className="ai-chat-bubble-reply">
                 <MarkdownRenderer content={output} />
-                <span className="stream-caret" aria-hidden="true" />
               </div>
             )}
           </div>
@@ -895,19 +895,58 @@ interface AgentRunningTimelineProps {
   phase: TaskPhase | null;
   status: TaskStatus | null;
   plan: PlanStep[];
+  output: string;
+  reasoning: string;
   liveToolActivity: ToolActivity[];
   onToolDecision: (callId: string, approved: boolean) => void;
-  onStop?: () => void;
+}
+
+/** 阶段 → 展示信息映射 */
+interface PhaseDisplay {
+  badge: string;
+  icon: ReactNode;
+  label: string;
+  colorClass: string;
+}
+
+function phaseDisplay(phase: TaskPhase | null): PhaseDisplay {
+  switch (phase) {
+    case "initializing":
+      return { badge: "INIT", icon: <PlayIcon />, label: "初始化中", colorClass: "is-init" };
+    case "planning":
+      return { badge: "PLAN", icon: <ClipboardIcon />, label: "生成执行计划", colorClass: "is-plan" };
+    case "thinking":
+      return { badge: "THINK", icon: <BrainIcon className="spin-icon" />, label: "思考中", colorClass: "is-thought" };
+    case "calling_tool":
+      return { badge: "TOOL", icon: <ToolIcon />, label: "调用工具", colorClass: "is-tool" };
+    case "waiting_approval":
+      return { badge: "WAIT", icon: <ShieldIcon />, label: "等待审批", colorClass: "is-wait" };
+    case "waiting_clarification":
+      return { badge: "ASK", icon: <ChatIcon />, label: "等待回复", colorClass: "is-ask" };
+    case "finalizing":
+      return { badge: "DONE", icon: <CheckIcon />, label: "整理结果", colorClass: "is-done" };
+    case "failed":
+      return { badge: "FAIL", icon: <ErrorIcon />, label: "任务失败", colorClass: "is-error" };
+    case "cancelled":
+      return { badge: "STOP", icon: <StopIcon />, label: "已取消", colorClass: "is-stop" };
+    default:
+      return { badge: "THINK", icon: <BrainIcon className="spin-icon" />, label: "思考中", colorClass: "is-thought" };
+  }
 }
 
 export function AgentRunningTimeline({
   busy,
   online,
+  phase,
+  status: _status,
+  plan,
+  output,
+  reasoning,
   liveToolActivity,
   onToolDecision,
-  onStop,
 }: AgentRunningTimelineProps) {
   const [seconds, setSeconds] = useState(0);
+  const [reasoningOpen, setReasoningOpen] = useState(false);
 
   useEffect(() => {
     if (!busy) {
@@ -920,6 +959,17 @@ export function AgentRunningTimeline({
     return () => clearInterval(timer);
   }, [busy]);
 
+  // 有新输出时自动展开 reasoning
+  useEffect(() => {
+    if (reasoning.trim().length > 0) setReasoningOpen(true);
+  }, [reasoning]);
+
+  const display = phaseDisplay(phase);
+  const hasOutput = output.trim().length > 0;
+  const hasReasoning = reasoning.trim().length > 0;
+  const isThinking = phase === "thinking";
+  const isToolCalling = phase === "calling_tool" || liveToolActivity.length > 0;
+
   return (
     <div className="aurevoy-agent-runner-box">
       {online === false && (
@@ -929,11 +979,17 @@ export function AgentRunningTimeline({
           </div>
           <div className="node-content">
             <span className="badge-network">NETWORK</span>
-            <span className="meta-text">正在重新连接 3/5 ...</span>
+            <span className="meta-text">正在重新连接…</span>
           </div>
         </div>
       )}
 
+      {/* 计划卡片（planning 结束后展示） */}
+      {!isToolCalling && plan.length > 0 && phase !== "planning" && phase !== "initializing" && (
+        <PlanCard plan={plan} defaultOpen={false} />
+      )}
+
+      {/* 工具活动列表 */}
       {liveToolActivity.map((item) => {
         const isFile = /file|dir|write|read|grep|find|artifact/i.test(item.name);
         const isBash = /cmd|command|exec|shell|terminal/i.test(item.name);
@@ -976,26 +1032,49 @@ export function AgentRunningTimeline({
         );
       })}
 
-      {busy && (
+      {busy && !isToolCalling && (
         <div className="runner-node is-active fade-in-up">
-          <div className="node-dot is-loading">
-            <BrainIcon className="spin-icon" />
+          <div className={`node-dot ${isThinking ? "is-loading" : ""} ${display.colorClass}`}>
+            {display.icon}
           </div>
           <div className="node-content">
-            <span className="badge-thought">THOUGHT</span>
-            <span className="meta-text">for {seconds}s...</span>
+            <span className={`badge-thought ${display.colorClass}`}>{display.badge}</span>
+            <span className="meta-text">{display.label} · {seconds}s</span>
           </div>
         </div>
       )}
 
-      {busy && onStop && (
-        <div className="runner-global-controls fade-in-up">
-          <button type="button" className="btn-stop-global" onClick={onStop}>
-            <StopIcon />
-            <span>{t("action.stop") || "停止"}</span>
-          </button>
+      {/* 思考链（collapsible reasoning） */}
+      {isThinking && hasReasoning && (
+        <details className="reasoning-block" open={reasoningOpen}>
+          <summary className="reasoning-summary" onClick={(e) => { e.preventDefault(); setReasoningOpen(!reasoningOpen); }}>
+            <span className="reasoning-dot" aria-hidden="true" />
+            <span>思考过程</span>
+            <span className="reasoning-toggle">{reasoningOpen ? "▾" : "▸"}</span>
+          </summary>
+          <div className="reasoning-content">
+            <MarkdownRenderer content={reasoning} />
+            <span className="stream-caret" aria-hidden="true" />
+          </div>
+        </details>
+      )}
+
+      {/* 流式输出文本（thinking 阶段实时打字机效果） */}
+      {isThinking && hasOutput && !hasReasoning && (
+        <div className="ai-chat-bubble-reply stream-preview">
+          <MarkdownRenderer content={output} />
+          <span className="stream-caret" aria-hidden="true" />
         </div>
       )}
+
+      {/* 有思考链时，最终文本在折叠区下方展示 */}
+      {isThinking && hasOutput && hasReasoning && (
+        <div className="ai-chat-bubble-reply stream-preview stream-after-reasoning">
+          <MarkdownRenderer content={output} />
+          <span className="stream-caret" aria-hidden="true" />
+        </div>
+      )}
+
     </div>
   );
 }
@@ -1237,6 +1316,49 @@ function ToolIcon() {
   return (
     <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
       <circle cx="10" cy="10" r="3" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <polygon points="5,2 18,10 5,18" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ClipboardIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <rect x="6" y="2" width="10" height="14" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M4 5h2v11.5A1.5 1.5 0 007.5 18H15" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <path d="M10 2L3 5v5c0 3.5 3 7 7 8 4-1 7-4.5 7-8V5L10 2z" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <path d="M3 5h14v9H7l-4 3V5z" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ErrorIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
+      <line x1="7" y1="7" x2="13" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="13" y1="7" x2="7" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }

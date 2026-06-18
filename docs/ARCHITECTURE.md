@@ -44,8 +44,10 @@ Aurevoy/  (npm workspaces monorepo)
 │        │ createTask / runTask                                     │
 │        ▼                                                          │
 │   agent/loop.ts  ──emit──▶  agent/events.ts (TaskEventBus)        │
-│        │  ReAct 工具调用循环         │ subscribe                    │
+│        │  Default Agent（ReAct 循环）    │ subscribe                │
 │        │                          └──▶ SSE 推送回前端              │
+│        ├──▶ agent/plan-agent.ts         (Plan Agent：按需侦查+规划)  │
+│        ├──▶ agent/subagent.ts           (子代理：受限委托执行)       │
 │        ├──▶ llm/provider.ts            (LLMProvider：OpenAI 兼容)   │
 │        ├──▶ agent/tool-call-accumulator (流式 tool_calls 累积)     │
 │        ├──▶ tools/registry.ts          (ToolRegistry：内置 / MCP)  │
@@ -79,7 +81,8 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/index.ts` | 进程入口，启动 Fastify |
 | `src/config.ts` | 运行时配置（host/port/dbPath/cors/provider/sandbox/network/MCP），全部可被环境变量覆盖 |
 | `src/server.ts` | HTTP 路由 + SSE 端点（见 `docs/API.md`） |
-| `src/agent/loop.ts` | **Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**。 P1: LLM 驱动侦查→规划（`runScoutPhase`/`generatePlanViaLLM`），失败回退正则兜底。 P2: 并行工具执行（safe 工具 `Promise.all`，risky 工具并发审批→并行执行，`invokeWithTimeout` 独立超时）。 含显式 runtime phase、多步计划、checkpoint、防死循环、重试、取消、恢复、每轮持久化。 P6: 写入前文件快照 + Rewind 文件回滚 + 失败结果 fallback 附加 |
+| `src/agent/loop.ts` | **Default Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**。 按需调用 Plan Agent（`assessComplexity`→复杂任务推 `plan_approval_request` 等待审批→批准后分步执行）。 简单对话单步直接执行。 P2: 并行工具执行（safe 工具 `Promise.all`，risky 工具并发审批→并行执行，`invokeWithTimeout` 独立超时）。 含显式 runtime phase、多步计划、checkpoint、防死循环、重试、取消、恢复、每轮持久化。 P6: 写入前文件快照 + Rewind 文件回滚 + 失败结果 fallback 附加 |
+| `src/agent/plan-agent.ts` | **Plan Agent**：Default Agent 按需调用的规划引擎。 Scout 阶段快速侦查工作区（仅 safe 只读工具）；LLM 生成 2-8 步 JSON 结构化计划；失败回退正则启发式。 返回结构化计划供用户审批 |
 | `src/agent/subagent.ts` | **P7: 子代理执行引擎**。受限 ReAct 循环：仅 safe 只读工具、max 5 轮、60s 超时、不写 memory、结果 20KB 截断 |
 | `src/agent/context.ts` | **上下文窗口 + 记忆注入**。 P4: `estimateTokens()` 轻量 token 估算；`autoCompactIfNeeded()` token 预算超 85% 时 LLM 语义摘要。 P5: `scoreMemories()` 相关性评分（关键词+分类+置信度+时间衰减）；`parseMemoryLinks()`/`expandLinkedMemories()` 解析 `[[link]]` 引用；`buildMemorySystemMessage()` 按目标评分排序注入 top-20 |
 | `src/agent/m6-state.ts` | Agent 交付状态辅助：预算、token usage、追问、artifact、checkpoint 的创建与状态更新 |

@@ -20,7 +20,6 @@ interface TaskHistorySidebarProps {
   onOpenSettings: () => void;
   onImportProject: () => void;
   onDeleteProject: (projectId: string) => void;
-  onDeleteTask: (taskId: string) => void;
 }
 
 export function TaskHistorySidebar({
@@ -38,7 +37,6 @@ export function TaskHistorySidebar({
   onOpenSettings,
   onImportProject,
   onDeleteProject,
-  onDeleteTask,
 }: TaskHistorySidebarProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
     const initial = new Set<string>();
@@ -210,7 +208,6 @@ export function TaskHistorySidebar({
                     tasks={projectTasks}
                     activeTaskId={activeTaskId}
                     onSelectTask={onSelectTask}
-                    onDeleteTask={onDeleteTask}
                     isChild={true}
                   />
                 )}
@@ -241,7 +238,6 @@ export function TaskHistorySidebar({
               tasks={tasksByProject.standalone}
               activeTaskId={activeTaskId}
               onSelectTask={onSelectTask}
-              onDeleteTask={onDeleteTask}
             />
           )}
         </div>
@@ -266,13 +262,11 @@ function TaskList({
   tasks,
   activeTaskId,
   onSelectTask,
-  onDeleteTask,
   isChild = false,
 }: {
   tasks: Task[];
   activeTaskId?: string;
   onSelectTask: (task: Task) => void;
-  onDeleteTask: (taskId: string) => void;
   isChild?: boolean;
 }) {
   if (tasks.length === 0) {
@@ -329,15 +323,6 @@ function TaskList({
                   </span>
                 )}
               </span>
-            </button>
-            <button
-              type="button"
-              className="conv-delete-btn"
-              onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
-              title={t("sidebar.deleteTask")}
-              aria-label={t("sidebar.deleteTask")}
-            >
-              <TrashIcon />
             </button>
           </div>
         </li>
