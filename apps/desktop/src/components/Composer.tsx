@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { t, type TranslationKey } from "../i18n";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { ImageViewer } from "./ImageViewer";
 import type { MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
 
 interface SlashCommand {
@@ -57,6 +58,7 @@ export function Composer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [cmdIndex, setCmdIndex] = useState(0);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [viewingImage, setViewingImage] = useState<string | null>(null);
   const providerConfigured = provider !== "unconfigured";
   const canSend = value.trim().length > 0 && !busy && online !== false && providerConfigured;
 
@@ -262,6 +264,7 @@ export function Composer({
                         className="composer-attachment-thumb"
                         src={imgSrc}
                         alt={att.name}
+                        onClick={() => setViewingImage(att.path)}
                       />
                     ) : isImage ? (
                       <ImageFileIcon />
@@ -354,6 +357,12 @@ export function Composer({
           </span>
         )}
       </div>
+      {viewingImage && (
+        <ImageViewer
+          src={viewingImage}
+          onClose={() => setViewingImage(null)}
+        />
+      )}
     </div>
   );
 }

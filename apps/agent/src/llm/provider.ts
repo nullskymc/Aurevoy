@@ -165,16 +165,16 @@ export class OpenAICompatibleProvider implements LLMProvider {
   async *stream(messages: Message[], options?: LLMStreamOptions): AsyncIterable<LLMStreamChunk> {
     const url = `${this.opts.baseUrl.replace(/\/$/, '')}/chat/completions`;
     const tools = options?.tools?.length ? toOpenAITools(options.tools) : undefined;
+
+    // 视觉子模型：本轮消息含图片 + 配置了 visionModel → 切换模型 + 注入图片
+    const needsVision = messages.some((m) => hasImageAttachments(m));
+    const includeImages = needsVision && config.llm.visionModel.trim().length > 0;
+    const effectiveModel = includeImages ? config.llm.visionModel : this.opts.model;
+
     const payloadMessages: OpenAIChatMessage[] = [
       { role: 'system', content: this.opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT },
-      ...(await Promise.all(messages.map(toOpenAIMessage))),
+      ...(await Promise.all(messages.map((m) => toOpenAIMessage(m, includeImages)))),
     ];
-
-    // 视觉子模型：用户消息含图片 + 设置了 visionModel → 切换模型
-    const needsVision = messages.some((m) => hasImageAttachments(m));
-    const effectiveModel = needsVision && config.llm.visionModel
-      ? config.llm.visionModel
-      : this.opts.model;
 
     // Ollama 带 tools 时关闭 streaming（其流式 tool_calls 不稳定）
     const useStream = !(this.isOllama && tools);
@@ -329,42 +329,55 @@ export class OpenAICompatibleProvider implements LLMProvider {
 }
 
 /** 把 Aurevoy Message 转为 OpenAI 兼容消息格式 */
-async function toOpenAIMessage(msg: Message): Promise<OpenAIChatMessage> {
+async function toOpenAIMessage(
+  msg: Message,
+  includeImages: boolean,
+): Promise<OpenAIChatMessage> {
   const out: OpenAIChatMessage = {
     role: toOpenAIRole(msg.role),
     content: msg.content,
   };
 
-  // 用户消息 + 图片附件 → 多模态 content 数组（由调用方决定使用哪个模型）
+  // 用户消息 + 图片附件 → 多模态 content 数组
   if (msg.role === 'user' && hasImageAttachments(msg)) {
-    const blocks: OpenAIContentBlock[] = [];
+    if (includeImages) {
+      // 视觉模型：构造 content[]（文本 + base64 图片）
+      const blocks: OpenAIContentBlock[] = [];
 
-    // 文本部分
-    if (msg.content.trim()) {
-      blocks.push({ type: 'text', text: msg.content });
-    } else {
-      blocks.push({ type: 'text', text: '请看以下图片：' });
-    }
-
-    // 图片部分
-    for (const att of msg.attachments ?? []) {
-      if (att.type !== 'image') continue;
-      const dataUrl = await readImageAsBase64(att.path, att.mimeType);
-      if (dataUrl) {
-        blocks.push({
-          type: 'image_url',
-          image_url: { url: dataUrl, detail: 'auto' },
-        });
+      if (msg.content.trim()) {
+        blocks.push({ type: 'text', text: msg.content });
       } else {
-        // 图片读取失败时插入提示文本
-        blocks.push({
-          type: 'text',
-          text: `\n[图片 "${att.name}" (${att.path}) 无法读取或过大（>20MB）]`,
-        });
+        blocks.push({ type: 'text', text: '请看以下图片：' });
       }
-    }
 
-    out.content = blocks;
+      for (const att of msg.attachments ?? []) {
+        if (att.type !== 'image') continue;
+        const dataUrl = await readImageAsBase64(att.path, att.mimeType);
+        if (dataUrl) {
+          blocks.push({
+            type: 'image_url',
+            image_url: { url: dataUrl, detail: 'auto' },
+          });
+        } else {
+          blocks.push({
+            type: 'text',
+            text: `\n[图片 "${att.name}" 无法读取或过大（>20MB）]`,
+          });
+        }
+      }
+
+      out.content = blocks;
+    } else {
+      // 文本模型：将图片附件转为文字引用，保持纯文本上下文
+      const imageNames = (msg.attachments ?? [])
+        .filter((a) => a.type === 'image')
+        .map((a) => a.name)
+        .join('、');
+      const prefix = msg.content.trim()
+        ? `${msg.content}\n\n[用户附带了图片: ${imageNames}]`
+        : `[用户附带了图片: ${imageNames}]`;
+      out.content = prefix;
+    }
   }
 
   // assistant 携带 tool_calls；OpenAI 要求此时 content 可为 null

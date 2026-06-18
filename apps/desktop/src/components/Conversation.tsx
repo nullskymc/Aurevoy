@@ -12,6 +12,7 @@ import type {
   ToolRiskLevel,
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { ImageViewer } from "./ImageViewer";
 import { t } from "../i18n";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
@@ -396,6 +397,7 @@ function UserBubble({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(content);
   const [pendingSave, setPendingSave] = useState(false);
+  const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   function confirmSave(): void {
     const trimmed = draft.trim();
@@ -467,29 +469,38 @@ function UserBubble({
 
   return (
     <div className="user-bubble-row">
-      <div className="user-bubble">{content}</div>
-      {imageAttachments.length > 0 && (
-        <div className="user-bubble-images">
-          {imageAttachments.map((att) => {
-            const src = (() => {
-              try { return convertFileSrc(att.path); } catch { return null; }
-            })();
-            return src ? (
-              <img
-                key={att.id}
-                className="user-bubble-image"
-                src={src}
-                alt={att.name}
-                loading="lazy"
-              />
-            ) : (
-              <span key={att.id} className="user-bubble-image-placeholder">
-                📷 {att.name}
-              </span>
-            );
-          })}
-        </div>
-      )}
+      <div className="user-bubble-col">
+        <div className="user-bubble">{content}</div>
+        {imageAttachments.length > 0 && (
+          <div className="user-bubble-images">
+            {imageAttachments.map((att) => {
+              const src = (() => {
+                try { return convertFileSrc(att.path); } catch { return null; }
+              })();
+              return src ? (
+                <img
+                  key={att.id}
+                  className="user-bubble-image"
+                  src={src}
+                  alt={att.name}
+                  loading="lazy"
+                  onClick={() => setViewingImage(att.path)}
+                />
+              ) : (
+                <span key={att.id} className="user-bubble-image-placeholder">
+                  📷 {att.name}
+                </span>
+              );
+            })}
+          </div>
+        )}
+        {viewingImage && (
+          <ImageViewer
+            src={viewingImage}
+            onClose={() => setViewingImage(null)}
+          />
+        )}
+      </div>
       <div className="msg-actions">
         <CopyButton content={content} />
         {onEdit && (

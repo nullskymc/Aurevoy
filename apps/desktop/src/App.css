@@ -3564,12 +3564,21 @@ textarea:focus-visible,
    ============================================================ */
 .user-bubble-row {
   display: flex;
+  align-items: flex-start;
   justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.user-bubble-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: 76%;
   min-width: 0;
 }
 
 .user-bubble {
-  max-width: 76%;
   padding: 10px 14px;
   border-radius: 16px 16px 4px 16px;
   background: var(--accent-soft-bg);
@@ -3583,15 +3592,17 @@ textarea:focus-visible,
 /* 用户消息中的图片附件缩略图 */
 .user-bubble-images {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 0 4px;
+  flex-wrap: nowrap;
+  gap: 6px;
+  margin-top: 6px;
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .user-bubble-image {
-  max-width: 240px;
-  max-height: 180px;
+  flex-shrink: 0;
+  width: 120px;
+  height: 90px;
   border-radius: 10px;
   object-fit: cover;
   border: 1px solid var(--border-subtle);
@@ -3600,7 +3611,7 @@ textarea:focus-visible,
 }
 
 .user-bubble-image:hover {
-  transform: scale(1.03);
+  transform: scale(1.05);
 }
 
 .user-bubble-image-placeholder {
@@ -3613,6 +3624,69 @@ textarea:focus-visible,
   color: var(--text-secondary);
   font-size: 12px;
   border: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   图片查看器（lightbox）
+   ============================================================ */
+.image-viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.82);
+  animation: viewer-fade-in 180ms ease;
+}
+
+@keyframes viewer-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.image-viewer-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  cursor: pointer;
+  transition: background 150ms ease;
+  z-index: 1001;
+}
+
+.image-viewer-close:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.image-viewer-img {
+  max-width: 92vw;
+  max-height: 90vh;
+  border-radius: 10px;
+  object-fit: contain;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
+  animation: viewer-img-in 220ms ease;
+}
+
+@keyframes viewer-img-in {
+  from { transform: scale(0.94); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+
+.image-viewer-placeholder {
+  padding: 24px 40px;
+  border-radius: 10px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 16px;
 }
 
 /* ============================================================
