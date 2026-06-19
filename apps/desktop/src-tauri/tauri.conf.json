@@ -15,7 +15,8 @@
         "title": "Aurevoy",
         "width": 1000,
         "height": 720,
-        "titleBarStyle": "Overlay"
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
