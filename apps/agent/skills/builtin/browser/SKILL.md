@@ -1,11 +1,10 @@
 ---
 name: browser
-description: 浏览器自动化——打开网页、截图、获取 DOM 摘要、抓取控制台错误。需要配置 Playwright MCP Server。
-allowed-tools:
-  - http_fetch
-  - web_search
-  - read_file
-version: "1.0"
+description: 浏览器自动化——打开网页、截图、获取 DOM 摘要、抓取控制台错误。需要配置 Playwright MCP Server。当用户需要查看页面渲染效果、操作 JS 动态页面、模拟用户交互、截图或调试前端错误时使用此技能。
+allowed-tools: http_fetch web_search read_file
+compatibility: Requires Playwright MCP Server configured via AUREVOY_MCP_SERVERS_JSON
+metadata:
+  version: "1.0"
 ---
 
 # Browser 浏览器自动化技能

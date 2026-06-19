@@ -101,13 +101,18 @@ export const config = {
     ),
   },
 
-  /** Skill 模块配置。Skill 是 markdown 文件（YAML frontmatter + body），
-   *  存放在用户/工作区/预装目录下。预装 skill 随 Agent 分发。 */
+  /** Skill 模块配置（Agent Skills 标准格式）。
+   *  Skill 是目录含 SKILL.md（+可选 scripts/references/assets），
+   *  存放在用户/工作区/预装目录下。支持 .aurevoy/skills/ 和 .agents/skills/ 两个路径。 */
   skills: {
-    /** 用户级 skill 目录（全局生效）。 */
+    /** 用户级 skill 目录 — .aurevoy/skills（Aurevoy 原生路径）。 */
     userDir: process.env.AUREVOY_SKILLS_USER_DIR ?? resolveUserSkillsDir(),
-    /** 工作区级 skill 子目录名（相对于 workspaceDir）。 */
+    /** 用户级 skill 目录 — .agents/skills（跨客户端标准路径）。 */
+    agentsUserDir: process.env.AUREVOY_SKILLS_AGENTS_USER_DIR ?? resolveAgentsUserSkillsDir(),
+    /** 工作区级 skill 子目录名 — .aurevoy/skills（Aurevoy 原生路径）。 */
     workspaceSubDir: process.env.AUREVOY_SKILLS_WORKSPACE_SUBDIR ?? '.aurevoy/skills',
+    /** 工作区级 skill 子目录名 — .agents/skills（跨客户端标准路径）。 */
+    agentsWorkspaceSubDir: process.env.AUREVOY_SKILLS_AGENTS_WORKSPACE_SUBDIR ?? '.agents/skills',
     /** 预装 skill 目录（随 Agent 分发，优先级最低，可被用户/工作区覆盖）。 */
     builtinDir: process.env.AUREVOY_SKILLS_BUILTIN_DIR ?? resolveBuiltinSkillsDir(),
   },
@@ -238,6 +243,15 @@ function resolveUserSkillsDir(): string {
     return resolve(homedir(), '.aurevoy', 'skills');
   } catch {
     return './.aurevoy/skills';
+  }
+}
+
+/** 解析用户级 .agents/skills 目录（跨客户端标准路径）。 */
+function resolveAgentsUserSkillsDir(): string {
+  try {
+    return resolve(homedir(), '.agents', 'skills');
+  } catch {
+    return './.agents/skills';
   }
 }
 

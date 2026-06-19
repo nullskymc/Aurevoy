@@ -1,13 +1,9 @@
 ---
 name: web-search
-description: 搜索网页获取最新信息、文档、技术方案。支持多轮搜索和结果整合。
-allowed-tools:
-  - web_search
-  - http_fetch
-  - read_file
-  - list_directory
-  - search_files
-version: "1.0"
+description: 搜索网页获取最新信息、文档、技术方案。支持多轮搜索和结果整合。当用户需要查找最新信息、技术文档、搜索错误解决方案、调研技术方案时使用此技能。
+allowed-tools: web_search http_fetch read_file list_directory search_files
+metadata:
+  version: "1.0"
 ---
 
 # Web Search 技能
@@ -54,7 +50,6 @@ version: "1.0"
 
 ### 详细来源
 1. **[标题]** — <摘要> — <URL>
-2. **[标题]** — <摘要> — <URL>
 
 ### 建议
 基于以上信息，建议...

@@ -75,9 +75,9 @@ function getEventTitle(event: AgentEvent): string {
     case "plan_approval_resolved":
       return event.approved ? t("event.planApproved") : t("event.planRejected");
     case "skill_activated":
-      return `${t("event.skillActivated")}${event.skillName}`;
+      return `${t("event.skillActivated")}${event.skillName}${event.description ? ` — ${event.description}` : ''}`;
     case "skill_deactivated":
-      return t("event.skillDeactivated");
+      return event.previousSkill ? `${t("event.skillDeactivated")} (${event.previousSkill})` : t("event.skillDeactivated");
   }
   return (event as AgentEvent).type;
 }

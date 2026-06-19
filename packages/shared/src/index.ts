@@ -443,8 +443,8 @@ export type AgentEvent =
   | { type: 'plan_generated'; taskId: string; plan: PlanStep[]; source: 'llm' | 'heuristic' }
   | { type: 'plan_approval_request'; taskId: string; plan: PlanStep[]; reasoning: string; scoutReport?: ScoutReport }
   | { type: 'plan_approval_resolved'; taskId: string; approved: boolean; reason?: string }
-  | { type: 'skill_activated'; taskId: string; skillName: string; allowedTools?: string[] }
-  | { type: 'skill_deactivated'; taskId: string }
+  | { type: 'skill_activated'; taskId: string; skillName: string; allowedTools?: string[]; description?: string; compatibility?: string }
+  | { type: 'skill_deactivated'; taskId: string; previousSkill?: string | null }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
   | { type: 'task_deleted'; taskId: string };
@@ -734,13 +734,17 @@ export interface MemoryEntry {
   linkedMemoryIds?: string[];
 }
 
-/** Skill: 暴露给前端的 skill 摘要（不含 body）。 */
+/** Skill: 暴露给前端的 skill 摘要（Agent Skills 标准格式，不含 body）。 */
 export interface SkillDescriptor {
   name: string;
   description: string;
   allowedTools?: string[];
-  version?: string;
+  license?: string;
+  compatibility?: string;
+  metadata?: Record<string, string>;
   sourceDir: 'builtin' | 'user' | 'workspace';
+  /** SKILL.md 文件的绝对路径（供模型 file-read 激活用）。 */
+  location?: string;
 }
 
 /** POST /api/memories — 用户手动新增一条记忆 */

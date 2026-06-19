@@ -5,6 +5,37 @@ import { getProvider } from '../llm/provider.js';
 import { skillRegistry } from '../skills/registry.js';
 
 /**
+ * 构建可用 skill 的 catalog 消息（Tier 1: name + description + location），
+ * 注入到 system prompt 中，让模型知道何时该调用 activate_skill。
+ * 当无可用 skill 时返回 null（标准要求不展示空 catalog）。
+ */
+export function buildSkillCatalogMessage(): Message | null {
+  const descriptors = skillRegistry.listAll();
+  if (descriptors.length === 0) return null;
+
+  const catalogLines = descriptors.map((s) => {
+    let line = `- **${s.name}**: ${s.description}`;
+    if (s.location) line += ` (location: ${s.location})`;
+    return line;
+  }).join('\n');
+
+  const content =
+    '<available_skills>\n' +
+    'The following skills provide specialized instructions for specific tasks.\n' +
+    'When a task matches a skill\'s description, call the activate_skill tool\n' +
+    'with the skill\'s name to load its full instructions.\n\n' +
+    catalogLines +
+    '\n</available_skills>';
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
  * 会话级短期记忆 —— 上下文窗口管理（M4.2）。
  *
  * 目标：把任务的完整消息历史压缩成"喂给 LLM 的上下文窗口"，而不是裸拼接全部历史。
@@ -525,19 +556,39 @@ export function buildMemorySystemMessage(
 }
 
 /**
- * Skill: 构建当前激活 skill 的 system message。
+ * Skill: 构建当前激活 skill 的 system message（Agent Skills 标准格式）。
  *
+ * 激活时懒加载 body（Tier 2），使用 <skill_content> 结构化标签注入。
+ * 标签便于上下文压缩时识别并保护 skill 内容。
  * 若没有活跃 skill 则返回 null。skill 消息放在 memory 消息之后、历史消息之前，
  * 确保 skill 指令优先级高于记忆但低于用户对话。
  */
 export function buildSkillSystemMessage(skillName?: string): Message | null {
   if (!skillName) return null;
-  const skill = skillRegistry.get(skillName);
-  if (!skill) return null;
+  const content = skillRegistry.getContent(skillName);
+  const entry = skillRegistry.get(skillName);
+  if (!content || !entry) return null;
+
+  const resourceLines = content.resources.length > 0
+    ? '\n<skill_resources>\n' +
+      content.resources.map((r) => `  <file>${r.relativePath}</file>`).join('\n') +
+      '\n</skill_resources>'
+    : '';
+
+  const skillDir = entry.skillDir;
+
+  const wrappedContent =
+    `<skill_content name="${skillName}">\n` +
+    `${content.body}\n\n` +
+    `Skill directory: ${skillDir}\n` +
+    `Relative paths in this skill are relative to the skill directory.` +
+    `${resourceLines}\n` +
+    `</skill_content>`;
+
   return {
     id: randomUUID(),
     role: 'system',
-    content: `[技能已激活: ${skill.frontmatter.name}]\n\n${skill.body}`,
+    content: wrappedContent,
     createdAt: new Date().toISOString(),
   };
 }
