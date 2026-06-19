@@ -16,7 +16,7 @@
  */
 
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, cpSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -60,8 +60,8 @@ function main() {
     // 确保父目录存在（scoped packages 需要 @scope 目录）
     mkdirSync(dirname(dest), { recursive: true });
 
-    // -R: 递归  -L: 跟随符号链接（workspace 包是 symlink）
-    execSync(`cp -RL "${src}" "${dest}"`, { stdio: 'pipe' });
+    // 跨平台递归拷贝，跟随符号链接（workspace 包是 symlink）
+    cpSync(src, dest, { recursive: true, dereference: true });
     ok++;
   }
 

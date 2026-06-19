@@ -21,8 +21,12 @@ concurrency:
 
 jobs:
   typecheck:
-    name: Typecheck
-    runs-on: macos-latest
+    name: Typecheck (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
 
     steps:
       - name: Checkout
@@ -39,3 +43,44 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+  regression:
+    name: Regression (${{ matrix.os }})
+    needs: typecheck
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: M3 Regression (基础 Agent, 安全, 审批, 取消)
+        run: npm run regression:m3
+        env:
+          AUREVOY_MCP_SERVERS_JSON: '[]'
+
+      - name: M6 Regression (追问, 产物, 预算, token, 命令执行)
+        run: npm run regression:m6
+        env:
+          AUREVOY_MCP_SERVERS_JSON: '[]'
+
+      - name: M7 Regression (文件工具, 网络安全, schema, checkpoint)
+        run: npm run regression:m7
+        env:
+          AUREVOY_MCP_SERVERS_JSON: '[]'

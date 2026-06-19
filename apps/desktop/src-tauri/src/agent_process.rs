@@ -361,11 +361,15 @@ fn find_node() -> Option<PathBuf> {
 
 /// 搜索系统安装的 Node.js 可执行文件。
 fn find_system_node() -> Option<PathBuf> {
-    // 常见 Node.js 安装路径
+    find_system_node_impl()
+}
+
+#[cfg(target_os = "macos")]
+fn find_system_node_impl() -> Option<PathBuf> {
     let candidates = [
-        "/opt/homebrew/bin/node",       // Homebrew ARM64
-        "/usr/local/bin/node",          // Homebrew x64 / 官方 pkg
-        "/opt/local/bin/node",          // MacPorts
+        "/opt/homebrew/bin/node",
+        "/usr/local/bin/node",
+        "/opt/local/bin/node",
     ];
     for path in &candidates {
         let p = PathBuf::from(path);
@@ -373,14 +377,69 @@ fn find_system_node() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    // 最后试着直接用 "node"（靠 PATH）
-    if let Ok(output) = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg("command -v node")
-        .output()
-    {
+    which_node_via_shell("command -v node")
+}
+
+#[cfg(target_os = "windows")]
+fn find_system_node_impl() -> Option<PathBuf> {
+    let candidates = [
+        r"C:\Program Files\nodejs\node.exe",
+        r"C:\Program Files (x86)\nodejs\node.exe",
+        r"C:\ProgramData\chocolatey\lib\nodejs\tools\node.exe",
+    ];
+    for path in &candidates {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    which_node_via_shell("where node")
+}
+
+#[cfg(target_os = "linux")]
+fn find_system_node_impl() -> Option<PathBuf> {
+    let candidates = [
+        "/usr/bin/node",
+        "/usr/local/bin/node",
+        "/opt/homebrew/bin/node",
+        "/home/linuxbrew/.linuxbrew/bin/node",
+        "/snap/bin/node",
+    ];
+    for path in &candidates {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let home = std::env::var("HOME").ok()?;
+    let user_paths = [
+        format!("{home}/.local/share/fnm/node-versions/latest/installation/bin/node"),
+        format!("{home}/.nvm/versions/node/current/bin/node"),
+    ];
+    for path in &user_paths {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    which_node_via_shell("command -v node")
+}
+
+/// 通过 shell 命令（command -v / where）查找 node 可执行文件。
+fn which_node_via_shell(shell_cmd: &str) -> Option<PathBuf> {
+    let (program, args): (&str, &[&str]) = if cfg!(target_os = "windows") {
+        ("cmd", &["/c", shell_cmd])
+    } else {
+        ("/bin/sh", &["-c", shell_cmd])
+    };
+    if let Ok(output) = std::process::Command::new(program).args(args).output() {
         if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let path = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string();
             if !path.is_empty() {
                 return Some(PathBuf::from(path));
             }
