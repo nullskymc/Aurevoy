@@ -814,11 +814,6 @@ function collectExternalPaths(task: Task): string[] {
       }
     }
   }
-  // 同时加入项目的路径（用户显式导入的目录）
-  if (task.projectId) {
-    const project = projectStore.get(task.projectId);
-    if (project) paths.push(project.path);
-  }
   return [...new Set(paths)];
 }
 
