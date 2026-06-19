@@ -27,6 +27,8 @@ interface ComposerProps {
   onChange: (value: string) => void;
   onSubmit: () => void;
   onOpenModelSelector: () => void;
+  /** 模型按钮 ref，用于弹层定位锚点 */
+  modelButtonRef?: React.RefObject<HTMLButtonElement | null>;
   /** busy 时点击发送按钮触发停止/取消 */
   onStop?: () => void;
   /** 拖拽/选择的附件列表 */
@@ -35,6 +37,8 @@ interface ComposerProps {
   onAttachmentsChange?: (attachments: MessageAttachment[]) => void;
   /** 粘贴文件回调：Composer 从剪贴板提取图片后通知父组件创建附件 */
   onPasteFiles?: (files: Array<{ name: string; dataUrl: string; mimeType: string }>) => void;
+  /** 点击 "+" 按钮打开文件选择器 */
+  onPickAttachments?: () => void;
 }
 
 export function Composer({
@@ -49,10 +53,12 @@ export function Composer({
   attachments,
   onAttachmentsChange,
   onPasteFiles,
+  onPickAttachments,
   onCancelEdit,
   onChange,
   onSubmit,
   onOpenModelSelector,
+  modelButtonRef,
   onStop,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -304,11 +310,12 @@ export function Composer({
               className="composer-icon-btn"
               title={t("composer.attachment")}
               aria-label={t("composer.attachment")}
-              onClick={() => onAttachmentsChange?.([])}
+              onClick={onPickAttachments}
             >
               <PlusIcon />
             </button>
             <button
+              ref={modelButtonRef}
               type="button"
               className="composer-chip"
               title={t("composer.selectModel")}

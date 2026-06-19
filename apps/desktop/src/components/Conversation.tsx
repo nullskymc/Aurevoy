@@ -1068,19 +1068,16 @@ export function AgentRunningTimeline({
       )}
 
       {/* 流式输出文本（thinking 阶段实时打字机效果） */}
-      {showStreamingOutput && !hasReasoning && (
-        <div className="ai-chat-bubble-reply stream-preview">
-          <MarkdownRenderer content={output} />
-          {busy && <span className="stream-caret" aria-hidden="true" />}
-        </div>
-      )}
-
-      {/* 有思考链时，最终文本在折叠区下方展示 */}
-      {showStreamingOutput && hasReasoning && (
-        <div className="ai-chat-bubble-reply stream-preview stream-after-reasoning">
-          <MarkdownRenderer content={output} />
-          {busy && <span className="stream-caret" aria-hidden="true" />}
-        </div>
+      {showStreamingOutput && (
+        <article className="doc-block doc-block-agent">
+          <DocumentMeta icon={<AgentIcon />} label="Aurevoy" />
+          <div className="doc-body">
+            <div className="stream-preview">
+              <MarkdownRenderer content={output} />
+              {busy && <span className="stream-caret" aria-hidden="true" />}
+            </div>
+          </div>
+        </article>
       )}
 
     </div>

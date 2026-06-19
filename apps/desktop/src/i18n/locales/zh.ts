@@ -226,7 +226,6 @@ export const zh = {
   "event.clarificationResolved": "追问已处理",
   "event.artifactCreated": "产物已创建：",
   "event.artifactUpdated": "产物已更新：",
-  "event.checkpoint": "Checkpoint：",
   "event.budgetUsage": "预算使用更新",
   "event.tokenUsage": "Token 使用更新",
   "event.reverted": "编辑重跑",
@@ -270,10 +269,6 @@ export const zh = {
   "inspector.uptimeUnit": "秒",
   "inspector.artifacts": "产物",
   "inspector.emptyArtifacts": "暂无任务产物",
-  "inspector.clarifications": "追问",
-  "inspector.emptyClarifications": "暂无追问",
-  "inspector.checkpoints": "Checkpoint",
-  "inspector.emptyCheckpoints": "暂无 checkpoint",
   "inspector.traces": "轨迹日志",
   "inspector.emptyTraces": "暂无持久轨迹",
   "inspector.toolCatalog": "工具目录",
@@ -286,6 +281,8 @@ export const zh = {
   "inspector.success": "成功",
   "inspector.failure": "失败",
   "inspector.outputBytes": "输出字节",
+  "inspector.queryIndex": "提问索引",
+  "inspector.emptyQueries": "暂无提问",
 
   // 轨迹标题/详情
   "trace.llmRound": "模型轮次",

@@ -14,7 +14,6 @@ interface TaskHistorySidebarProps {
   onNewTask: (projectId?: string) => void;
   onSelectTask: (task: Task) => void;
   onSelectProject: (projectId: string) => void;
-  onCollapse: () => void;
   onOpenSearch: () => void;
   onOpenTools: () => void;
   onOpenSettings: () => void;
@@ -32,7 +31,6 @@ export function TaskHistorySidebar({
   onNewTask,
   onSelectTask,
   onSelectProject,
-  onCollapse,
   onOpenSearch,
   onOpenTools,
   onOpenSettings,
@@ -105,9 +103,6 @@ export function TaskHistorySidebar({
     <aside className="sidebar app-sidebar" aria-label={t("sidebar.label")}>
       <div className="sidebar-brand" data-tauri-drag-region>
         <img className="sidebar-brand-logo" src="/aurevoy-wordmark.svg" alt="Aurevoy" />
-        <button type="button" className="sidebar-collapse" onClick={onCollapse} aria-label={t("nav.collapse")}>
-          <CollapseIcon />
-        </button>
       </div>
 
       <div className="sidebar-actions">
@@ -346,21 +341,6 @@ function TaskList({
         </li>
       ))}
     </ul>
-  );
-}
-
-function CollapseIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <path
-        d="M3.8 4.2h12.4c.9 0 1.6.7 1.6 1.6v8.4c0 .9-.7 1.6-1.6 1.6H3.8c-.9 0-1.6-.7-1.6-1.6V5.8c0-.9.7-1.6 1.6-1.6zM7.4 4.5v11M13 7.2l-2.8 2.8 2.8 2.8"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        fill="none"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }
 

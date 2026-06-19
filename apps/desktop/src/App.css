@@ -256,7 +256,6 @@ button:disabled {
   height: auto;
 }
 
-.sidebar-collapse,
 .icon-btn {
   display: grid;
   place-items: center;
@@ -268,7 +267,6 @@ button:disabled {
   color: var(--text-secondary);
 }
 
-.sidebar-collapse:hover,
 .icon-btn:hover {
   background: var(--hover);
   color: var(--text);
@@ -654,7 +652,7 @@ button:disabled {
 
 .app-shell[data-left-collapsed="true"] .topbar-left-tools {
   justify-self: start;
-  padding-left: 80px;
+  padding-left: 78px;
 }
 
 .app-shell[data-left-collapsed="true"] .topbar-actions {
@@ -1566,7 +1564,8 @@ button:disabled {
 
 .inspector-content {
   display: grid;
-  gap: 20px;
+  gap: 12px;
+  align-content: start;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -1577,22 +1576,51 @@ button:disabled {
   min-width: 0;
 }
 
+.inspector-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 6px 0;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.inspector-section-head:hover {
+  color: var(--text);
+}
+
+.inspector-section-head .inspector-label {
+  flex: 1;
+  text-align: left;
+  margin: 0;
+}
+
+.inspector-section-head .inspector-count {
+  flex: 0 0 auto;
+}
+
+.inspector-chevron {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  transition: transform 150ms ease;
+}
+
+.inspector-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.inspector-section-body {
+  margin-top: 10px;
+}
+
 .inspector-label {
   margin: 0 0 10px;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
-}
-
-.inspector-label-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.inspector-label-row .inspector-label {
-  margin: 0;
 }
 
 .inspector-count {
@@ -1827,7 +1855,7 @@ button:disabled {
 .model-popover {
   position: absolute;
   left: 0;
-  bottom: 74px;
+  bottom: 100%;
   z-index: 30;
   display: grid;
   width: min(var(--ui-popover-width), calc(100vw - 48px));
@@ -1887,7 +1915,8 @@ button:disabled {
 }
 
 .model-popover-item[data-active="true"] {
-  color: var(--text);
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
 }
 
 .model-popover-item:disabled {
@@ -2250,78 +2279,6 @@ button:disabled {
   color: var(--text);
   font-size: 13px;
   padding: 8px 10px;
-}
-
-.event-feed {
-  display: grid;
-  gap: 8px;
-}
-
-.event-item {
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr);
-  gap: 8px;
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-  padding: 10px 12px;
-}
-
-.event-dot {
-  width: 8px;
-  height: 8px;
-  margin-top: 5px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-}
-
-.event-item[data-type="error"] .event-dot {
-  background: var(--offline);
-}
-
-.event-item[data-type="done"] .event-dot,
-.event-item[data-type="tool_result"] .event-dot {
-  background: var(--online);
-}
-
-.event-item[data-type="status"] .event-dot,
-.event-item[data-type="tool_call"] .event-dot {
-  background: var(--accent-soft-fg);
-}
-
-.event-item header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.event-item strong {
-  overflow: hidden;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.event-item time {
-  flex: 0 0 auto;
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-
-.event-item pre {
-  display: -webkit-box;
-  margin: 6px 0 0;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
 }
 
 /* ============ 响应式 ============ */
@@ -4958,21 +4915,12 @@ textarea:focus-visible,
   transform: scale(0.97);
 }
 
-/* AI Chat Streaming reply */
-.ai-chat-bubble-reply {
-  margin-top: var(--ui-space-3);
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  color: var(--text);
-  font-size: calc(14px * var(--font-scale));
-  line-height: 1.6;
+/* Streaming preview text */
+.stream-preview {
   position: relative;
-  box-shadow: none;
 }
 
-.ai-chat-bubble-reply .stream-caret {
+.stream-preview .stream-caret {
   display: inline-block;
   width: 2px;
   height: 14px;

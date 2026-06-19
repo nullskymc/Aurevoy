@@ -226,7 +226,6 @@ export const ko = {
   "event.clarificationResolved": "질문 처리됨",
   "event.artifactCreated": "산출물 생성됨: ",
   "event.artifactUpdated": "산출물 업데이트됨: ",
-  "event.checkpoint": "체크포인트: ",
   "event.budgetUsage": "예산 사용 업데이트",
   "event.tokenUsage": "토큰 사용 업데이트",
   "event.reverted": "편집 재실행",
@@ -270,10 +269,6 @@ export const ko = {
   "inspector.uptimeUnit": "초",
   "inspector.artifacts": "산출물",
   "inspector.emptyArtifacts": "작업 산출물 없음",
-  "inspector.clarifications": "질문",
-  "inspector.emptyClarifications": "질문 없음",
-  "inspector.checkpoints": "체크포인트",
-  "inspector.emptyCheckpoints": "체크포인트 없음",
   "inspector.traces": "추적 로그",
   "inspector.emptyTraces": "지속적 추적 없음",
   "inspector.toolCatalog": "도구 카탈로그",
@@ -286,6 +281,8 @@ export const ko = {
   "inspector.success": "성공",
   "inspector.failure": "실패",
   "inspector.outputBytes": "출력 바이트",
+  "inspector.queryIndex": "쿼리 색인",
+  "inspector.emptyQueries": "쿼리 없음",
 
   // Trace titles / details
   "trace.llmRound": "LLM 라운드",

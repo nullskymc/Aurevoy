@@ -226,7 +226,6 @@ export const ja = {
   "event.clarificationResolved": "確認処理済み",
   "event.artifactCreated": "成果物作成済み: ",
   "event.artifactUpdated": "成果物更新済み: ",
-  "event.checkpoint": "チェックポイント: ",
   "event.budgetUsage": "予算使用更新",
   "event.tokenUsage": "トークン使用更新",
   "event.reverted": "編集再実行",
@@ -270,10 +269,6 @@ export const ja = {
   "inspector.uptimeUnit": "秒",
   "inspector.artifacts": "成果物",
   "inspector.emptyArtifacts": "タスク成果物なし",
-  "inspector.clarifications": "確認",
-  "inspector.emptyClarifications": "確認事項なし",
-  "inspector.checkpoints": "チェックポイント",
-  "inspector.emptyCheckpoints": "チェックポイントなし",
   "inspector.traces": "トレースログ",
   "inspector.emptyTraces": "永続トレースなし",
   "inspector.toolCatalog": "ツールカタログ",
@@ -286,6 +281,8 @@ export const ja = {
   "inspector.success": "成功",
   "inspector.failure": "失敗",
   "inspector.outputBytes": "出力バイト",
+  "inspector.queryIndex": "クエリインデックス",
+  "inspector.emptyQueries": "クエリなし",
 
   // Trace titles / details
   "trace.llmRound": "LLMラウンド",

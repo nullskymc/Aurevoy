@@ -226,7 +226,6 @@ export const en = {
   "event.clarificationResolved": "Clarification Resolved",
   "event.artifactCreated": "Artifact Created: ",
   "event.artifactUpdated": "Artifact Updated: ",
-  "event.checkpoint": "Checkpoint: ",
   "event.budgetUsage": "Budget Usage Update",
   "event.tokenUsage": "Token Usage Update",
   "event.reverted": "Edit Rerun",
@@ -270,10 +269,6 @@ export const en = {
   "inspector.uptimeUnit": "seconds",
   "inspector.artifacts": "Artifacts",
   "inspector.emptyArtifacts": "No task artifacts",
-  "inspector.clarifications": "Clarifications",
-  "inspector.emptyClarifications": "No clarifications",
-  "inspector.checkpoints": "Checkpoints",
-  "inspector.emptyCheckpoints": "No checkpoints",
   "inspector.traces": "Trace Logs",
   "inspector.emptyTraces": "No persistent traces",
   "inspector.toolCatalog": "Tool Catalog",
@@ -286,6 +281,8 @@ export const en = {
   "inspector.success": "Success",
   "inspector.failure": "Failure",
   "inspector.outputBytes": "Output Bytes",
+  "inspector.queryIndex": "Query Index",
+  "inspector.emptyQueries": "No queries yet",
 
   // Trace titles / details
   "trace.llmRound": "LLM Round",

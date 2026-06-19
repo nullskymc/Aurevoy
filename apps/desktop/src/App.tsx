@@ -62,7 +62,12 @@ import { InspectorPanel } from "./components/InspectorPanel";
 import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
 import { SettingsPanel, type SettingsDraft } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
-import type { FeedItem } from "./components/AgentEventFeed";
+
+interface FeedItem {
+  id: string;
+  event: AgentEvent;
+  createdAt: string;
+}
 import { getPhaseLabel, getStatusLabel } from "./components/status";
 import { setLocale, t, type Locale } from "./i18n";
 import "./App.css";
@@ -238,6 +243,7 @@ function App() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
+  const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const {
     busy,
     currentTask,
@@ -387,6 +393,42 @@ function App() {
       setNotice(`已导入项目: ${project.name}`);
     } catch (err) {
       setNotice(`导入失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handlePickAttachments(): Promise<void> {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({ directory: false, multiple: true });
+      if (!selected || (Array.isArray(selected) && selected.length === 0)) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      for (const p of paths) {
+        try {
+          const meta = await invoke<{ name: string; size: number; is_dir: boolean; mime_type: string }>(
+            'file_metadata',
+            { path: p },
+          );
+          if (meta.is_dir) continue;
+          setAttachments((prev) => {
+            if (prev.some((a) => a.path === p)) return prev;
+            return [
+              ...prev,
+              {
+                id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                name: meta.name,
+                path: p,
+                mimeType: meta.mime_type,
+                size: meta.size,
+                type: meta.mime_type.startsWith('image/') ? 'image' : 'file',
+              },
+            ];
+          });
+        } catch {
+          setNotice(`无法读取文件信息: ${p}`);
+        }
+      }
+    } catch (err) {
+      setNotice(`选择文件失败: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1304,7 +1346,6 @@ function App() {
         onNewTask={handleNewTask}
         onSelectTask={handleSelectTask}
         onSelectProject={setDraftProjectId}
-        onCollapse={() => setLeftCollapsed(true)}
         onOpenSearch={handleOpenSearch}
         onOpenTools={handleOpenTools}
         onOpenSettings={handleOpenSettings}
@@ -1323,16 +1364,14 @@ function App() {
       <main className="main">
         <header className="topbar" data-tauri-drag-region>
           <div className="topbar-left-tools">
-            {leftCollapsed && (
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => setLeftCollapsed(false)}
-                aria-label={t("nav.expand")}
-              >
-                <SidebarIcon />
-              </button>
-            )}
+            <button
+              type="button"
+              className="icon-btn sidebar-toggle-btn"
+              onClick={() => setLeftCollapsed((c) => !c)}
+              aria-label={leftCollapsed ? t("nav.expand") : t("nav.collapse")}
+            >
+              <SidebarIcon collapsed={leftCollapsed} />
+            </button>
           </div>
           {isChatView && showConversation ? (
             <>
@@ -1502,6 +1541,7 @@ function App() {
                 attachments={attachments}
                 onAttachmentsChange={setAttachments}
                 onPasteFiles={(files) => void handlePasteFiles(files)}
+                onPickAttachments={() => void handlePickAttachments()}
                 onCancelEdit={() => {
                   setEditingMessageId(null);
                   setGoal("");
@@ -1511,6 +1551,7 @@ function App() {
                 onChange={setGoal}
                 onSubmit={handleComposerSubmit}
                 onOpenModelSelector={handleOpenModelSelector}
+                modelButtonRef={modelButtonRef}
                 onStop={handleStopStream}
               />
               <ModelSelectorDrawer
@@ -1518,6 +1559,7 @@ function App() {
                 provider={health?.provider}
                 settings={runtimeSettings}
                 saving={settingsSaving}
+                anchorRef={modelButtonRef}
                 onClose={() => setModelDrawerOpen(false)}
                 onOpenFullSettings={handleOpenFullSettingsFromModelDrawer}
                 onSave={handleSaveModelSelection}
@@ -1538,10 +1580,12 @@ function App() {
               attachments={attachments}
               onAttachmentsChange={setAttachments}
               onPasteFiles={(files) => void handlePasteFiles(files)}
+              onPickAttachments={() => void handlePickAttachments()}
               provider={health?.provider}
               onChange={setGoal}
               onSubmit={handleComposerSubmit}
               onOpenModelSelector={handleOpenModelSelector}
+              modelButtonRef={modelButtonRef}
               onStop={handleStopStream}
             />
             <ModelSelectorDrawer
@@ -1549,6 +1593,7 @@ function App() {
               provider={health?.provider}
               settings={runtimeSettings}
               saving={settingsSaving}
+              anchorRef={modelButtonRef}
               onClose={() => setModelDrawerOpen(false)}
               onOpenFullSettings={handleOpenFullSettingsFromModelDrawer}
               onSave={handleSaveModelSelection}
@@ -1566,7 +1611,6 @@ function App() {
 
       <InspectorPanel
         open={inspectorOpen}
-        events={events}
         health={health}
         task={currentTask}
         phase={phase}
@@ -1590,7 +1634,7 @@ function ToastNotice({ message, onClose }: { message: string; onClose: () => voi
   );
 }
 
-function SidebarIcon() {
+function SidebarIcon({ collapsed }: { collapsed: boolean }) {
   return (
     <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
       <path
@@ -1600,6 +1644,11 @@ function SidebarIcon() {
         fill="none"
         strokeLinejoin="round"
       />
+      {collapsed ? (
+        <path d="M10 7.2l2.8 2.8-2.8 2.8" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+      ) : (
+        <path d="M13 7.2l-2.8 2.8 2.8 2.8" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+      )}
     </svg>
   );
 }
