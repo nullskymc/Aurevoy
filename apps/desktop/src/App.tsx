@@ -1437,19 +1437,11 @@ function App() {
               </div>
             </>
           ) : (
-            <>
-              <div className="topbar-context">
-                <div className="topbar-title-group">
-                  <span className="topbar-title">{getMainViewTitle(activeView)}</span>
-                  <span className="topbar-subtitle">{getMainViewSubtitle(activeView)}</span>
-                </div>
+            <div className="topbar-context">
+              <div className="topbar-title-group">
+                <span className="topbar-title">{getMainViewTitle(activeView)}</span>
               </div>
-              <div className="topbar-actions">
-                <button type="button" className="ghost-btn" onClick={() => setActiveView("chat")}>
-                  返回对话
-                </button>
-              </div>
-            </>
+            </div>
           )}
         </header>
 
@@ -1660,13 +1652,6 @@ function getMainViewTitle(view: MainView): string {
   return t("mode.conversation");
 }
 
-function getMainViewSubtitle(view: MainView): string {
-  if (view === "search") return t("view.search.subtitle");
-  if (view === "tools") return t("view.skills.subtitle");
-  if (view === "settings") return t("view.settings.subtitle");
-  return t("view.chat.subtitle");
-}
-
 function SearchPage({
   query,
   tasks,
@@ -1685,12 +1670,6 @@ function SearchPage({
 
   return (
     <section className="page-panel">
-      <header className="page-panel-head">
-        <div>
-          <h1>{t("nav.search")}</h1>
-          <p>{t("search.desc")}</p>
-        </div>
-      </header>
       <input
         className="page-search-input"
         value={query}
@@ -1718,12 +1697,6 @@ function SearchPage({
 function SkillsPage({ skills }: { skills: SkillDescriptor[] }) {
   return (
     <section className="page-panel">
-      <header className="page-panel-head">
-        <div>
-          <h1>{t("nav.skills")}</h1>
-          <p>{t("skillsPage.desc")}</p>
-        </div>
-      </header>
       <div className="skill-page-grid">
         {skills.length === 0 ? (
           <p className="page-empty">{t("skillsPage.empty")}</p>

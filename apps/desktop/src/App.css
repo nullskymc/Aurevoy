@@ -670,6 +670,7 @@ button:disabled {
 .topbar-context {
   display: flex;
   align-items: center;
+  flex: 1;
   gap: 10px;
   min-width: 0;
 }

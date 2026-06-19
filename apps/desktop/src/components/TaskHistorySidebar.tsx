@@ -133,14 +133,6 @@ export function TaskHistorySidebar({
           <PluginIcon />
           <span>{t("nav.skills")}</span>
         </button>
-        <button type="button" className="sidebar-action" disabled title={t("nav.automationDisabled")}>
-          <ClockIcon />
-          <span>{t("nav.automation")}</span>
-        </button>
-        <button type="button" className="sidebar-action" disabled title={t("nav.sitesDisabled")}>
-          <GridIcon />
-          <span>{t("nav.sites")}</span>
-        </button>
       </div>
 
       <div className="sidebar-scroll">
@@ -407,28 +399,6 @@ function PluginIcon() {
   );
 }
 
-function ClockIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.4" fill="none" />
-      <path d="M10 6.5V10l2.5 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function GridIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <path
-        d="M4 4h6v6H4zM12 4h4v4h-4zM4 12h4v4H4zM10 12h6v4h-6z"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        fill="none"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 function FolderIcon() {
   return (
