@@ -62,7 +62,47 @@ packages/shared/src/    跨进程类型（契约）
 - 不调用平台专有命令（`open`、`osascript` 等）；需要系统能力走 Tauri 插件。
 - 换平台后原生模块（better-sqlite3）由 `npm install` 自动重编，CI 需覆盖两平台。
 
-## 6. 扩展配方（Cookbook）
+## 6. 交付级 Agent Runtime 要求
+
+| 能力 | 最低要求 | 不可接受 |
+|---|---|---|
+| 模型调用 | 真实 Provider；未配置 Key 明确失败；记录 provider/model | 回退到 Mock 答案或固定回复 |
+| 工具调用 | 工具统一注册；riskLevel 生效；非 safe 工具需审批 | 在 Agent loop 内写工具特例；绕过审批 |
+| MCP | 启动期发现工具；连接失败可诊断；工具名稳定 | MCP server 失败导致整个引擎不可用 |
+| 状态 | 任务、消息、计划、工具结果持久化 | 刷新或重启后任务状态不可恢复 |
+| 产物 | 先生成 draft artifact；用户确认/审批后才写真实文件 | 直接覆盖用户文件或只给口头"已完成" |
+| 追问 | 信息不足时进入 `waiting_clarification` 并等待真实用户回复 | 编造用户意图或新建任务丢历史 |
+| 预算 | 轮次、工具调用、耗时、输出量可配置且超限可诊断 | 无限循环、无限输出或只靠 prompt 限制 |
+| 取消/超时 | LLM 和等待审批可取消；超时进入失败/拒绝路径 | 用户点停止但后端继续不可见执行 |
+| 错误 | 错误进入 `error` + `done(failed)`；UI 可见 | 后端吞错、前端卡在运行中 |
+
+### 可观测性与审计
+
+新增 runtime 能力时，应确保以下结构化记录落入 SQLite `traceStore`：
+
+- `taskId`、`iteration`、`provider`、`model`、开始/结束时间、最终状态。
+- 每次 LLM 请求的轮次、finish reason、重试次数、超时/取消原因。
+- 每次工具调用的工具名、参数摘要、riskLevel、审批结果、耗时、成功/失败。
+- 用户审批决策：批准/拒绝、时间、关联 callId。
+- 错误分类：配置错误、模型错误、工具错误、权限错误、超时、取消、解析错误。
+- 成本指标：token 用量在 Provider 支持时记录；不支持时明确为空。
+- 交付产物：artifact id、类型、状态、来源 callId、确认/拒绝/写入路径。
+- 人机交互：clarification id、问题、用户回复、超时/取消状态。
+
+后续再考虑 OpenTelemetry/Prometheus/LangSmith 等外部观测系统。
+
+### 沙箱与权限
+
+当前已具备文件路径限制和工具审批，引入 shell、代码执行、浏览器控制或系统操作前，必须满足：
+
+- 默认关闭高风险工具，用户显式开启。
+- 文件访问限定工作区，真实路径校验要跟随 symlink。
+- 写入、删除、网络访问、执行命令必须进入审批流。
+- 命令执行必须有工作目录、超时、输出大小、环境变量 allowlist 和可终止进程。
+- 对真实用户目录、系统目录、密钥文件和仓库外路径默认拒绝。
+- 高风险执行优先放入独立沙箱进程/容器；不能直接把本机 shell 暴露给模型。
+
+## 7. 扩展配方（Cookbook）
 
 ### 新增一个工具
 ```ts
@@ -92,39 +132,26 @@ export class OpenAIProvider implements LLMProvider {
 2. `npm run build:shared`。
 3. 前后端按编译错误同步更新。
 
-### 回归 M3 Agent runtime
+### 回归测试
 
 ```bash
-npm run build
-npm run regression:m3
+npm run build                 # 构建 shared → agent → desktop
+npm run regression:m3         # 基础 Agent、安全、审批、取消
+npm run regression:m4         # 多轮、记忆、恢复
+npm run regression:m5         # 设置、工具管理、数据管理、MCP
+npm run regression:m6         # 追问、产物、预算、token、命令执行
+npm run regression:m7         # 文件工具、网络安全、schema、计划、checkpoint
 ```
 
-`regression:m3` 会启动真实 Fastify 后端、临时 OpenAI-compatible fixture、临时 MCP stdio server、
-临时 SQLite 和工作区，覆盖直接回答、读文件、写文件审批、HTTP 审批、MCP 工具、取消、
-目录穿越、symlink 越界、审批拒绝/超时、非法 URL、未配置 Key、迟到 SSE 和历史轨迹回看。
+各回归覆盖范围：
 
-### 回归 M6 Agent 交付能力
+- **m3**：直接回答、读文件、写文件审批、HTTP 审批、MCP 工具、取消、目录穿越、symlink 越界、审批拒绝/超时、非法 URL、未配置 Key、迟到 SSE、历史轨迹回看。
+- **m4**：多轮上下文、上下文压缩、长期记忆 CRUD、Agent 写入记忆、记忆注入/禁用、启动期中断任务恢复扫描。
+- **m5**：运行设置生效、Provider 缓存失效、工作区切换、工具启停影响模型可见工具、MCP 配置校验/状态、数据清理。
+- **m6**：`ask_user` 追问与恢复、追问超时、artifact 草稿/确认/拒绝、预算超限、token usage、`execute_command` 审批后执行、cwd 越界拒绝。
+- **m7**：文件搜索/复制/移动/删除、删除默认禁用与审批、`http_fetch` SSRF/重定向、工具 schema validation、MCP 描述净化、本地风险覆盖、多步计划、checkpoint 恢复。
 
-```bash
-npm run build
-npm run regression:m6
-```
-
-`regression:m6` 覆盖结构化追问、追问超时、artifact 草稿/确认/拒绝、预算超限、
-Provider token usage、`execute_command` 成功执行和工作区 cwd 越界拒绝。
-
-### 回归 M7 工具与安全治理
-
-```bash
-npm run build
-npm run regression:m7
-```
-
-`regression:m7` 覆盖 `search_files`、文件复制/移动/删除、删除默认禁用、审批拒绝、
-`http_fetch` SSRF/重定向策略、工具 schema validation、MCP 描述净化、本地风险覆盖、
-多步计划和 checkpoint 恢复。
-
-## 7. 提交前检查清单
+## 8. 提交前检查清单
 
 - [ ] `npm run typecheck` 通过
 - [ ] 改了 shared → 已 `npm run build:shared`
@@ -132,14 +159,16 @@ npm run regression:m7
 - [ ] 改了前端 → `npm run build -w @aurevoy/desktop` 通过
 - [ ] 改了 Agent loop / 工具 / 审批 / 存储 → 有可复现的轨迹或回归用例
 - [ ] 改了 Agent runtime / 工具 / 审批 / 安全边界 → `npm run regression:m3` 通过
-- [ ] 改了 M6 交付链路（追问 / 产物 / 预算 / token / 命令执行）→ `npm run regression:m6` 通过
-- [ ] 改了 M7 工具 / HTTP 安全 / schema / MCP / checkpoint / 工作台拆分 → `npm run regression:m7` 通过
+- [ ] 改了记忆 / 多轮对话 / 恢复 → `npm run regression:m4` 通过
+- [ ] 改了设置 / 工具管理 / MCP / 数据管理 → `npm run regression:m5` 通过
+- [ ] 改了追问 / 产物 / 预算 / token / 命令执行 → `npm run regression:m6` 通过
+- [ ] 改了文件工具 / HTTP 安全 / schema / MCP / checkpoint → `npm run regression:m7` 通过
 - [ ] 新增工具 → 已声明风险等级、审批行为、错误路径和输入 schema
 - [ ] 新增执行能力 → 已定义沙箱/权限边界、超时、输出上限和取消路径
 - [ ] 无硬编码秘钥；无平台专有路径/命令
 - [ ] 临时文件已清理
 
-## 8. Git 约定
+## 9. Git 约定
 
 - 提交信息建议 Conventional Commits：`feat: …` / `fix: …` / `docs: …` / `refactor: …`。
 - 只在用户明确要求时创建提交；优先暂存具体文件而非 `git add .`。

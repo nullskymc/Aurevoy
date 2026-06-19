@@ -322,7 +322,82 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 
 `App` 可以持有 UI 编排状态，但业务真相仍来自后端 `Task` 和 `AgentEvent`。
 
-## 7. 接口与契约边界
+## 7. 多模态交互
+
+Aurevoy 支持用户拖拽、粘贴或手动选择图片/文件，Agent 可读取内容、查看图片，
+视觉模型可"看见"图片内容。
+
+### 7.1 视觉模型配置
+
+Aurevoy 使用**主模型 + 视觉子模型**架构：
+
+- **主模型**（Settings → Provider → Model）：处理纯文本对话。
+- **视觉子模型**（Settings → Provider → 视觉模型）：消息包含图片时自动切换。
+- 视觉子模型留空时，图片以文字引用形式注入（`[用户附带了图片: xxx]`），
+  纯文本模型无法"看到"图片像素内容。
+
+### 7.2 Composer 附件
+
+| 方式 | 操作 | 说明 |
+|------|------|------|
+| **从 Finder 拖入** | 拖文件/文件夹到输入框 | 文件夹导入为项目；文件作为附件 |
+| **粘贴** | Cmd+V 在输入框 | 系统剪贴板中的图片自动提取 |
+| **附件按钮** | 点击输入框左侧 + 按钮 | 清除当前附件 |
+
+附件 chip 出现在输入框上方。输入文字描述后发送，Agent 会：
+
+1. 读取文本文件内容（≤30KB），注入上下文；超大文件截断并提示 LLM 用 `read_file`。
+2. 检测到图片 → 切换视觉子模型 → 以 base64 多模态格式发送。
+3. 用户拖入的文件路径被标记为"受信任外部路径"，工具可跳过工作区沙箱检查直接读写。
+4. 文件夹拖入 → 自动导入为项目。
+
+### 7.3 图片展示
+
+- 聊天历史中的图片显示缩略图（横排，点击可全屏查看）。
+- 图片查看器：点击缩略图 → 全屏 lightbox → ESC/✕/点击背景关闭。
+- 支持格式：PNG、JPG、GIF、WebP 等（取决于模型），单张最大 20MB。
+
+### 7.4 审批系统
+
+高风险工具（写文件、执行命令等）调用前需要用户确认。审批卡片内嵌在聊天界面内：
+
+| 按钮 | 行为 | 有效期 |
+|------|------|--------|
+| **允许本次** | 仅本次调用通过 | — |
+| **本次会话允许** | 本次调用 + 该任务后续同一工具免确认 | 任务结束 |
+| **拒绝** | 拒绝本次调用 | — |
+
+全局永久自动批准：Settings → 工具管理 → 勾选工具的"自动批准：跳过审批直接执行"。
+
+### 7.5 技术架构
+
+```
+[Composer 图片/文件] → [App attachment state]
+  → POST /api/tasks { goal, attachments }
+  → Agent createTask/addUserTurn 存储 Message.attachments
+
+[Agent Loop runTask]
+  ├── collectExternalPaths() → ToolContext.externalPaths → 工具沙箱放行
+  ├── buildAttachmentSystemMessage() → 文本文件注入 system context
+  └── Provider.stream(messages)
+      ├── needsVision? → effectiveModel = visionModel
+      ├── toOpenAIMessage(msg, includeImages)
+      │   ├── includeImages=true → content: [{text}, {image_url: base64}]
+      │   └── includeImages=false → content: "text\n[图片: xxx]"
+      └── FETCH /chat/completions { model: effectiveModel, messages }
+```
+
+相关组件：
+
+| 组件 | 职责 |
+|------|------|
+| `Composer` | 拖拽/粘贴处理、附件 chip、缩略图 |
+| `Conversation` | 聊天历史图片展示 |
+| `ImageViewer` | 全屏 lightbox 查看器 |
+| `Provider` (后端) | 多模态 content blocks、视觉模型切换 |
+| `loop.ts` (后端) | 附件上下文注入、externalPaths、session auto-approve |
+
+## 8. 接口与契约边界
 
 必须遵守：
 
@@ -336,7 +411,7 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
   当前 active model 不能被隐藏。
 - 工具、记忆、搜索入口必须连接真实 API；否则禁用或隐藏。
 
-## 8. 验收标准
+## 9. 验收标准
 
 基础验收：
 
@@ -362,12 +437,11 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 - 设置页手动获取模型后显示可勾选列表；主界面模型菜单只出现已启用模型。
 - 所有按钮和状态文案使用中文，符合普通个人用户理解。
 
-## 9. 参考依据
+## 10. 参考依据
 
-- `start.md`：产品愿景与“主动执行 / 持续成长 / 人人可用”理念。
 - `docs/ARCHITECTURE.md`：前后端分离、本地 HTTP + SSE、契约集中。
 - `docs/API.md`：`Task`、`AgentEvent`、HTTP API 与 SSE 事件流。
-- `docs/ROADMAP.md`：M1-M4 对真实 Agent 循环、工具可视化、历史、设置和多轮的规划。
-- `docs/ENGINEERING_GOVERNANCE.md`：真实能力、轨迹、审批、评测和沙箱的交付门槛。
+- `docs/CONVENTIONS.md`：开发约定、工程治理与交付门槛。
+- `docs/ROADMAP.md`：里程碑与阶段规划。
 - NN/g 可用性启发式：强调系统状态可见性、用户控制、错误恢复。
 - AI 透明度 HCI 研究：强调 Agent 过程、能力边界和不确定性的可解释呈现。

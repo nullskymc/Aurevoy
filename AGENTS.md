@@ -37,10 +37,8 @@ packages/shared (TS 类型)  ← 前后端共享契约，跨进程数据结构�
 | [`docs/TECH_STACK.md`](./docs/TECH_STACK.md) | 技术选型与取舍理由 | 引入新依赖 / 选型决策 |
 | [`docs/API.md`](./docs/API.md) | HTTP API + SSE 事件契约 | 改前后端接口 |
 | [`docs/UI_DESIGN.md`](./docs/UI_DESIGN.md) | 人机交互、信息架构、前端界面设计 | 改桌面 UI / 设计 Agent 工作台 |
-| [`docs/CONVENTIONS.md`](./docs/CONVENTIONS.md) | 代码规范、目录约定、扩展指南 | 写任何代码前 |
-| [`docs/ENGINEERING_GOVERNANCE.md`](./docs/ENGINEERING_GOVERNANCE.md) | 工程治理、可观测性、安全、评测与交付门槛 | 改 Agent runtime / 工具 / 存储 / 发布流程 |
+| [`docs/CONVENTIONS.md`](./docs/CONVENTIONS.md) | 代码规范、目录约定、工程治理、扩展指南 | 写任何代码前 |
 | [`docs/ROADMAP.md`](./docs/ROADMAP.md) | 分阶段规划与任务清单 | 决定"做什么" |
-| [`docs/ROADMAP_AGENT_DELIVERY.md`](./docs/ROADMAP_AGENT_DELIVERY.md) | Agent 功能真实落地路线图 | 规划从技术底座到可用任务执行能力 |
 | [`.github/workflows/build.yml`](./.github/workflows/build.yml) | CI/CD 自动构建与回归 | 了解构建流程 |
 
 ## 4. 给协作智能体的硬性规则
@@ -95,7 +93,8 @@ npm run regression:m7    # M7 文件工具、网络安全、schema、计划、ch
 - ✅ Skill 系统：斜杠命令激活、预装 skill（web-search/browser）、工具白名单
 - ✅ 网页搜索：`web_search` 工具，DuckDuckGo 免费搜索
 - ✅ CI/CD：GitHub Actions macOS ARM64 自动构建 + M3-M7 回归
+- ✅ Multimodal：图片/文件拖拽粘贴、视觉模型、图片查看器
 - 🚧 M5 打包签名：macOS 签名公证、自动更新（需 Apple Developer 账号）
 - ⬜ M8：知识库/RAG、Agent usability eval、浏览器自动化（Playwright MCP）、发布体验
 
-详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md) 与 [`docs/ROADMAP_AGENT_DELIVERY.md`](./docs/ROADMAP_AGENT_DELIVERY.md)。
+详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。

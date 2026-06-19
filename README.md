@@ -40,7 +40,7 @@ Aurevoy breaks down the task and gets to work. You don't need to explain how.
 "This code is too slow — help me find the bottleneck"
 ```
 
-It understands your project structure, makes precise edits, and flags issues. If something goes wrong, you can always **undo**.
+It understands your project structure, makes precise edits, and flags issues. If something goes wrong, you can always **undo** — edit any earlier message, branch the conversation, or compress context to start fresh.
 
 ### Research & Writing
 
@@ -51,6 +51,10 @@ It understands your project structure, makes precise edits, and flags issues. If
 ```
 
 It searches the web for up-to-date information, fetches pages for details, and synthesizes everything into the format you need.
+
+### See and Understand Images
+
+Drag and drop images or files into the conversation. Aurevoy switches to a vision model when images are present, so it can read screenshots, analyze diagrams, and answer questions about what it sees.
 
 ### Learns Your Preferences
 
@@ -67,7 +71,7 @@ You give it a goal → Aurevoy scouts your workspace to understand the context �
 - **Need to write code?** It makes precise edits without touching unrelated parts.
 - **Need your input?** It pauses, asks, and waits for your go-ahead before proceeding.
 
-You see every step. Dislike a direction? Interrupt anytime, revise, and it picks back up.
+You see every step. Dislike a direction? Interrupt anytime, revise, and it picks back up. You can also rewind — edit any earlier message and regenerate from that point, or branch into a new thread to explore a different direction.
 
 ---
 
@@ -140,18 +144,17 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ---
 
-## Roadmap
+## What's Included
 
-Current version `v0.2.0-dev` includes the core agent capabilities:
-
-- ✅ Autonomous planning & parallel tool execution
-- ✅ File read/write/search/edit (diff-based precision edits)
-- ✅ Web search & page fetching
-- ✅ Browser automation (via Playwright MCP)
-- ✅ Long-term memory (learns your preferences over time)
-- ✅ Multi-turn conversations, edit & retry, branching threads
-- ✅ Skill system (slash commands, custom skills)
-- ✅ macOS ARM64 native desktop app
+- Autonomous planning & parallel tool execution
+- File read/write/search/copy/move/delete, precision diff edits
+- Web search & page fetching with SSRF protection
+- Long-term memory (learns your preferences over time)
+- Multi-turn conversations, edit & retry, branching threads, context compression
+- Multimodal: image/file drag-and-drop, vision model support
+- Project workspaces for organizing conversations
+- Skill system (slash commands, custom skills)
+- macOS native desktop app
 
 Coming next: knowledge base / RAG, agent evaluation framework, release polish. See [ROADMAP](docs/ROADMAP.md).
 
