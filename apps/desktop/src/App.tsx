@@ -670,6 +670,9 @@ function App() {
       case "token_usage":
         patchCurrentTask({ tokenUsage: event.usage });
         break;
+      case "context_snapshot":
+        patchCurrentTask({ contextTokens: event.tokens });
+        break;
       case "reverted":
         break;
       case "unreverted":
@@ -1517,9 +1520,9 @@ function App() {
               />
             </div>
             <div className="composer-dock">
-              {health?.contextCharBudget != null && currentTask && currentTask.messages.length > 0 && (
+              {health?.contextTokenBudget != null && currentTask && currentTask.messages.length > 0 && (
                 <div className="context-hint">
-                  {t("context.label")} ~{formatContextK(currentTask.messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0))} / {formatContextK(health.contextCharBudget)} {t("context.unit")}
+                  {t("context.label")} ~{formatContextK(currentTask.contextTokens ?? 0)} / {formatContextK(health.contextTokenBudget)} {t("context.unit")}
                 </div>
               )}
               <Composer

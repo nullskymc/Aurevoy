@@ -203,7 +203,7 @@ export const ja = {
 
   // Context hint
   "context.label": "コンテキスト",
-  "context.unit": "文字",
+  "context.unit": "tokens",
 
   // Slash commands
   "cmd.compact": "古いメッセージを要約に圧縮",

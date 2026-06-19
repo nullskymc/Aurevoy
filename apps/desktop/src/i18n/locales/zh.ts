@@ -203,7 +203,7 @@ export const zh = {
 
   // 上下文提示
   "context.label": "上下文",
-  "context.unit": "字符",
+  "context.unit": "tokens",
 
   // 斜杠命令
   "cmd.compact": "压缩旧消息为摘要",

@@ -203,7 +203,7 @@ export const ko = {
 
   // Context hint
   "context.label": "컨텍스트",
-  "context.unit": "자",
+  "context.unit": "tokens",
 
   // Slash commands
   "cmd.compact": "오래된 메시지를 요약으로 압축",

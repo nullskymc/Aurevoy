@@ -203,7 +203,7 @@ export const en = {
 
   // Context hint
   "context.label": "Context",
-  "context.unit": "chars",
+  "context.unit": "tokens",
 
   // Slash commands
   "cmd.compact": "Compress old messages into summary",

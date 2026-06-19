@@ -139,7 +139,7 @@ function messageTokens(message: Message): number {
   return n;
 }
 
-function totalTokens(messages: Message[]): number {
+export function totalTokens(messages: Message[]): number {
   return messages.reduce((sum, m) => sum + messageTokens(m), 0);
 }
 

@@ -102,6 +102,7 @@ export async function buildServer(externalLogger?: Logger) {
       uptimeMs: Date.now() - startedAt,
       provider: getProviderName(),
       contextCharBudget: config.agent.contextCharBudget,
+      contextTokenBudget: config.agent.contextTokenBudget,
     };
   });
 

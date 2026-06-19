@@ -222,6 +222,8 @@ export interface Task {
   approvedApprovalKeys?: string[];
   checkpoints?: TaskCheckpoint[];
   tokenUsage?: AggregatedTokenUsage;
+  /** 当前上下文窗口估算 token 数（后端 estimateTokens 计算） */
+  contextTokens?: number;
   /** 最近一次 revert 归档的消息（Phase 2 unrevert 钩子） */
   archivedMessages?: Message[];
   /** 分支来源的父任务 ID（branch 功能） */
@@ -413,6 +415,7 @@ export type AgentEvent =
   | { type: 'checkpoint_created'; taskId: string; checkpoint: TaskCheckpoint }
   | { type: 'budget_usage'; taskId: string; usage: BudgetUsage; budget?: TaskBudget }
   | { type: 'token_usage'; taskId: string; usage: AggregatedTokenUsage }
+  | { type: 'context_snapshot'; taskId: string; tokens: number }
   | {
       type: 'reverted';
       taskId: string;
@@ -494,6 +497,8 @@ export interface HealthResponse {
   provider: string;
   /** Agent 上下文字符预算（用于前端展示当前上下文使用率） */
   contextCharBudget?: number;
+  /** Agent 上下文 token 预算（用于前端展示 token 使用率） */
+  contextTokenBudget?: number;
 }
 
 /** POST /api/tasks/:id/approvals — 对一次工具调用做出审批决策 */

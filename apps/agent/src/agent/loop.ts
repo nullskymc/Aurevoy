@@ -22,7 +22,7 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillSystemMessage, buildSkillCatalogMessage } from './context.js';
+import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillSystemMessage, buildSkillCatalogMessage, totalTokens } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 import { skillRegistry } from '../skills/registry.js';
 import { runPlanAgent } from './plan-agent.js';
@@ -1208,6 +1208,11 @@ export async function runTask(task: Task): Promise<void> {
         attachmentSystemMessage,
         ...ctx.messages,
       ].filter(Boolean) as Message[];
+
+      // 估算当前上下文 token 数并推送前端
+      const contextTokenEstimate = totalTokens(requestMessages);
+      task.contextTokens = contextTokenEstimate;
+      taskEvents.publish({ type: 'context_snapshot', taskId: task.id, tokens: contextTokenEstimate });
 
       // ---------- 调用 LLM（带重试） ----------
       try {
