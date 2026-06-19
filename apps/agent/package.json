@@ -1,6 +1,6 @@
 {
   "name": "@aurevoy/agent",
-  "version": "0.5.1-dev",
+  "version": "0.5.2-dev",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
