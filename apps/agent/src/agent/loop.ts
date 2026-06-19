@@ -22,7 +22,7 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillSystemMessage } from './context.js';
+import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillSystemMessage, buildSkillCatalogMessage } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 import { skillRegistry } from '../skills/registry.js';
 import { runPlanAgent } from './plan-agent.js';
@@ -500,15 +500,17 @@ export function addUserTurn(
     task.goal = messageContent;
   }
   if (parsed.skillName) {
-    const skill = skillRegistry.get(parsed.skillName);
-    if (skill) {
+    const entry = skillRegistry.get(parsed.skillName);
+    if (entry) {
       task.activeSkills = [parsed.skillName];
       messageContent = parsed.text || parsed.skillName;
       taskEvents.publish({
         type: 'skill_activated',
         taskId: task.id,
         skillName: parsed.skillName,
-        allowedTools: skill.frontmatter['allowed-tools'],
+        allowedTools: entry.frontmatter['allowed-tools'],
+        description: entry.frontmatter.description,
+        compatibility: entry.frontmatter.compatibility,
       });
     }
   }
@@ -1191,7 +1193,7 @@ export async function runTask(task: Task): Promise<void> {
         recentTopics,
       );
 
-      // Skill: 应用工具白名单 + 注入 skill system prompt
+      // Skill: 应用工具白名单 + 注入 skill catalog + skill system prompt
       const activeSkillName = task.activeSkills?.[0];
       const skillAllowedTools = activeSkillName
         ? skillRegistry.getAllowedTools(activeSkillName)
@@ -1201,10 +1203,12 @@ export async function runTask(task: Task): Promise<void> {
           ? [...new Set([...skillAllowedTools, 'execute_command'])]
           : skillAllowedTools;
       const toolDescriptors = toolRegistry.list(allowedToolNames);
+      const skillCatalogMessage = buildSkillCatalogMessage();
       const skillMessage = buildSkillSystemMessage(activeSkillName);
 
       const requestMessages = [
         memoryMessage,
+        skillCatalogMessage,
         skillMessage,
         attachmentSystemMessage,
         ...ctx.messages,

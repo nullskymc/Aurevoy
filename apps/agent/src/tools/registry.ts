@@ -42,13 +42,13 @@ class ToolRegistry {
    * 列出当前启用的工具。
    *
    * `allowedToolNames` 参数用于 skill 白名单过滤：传入时仅返回白名单内
-   * 的工具 + `use_skill`（确保 LLM 总能切换/退出 skill）。
+   * 的工具 + `activate_skill`（确保 LLM 总能切换/退出 skill）。
    * 不传时返回所有启用工具（向后兼容）。
    */
   list(allowedToolNames?: string[]): ToolDescriptor[] {
     const enabled = this.listAll().filter((tool) => tool.enabled !== false);
     if (!allowedToolNames) return enabled;
-    const whitelist = new Set([...allowedToolNames, 'use_skill']);
+    const whitelist = new Set([...allowedToolNames, 'activate_skill']);
     return enabled.filter((tool) => whitelist.has(tool.name));
   }
 

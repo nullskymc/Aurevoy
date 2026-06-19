@@ -41,16 +41,18 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 命中返回更新后的 `ToolDescriptor`；工具不存在 → `404`；字段缺失 → `400`。
 
 ### GET `/api/skills`
-列出已加载的 skill（斜杠命令自动完成）。
+列出已发现的 skill（Tier 1 catalog，不含 body）。
 ```json
 // 200 → SkillListResponse
 { "skills": [
-  { "name": "web-search", "description": "搜索网页获取最新信息", "allowedTools": ["web_search","http_fetch"], "version": "1.0", "sourceDir": "builtin" },
-  { "name": "browser", "description": "浏览器自动化", "allowedTools": ["http_fetch","web_search"], "version": "1.0", "sourceDir": "builtin" }
+  { "name": "web-search", "description": "搜索网页获取最新信息、文档、技术方案。支持多轮搜索和结果整合。", "allowedTools": ["web_search","http_fetch","read_file","list_directory","search_files"], "license": null, "compatibility": null, "metadata": { "version": "1.0" }, "sourceDir": "builtin", "location": "/path/to/skills/builtin/web-search/SKILL.md" },
+  { "name": "browser", "description": "浏览器自动化——打开网页、截图、获取DOM摘要、抓取控制台错误。", "allowedTools": ["http_fetch","web_search","read_file"], "license": null, "compatibility": "Requires Playwright MCP Server", "metadata": { "version": "1.0" }, "sourceDir": "builtin", "location": "/path/to/skills/builtin/browser/SKILL.md" }
 ]}
 ```
-- 加载优先级：预装（builtin）< 用户（user）< 工作区（workspace），后加载的覆盖同名
-- 预装 skill 随 Agent 分发，用户可在 `~/.aurevoy/skills/` 或 `.aurevoy/skills/` 中自定义覆盖
+- Agent Skills 标准格式：每个 skill 是一个目录含 `SKILL.md`（+可选 scripts/references/assets）
+- 发现路径：`.aurevoy/skills/`（Aurevoy 原生）+ `.agents/skills/`（跨客户端标准）
+- 加载优先级：预装（builtin）< 用户（user）< 工作区（workspace），后发现的覆盖同名
+- 渐进披露：启动仅加载 name+description（Tier 1），激活时加载 body（Tier 2），按需加载资源（Tier 3）
 
 ### GET `/api/mcp/status`
 查看 MCP server 连接状态。
@@ -309,8 +311,8 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `plan_generated` | `plan: PlanStep[]`, `source` | Plan Agent 生成执行计划（`llm` 或 `heuristic`） |
 | `plan_approval_request` | `plan`, `reasoning`, `scoutReport?` | 计划推送前端等待用户审批 |
 | `plan_approval_resolved` | `approved`, `reason?` | 用户审批决策（批准/拒绝） |
-| `skill_activated` | `skillName`, `allowedTools?` | Skill：用户或 LLM 激活了某个技能 |
-| `skill_deactivated` | — | Skill：当前技能已停用 |
+| `skill_activated` | `skillName`, `allowedTools?`, `description?`, `compatibility?` | Skill：用户或 LLM 通过 `/skill-name` 或 `activate_skill` 工具激活了某个技能 |
+| `skill_deactivated` | `previousSkill?` | Skill：当前技能已停用（含上一技能名） |
 | `plan` | `plan: PlanStep[]` | 给出/更新完整计划 |
 | `step_update` | `step: PlanStep` | 单个计划步骤状态变化 |
 | `token` | `delta: string` | LLM 流式输出的增量片段 |
@@ -342,7 +344,7 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 ```
 status(running) → phase(initializing)
   → phase(planning) → scout_started → scout_report → plan_generated
-  → [可选: skill_activated]           (用户输入 /skill-name 或 LLM 调用 use_skill)
+  → [可选: skill_activated]           (用户输入 /skill-name 或 LLM 调用 activate_skill)
   → phase(thinking) → token × N
   → phase(finalizing) → message → status(completed) → done(completed)
 ```

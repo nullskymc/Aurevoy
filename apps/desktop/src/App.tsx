@@ -1686,8 +1686,12 @@ function SkillsPage({ skills }: { skills: SkillDescriptor[] }) {
                 <span>{skillSourceLabel(skill.sourceDir)}</span>
               </header>
               <p>{skill.description}</p>
+              {skill.compatibility && (
+                <p className="skill-page-compatibility">{skill.compatibility}</p>
+              )}
               <div className="skill-page-meta">
-                {skill.version && <span>{skill.version}</span>}
+                {skill.metadata?.version && <span>{skill.metadata.version}</span>}
+                {skill.license && <span>{skill.license}</span>}
                 <span>{formatAllowedTools(skill.allowedTools)}</span>
               </div>
             </article>
