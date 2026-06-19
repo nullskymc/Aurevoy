@@ -16,7 +16,7 @@
  */
 
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, cpSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, cpSync, realpathSync, rmSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -43,7 +43,10 @@ function main() {
 
   console.log(`[prepare-agent-deps] 传递闭包共 ${allDeps.size} 个包`);
 
-  // 确保目标目录存在
+  // 清理旧产物后重建，避免 cpSync 遇到残留文件报 EEXIST
+  if (existsSync(AGENT_NM)) {
+    rmSync(AGENT_NM, { recursive: true, force: true });
+  }
   mkdirSync(AGENT_NM, { recursive: true });
 
   let ok = 0;
@@ -59,6 +62,14 @@ function main() {
     const dest = join(AGENT_NM, name);
     // 确保父目录存在（scoped packages 需要 @scope 目录）
     mkdirSync(dirname(dest), { recursive: true });
+
+    // src/dest 可能通过 symlink 指向同一目录（workspace 包已 hoist 时），跳过
+    const realSrc = realpathSync(src);
+    const realDest = existsSync(dest) ? realpathSync(dest) : dest;
+    if (realSrc === realDest) {
+      ok++;
+      continue;
+    }
 
     // 跨平台递归拷贝，跟随符号链接（workspace 包是 symlink）
     cpSync(src, dest, { recursive: true, dereference: true });
