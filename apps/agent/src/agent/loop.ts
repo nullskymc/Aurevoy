@@ -1482,6 +1482,13 @@ export async function runTask(task: Task): Promise<void> {
 
         // 按序审批非命令工具——每次只弹一个确认，审批后立即执行
         for (const v of sequentialRiskyOnes) {
+          // 已自动批准的工具（APPROVAL_FREE_TOOLS / session 已批准）跳过审批直接执行
+          if (isAutoApproved(v)) {
+            setRuntimePhase('calling_tool', `执行：${v.call.toolName}`, 'running');
+            const execResult = await executeOne(v, true);
+            resultByCallId.set(execResult.callId, execResult);
+            continue;
+          }
           addPendingApproval(task, v.call, v.risk);
           taskEvents.publish({
             type: 'approval_request',
