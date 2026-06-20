@@ -448,6 +448,8 @@ export type AgentEvent =
   | { type: 'plan_approval_resolved'; taskId: string; approved: boolean; reason?: string }
   | { type: 'skill_activated'; taskId: string; skillName: string; allowedTools?: string[]; description?: string; compatibility?: string }
   | { type: 'skill_deactivated'; taskId: string; previousSkill?: string | null }
+  | { type: 'skill_installed'; taskId: string; skillNames: string[]; repoUrl: string }
+  | { type: 'skill_uninstalled'; taskId: string; skillName: string }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
   | { type: 'task_deleted'; taskId: string };
@@ -750,6 +752,29 @@ export interface SkillDescriptor {
   sourceDir: 'builtin' | 'user' | 'workspace';
   /** SKILL.md 文件的绝对路径（供模型 file-read 激活用）。 */
   location?: string;
+  /** 安装来源 Git 仓库 URL（仅通过 install 安装的 skill）。 */
+  installUrl?: string;
+  /** 安装时间 ISO 时间戳。 */
+  installedAt?: string;
+}
+
+/** POST /api/skills/install — 从 Git 仓库安装 skill */
+export interface SkillInstallRequest {
+  repoUrl: string;
+}
+
+/** POST /api/skills/install 响应 */
+export interface SkillInstallResponse {
+  installedSkills: string[];
+  repoUrl: string;
+  alreadyExisted: string[];
+  totalFound: number;
+}
+
+/** DELETE /api/skills/:name 响应 */
+export interface SkillUninstallResponse {
+  name: string;
+  deleted: boolean;
 }
 
 /** POST /api/memories — 用户手动新增一条记忆 */

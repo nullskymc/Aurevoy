@@ -38,6 +38,12 @@ class ToolRegistry {
     if (!this.enabledByName.has(descriptor.name)) this.enabledByName.set(descriptor.name, true);
   }
 
+  unregister(name: string): boolean {
+    const existed = this.tools.delete(name);
+    this.enabledByName.delete(name);
+    return existed;
+  }
+
   /**
    * 列出当前启用的工具。
    *
@@ -48,7 +54,7 @@ class ToolRegistry {
   list(allowedToolNames?: string[]): ToolDescriptor[] {
     const enabled = this.listAll().filter((tool) => tool.enabled !== false);
     if (!allowedToolNames) return enabled;
-    const whitelist = new Set([...allowedToolNames, 'activate_skill']);
+    const whitelist = new Set([...allowedToolNames, 'activate_skill', 'install_skill']);
     return enabled.filter((tool) => whitelist.has(tool.name));
   }
 

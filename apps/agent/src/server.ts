@@ -35,7 +35,10 @@ import type {
   ResumeTaskResponse,
   RevertTaskRequest,
   RevertTaskResponse,
+  SkillInstallRequest,
+  SkillInstallResponse,
   SkillListResponse,
+  SkillUninstallResponse,
   UnrevertTaskResponse,
   TaskArtifactContentResponse,
   TaskArtifactListResponse,
@@ -67,6 +70,8 @@ import { taskEvents } from './agent/events.js';
 import { taskStore, traceStore, memoryStore, toolSettingsStore, projectStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
 import { skillRegistry } from './skills/registry.js';
+import { installFromGit, uninstallSkill } from './skills/installer.js';
+import { reloadSkillsAndTools } from './skills/reload.js';
 import { getProviderName, listProviderModels } from './llm/provider.js';
 import { getMcpStatuses, reloadMcpTools } from './tools/mcp.js';
 import {
@@ -111,6 +116,53 @@ export async function buildServer(externalLogger?: Logger) {
 
   app.get('/api/skills', async (): Promise<SkillListResponse> => {
     return { skills: skillRegistry.listAll() };
+  });
+
+  app.post<{ Body: SkillInstallRequest }>('/api/skills/install', async (req, reply) => {
+    const repoUrl = typeof req.body?.repoUrl === 'string' ? req.body.repoUrl.trim() : '';
+    if (!repoUrl) {
+      return reply.code(400).send({ error: 'repoUrl 不能为空' });
+    }
+
+    try {
+      const targetDir = resolve(config.skills.userDir);
+      const result = await installFromGit(repoUrl, targetDir);
+      reloadSkillsAndTools();
+
+      const response: SkillInstallResponse = {
+        installedSkills: result.installedSkills,
+        repoUrl,
+        alreadyExisted: result.alreadyExisted,
+        totalFound: result.totalFound,
+      };
+      return reply.code(201).send(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: message });
+    }
+  });
+
+  app.delete<{ Params: { name: string } }>('/api/skills/:name', async (req, reply) => {
+    const name = req.params.name;
+    const entry = skillRegistry.get(name);
+    if (!entry) {
+      return reply.code(404).send({ error: 'skill 不存在' });
+    }
+    if (entry.sourceDir !== 'user') {
+      return reply.code(403).send({ error: '仅用户安装的 skill 可以卸载' });
+    }
+
+    try {
+      const targetDir = resolve(config.skills.userDir);
+      await uninstallSkill(name, targetDir);
+      reloadSkillsAndTools();
+
+      const response: SkillUninstallResponse = { name, deleted: true };
+      return reply.send(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: message });
+    }
   });
 
   app.patch<{ Params: { name: string }; Body: UpdateToolRequest }>(

@@ -19,6 +19,8 @@ import {
   type RevertMode,
   type RevertTaskResponse,
   type SkillDescriptor,
+  type SkillInstallResponse,
+  type SkillUninstallResponse,
   type UnrevertTaskResponse,
   type RuntimeSettings,
   type Task,
@@ -227,6 +229,30 @@ export async function fetchSkills(): Promise<SkillDescriptor[]> {
   if (!res.ok) return [];
   const data = (await res.json()) as { skills: SkillDescriptor[] };
   return data.skills ?? [];
+}
+
+export async function installSkill(repoUrl: string): Promise<SkillInstallResponse> {
+  const res = await fetch(`${BASE_URL}/api/skills/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repoUrl }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `install failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function uninstallSkill(name: string): Promise<SkillUninstallResponse> {
+  const res = await fetch(`${BASE_URL}/api/skills/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `uninstall failed: ${res.status}`);
+  }
+  return res.json();
 }
 
 export async function updateTool(

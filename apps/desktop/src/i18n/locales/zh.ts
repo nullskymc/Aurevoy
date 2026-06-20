@@ -464,4 +464,12 @@ export const zh = {
   "skillsPage.sourceUser": "用户",
   "skillsPage.sourceWorkspace": "工作区",
   "skillsPage.allTools": "允许全部工具",
+  "skillsPage.install": "安装",
+  "skillsPage.installing": "安装中...",
+  "skillsPage.installPlaceholder": "粘贴 Git 仓库地址...",
+  "skillsPage.installSuccess": "已安装：",
+  "skillsPage.installFailed": "安装失败：",
+  "skillsPage.deleteConfirm": "确定要卸载此技能吗？",
+  "skillsPage.uninstallFailed": "卸载失败：",
+  "skillsPage.installedFrom": "安装来源",
 } as const;

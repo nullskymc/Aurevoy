@@ -464,4 +464,12 @@ export const ko = {
   "skillsPage.sourceUser": "사용자",
   "skillsPage.sourceWorkspace": "작업공간",
   "skillsPage.allTools": "모든 도구 허용",
+  "skillsPage.install": "설치",
+  "skillsPage.installing": "설치 중...",
+  "skillsPage.installPlaceholder": "Git 저장소 URL을 붙여넣으세요...",
+  "skillsPage.installSuccess": "설치됨: ",
+  "skillsPage.installFailed": "설치 실패: ",
+  "skillsPage.deleteConfirm": "이 스킬을 삭제하시겠습니까?",
+  "skillsPage.uninstallFailed": "삭제 실패: ",
+  "skillsPage.installedFrom": "설치 출처",
 } as const;

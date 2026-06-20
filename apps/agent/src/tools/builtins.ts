@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import type { MemoryCategory, MemoryEntry, TaskArtifact } from '@aurevoy/shared';
@@ -44,6 +45,23 @@ export function isInsideExternalPath(target: string, externalPaths?: string[]): 
   return false;
 }
 
+/** Agent 数据目录（skills/config/logs 等）始终可访问，不受工作区沙盒限制。 */
+function getTrustedDirs(): string[] {
+  const home = homedir();
+  return [
+    resolve(home, '.aurevoy'),
+    resolve(home, '.agents'),
+  ];
+}
+
+function isInsideTrustedDir(target: string): boolean {
+  const resolved = resolve(target);
+  for (const dir of getTrustedDirs()) {
+    if (resolved === dir || resolved.startsWith(`${dir}/`)) return true;
+  }
+  return false;
+}
+
 export function resolveInWorkspace(
   input: unknown,
   workspaceRoot: string,
@@ -56,6 +74,9 @@ export function resolveInWorkspace(
 
   // 受信任外部路径（用户拖拽文件/目录）放行
   if (isInsideExternalPath(target, externalPaths)) return target;
+
+  // Agent 数据目录（~/.aurevoy, ~/.agents）始终放行
+  if (isInsideTrustedDir(target)) return target;
 
   const rel = relative(workspaceRoot, target);
   if (rel === '') return target;
@@ -90,6 +111,9 @@ export async function assertRealPathInside(
 ): Promise<void> {
   // 受信任外部路径放行
   if (isInsideExternalPath(target, externalPaths)) return;
+
+  // Agent 数据目录放行
+  if (isInsideTrustedDir(target)) return;
 
   await ensureWorkspace(workspaceRoot);
   const realRoot = await fs.realpath(workspaceRoot);

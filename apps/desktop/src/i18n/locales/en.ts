@@ -464,4 +464,12 @@ export const en = {
   "skillsPage.sourceUser": "User",
   "skillsPage.sourceWorkspace": "Workspace",
   "skillsPage.allTools": "All Tools Allowed",
+  "skillsPage.install": "Install",
+  "skillsPage.installing": "Installing...",
+  "skillsPage.installPlaceholder": "Paste a Git repository URL...",
+  "skillsPage.installSuccess": "Installed: ",
+  "skillsPage.installFailed": "Installation failed: ",
+  "skillsPage.deleteConfirm": "Are you sure you want to uninstall this skill?",
+  "skillsPage.uninstallFailed": "Uninstall failed: ",
+  "skillsPage.installedFrom": "Installed from",
 } as const;

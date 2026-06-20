@@ -4,8 +4,10 @@ import { config } from './config.js';
 import './tools/builtins.js'; // 副作用导入：注册内置工具（文件/网络）
 import './tools/web-search.js'; // 副作用导入：注册 web_search 工具
 import { registerActivateSkillTool } from './tools/activate-skill.js';
+import { registerInstallSkillTool } from './tools/install-skill.js';
 import { closeMcpTools, initializeMcpTools } from './tools/mcp.js';
 import { loadPersistedSettings } from './runtime/settings.js';
+import { ensurePythonReady, getPythonPath, getPythonVersion, isPythonInstalled } from './runtime/python-runtime.js';
 import { createLogger, getLogger } from './logging/logger.js';
 import { skillRegistry } from './skills/registry.js';
 import { mkdirSync } from 'node:fs';
@@ -23,8 +25,24 @@ async function main() {
 
   loadPersistedSettings();
 
+  if (config.python.autoSetup) {
+    if (!isPythonInstalled()) {
+      log.info('Python 运行时未安装，正在自动下载...');
+      try {
+        await ensurePythonReady();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn({ err: message }, 'Python 运行时自动安装失败，MCP Python 服务器和 execute_command 中的 python3 将不可用');
+      }
+    }
+    if (isPythonInstalled()) {
+      log.info({ python: getPythonPath(), version: getPythonVersion() }, 'Python 运行时就绪');
+    }
+  }
+
   skillRegistry.load();
   registerActivateSkillTool();
+  registerInstallSkillTool();
   log.info({ count: skillRegistry.list().length }, 'skill 模块已加载');
 
   log.info(

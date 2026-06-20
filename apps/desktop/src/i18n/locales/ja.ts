@@ -464,4 +464,12 @@ export const ja = {
   "skillsPage.sourceUser": "ユーザー",
   "skillsPage.sourceWorkspace": "ワークスペース",
   "skillsPage.allTools": "すべてのツールを許可",
+  "skillsPage.install": "インストール",
+  "skillsPage.installing": "インストール中...",
+  "skillsPage.installPlaceholder": "Git リポジトリ URL を貼り付け...",
+  "skillsPage.installSuccess": "インストール済み: ",
+  "skillsPage.installFailed": "インストール失敗: ",
+  "skillsPage.deleteConfirm": "このスキルを削除しますか？",
+  "skillsPage.uninstallFailed": "削除失敗: ",
+  "skillsPage.installedFrom": "インストール元",
 } as const;
