@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { delimiter } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import {
   StdioClientTransport,
@@ -10,6 +11,7 @@ import type { McpServerStatus, ToolDescriptor, ToolRiskLevel } from '@aurevoy/sh
 import { config, type McpServerConfig } from '../config.js';
 import { toolRegistry } from './registry.js';
 import { getLogger } from '../logging/logger.js';
+import { getPythonBinDir, isPythonInstalled } from '../runtime/python-runtime.js';
 
 const mcpLog = getLogger('mcp');
 
@@ -150,7 +152,15 @@ function toStdioParameters(server: McpServerConfig): StdioServerParameters {
     args: server.args,
   };
   if (server.cwd) params.cwd = server.cwd;
-  if (server.env) params.env = { ...getDefaultEnvironment(), ...server.env };
+  const pythonInstalled = isPythonInstalled();
+  const baseEnv = server.env ? getDefaultEnvironment() : undefined;
+  if (pythonInstalled || server.env) {
+    const env = { ...(baseEnv ?? getDefaultEnvironment()) };
+    if (pythonInstalled) {
+      env.PATH = `${getPythonBinDir()}${delimiter}${env.PATH ?? ''}`;
+    }
+    params.env = { ...env, ...(server.env ?? {}) };
+  }
   return params;
 }
 

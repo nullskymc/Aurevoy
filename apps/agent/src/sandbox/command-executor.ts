@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { delimiter, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { config } from '../config.js';
+import { getPythonBinDir, isPythonInstalled } from '../runtime/python-runtime.js';
 
 export interface CommandExecutionPolicy {
   enabled: boolean;
@@ -171,6 +172,10 @@ function buildAllowedEnv(
   }
   for (const [key, value] of Object.entries(extraEnv ?? {})) {
     if (allowlist.includes(key)) env[key] = value;
+  }
+  if (isPythonInstalled() && allowlist.includes('PATH')) {
+    const systemPath = (env.PATH as string | undefined) ?? '';
+    env.PATH = `${getPythonBinDir()}${delimiter}${systemPath}`;
   }
   return env;
 }

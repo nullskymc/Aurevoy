@@ -7,6 +7,7 @@ import { registerActivateSkillTool } from './tools/activate-skill.js';
 import { registerInstallSkillTool } from './tools/install-skill.js';
 import { closeMcpTools, initializeMcpTools } from './tools/mcp.js';
 import { loadPersistedSettings } from './runtime/settings.js';
+import { ensurePythonReady, getPythonPath, getPythonVersion, isPythonInstalled } from './runtime/python-runtime.js';
 import { createLogger, getLogger } from './logging/logger.js';
 import { skillRegistry } from './skills/registry.js';
 import { mkdirSync } from 'node:fs';
@@ -23,6 +24,21 @@ async function main() {
   log.info({ provider: config.llm.provider, model: config.llm.model, host: config.host, port: config.port, db: config.dbPath }, '加载配置完成');
 
   loadPersistedSettings();
+
+  if (config.python.autoSetup) {
+    if (!isPythonInstalled()) {
+      log.info('Python 运行时未安装，正在自动下载...');
+      try {
+        await ensurePythonReady();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn({ err: message }, 'Python 运行时自动安装失败，MCP Python 服务器和 execute_command 中的 python3 将不可用');
+      }
+    }
+    if (isPythonInstalled()) {
+      log.info({ python: getPythonPath(), version: getPythonVersion() }, 'Python 运行时就绪');
+    }
+  }
 
   skillRegistry.load();
   registerActivateSkillTool();
