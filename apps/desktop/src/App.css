@@ -521,7 +521,6 @@ button:disabled {
 }
 
 
-
 .sidebar-section-label {
   margin: 10px 0 6px;
   padding: 0 9px;
@@ -1480,7 +1479,6 @@ button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
-
 
 /* ============ 状态徽标 ============ */
 .status-pill {
@@ -3303,7 +3301,7 @@ button:disabled {
 }
 
 .memory-toggle {
-  margin-left: auto;
+
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -3334,7 +3332,7 @@ button:disabled {
 }
 
 .memory-time {
-  margin-left: auto;
+
 }
 
 .memory-item-actions {
@@ -3523,7 +3521,7 @@ button:disabled {
 .artifact-doc-actions {
   display: flex;
   gap: var(--ui-space-2);
-  margin-left: auto;
+
 }
 
 .artifact-doc-body {
@@ -3619,7 +3617,6 @@ button:disabled {
   font-weight: 500;
   line-height: 1;
 }
-
 
 /* ============================================================
    Markdown 升级（P2-1）：GFM 块级元素 + highlight.js 主题
@@ -3740,9 +3737,9 @@ textarea:focus-visible,
    ============================================================ */
 .user-bubble-row {
   display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -3752,6 +3749,7 @@ textarea:focus-visible,
   align-items: flex-end;
   max-width: 76%;
   min-width: 0;
+
 }
 
 .user-bubble {
@@ -3924,7 +3922,6 @@ textarea:focus-visible,
 
 /* 用户消息：气泡右对齐，操作行也右对齐，常态淡显 */
 .user-bubble-row .msg-actions {
-  justify-content: flex-end;
   opacity: 0;
   transition: opacity 0.15s;
 }
@@ -3934,17 +3931,13 @@ textarea:focus-visible,
   opacity: 1;
 }
 
-.user-bubble-row.is-editing {
-  justify-content: flex-end;
-}
-
 .user-bubble-edit {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--ui-space-2);
   width: min(100%, 780px);
-  margin-left: auto;
+
 }
 
 .user-bubble-input {
@@ -4019,7 +4012,6 @@ textarea:focus-visible,
   border-bottom: 1px solid var(--border);
   opacity: 0.4;
 }
-
 
 .section-action-btn {
   display: inline-flex;
@@ -4881,7 +4873,7 @@ textarea:focus-visible,
 }
 
 .reasoning-toggle {
-  margin-left: auto;
+
   color: var(--text-tertiary);
   font-size: 12px;
 }
@@ -5216,15 +5208,6 @@ textarea:focus-visible,
   flex: 0 0 auto;
 }
 
-/* 步骤状态图标 */
-.timeline-step-icon {
-  flex: 0 0 auto;
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-}
 
 .timeline-step-icon.is-pending {
   border: 2px dashed var(--border-strong);
@@ -5237,20 +5220,6 @@ textarea:focus-visible,
   color: var(--accent-soft-fg);
 }
 
-.step-spinner {
-  animation: timeline-spin 1s linear infinite;
-}
-
-.step-spinner-sm {
-  animation: timeline-spin 1s linear infinite;
-}
-
-@keyframes timeline-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .timeline-step-icon.is-success {
   border: none;
   background: transparent;
@@ -5261,67 +5230,20 @@ textarea:focus-visible,
   background: transparent;
 }
 
-/* 步骤 Badge 标签 */
+/* 步骤类型文字标签 */
 .timeline-step-badge {
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: 4px;
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  line-height: 1;
-  text-transform: uppercase;
-  background: var(--pill-bg);
-  color: var(--text-secondary);
+  font-weight: 600;
+  color: var(--text-tertiary);
   white-space: nowrap;
+  line-height: 1;
 }
 
-.timeline-step-badge.is-command {
-  background: var(--pill-bg);
-  color: var(--text);
-}
 
-.timeline-step-badge.is-file_read {
-  background: var(--accent-soft-bg);
-  color: var(--accent-soft-fg);
-}
 
-.timeline-step-badge.is-file_write {
-  background: var(--warn-soft-bg);
-  color: var(--warn-soft-fg);
-}
 
-.timeline-step-badge.is-search {
-  background: #e8dff5;
-  color: #6b3fa0;
-}
 
-:root[data-theme="dark"] .timeline-step-badge.is-search {
-  background: rgba(130, 80, 200, 0.25);
-  color: #b088e0;
-}
 
-.timeline-step-badge.is-browse {
-  background: #d5e8f0;
-  color: #1a6e8a;
-}
-
-:root[data-theme="dark"] .timeline-step-badge.is-browse {
-  background: rgba(30, 120, 160, 0.25);
-  color: #70b8d0;
-}
-
-.timeline-step-badge.is-edit {
-  background: var(--warn-soft-bg);
-  color: var(--warn-soft-fg);
-}
-
-.timeline-step-badge.is-artifact {
-  background: var(--success-soft-bg);
-  color: var(--success-soft-fg);
-}
 
 /* 步骤标题按钮 */
 .timeline-step-title-btn {
@@ -5581,4 +5503,40 @@ textarea:focus-visible,
 
 .fade-in-up {
   animation: fadeInUp 0.2s ease both;
+}
+
+
+/* 步骤状态文本 */
+.timeline-step-status {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  margin-left: 6px;
+  color: var(--text-tertiary);
+}
+
+.timeline-step-status.is-running {
+  color: var(--accent-soft-fg);
+}
+
+.timeline-step-status.is-failed {
+  color: var(--danger-soft-fg);
+}
+
+.timeline-step-status.is-success {
+  color: var(--success-soft-fg);
+}
+
+
+/* 步骤汇总执行中旋转 */
+.step-spinner-sm {
+  animation: timeline-spin 1s linear infinite;
+}
+
+@keyframes timeline-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

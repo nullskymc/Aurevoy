@@ -333,32 +333,10 @@ export function buildLiveAgentRoundData(params: {
 /* ============ 组件 ============ */
 
 /** 步骤状态图标组件 */
-function StepIcon({ status }: { status: TimelineStepData["status"] }) {
-  if (status === "pending") {
-    return <span className="timeline-step-icon is-pending" aria-hidden="true" />;
-  }
-  if (status === "running") {
-    return <span className="timeline-step-icon is-running" aria-hidden="true">
-      <svg viewBox="0 0 16 16" width="14" height="14" className="step-spinner">
-        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="2"
-          strokeDasharray="28" strokeLinecap="round" />
-      </svg>
-    </span>;
-  }
-  if (status === "success") {
-    return <span className="timeline-step-icon is-success" aria-hidden="true">
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
-        <circle cx="8" cy="8" r="7" fill="var(--success-soft-bg)" />
-        <path d="M5 8.5L7 10.5L11 6" stroke="var(--success-soft-fg)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </span>;
-  }
-  return <span className="timeline-step-icon is-failed" aria-hidden="true">
-    <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
-      <circle cx="8" cy="8" r="7" fill="var(--danger-soft-bg)" />
-      <path d="M5.5 5.5L10.5 10.5M10.5 5.5L5.5 10.5" stroke="var(--danger-soft-fg)" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  </span>;
+function StepStatus({ status }: { status: TimelineStepData["status"] }) {
+  if (status === "running") return <span className="timeline-step-status is-running">运行中</span>;
+  if (status === "failed") return <span className="timeline-step-status is-failed">失败</span>;
+  return null;
 }
 
 /** Badge 标签 */
@@ -434,7 +412,6 @@ function TimelineStepNode({
     <div className="timeline-step" data-status={step.status}>
       <div className="timeline-step-header">
         <div className="timeline-step-left">
-          <StepIcon status={step.status} />
           <StepBadge kind={step.kind} />
         </div>
         <button
@@ -444,6 +421,7 @@ function TimelineStepNode({
           aria-expanded={open}
         >
           <span className="timeline-step-title">{step.title}</span>
+            <StepStatus status={step.status} />
           {hasDetails && (
             <span className="timeline-step-caret" data-open={open}>
               <svg viewBox="0 0 12 12" width="10" height="10" fill="none">
