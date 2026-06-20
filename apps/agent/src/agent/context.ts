@@ -6,7 +6,7 @@ import { skillRegistry } from '../skills/registry.js';
 
 /**
  * 构建可用 skill 的 catalog 消息（Tier 1: name + description + location），
- * 注入到 system prompt 中，让模型知道何时该调用 activate_skill。
+ * 注入到 system prompt 中，让模型知道技能（skill）的存在，可通过 load_skill 工具加载。
  * 当无可用 skill 时返回 null（标准要求不展示空 catalog）。
  */
 export function buildSkillCatalogMessage(): Message | null {
@@ -22,8 +22,8 @@ export function buildSkillCatalogMessage(): Message | null {
   const content =
     '<available_skills>\n' +
     'The following skills provide specialized instructions for specific tasks.\n' +
-    'When a task matches a skill\'s description, call the activate_skill tool\n' +
-    'with the skill\'s name to load its full instructions.\n\n' +
+    'When a task matches a skill\'s description, call the load_skill tool\n' +
+    'with the skill\'s name to load its instructions.\n\n' +
     catalogLines +
     '\n</available_skills>';
 
@@ -551,44 +551,6 @@ export function buildMemorySystemMessage(
     id: randomUUID(),
     role: 'system',
     content,
-    createdAt: new Date().toISOString(),
-  };
-}
-
-/**
- * Skill: 构建当前激活 skill 的 system message（Agent Skills 标准格式）。
- *
- * 激活时懒加载 body（Tier 2），使用 <skill_content> 结构化标签注入。
- * 标签便于上下文压缩时识别并保护 skill 内容。
- * 若没有活跃 skill 则返回 null。skill 消息放在 memory 消息之后、历史消息之前，
- * 确保 skill 指令优先级高于记忆但低于用户对话。
- */
-export function buildSkillSystemMessage(skillName?: string): Message | null {
-  if (!skillName) return null;
-  const content = skillRegistry.getContent(skillName);
-  const entry = skillRegistry.get(skillName);
-  if (!content || !entry) return null;
-
-  const resourceLines = content.resources.length > 0
-    ? '\n<skill_resources>\n' +
-      content.resources.map((r) => `  <file>${r.relativePath}</file>`).join('\n') +
-      '\n</skill_resources>'
-    : '';
-
-  const skillDir = entry.skillDir;
-
-  const wrappedContent =
-    `<skill_content name="${skillName}">\n` +
-    `${content.body}\n\n` +
-    `Skill directory: ${skillDir}\n` +
-    `Relative paths in this skill are relative to the skill directory.` +
-    `${resourceLines}\n` +
-    `</skill_content>`;
-
-  return {
-    id: randomUUID(),
-    role: 'system',
-    content: wrappedContent,
     createdAt: new Date().toISOString(),
   };
 }

@@ -169,7 +169,6 @@ interface TaskRow {
   archived_messages: string;
   parent_task_id: string | null;
   project_id: string | null;
-  active_skills: string | null;
   plan_mode: string | null;
   context_tokens: number | null;
   created_at: string;
@@ -218,7 +217,6 @@ function rowToTask(row: TaskRow): Task {
     archivedMessages: (parseJsonColumn(row.archived_messages) as Task['archivedMessages']) ?? [],
     parentTaskId: row.parent_task_id ?? undefined,
     projectId: row.project_id ?? undefined,
-    activeSkills: (parseJsonColumn(row.active_skills) as Task['activeSkills']) ?? undefined,
     planMode: row.plan_mode === 'manual' ? 'manual' : undefined,
     contextTokens: row.context_tokens ?? undefined,
     createdAt: row.created_at,
@@ -271,12 +269,12 @@ export const taskStore = {
       `INSERT INTO tasks (
          id, goal, status, phase, plan, messages, artifacts, clarifications, pending_approvals, approved_approval_keys, checkpoints,
          budget, budget_usage, token_usage, archived_messages, parent_task_id, project_id,
-         active_skills, plan_mode, context_tokens, created_at, updated_at
+         plan_mode, context_tokens, created_at, updated_at
        )
        VALUES (
          @id, @goal, @status, @phase, @plan, @messages, @artifacts, @clarifications,
          @pendingApprovals, @approvedApprovalKeys, @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId,
-         @projectId, @activeSkills, @planMode, @contextTokens, @createdAt, @updatedAt
+         @projectId, @planMode, @contextTokens, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
          goal=excluded.goal, status=excluded.status, phase=excluded.phase, plan=excluded.plan,
@@ -287,7 +285,7 @@ export const taskStore = {
          budget=excluded.budget, budget_usage=excluded.budget_usage,
          token_usage=excluded.token_usage, archived_messages=excluded.archived_messages,
          parent_task_id=excluded.parent_task_id, project_id=excluded.project_id,
-         active_skills=excluded.active_skills, plan_mode=excluded.plan_mode,
+         plan_mode=excluded.plan_mode,
          context_tokens=excluded.context_tokens,
          updated_at=excluded.updated_at`,
     ).run({
@@ -308,7 +306,6 @@ export const taskStore = {
       archivedMessages: JSON.stringify(task.archivedMessages ?? []),
       parentTaskId: task.parentTaskId ?? null,
       projectId: task.projectId ?? null,
-      activeSkills: task.activeSkills === undefined ? null : JSON.stringify(task.activeSkills),
       planMode: task.planMode ?? null,
       contextTokens: task.contextTokens ?? null,
       createdAt: task.createdAt,

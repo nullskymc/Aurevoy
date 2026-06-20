@@ -119,11 +119,6 @@ class SkillRegistry {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  /** 获取 skill 指定的工具白名单；未声明则返回 undefined（不限工具）。 */
-  getAllowedTools(name: string): string[] | undefined {
-    const skill = this.catalog.get(name);
-    return skill?.frontmatter['allowed-tools'];
-  }
 }
 
 export const skillRegistry = new SkillRegistry();

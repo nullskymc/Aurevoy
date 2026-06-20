@@ -11,7 +11,7 @@ export function registerInstallSkillTool(): void {
       name: 'install_skill',
       description:
         '从 Git 仓库 URL 安装技能（skill）。仓库中应包含 skill 子目录（每个子目录含 SKILL.md 文件）。\n' +
-        '安装后 skill 立即生效，可通过 activate_skill 工具或直接 /skillname 斜杠命令激活。\n' +
+        '安装后 skill 立即生效，可通过 load_skill 工具加载。\n' +
         '示例：install_skill({ repoUrl: "https://github.com/user/skill-collection" })',
       inputSchema: {
         type: 'object',

@@ -234,8 +234,6 @@ export interface Task {
   projectId?: string;
   /** P6: 文件快照列表（用于 Rewind 回滚文件）。 */
   fileSnapshots?: FileSnapshot[];
-  /** Skill: 当前激活的 skill 名称列表（通常最多 1 个）。 */
-  activeSkills?: string[];
   /** Plan Agent 触发方式；manual 表示用户通过 /plan 显式请求规划。 */
   planMode?: 'manual';
   createdAt: string;
@@ -450,7 +448,6 @@ export type AgentEvent =
   | { type: 'plan_generated'; taskId: string; plan: PlanStep[]; source: 'llm' | 'heuristic' }
   | { type: 'plan_approval_request'; taskId: string; plan: PlanStep[]; reasoning: string; scoutReport?: ScoutReport }
   | { type: 'plan_approval_resolved'; taskId: string; approved: boolean; reason?: string }
-  | { type: 'skill_activated'; taskId: string; skillName: string; allowedTools?: string[]; description?: string; compatibility?: string }
   | { type: 'skill_deactivated'; taskId: string; previousSkill?: string | null }
   | { type: 'skill_installed'; taskId: string; skillNames: string[]; repoUrl: string }
   | { type: 'skill_uninstalled'; taskId: string; skillName: string }

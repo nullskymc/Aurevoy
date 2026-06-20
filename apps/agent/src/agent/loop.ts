@@ -22,9 +22,9 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillSystemMessage, buildSkillCatalogMessage, totalTokens } from './context.js';
+import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillCatalogMessage, totalTokens } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
-import { skillRegistry } from '../skills/registry.js';
+
 import { runPlanAgent } from './plan-agent.js';
 import { withRetry } from './retry.js';
 import { taskStore, memoryStore, projectStore } from '../store/db.js';
@@ -52,7 +52,7 @@ const MAX_TOOL_CALLS_PER_TURN = 10;
 /** P6: 写入类工具（需要执行前文件快照） */
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_artifact', 'copy_file', 'move_file', 'rename_file']);
 /** 基础只读工具免审批；其余工具仅允许当前任务会话内临时批准。 */
-const APPROVAL_FREE_TOOLS = new Set(['read_file', 'list_directory']);
+const APPROVAL_FREE_TOOLS = new Set(['read_file', 'list_directory', 'load_skill']);
 /** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
 const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'running', 'paused'];
 /** 进行中任务的取消句柄 */
@@ -461,23 +461,16 @@ export async function compactTask(
   return { task, originalCount, summaryLength };
 }
 
-interface ParsedSlashCommand {
-  skillName: string | null;
-  planRequested: boolean;
-  text: string;
-}
-
 /** 解析用户输入中的斜杠命令前缀。/plan 只触发 Plan Agent，不作为 skill。 */
-function parseSlashCommand(content: string): ParsedSlashCommand {
+function parseSlashCommand(content: string): { planRequested: boolean; text: string } {
   const match = content.match(/^\/(\S+)(?:\s+(.*))?/s);
-  if (!match) return { skillName: null, planRequested: false, text: content };
-  const skillName = match[1];
-  // 保留 /compact 为前端专有命令，不当作 skill
-  if (skillName === 'compact') return { skillName: null, planRequested: false, text: content };
-  if (skillName === 'plan') {
-    return { skillName: null, planRequested: true, text: match[2]?.trim() || '' };
+  if (!match) return { planRequested: false, text: content };
+  const command = match[1];
+  if (command === 'compact') return { planRequested: false, text: content };
+  if (command === 'plan') {
+    return { planRequested: true, text: match[2]?.trim() || '' };
   }
-  return { skillName, planRequested: false, text: match[2]?.trim() || '' };
+  return { planRequested: false, text: content };
 }
 
 /**
@@ -498,21 +491,6 @@ export function addUserTurn(
   if (parsed.planRequested) {
     messageContent = parsed.text || task.goal;
     task.goal = messageContent;
-  }
-  if (parsed.skillName) {
-    const entry = skillRegistry.get(parsed.skillName);
-    if (entry) {
-      task.activeSkills = [parsed.skillName];
-      messageContent = parsed.text || parsed.skillName;
-      taskEvents.publish({
-        type: 'skill_activated',
-        taskId: task.id,
-        skillName: parsed.skillName,
-        allowedTools: entry.frontmatter['allowed-tools'],
-        description: entry.frontmatter.description,
-        compatibility: entry.frontmatter.compatibility,
-      });
-    }
   }
 
   const userMsg: Message = {
@@ -1188,23 +1166,12 @@ export async function runTask(task: Task): Promise<void> {
         recentTopics,
       );
 
-      // Skill: 应用工具白名单 + 注入 skill catalog + skill system prompt
-      const activeSkillName = task.activeSkills?.[0];
-      const skillAllowedTools = activeSkillName
-        ? skillRegistry.getAllowedTools(activeSkillName)
-        : undefined;
-      const allowedToolNames =
-        skillAllowedTools && config.sandbox.commandExecutionEnabled
-          ? [...new Set([...skillAllowedTools, 'execute_command'])]
-          : skillAllowedTools;
-      const toolDescriptors = toolRegistry.list(allowedToolNames);
+      // Skill: 注入 skill catalog（轻量注册表，无状态）
+      const toolDescriptors = toolRegistry.list();
       const skillCatalogMessage = buildSkillCatalogMessage();
-      const skillMessage = buildSkillSystemMessage(activeSkillName);
-
       const requestMessages = [
         memoryMessage,
         skillCatalogMessage,
-        skillMessage,
         attachmentSystemMessage,
         ...ctx.messages,
       ].filter(Boolean) as Message[];
@@ -1380,6 +1347,9 @@ export async function runTask(task: Task): Promise<void> {
         setRuntimePhase('thinking', '已收到追问回复，继续推理', 'running');
       }
 
+      // Step 5: 收集所有执行结果（按 callId 索引）
+      const resultByCallId = new Map<string, { callId: string; output: unknown }>();
+
       // Step 4: 分区 —— safe+可并行 vs 需审批/不可并行
       const toExecute = validatedCalls.filter(
         (v) => !v.skipReason && v.call.toolName !== 'ask_user',
@@ -1504,9 +1474,72 @@ export async function runTask(task: Task): Promise<void> {
         };
       };
 
-      // Step 5: 收集所有执行结果（按 callId 索引）
-      const resultByCallId = new Map<string, { callId: string; output: unknown }>();
+      // 5c: risky 工具 → 分区处理：非命令工具按序审批，命令工具保持并行
+      if (riskyOnes.length > 0) {
+        // 分区
+        const cmdRiskyOnes = riskyOnes.filter(v => v.call.toolName === 'execute_command');
+        const sequentialRiskyOnes = riskyOnes.filter(v => v.call.toolName !== 'execute_command');
 
+        // 按序审批非命令工具——每次只弹一个确认，审批后立即执行
+        for (const v of sequentialRiskyOnes) {
+          addPendingApproval(task, v.call, v.risk);
+          taskEvents.publish({
+            type: 'approval_request',
+            taskId: task.id,
+            call: v.call,
+            riskLevel: v.risk,
+          });
+          setRuntimePhase('waiting_approval', `等待确认：${v.call.toolName}`, 'paused');
+          updateStep(`等待确认：${v.call.toolName}`, 'paused');
+
+          const result = await waitForApproval(task.id, v.tc.id, abortController.signal);
+          if (result.approved && result.sessionApprove) {
+            rememberSessionApproval(task, approvalKeyForCall(v.call));
+          }
+          removePendingApproval(task, v.call.id);
+          writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
+
+          if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+
+          setRuntimePhase('calling_tool', `执行：${v.call.toolName}`, 'running');
+          const execResult = await executeOne(v, result.approved);
+          resultByCallId.set(execResult.callId, execResult);
+        }
+
+        // execute_command 保持并行（现有逻辑不变）
+        if (cmdRiskyOnes.length > 0) {
+          for (const v of cmdRiskyOnes) {
+            addPendingApproval(task, v.call, v.risk);
+            taskEvents.publish({
+              type: 'approval_request',
+              taskId: task.id,
+              call: v.call,
+              riskLevel: v.risk,
+            });
+          }
+          setRuntimePhase('waiting_approval', `等待确认 ${cmdRiskyOnes.length} 个命令`, 'paused');
+
+          const approvalResults = await Promise.all(
+            cmdRiskyOnes.map(async (v) => {
+              const result = await waitForApproval(task.id, v.tc.id, abortController.signal);
+              if (result.approved && result.sessionApprove) {
+                rememberSessionApproval(task, approvalKeyForCall(v.call));
+              }
+              removePendingApproval(task, v.call.id);
+              writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
+              return { v, approved: result.approved };
+            }),
+          );
+
+          if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+
+          setRuntimePhase('calling_tool', '执行已批准的命令', 'running');
+          const cmdResults = await Promise.all(
+            approvalResults.map(({ v, approved }) => executeOne(v, approved)),
+          );
+          for (const r of cmdResults) resultByCallId.set(r.callId, r);
+        }
+      }
       // 5a: 跳过项 → 错误结果
       for (const v of validatedCalls.filter((v) => v.skipReason)) {
         resultByCallId.set(v.tc.id, {
@@ -1524,57 +1557,6 @@ export async function runTask(task: Task): Promise<void> {
         );
         const safeResults = await Promise.all(safeOnes.map((v) => executeOne(v)));
         for (const r of safeResults) resultByCallId.set(r.callId, r);
-      }
-
-      // 5c: risky 工具 → 先发布审批事件，再改 phase，最后等待决策
-      if (riskyOnes.length > 0) {
-        // Step 1: 先发布所有 approval_request 事件，让前端先拿到审批数据
-        for (const v of riskyOnes) {
-          addPendingApproval(task, v.call, v.risk);
-          taskEvents.publish({
-            type: 'approval_request',
-            taskId: task.id,
-            call: v.call,
-            riskLevel: v.risk,
-          });
-        }
-
-        // Step 2: 再更新 phase，此时前端 events feed 已包含审批数据，可一次渲染
-        setRuntimePhase(
-          'waiting_approval',
-          `等待确认 ${riskyOnes.length} 个工具`,
-          'paused',
-        );
-
-        // Step 3: 并发等待所有审批决策
-        const approvalResults = await Promise.all(
-          riskyOnes.map(async (v) => {
-            const approval = waitForApproval(
-              task.id,
-              v.tc.id,
-              abortController.signal,
-            );
-            updateStep(`等待确认：${v.call.toolName}`, 'paused');
-            const result = await approval;
-            if (result.approved && result.sessionApprove) {
-              rememberSessionApproval(task, approvalKeyForCall(v.call));
-            }
-            removePendingApproval(task, v.call.id);
-            writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
-            return { v, approved: result.approved };
-          }),
-        );
-
-        if (abortController.signal.aborted)
-          return finishCancelled(task, updateStep, touch);
-
-        setRuntimePhase('calling_tool', '执行已批准的工具', 'running');
-
-        // 并行执行所有（批准的 + 拒绝的）risky 工具
-        const riskyResults = await Promise.all(
-          approvalResults.map(({ v, approved }) => executeOne(v, approved)),
-        );
-        for (const r of riskyResults) resultByCallId.set(r.callId, r);
       }
 
       // Step 6: 按原始 toolCalls 顺序将结果回填到 messages
