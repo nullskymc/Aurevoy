@@ -1350,11 +1350,11 @@ export async function runTask(task: Task): Promise<void> {
       // Step 5: 收集所有执行结果（按 callId 索引）
       const resultByCallId = new Map<string, { callId: string; output: unknown }>();
 
-      // Step 4: 分区 —— safe+可并行 vs 需审批/不可并行
+      // Step 4: 分区 —— 免批+可并行 / 免批+串行 / 需审批
       const toExecute = validatedCalls.filter(
         (v) => !v.skipReason && v.call.toolName !== 'ask_user',
       );
-      // 审批规则：read_file/list_directory 免审批；其他工具只允许本对话中已批准的指纹通过。
+      // 审批规则：read_file/list_directory/load_skill 免审批；其他工具只允许本对话中已批准的指纹通过。
       const sessionApprovedApprovalKeys = new Set(task.approvedApprovalKeys ?? []);
       const isAutoApproved = (v: ValidatedCall) =>
         isApprovalFreeTool(v.call.toolName) ||
@@ -1364,7 +1364,10 @@ export async function runTask(task: Task): Promise<void> {
         isAutoApproved(v) &&
         toolRegistry.executionPolicyOf(v.call.toolName).parallelizable !== false;
       const safeOnes = toExecute.filter(isParallelSafe);
-      const riskyOnes = toExecute.filter((v) => !isParallelSafe(v));
+      const approvedSequential = toExecute.filter(
+        (v) => isAutoApproved(v) && toolRegistry.executionPolicyOf(v.call.toolName).parallelizable === false,
+      );
+      const needsApproval = toExecute.filter((v) => !isAutoApproved(v));
 
       // 执行单个工具的共享逻辑（不含审批门——审批在外部处理）
       const executeOne = async (
@@ -1474,14 +1477,21 @@ export async function runTask(task: Task): Promise<void> {
         };
       };
 
-      // 5c: risky 工具 → 分区处理：非命令工具按序审批，命令工具保持并行
-      if (riskyOnes.length > 0) {
-        // 分区
-        const cmdRiskyOnes = riskyOnes.filter(v => v.call.toolName === 'execute_command');
-        const sequentialRiskyOnes = riskyOnes.filter(v => v.call.toolName !== 'execute_command');
 
-        // 按序审批非命令工具——每次只弹一个确认，审批后立即执行
-        for (const v of sequentialRiskyOnes) {
+      // 5c: 免批+串行工具 → 逐个执行，无需审批
+      for (const v of approvedSequential) {
+        setRuntimePhase('calling_tool', `执行：${v.call.toolName}`, 'running');
+        const execResult = await executeOne(v, true);
+        resultByCallId.set(execResult.callId, execResult);
+      }
+
+      // 5d: 需审批工具 → 分区处理：非命令工具按序审批，命令工具保持并行
+      if (needsApproval.length > 0) {
+        const cmdApproval = needsApproval.filter(v => v.call.toolName === 'execute_command');
+        const sequentialApproval = needsApproval.filter(v => v.call.toolName !== 'execute_command');
+
+        // 非命令工具——每次只弹一个确认，审批后立即执行
+        for (const v of sequentialApproval) {
           addPendingApproval(task, v.call, v.risk);
           taskEvents.publish({
             type: 'approval_request',
@@ -1506,9 +1516,9 @@ export async function runTask(task: Task): Promise<void> {
           resultByCallId.set(execResult.callId, execResult);
         }
 
-        // execute_command 保持并行（现有逻辑不变）
-        if (cmdRiskyOnes.length > 0) {
-          for (const v of cmdRiskyOnes) {
+        // execute_command 保持并行
+        if (cmdApproval.length > 0) {
+          for (const v of cmdApproval) {
             addPendingApproval(task, v.call, v.risk);
             taskEvents.publish({
               type: 'approval_request',
@@ -1517,10 +1527,10 @@ export async function runTask(task: Task): Promise<void> {
               riskLevel: v.risk,
             });
           }
-          setRuntimePhase('waiting_approval', `等待确认 ${cmdRiskyOnes.length} 个命令`, 'paused');
+          setRuntimePhase('waiting_approval', `等待确认 ${cmdApproval.length} 个命令`, 'paused');
 
           const approvalResults = await Promise.all(
-            cmdRiskyOnes.map(async (v) => {
+            cmdApproval.map(async (v) => {
               const result = await waitForApproval(task.id, v.tc.id, abortController.signal);
               if (result.approved && result.sessionApprove) {
                 rememberSessionApproval(task, approvalKeyForCall(v.call));
