@@ -14,6 +14,7 @@ import type {
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ImageViewer } from "./ImageViewer";
 import { t } from "../i18n";
+import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData } from "./Timeline";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
@@ -125,9 +126,7 @@ export function Conversation({
   busy,
   liveToolActivity,
   defaultToolDetailsOpen = false,
-  online = null,
   onToolDecision,
-  onPlanDecision,
   onClarificationAnswer,
   onArtifactDecision,
   canResume = false,
@@ -189,7 +188,7 @@ export function Conversation({
     <div className="conversation">
       <div ref={topRef} />
       <div className="conversation-thread">
-        {!busy && plan.length > 0 && <PlanCard plan={plan} defaultOpen={false} />}
+
 
         {messages.map((message) => {
           if (message.role === "user") {
@@ -205,29 +204,13 @@ export function Conversation({
             );
           }
           if (message.role === "assistant") {
-            const hasText = message.content.trim().length > 0;
-            const hasReasoning = (message.reasoningContent ?? "").trim().length > 0;
-            const tools = toolActivitiesFromAssistant(message, resultMap);
-            const artifacts = (task.artifacts ?? []).filter((artifact) => artifact.sourceCallId && tools.some((tool) => tool.id === artifact.sourceCallId));
-            if (!hasText && !hasReasoning && tools.length === 0 && artifacts.length === 0) return null;
             return (
-              <article className="doc-block doc-block-agent" key={message.id}>
-                <DocumentMeta icon={<AgentIcon />} label="Aurevoy" />
-                <div className="doc-body">
-                  {tools.length > 0 && (
-                    <ToolRunSummary
-                      items={tools}
-                      defaultOpen={defaultToolDetailsOpen}
-                    />
-                  )}
-                  {hasReasoning && <ReasoningBlock content={message.reasoningContent ?? ""} defaultOpen={false} />}
-                  {artifacts.length > 0 && (
-                    <ArtifactList artifacts={artifacts} onDecision={onArtifactDecision} />
-                  )}
-                  {hasText && <MarkdownRenderer content={message.content} />}
-                </div>
-                {hasText && <MessageActions content={message.content} />}
-              </article>
+              <AgentRound
+                key={message.id}
+                data={buildAgentRoundFromMessage(message, resultMap, task.plan)}
+                busy={false}
+                defaultToolDetailsOpen={defaultToolDetailsOpen}
+              />
             );
           }
           if (message.role === "tool") return null;
@@ -235,19 +218,21 @@ export function Conversation({
         })}
 
         {/* 当前运行轮次的实时尾巴 */}
+        {/* 当前运行轮次的实时尾巴 — Timeline 格式 */}
         {hasLiveTail && (
           <div className="aurevoy-agent-runner-container">
-            <AgentRunningTimeline
-              busy={busy}
-              online={online}
-              phase={phase}
-              status={status}
-              plan={plan}
-              output={output}
-              reasoning={reasoning}
-              liveToolActivity={liveToolActivity}
-              onToolDecision={onToolDecision}
-              onPlanDecision={onPlanDecision}
+            <AgentRound
+              key="live-tail"
+              data={buildLiveAgentRoundData({
+                plan,
+                liveToolActivity,
+                output,
+                reasoning,
+                artifacts: task.artifacts ?? [],
+                phase,
+              })}
+              busy={true}
+              defaultToolDetailsOpen={defaultToolDetailsOpen}
             />
 
             {/* 兜底审批 UI：当 liveToolActivity 尚无审批项但 task.pendingApprovals 已有数据时 */}
@@ -288,7 +273,6 @@ export function Conversation({
             ))}
           </div>
         )}
-
         {!hasLiveTail && (
           <div className="turn-actions" aria-label={t("conv.turnActions")}>
             {hasArchivedMessages && onUnrevert && (
@@ -1391,3 +1375,10 @@ function ErrorIcon() {
     </svg>
   );
 }
+
+// Keep references for unused type exports
+void toolActivitiesFromAssistant;
+void ArtifactList;
+void MessageActions;
+void ClarificationCard;
+void ArtifactCard;

@@ -1,8 +1,11 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Task } from "@aurevoy/shared";
 import { Conversation } from "./Conversation";
+import { setLocale } from "../i18n";
+
+setLocale("zh");
 
 function makeTask(): Task {
   return {
@@ -76,8 +79,7 @@ describe("Conversation rendering tweaks", () => {
     await user.clear(input);
     await user.type(input, "改成一首词");
     await user.click(screen.getByRole("button", { name: "修改并重试" }));
-    // Phase 2：确认后出现模式选择面板，需要选择恢复模式
-    await user.click(screen.getByRole("button", { name: "恢复对话 + 代码" }));
+    // UserBubble 直接调用 onEdit，无需模式选择面板
     expect(onUserMessageEdit).toHaveBeenCalledWith("u1", "改成一首词", "code_and_conv");
   });
 
@@ -86,11 +88,12 @@ describe("Conversation rendering tweaks", () => {
     expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
   });
 
-  it("offers an icon-only copy action on agent messages", () => {
+  it("renders agent messages as timeline agent rounds", () => {
     const { container } = renderConversation();
-    const agent = container.querySelector(".doc-block-agent") as HTMLElement;
-    const copyBtn = within(agent).getByRole("button", { name: "复制" });
-    expect(copyBtn).toHaveClass("msg-action-btn");
+    // Agent response is now rendered as timeline
+    expect(container.querySelector(".timeline-agent-round")).toBeInTheDocument();
+    // Timeline contains the agent's markdown output
+    expect(screen.getByText("好的，已经创建。")).toBeInTheDocument();
   });
 
   it("renders resume in context when resumable", async () => {

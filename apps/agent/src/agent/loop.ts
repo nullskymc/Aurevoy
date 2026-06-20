@@ -1304,7 +1304,11 @@ export async function runTask(task: Task): Promise<void> {
       }
 
       // 先把 assistant（含 tool_calls）加入上下文
-      const assistantMsg = makeAssistantWithToolCalls(textBuffer, reasoningContent, toolCalls);
+      // 记录本次迭代中所有 tool call 关联的 planStepId（用于 timeline 分组）
+      const planStepIdByCallId = new Map<string, string>();
+      const currentPsId = task.plan[activeStepIndex]?.id;
+      if (currentPsId) toolCalls.forEach(tc => planStepIdByCallId.set(tc.id, currentPsId));
+      const assistantMsg = makeAssistantWithToolCalls(textBuffer, reasoningContent, toolCalls, planStepIdByCallId);
       messages.push(assistantMsg);
       taskEvents.publish({ type: 'message', taskId: task.id, message: assistantMsg });
 
@@ -1346,8 +1350,10 @@ export async function runTask(task: Task): Promise<void> {
       }
 
       // Step 2: 发布 tool_call 事件 + 批量更新预算
+      const currentPlanStepId = task.plan[activeStepIndex]?.id;
       for (const v of validatedCalls) {
         if (v.skipReason) continue;
+        (v.call as ToolCall & { planStepId?: string }).planStepId = currentPlanStepId;
         taskEvents.publish({ type: 'tool_call', taskId: task.id, call: v.call });
         writeToolCallTrace(task.id, v.call, v.risk, iteration + 1);
       }
@@ -1798,13 +1804,14 @@ function makeAssistantWithToolCalls(
   content: string,
   reasoningContent: string,
   toolCalls: AccumulatedToolCall[],
+  planStepIdByCallId?: ReadonlyMap<string, string>,
 ): Message {
   const msg = makeAssistant(content, reasoningContent);
   msg.toolCalls = toolCalls.map(
     (tc): MessageToolCall => ({
       id: tc.id,
       type: 'function',
-      function: { name: tc.function.name, arguments: tc.function.arguments },
+      function: { name: tc.function.name, arguments: tc.function.arguments, planStepId: planStepIdByCallId?.get(tc.id) } as MessageToolCall['function'],
     }),
   );
   return msg;

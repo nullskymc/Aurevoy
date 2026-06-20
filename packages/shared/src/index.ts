@@ -43,6 +43,8 @@ export interface MessageToolCall {
   id: string;
   type: 'function';
   function: {
+    /** 该工具调用关联的计划步骤 ID；前端 timeline 按此分组 */
+    planStepId?: string;
     name: string;
     /** 入参，原始 JSON 字符串（累积完成后再 JSON.parse） */
     arguments: string;
@@ -339,9 +341,9 @@ export interface ToolDescriptor {
   executionPolicy?: ToolExecutionPolicy;
   /** P6: 失败时给 LLM 的替代方案建议。 */
   fallback?: {
-    /** 推荐的替代工具列表 */
+  /** 推荐的替代工具列表 */
     tools?: string[];
-    /** 给 LLM 的具体建议 */
+  /** 给 LLM 的具体建议 */
     message?: string;
   };
 }
@@ -365,6 +367,8 @@ export interface ToolCall {
   id: string;
   toolName: string;
   args: Record<string, unknown>;
+  /** 该工具调用关联的计划步骤 ID；前端按 group 重新渲染 timeline */
+  planStepId?: string;
 }
 
 /** 工具调用结果 */
@@ -806,11 +810,11 @@ export interface RuntimeSettings {
     provider: 'openai';
     baseUrl: string;
     model: string;
-    /** 视觉子模型：当消息带图片附件时自动切换此模型（空则用主模型） */
+  /** 视觉子模型：当消息带图片附件时自动切换此模型（空则用主模型） */
     visionModel: string;
-    /** 最近一次手动从当前 Provider 获取到的完整模型列表。 */
+  /** 最近一次手动从当前 Provider 获取到的完整模型列表。 */
     availableModels: string[];
-    /** 用户勾选后允许出现在主界面模型菜单中的模型列表。 */
+  /** 用户勾选后允许出现在主界面模型菜单中的模型列表。 */
     enabledModels: string[];
     temperature: number;
     timeoutMs: number;
@@ -828,13 +832,13 @@ export interface UpdateRuntimeSettingsRequest {
     provider: 'openai';
     baseUrl: string;
     model: string;
-    /** 视觉子模型：空字符串表示清除 */
+  /** 视觉子模型：空字符串表示清除 */
     visionModel: string;
     availableModels: string[];
     enabledModels: string[];
     temperature: number;
     timeoutMs: number;
-    /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
+  /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
     apiKey: string;
   }>;
   workspaceDir?: string;
