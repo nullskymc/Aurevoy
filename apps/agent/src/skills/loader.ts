@@ -12,6 +12,7 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import type { SkillCatalogEntry, SkillContent, SkillResource, SkillFrontmatter } from './types.js';
+import { readInstallMetadata } from './installer.js';
 import { getLogger } from '../logging/logger.js';
 
 const BODY_CHAR_CAP = 8000;
@@ -70,11 +71,14 @@ export function discoverSkills(
         }
         namesFromDirs.add(fm.name);
 
+        const installMeta = readInstallMetadata(fullPath);
         catalog.push({
           frontmatter: fm,
           location: skillMdPath,
           skillDir: fullPath,
           sourceDir,
+          installUrl: installMeta?.repoUrl,
+          installedAt: installMeta?.installedAt,
         });
       }
     } else if (extname(entry).toLowerCase() === '.md' && entry !== 'SKILL.md') {

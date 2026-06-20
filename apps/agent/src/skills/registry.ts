@@ -113,6 +113,8 @@ class SkillRegistry {
         metadata: s.frontmatter.metadata,
         sourceDir: s.sourceDir,
         location: s.location,
+        installUrl: s.installUrl,
+        installedAt: s.installedAt,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }

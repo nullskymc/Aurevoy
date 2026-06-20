@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { config } from '../config.js';
 
 export interface CommandExecutionPolicy {
@@ -150,7 +151,11 @@ function resolveCommandCwd(input: string | undefined, workspaceDir: string): str
   const root = resolve(workspaceDir);
   const cwd = resolve(root, input ?? '.');
   if (cwd !== root && !cwd.startsWith(`${root}/`)) {
-    throw new Error(`cwd 越界：只允许在工作区内执行 (${root})`);
+    const home = homedir();
+    const trusted = [resolve(home, '.aurevoy'), resolve(home, '.agents')];
+    if (!trusted.some((d) => cwd === d || cwd.startsWith(`${d}/`))) {
+      throw new Error(`cwd 越界：只允许在工作区内执行 (${root})`);
+    }
   }
   return cwd;
 }

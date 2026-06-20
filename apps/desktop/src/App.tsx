@@ -9,6 +9,7 @@ import type {
   PendingToolApproval,
   RevertMode,
   SkillDescriptor,
+  SkillInstallResponse,
   Task,
   TaskPhase,
   UpdateRuntimeSettingsRequest,
@@ -280,7 +281,7 @@ function App() {
   } = useSettings();
   const { projects, setProjects } = useProjects();
   const { memories, setMemories } = useMemories();
-  const { skills } = useSkills();
+  const { skills, refresh: refreshSkills, installing, installError, install, uninstall } = useSkills();
   const { mergeArtifact } = useArtifacts(setCurrentTask, updateTaskList);
 
   const [draftProjectId, setDraftProjectId] = useState<string | undefined>();
@@ -709,6 +710,12 @@ function App() {
           updateTaskList(nextTask);
           return nextTask;
         });
+        break;
+      case "skill_installed":
+        refreshSkills();
+        break;
+      case "skill_uninstalled":
+        refreshSkills();
         break;
       case "task_deleted":
         // 任务被删除（可能来自其他客户端或本端），关流并清理
@@ -1456,7 +1463,13 @@ function App() {
             onSelectTask={handleSelectTask}
           />
         ) : activeView === "tools" ? (
-          <SkillsPage skills={skills} />
+          <SkillsPage
+            skills={skills}
+            installing={installing}
+            installError={installError}
+            onInstall={install}
+            onUninstall={uninstall}
+          />
         ) : activeView === "settings" ? (
           <SettingsPanel
             settings={runtimeSettings}
@@ -1697,9 +1710,81 @@ function SearchPage({
   );
 }
 
-function SkillsPage({ skills }: { skills: SkillDescriptor[] }) {
+function SkillsPage({
+  skills,
+  installing,
+  installError,
+  onInstall,
+  onUninstall,
+}: {
+  skills: SkillDescriptor[];
+  installing: boolean;
+  installError: string | null;
+  onInstall: (url: string) => Promise<SkillInstallResponse>;
+  onUninstall: (name: string) => Promise<void>;
+}) {
+  const [url, setUrl] = useState("");
+  const [lastResult, setLastResult] = useState<SkillInstallResponse | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  async function handleInstall() {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    try {
+      const result = await onInstall(trimmed);
+      setLastResult(result);
+      setUrl("");
+    } catch {
+      /* error shown via installError prop */
+    }
+  }
+
+  async function handleUninstall(name: string) {
+    if (confirmDelete !== name) {
+      setConfirmDelete(name);
+      return;
+    }
+    setConfirmDelete(null);
+    try {
+      await onUninstall(name);
+    } catch {
+      /* error shown via installError prop */
+    }
+  }
+
   return (
     <section className="page-panel">
+      <div className="skill-install-bar">
+        <input
+          type="text"
+          value={url}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            setLastResult(null);
+          }}
+          placeholder={t("skillsPage.installPlaceholder")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleInstall();
+          }}
+          disabled={installing}
+        />
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={handleInstall}
+          disabled={installing || !url.trim()}
+        >
+          {installing ? t("skillsPage.installing") : t("skillsPage.install")}
+        </button>
+      </div>
+      {installError && (
+        <p className="skill-install-error">{t("skillsPage.installFailed")}{installError}</p>
+      )}
+      {lastResult && !installError && (
+        <p className="skill-install-success">
+          {t("skillsPage.installSuccess")}{lastResult.installedSkills.join(", ")}
+        </p>
+      )}
       <div className="skill-page-grid">
         {skills.length === 0 ? (
           <p className="page-empty">{t("skillsPage.empty")}</p>
@@ -1709,6 +1794,17 @@ function SkillsPage({ skills }: { skills: SkillDescriptor[] }) {
               <header>
                 <strong>{skill.name}</strong>
                 <span>{skillSourceLabel(skill.sourceDir)}</span>
+                {skill.sourceDir === "user" && (
+                  <button
+                    type="button"
+                    className={`skill-delete-btn${confirmDelete === skill.name ? " confirm" : ""}`}
+                    onClick={() => handleUninstall(skill.name)}
+                    onBlur={() => setConfirmDelete(null)}
+                    title={confirmDelete === skill.name ? t("skillsPage.deleteConfirm") : t("action.delete")}
+                  >
+                    {confirmDelete === skill.name ? "Confirm" : "\u00d7"}
+                  </button>
+                )}
               </header>
               <p>{skill.description}</p>
               {skill.compatibility && (
@@ -1719,6 +1815,11 @@ function SkillsPage({ skills }: { skills: SkillDescriptor[] }) {
                 {skill.license && <span>{skill.license}</span>}
                 <span>{formatAllowedTools(skill.allowedTools)}</span>
               </div>
+              {skill.installUrl && (
+                <p className="skill-page-source" title={skill.installUrl}>
+                  {t("skillsPage.installedFrom")}: {skill.installUrl}
+                </p>
+              )}
             </article>
           ))
         )}

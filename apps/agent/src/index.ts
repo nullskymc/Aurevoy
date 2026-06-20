@@ -4,6 +4,7 @@ import { config } from './config.js';
 import './tools/builtins.js'; // 副作用导入：注册内置工具（文件/网络）
 import './tools/web-search.js'; // 副作用导入：注册 web_search 工具
 import { registerActivateSkillTool } from './tools/activate-skill.js';
+import { registerInstallSkillTool } from './tools/install-skill.js';
 import { closeMcpTools, initializeMcpTools } from './tools/mcp.js';
 import { loadPersistedSettings } from './runtime/settings.js';
 import { createLogger, getLogger } from './logging/logger.js';
@@ -25,6 +26,7 @@ async function main() {
 
   skillRegistry.load();
   registerActivateSkillTool();
+  registerInstallSkillTool();
   log.info({ count: skillRegistry.list().length }, 'skill 模块已加载');
 
   log.info(
