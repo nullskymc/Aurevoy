@@ -1,8 +1,9 @@
 import './load-env.js';
 import { buildServer } from './server.js';
 import { config } from './config.js';
-import './tools/builtins.js'; // 副作用导入：注册内置工具（文件/网络）
-import './tools/web-search.js'; // 副作用导入：注册 web_search 工具
+ import './tools/builtins.js'; // 副作用导入：注册内置工具（文件/网络）
+import './tools/file-basics.js'; // 副作用导入：注册行级视口文件工具（open_file/scroll/search_grep/replace_lines 等）
+ import './tools/web-search.js'; // 副作用导入：注册 web_search 工具
 import { registerLoadSkillTool } from './tools/load-skill.js';
 import { registerInstallSkillTool } from './tools/install-skill.js';
 import { closeMcpTools, initializeMcpTools } from './tools/mcp.js';
