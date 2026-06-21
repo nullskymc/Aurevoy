@@ -6,7 +6,6 @@ import type {
   PlanStep,
   RevertMode,
   Task,
-  TaskArtifact,
   TaskPhase,
   TaskStatus,
   ToolRiskLevel,
@@ -48,7 +47,6 @@ interface ConversationProps {
   onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
   onPlanDecision: (approved: boolean) => void;
   onClarificationAnswer: (clarificationId: string, answer: string) => void;
-  onArtifactDecision: (artifactId: string, status: "confirmed" | "rejected") => void;
   /** 当前任务是否可恢复（中断/失败等可续跑状态） */
   canResume?: boolean;
   /** 当前任务是否有可撤销的 revert（archivedMessages 非空） */
@@ -129,7 +127,6 @@ export function Conversation({
   defaultToolDetailsOpen = false,
   onToolDecision,
   onClarificationAnswer,
-  onArtifactDecision,
   canResume = false,
   hasArchivedMessages = false,
   onUserMessageEdit,
@@ -265,13 +262,6 @@ export function Conversation({
               />
             ))}
 
-            {(task.artifacts ?? []).filter((item) => item.status === "draft").map((artifact) => (
-              <ArtifactCard
-                key={artifact.id}
-                artifact={artifact}
-                onDecision={onArtifactDecision}
-              />
-            ))}
           </div>
         )}
         {!hasLiveTail && (
@@ -348,57 +338,7 @@ function ClarificationCard({
   );
 }
 
-function ArtifactList({
-  artifacts,
-  onDecision,
-}: {
-  artifacts: TaskArtifact[];
-  onDecision: (artifactId: string, status: "confirmed" | "rejected") => void;
-}) {
-  return (
-    <div className="artifact-list">
-      {artifacts.map((artifact) => (
-        <ArtifactCard key={artifact.id} artifact={artifact} onDecision={onDecision} />
-      ))}
-    </div>
-  );
-}
 
-function ArtifactCard({
-  artifact,
-  onDecision,
-}: {
-  artifact: TaskArtifact;
-  onDecision: (artifactId: string, status: "confirmed" | "rejected") => void;
-}) {
-  const [open, setOpen] = useState(artifact.status === "draft");
-  const preview = artifact.content.length > 1600 ? `${artifact.content.slice(0, 1600)}\n…` : artifact.content;
-  return (
-    <section className="artifact-card" data-status={artifact.status}>
-      <button type="button" className="artifact-head" onClick={() => setOpen((value) => !value)}>
-        <span className="artifact-type">{artifact.type}</span>
-        <strong>{artifact.name}</strong>
-        <span>{artifact.status}</span>
-      </button>
-      {open && (
-        <div className="artifact-body">
-          <MarkdownRenderer content={preview} />
-          {artifact.status === "draft" && (
-            <div className="artifact-actions">
-              <button type="button" onClick={() => onDecision(artifact.id, "rejected")}>
-                {t("action.reject")}
-              </button>
-              <button type="button" onClick={() => onDecision(artifact.id, "confirmed")}>
-                {t("action.confirm")}
-              </button>
-            </div>
-          )}
-          {artifact.appliedPath && <small>{t("artifact.written")}{artifact.appliedPath}</small>}
-        </div>
-      )}
-    </section>
-  );
-}
 
 /** 用户消息气泡：可复制；可编辑，编辑后选择恢复模式再提交。 */
 function UserBubble({
@@ -516,14 +456,6 @@ function UserBubble({
 }
 
 /** Agent 消息底部的纯 icon 操作行（当前：复制）。 */
-function MessageActions({ content }: { content: string }) {
-  return (
-    <div className="msg-actions">
-      <CopyButton content={content} />
-    </div>
-  );
-}
-
 function CopyButton({ content }: { content: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -1340,7 +1272,4 @@ function ErrorIcon() {
 
 // Keep references for unused type exports
 void toolActivitiesFromAssistant;
-void ArtifactList;
-void MessageActions;
 void ClarificationCard;
-void ArtifactCard;

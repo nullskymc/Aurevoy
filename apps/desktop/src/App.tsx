@@ -1523,7 +1523,6 @@ function App() {
                 onToolDecision={handleToolDecision}
                 onPlanDecision={handlePlanDecision}
                 onClarificationAnswer={handleClarificationAnswer}
-                onArtifactDecision={handleArtifactDecision}
                 canResume={canResume}
                 hasArchivedMessages={(currentTask?.archivedMessages?.length ?? 0) > 0}
                 onUserMessageEdit={(messageId, content, mode) => void handleRevertAndEdit(messageId, content, mode)}
