@@ -1,0 +1,8 @@
+node_modules
+apps/desktop/src-tauri/target
+**/*.sqlite*
+**/dist
+**/*.tsbuildinfo
+.git
+.env
+.env.*
