@@ -200,6 +200,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.13
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -216,6 +221,10 @@ jobs:
 
       - name: Remove local.properties (CI uses ANDROID_HOME)
         run: rm -f apps/android/local.properties
+
+      - name: Generate Gradle Wrapper
+        working-directory: apps/android
+        run: gradle wrapper --gradle-version 8.13
 
       - name: Build Android APK (debug)
         working-directory: apps/android
