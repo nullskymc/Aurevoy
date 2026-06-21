@@ -6,6 +6,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WEB_UI_DIR="$ROOT/packages/web-ui"
 ANDROID_ASSETS="$ROOT/apps/android/app/src/main/assets/web"
 
+echo "==> Building @aurevoy/shared..."
+cd "$ROOT"
+npm run build:shared
+
 echo "==> Building web-ui..."
 cd "$WEB_UI_DIR"
 npm run build:web
