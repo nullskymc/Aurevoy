@@ -193,6 +193,13 @@ export const ko = {
   // Plan & thinking state
   "plan.title": "실행 계획",
   "thinking.continue": "계속 진행 중…",
+  "thinking.label": "사고 과정",
+  "thinking.collapse": "접기",
+  "thinking.expand": "펼치기",
+  "thinking.phase": "단계",
+  "thinking.cmd": "Cmd",
+  "thinking.complete": "완료",
+  "thinking.summarySkeleton": "요약 로딩 중...",
 
   // Turn actions / budget bar
   "conv.turnActions": "현재 턴 작업",

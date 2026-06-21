@@ -15,6 +15,7 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ImageViewer } from "./ImageViewer";
 import { t } from "../i18n";
 import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData } from "./Timeline";
+import { ThinkingCard } from "./ThinkingTimeline";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
@@ -983,8 +984,6 @@ export function AgentRunningTimeline({
   onPlanDecision,
 }: AgentRunningTimelineProps) {
   const [seconds, setSeconds] = useState(0);
-  const [reasoningOpen, setReasoningOpen] = useState(false);
-
   useEffect(() => {
     if (!busy) {
       setSeconds(0);
@@ -1041,14 +1040,15 @@ export function AgentRunningTimeline({
         </div>
       )}
 
-      {/* 思考链（collapsible reasoning） */}
+      {/* 思考链（ThinkingCard） */}
       {showStreamingReasoning && (
-        <ReasoningBlock
-          content={reasoning}
-          defaultOpen={reasoningOpen}
-          onToggle={setReasoningOpen}
-          streaming={busy}
-        />
+        <ThinkingCard data={{
+          id: 'live-reasoning',
+          phase: 1,
+          summary: '',
+          fullText: reasoning,
+          defaultOpen: false,
+        }} />
       )}
 
       {/* 流式输出文本（thinking 阶段实时打字机效果） */}
@@ -1136,51 +1136,13 @@ function ToolRunSummary({
   );
 }
 
-function ReasoningBlock({
-  content,
-  defaultOpen = false,
-  streaming = false,
-  onToggle,
-}: {
-  content: string;
-  defaultOpen?: boolean;
-  streaming?: boolean;
-  onToggle?: (open: boolean) => void;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-
-  useEffect(() => {
-    setOpen(defaultOpen);
-  }, [defaultOpen]);
-
-  function toggle(event: React.MouseEvent<HTMLElement>): void {
-    event.preventDefault();
-    const next = !open;
-    setOpen(next);
-    onToggle?.(next);
-  }
-
-  return (
-    <details className="reasoning-block" open={open}>
-      <summary className="reasoning-summary" onClick={toggle}>
-        <span className="reasoning-dot" aria-hidden="true" />
-        <span>思考过程</span>
-        <span className="reasoning-toggle">{open ? "▾" : "▸"}</span>
-      </summary>
-      <div className="reasoning-content">
-        <MarkdownRenderer content={content} />
-        {streaming && <span className="stream-caret" aria-hidden="true" />}
-      </div>
-    </details>
-  );
-}
-
 function ApprovalInline({
   item,
   onDecision,
 }: {
   item: ToolActivity;
   onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+
 }) {
   const [decided, setDecided] = useState<'approve' | 'reject' | null>(null);
 

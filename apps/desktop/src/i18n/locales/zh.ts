@@ -193,6 +193,13 @@ export const zh = {
   // 计划与思考态
   "plan.title": "执行计划",
   "thinking.continue": "继续推进…",
+  "thinking.label": "思考过程",
+  "thinking.collapse": "收起",
+  "thinking.expand": "展开",
+  "thinking.phase": "阶段",
+  "thinking.cmd": "Cmd",
+  "thinking.complete": "完成",
+  "thinking.summarySkeleton": "思考摘要加载中...",
 
   // 轮次操作 / 预算条
   "conv.turnActions": "当前轮次操作",

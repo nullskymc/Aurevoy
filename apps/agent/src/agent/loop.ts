@@ -544,6 +544,8 @@ export function resolveClarificationAnswer(
 interface ApprovalResult {
   approved: boolean;
   sessionApprove?: boolean;
+  /** 命令前缀 key（如 cmd:rm），选中"允许本 session 内的 <cmd> 命令"时传入 */
+  prefixKey?: string;
 }
 
 function waitForApproval(
@@ -560,11 +562,11 @@ function waitForApproval(
       map?.delete(callId);
       if (map && map.size === 0) pendingApprovals.delete(taskId);
     };
-    const finish = (approved: boolean, sessionApprove?: boolean) => {
+    const finish = (approved: boolean, sessionApprove?: boolean, prefixKey?: string) => {
       if (settled) return;
       settled = true;
       cleanup();
-      resolve({ approved, sessionApprove });
+      resolve({ approved, sessionApprove, prefixKey });
     };
     const onAbort = () => finish(false);
     const timer = setTimeout(() => finish(false), config.agent.approvalTimeoutMs);
@@ -605,6 +607,15 @@ function approvalKeyForCall(call: ToolCall): string {
 
 function isApprovalFreeTool(toolName: string): boolean {
   return APPROVAL_FREE_TOOLS.has(toolName);
+}
+
+/** 获取命令审批的 key（前缀匹配，如 cmd:rm、cmd:git）。仅对 execute_command 生效。 */
+function prefixApprovalKeyForCall(call: ToolCall): string {
+  if (call.toolName !== 'execute_command') return '';
+  const args = call.args as Record<string, unknown>;
+  const command = typeof args.command === 'string' ? args.command.trim() : '';
+  const prefix = command.split(/\s+/)[0] || command;
+  return prefix ? `cmd:${prefix}` : '';
 }
 
 function addPendingApproval(task: Task, call: ToolCall, riskLevel: ToolRiskLevel): void {
@@ -1358,7 +1369,8 @@ export async function runTask(task: Task): Promise<void> {
       const sessionApprovedApprovalKeys = new Set(task.approvedApprovalKeys ?? []);
       const isAutoApproved = (v: ValidatedCall) =>
         isApprovalFreeTool(v.call.toolName) ||
-        sessionApprovedApprovalKeys.has(approvalKeyForCall(v.call));
+        sessionApprovedApprovalKeys.has(approvalKeyForCall(v.call)) ||
+        sessionApprovedApprovalKeys.has(prefixApprovalKeyForCall(v.call));
 
       const isParallelSafe = (v: ValidatedCall) =>
         isAutoApproved(v) &&
@@ -1506,6 +1518,9 @@ export async function runTask(task: Task): Promise<void> {
           if (result.approved && result.sessionApprove) {
             rememberSessionApproval(task, approvalKeyForCall(v.call));
           }
+          if (result.approved && result.prefixKey) {
+            rememberSessionApproval(task, result.prefixKey);
+          }
           removePendingApproval(task, v.call.id);
           writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
 
@@ -1534,6 +1549,9 @@ export async function runTask(task: Task): Promise<void> {
               const result = await waitForApproval(task.id, v.tc.id, abortController.signal);
               if (result.approved && result.sessionApprove) {
                 rememberSessionApproval(task, approvalKeyForCall(v.call));
+              }
+              if (result.approved && result.prefixKey) {
+                rememberSessionApproval(task, result.prefixKey);
               }
               removePendingApproval(task, v.call.id);
               writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);

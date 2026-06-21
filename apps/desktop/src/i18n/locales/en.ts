@@ -193,6 +193,13 @@ export const en = {
   // Plan & thinking state
   "plan.title": "Execution Plan",
   "thinking.continue": "Continuing…",
+  "thinking.label": "Thinking",
+  "thinking.collapse": "Collapse",
+  "thinking.expand": "Expand",
+  "thinking.phase": "Phase",
+  "thinking.cmd": "Cmd",
+  "thinking.complete": "Done",
+  "thinking.summarySkeleton": "Summary loading...",
 
   // Turn actions / budget bar
   "conv.turnActions": "Current Turn Actions",

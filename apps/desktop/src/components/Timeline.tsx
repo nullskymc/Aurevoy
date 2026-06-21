@@ -14,6 +14,7 @@ import type {
   TaskArtifact,
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { ThinkingCard } from "./ThinkingTimeline";
 
 /* ============ 类型定义 ============ */
 
@@ -519,24 +520,6 @@ function PlanStepGroup({
   );
 }
 
-/** 推理过程折叠块 */
-function ReasoningBlock({ content, streaming }: { content: string; streaming?: boolean }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <details className="reasoning-block" open={open}>
-      <summary className="reasoning-summary" onClick={(e) => { e.preventDefault(); setOpen((v) => !v); }}>
-        <span className="reasoning-dot" aria-hidden="true" />
-        <span>思考过程</span>
-        <span className="reasoning-toggle">{open ? "▾" : "▸"}</span>
-      </summary>
-      <div className="reasoning-content">
-        <MarkdownRenderer content={content} />
-        {streaming && <span className="stream-caret" aria-hidden="true" />}
-      </div>
-    </details>
-  );
-}
-
 /** 产物卡片（最后一步高亮展示） */
 function ArtifactCard({
   artifact,
@@ -614,7 +597,13 @@ export function AgentRound({
 
       {/* 推理过程 */}
       {data.reasoning && (
-        <ReasoningBlock content={data.reasoning} streaming={hasLiveRunning} />
+        <ThinkingCard data={{
+          id: `reasoning-${data.id}`,
+          phase: 1,
+          summary: data.reasoning.split('\n')[0]?.trim()?.slice(0, 80) || '',
+          fullText: data.reasoning,
+          defaultOpen: false,
+        }} />
       )}
 
       {/* 时间线区域 */}

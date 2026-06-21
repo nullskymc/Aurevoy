@@ -193,6 +193,13 @@ export const ja = {
   // Plan & thinking state
   "plan.title": "実行計画",
   "thinking.continue": "続行中…",
+  "thinking.label": "思考プロセス",
+  "thinking.collapse": "折りたたむ",
+  "thinking.expand": "展開",
+  "thinking.phase": "フェーズ",
+  "thinking.cmd": "Cmd",
+  "thinking.complete": "完了",
+  "thinking.summarySkeleton": "要約を読み込み中...",
 
   // Turn actions / budget bar
   "conv.turnActions": "現在のターン操作",
