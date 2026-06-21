@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
@@ -101,17 +102,17 @@ class MainActivity : ComponentActivity() {
             .build()
 
         webView.webViewClient = object : WebViewClientCompat() {
+            override fun shouldInterceptRequest(
+                view: WebView,
+                request: WebResourceRequest,
+            ): WebResourceResponse? {
+                return assetLoader.shouldInterceptRequest(request.url)
+            }
+
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
             ): Boolean {
-                val url = request.url.toString()
-                // 非本地资源 → 让系统浏览器处理
-                if (!url.startsWith("https://aurevoy.local/") &&
-                    !url.startsWith("file:///android_assets/")
-                ) {
-                    return false
-                }
                 return false
             }
 
