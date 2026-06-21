@@ -226,7 +226,6 @@ export function Conversation({
                 liveToolActivity,
                 output,
                 reasoning,
-                artifacts: task.artifacts ?? [],
                 phase,
               })}
               busy={true}

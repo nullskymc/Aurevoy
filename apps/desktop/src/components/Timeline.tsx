@@ -11,7 +11,6 @@ import type {
   Message,
   MessageToolCall,
   PlanStep,
-  TaskArtifact,
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ThinkingCard } from "./ThinkingTimeline";
@@ -52,7 +51,6 @@ export interface AgentRoundData {
   summary: string;
   reasoning?: string;
   markdownOutput?: string;
-  artifacts?: TaskArtifact[];
   status: "pending" | "running" | "completed" | "failed";
 }
 
@@ -255,7 +253,6 @@ export function buildAgentRoundFromMessage(
     summary,
     reasoning: message.reasoningContent,
     markdownOutput: message.content,
-    artifacts: undefined,
     status: "completed",
   };
 }
@@ -266,10 +263,9 @@ export function buildLiveAgentRoundData(params: {
   liveToolActivity: { id: string; name: string; args: unknown; status: string; output?: unknown; error?: string }[];
   output?: string;
   reasoning?: string;
-  artifacts?: TaskArtifact[];
   phase?: string | null;
 }): AgentRoundData {
-  const { plan, liveToolActivity, output, reasoning, artifacts, phase } = params;
+  const { plan, liveToolActivity, output, reasoning, phase } = params;
   const steps: TimelineStepData[] = liveToolActivity.map((act) => {
     const kind = detectStepKind(act.name);
     const args = typeof act.args === "object" && act.args !== null
@@ -326,7 +322,6 @@ export function buildLiveAgentRoundData(params: {
     summary,
     reasoning,
     markdownOutput: output,
-    artifacts,
     status: isFailed ? "failed" : steps.some((s) => s.status === "running") ? "running" : "completed",
   };
 }
@@ -519,49 +514,6 @@ function PlanStepGroup({
     </div>
   );
 }
-
-/** 产物卡片（最后一步高亮展示） */
-function ArtifactCard({
-  artifact,
-}: {
-  artifact: TaskArtifact;
-}) {
-  const [open, setOpen] = useState(false);
-  const preview = artifact.content.length > 1200
-    ? `${artifact.content.slice(0, 1200)}\n…`
-    : artifact.content;
-  return (
-    <div className="timeline-artifact-card" data-status={artifact.status}>
-      <div className="timeline-artifact-icon" aria-hidden="true">
-        <svg viewBox="0 0 20 20" width="18" height="18" fill="none">
-          <rect x="3" y="2" width="14" height="16" rx="2" stroke="currentColor" strokeWidth="1.4" />
-          <path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-        </svg>
-      </div>
-      <div className="timeline-artifact-body">
-        <div className="timeline-artifact-head">
-          <span className="timeline-artifact-type">{artifact.type}</span>
-          <strong className="timeline-artifact-name">{artifact.name}</strong>
-          {artifact.status === "draft" && <span className="timeline-artifact-status">等待确认</span>}
-          {artifact.appliedPath && <span className="timeline-artifact-path">{artifact.appliedPath}</span>}
-          <button
-            type="button"
-            className="timeline-artifact-toggle"
-            onClick={() => setOpen((v) => !v)}
-          >
-            {open ? "收起" : "预览"}
-          </button>
-        </div>
-        {open && (
-          <div className="timeline-artifact-body">
-            <MarkdownRenderer content={preview} />
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /* ============ 主组件 ============ */
 
 /**
@@ -614,7 +566,7 @@ export function AgentRound({
               key={group.planStepId}
               group={group}
               index={i}
-              isLast={i === data.planStepGroups.length - 1 && !data.artifacts?.length}
+              isLast={i === data.planStepGroups.length - 1}
               defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
             />
           ))
@@ -626,18 +578,6 @@ export function AgentRound({
           </div>
         )}
       </div>
-
-      {/* 产物卡片（完成态显示，最后一步高亮） */}
-      {data.artifacts && data.artifacts.length > 0 && data.status === "completed" && (
-        <div className="timeline-artifact-section">
-          <div className="timeline-artifact-connector" />
-          <div className="timeline-artifact-list">
-            {data.artifacts.map((artifact) => (
-              <ArtifactCard key={artifact.id} artifact={artifact} />
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* 流式输出文本（实时模式下的最终 markdown 输出） */}
       {data.markdownOutput && (
