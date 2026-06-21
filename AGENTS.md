@@ -90,10 +90,11 @@ npm run regression:m7    # M7 文件工具、网络安全、schema、计划、ch
 - ✅ Rewind：编辑重跑/撤销/分支/压缩
 - ✅ Project：项目工作区与对话分组
 - ✅ P1-P7：Agent 架构重构（LLM 规划→并行执行→截断→语义压缩→记忆评分→Diff 编辑→子代理）
-- ✅ Skill 系统：斜杠命令激活、预装 skill（web-search/browser）、工具白名单
+- ✅ Skill 系统：load_skill 工具激活、install_skill 从 Git 安装、预装 skill（web-search/browser）、工具白名单
 - ✅ 网页搜索：`web_search` 工具，DuckDuckGo 免费搜索
 - ✅ CI/CD：GitHub Actions macOS ARM64 自动构建 + M3-M7 回归
 - ✅ Multimodal：图片/文件拖拽粘贴、视觉模型、图片查看器
+- ✅ 其他：Python 运行时、行级文件工具、审批三分区 + 命令前缀审批、planStepId 时间线分组
 - 🚧 M5 打包签名：macOS 签名公证、自动更新（需 Apple Developer 账号）
 - ⬜ M8：知识库/RAG、Agent usability eval、浏览器自动化（Playwright MCP）、发布体验
 

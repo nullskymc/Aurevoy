@@ -1,0 +1,105 @@
+import type { PlatformAdapter } from '@aurevoy/web-ui';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+
+/**
+ * Tauri 桌面壳的 PlatformAdapter 实现。
+ *
+ * 桥接 web-ui 的平台无关代码与 Tauri 原生能力：
+ * - 文件系统：convertFileSrc / invoke('file_metadata') / invoke('save_temp_file')
+ * - 系统对话框：@tauri-apps/plugin-dialog（动态 import）
+ * - 文件拖拽：getCurrentWindow().onDragDropEvent
+ * - 进程管理：invoke('ensure_agent_process')
+ * - 外部链接：@tauri-apps/plugin-opener（动态 import）
+ */
+export const tauriPlatformAdapter: PlatformAdapter = {
+  filePathToUrl(filePath: string): string | null {
+    try {
+      return convertFileSrc(filePath);
+    } catch {
+      return null;
+    }
+  },
+
+  async openExternal(url: string): Promise<void> {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl(url);
+  },
+
+  onFileDrop(callback: (paths: string[]) => void): (() => void) {
+    let unlisten: (() => void) | undefined;
+    const win = getCurrentWindow();
+    win
+      .onDragDropEvent((event) => {
+        if (event.payload.type === 'drop') {
+          callback(event.payload.paths);
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        // 浏览器开发模式忽略
+      });
+    return () => {
+      unlisten?.();
+    };
+  },
+
+  async openFileDialog(options?: {
+    directory?: boolean;
+    multiple?: boolean;
+  }): Promise<string[] | null> {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({
+        directory: options?.directory ?? false,
+        multiple: options?.multiple ?? false,
+      });
+      if (!selected) return null;
+      return Array.isArray(selected) ? selected : [selected];
+    } catch {
+      return null;
+    }
+  },
+
+  async getFileMetadata(path: string) {
+    const meta = await invoke<{
+      name: string;
+      size: number;
+      is_dir: boolean;
+      mime_type: string;
+    }>('file_metadata', { path });
+    return {
+      name: meta.name,
+      size: meta.size,
+      mimeType: meta.mime_type,
+      isDir: meta.is_dir,
+    };
+  },
+
+  async saveTempFile(name: string, dataUrl: string): Promise<string> {
+    return invoke<string>('save_temp_file', { name, data: dataUrl });
+  },
+
+  async ensureAgentRunning() {
+    if (
+      typeof window !== 'undefined' &&
+      '__TAURI_INTERNALS__' in window
+    ) {
+      try {
+        return invoke<{
+          baseUrl: string;
+          mode: string;
+          running: boolean;
+          pid: number | null;
+          message: string;
+          error: string | null;
+        }>('ensure_agent_process');
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  },
+};
