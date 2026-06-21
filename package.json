@@ -1,6 +1,6 @@
 {
   "name": "aurevoy",
-  "version": "0.5.5-dev",
+  "version": "0.5.6-dev",
   "private": true,
   "description": "Aurevoy \u2014 \u8ba9\u6bcf\u4e2a\u4eba\u90fd\u62e5\u6709\u5c5e\u4e8e\u81ea\u5df1\u7684 AI Agent\u3002\u901a\u7528\u4e2a\u4eba AI Agent \u684c\u9762\u4ea7\u54c1\u3002",
   "workspaces": [
@@ -11,7 +11,7 @@
     "dev": "npm run build:shared && npm run prepare-agent-deps && concurrently -n agent,desktop -c blue,green \"npm:dev:agent\" \"npm:dev:desktop\"",
     "dev:agent": "npm run dev -w @aurevoy/agent",
     "dev:desktop": "npm run tauri:dev -w @aurevoy/desktop",
-    "build": "npm run build -w @aurevoy/shared && npm run build -w @aurevoy/agent && npm run build -w @aurevoy/desktop",
+    "build": "npm run build:shared && npm run build:web-ui && npm run build -w @aurevoy/agent && npm run build -w @aurevoy/desktop",
     "build:shared": "npm run build -w @aurevoy/shared",
     "prepare-agent-deps": "node scripts/prepare-agent-deps.mjs",
     "setup:python": "node scripts/setup-python.mjs",
@@ -20,11 +20,12 @@
     "regression:m5": "node scripts/m5-regression.mjs",
     "regression:m6": "node scripts/m6-regression.mjs",
     "regression:m7": "node scripts/m7-regression.mjs",
-    "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run build:shared && npm run build:web-ui && npm run typecheck --workspaces --if-present",
     "clean": "rimraf \"packages/*/dist\" \"apps/*/dist\"",
     "build:web-ui": "npm run build -w @aurevoy/web-ui",
     "build:android": "bash scripts/sync-android-assets.sh",
-    "dev:web": "npm run dev:web -w @aurevoy/web-ui"
+    "dev:web": "npm run dev:web -w @aurevoy/web-ui",
+    "dev:watch-web-ui": "npm run dev -w @aurevoy/web-ui"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",
