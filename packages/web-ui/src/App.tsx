@@ -1477,6 +1477,7 @@ function App() {
             onToggleMemory={handleToggleMemory}
             onEditMemory={handleEditMemory}
             onDeleteMemory={handleDeleteMemory}
+            onConnectionChange={refreshRuntime}
           />
         ) : showConversation ? (
           contentMode === "artifacts" ? (

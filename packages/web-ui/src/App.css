@@ -2888,6 +2888,30 @@ button:disabled {
   padding: 0 var(--ui-space-3);
 }
 
+.settings-inline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+}
+
+.settings-inline-btn {
+  height: var(--ui-control-md);
+  padding: 0 var(--ui-space-3);
+  border: none;
+  border-radius: var(--ui-radius-md);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-inline-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .settings-model-input {
   min-width: min(320px, 100%);
 }

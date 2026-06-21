@@ -41,12 +41,30 @@ import {
 
 /** Agent 引擎地址。优先级：localStorage > 运行时注入 > Vite 环境变量 > 默认值 */
 const AGENT_URL_STORAGE_KEY = 'aurevoy.agentBaseUrl';
-const BASE_URL =
-  (typeof window !== 'undefined' && window.localStorage.getItem(AGENT_URL_STORAGE_KEY)) ??
-  (typeof globalThis !== 'undefined' &&
-    (globalThis as unknown as Record<string, string | undefined>).__AUREVOY_AGENT_BASE_URL__) ??
-  (import.meta.env.VITE_AGENT_BASE_URL as string | undefined) ??
-  AGENT_DEFAULT_BASE_URL;
+
+function resolveBaseUrl(): string {
+  return (
+    (typeof window !== 'undefined' ? window.localStorage.getItem(AGENT_URL_STORAGE_KEY) : null) ??
+    (typeof globalThis !== 'undefined'
+      ? (globalThis as unknown as Record<string, string | undefined>).__AUREVOY_AGENT_BASE_URL__
+      : null) ??
+    (import.meta.env.VITE_AGENT_BASE_URL as string | undefined) ??
+    AGENT_DEFAULT_BASE_URL
+  );
+}
+
+let BASE_URL = resolveBaseUrl();
+
+export function getBaseUrl(): string {
+  return BASE_URL;
+}
+
+export function setBaseUrl(url: string): void {
+  BASE_URL = url.replace(/\/+$/, '');
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(AGENT_URL_STORAGE_KEY, BASE_URL);
+  }
+}
 
 export async function checkHealth(): Promise<HealthResponse> {
   const res = await fetch(`${BASE_URL}/api/health`);
