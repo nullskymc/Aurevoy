@@ -177,68 +177,10 @@ jobs:
         with:
           name: aurevoy-linux-appimage
           path: apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
-  build-android:
-    name: Build (Android)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 26
-          cache: npm
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 8.13
-
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: ~/.gradle/caches
-          key: ${{ runner.os }}-gradle-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle/**') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Sync web-ui to Android assets
-        run: bash scripts/sync-android-assets.sh
-
-      - name: Remove local.properties (CI uses ANDROID_HOME)
-        run: rm -f apps/android/local.properties
-
-      - name: Generate Gradle Wrapper
-        working-directory: apps/android
-        run: gradle wrapper --gradle-version 8.13
-
-      - name: Build Android APK (debug)
-        working-directory: apps/android
-        run: ./gradlew assembleDebug --no-daemon
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: aurevoy-android
-          path: apps/android/app/build/outputs/apk/debug/*.apk
 
   create-release:
     name: Create Release
-    needs: [build-macos, build-windows, build-linux, build-android]
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -260,7 +202,6 @@ jobs:
             artifacts/aurevoy-windows/*.exe
             artifacts/aurevoy-linux-deb/*.deb
             artifacts/aurevoy-linux-appimage/*.AppImage
-            artifacts/aurevoy-android/*.apk
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
