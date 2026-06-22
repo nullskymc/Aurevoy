@@ -35,6 +35,7 @@ import type {
   ResumeTaskResponse,
   RevertTaskRequest,
   RevertTaskResponse,
+  SkillDescriptor,
   SkillInstallRequest,
   SkillInstallResponse,
   SkillListResponse,
@@ -67,7 +68,7 @@ import {
   unrevertTask,
 } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
-import { taskStore, traceStore, memoryStore, toolSettingsStore, projectStore } from './store/db.js';
+import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
 import { skillRegistry } from './skills/registry.js';
 import { installFromGit, uninstallSkill } from './skills/installer.js';
@@ -118,6 +119,11 @@ export async function buildServer(externalLogger?: Logger) {
     return { skills: skillRegistry.listAll() };
   });
 
+  app.post('/api/skills/reload', async (): Promise<SkillListResponse> => {
+    const skills = reloadSkillsAndTools();
+    return { skills };
+  });
+
   app.post<{ Body: SkillInstallRequest }>('/api/skills/install', async (req, reply) => {
     const repoUrl = typeof req.body?.repoUrl === 'string' ? req.body.repoUrl.trim() : '';
     if (!repoUrl) {
@@ -164,6 +170,24 @@ export async function buildServer(externalLogger?: Logger) {
       return reply.code(400).send({ error: message });
     }
   });
+
+  app.patch<{ Params: { name: string }; Body: { enabled: boolean } }>(
+    '/api/skills/:name',
+    async (req, reply) => {
+      const name = req.params.name;
+      const enabled = req.body?.enabled;
+      if (typeof enabled !== 'boolean') {
+        return reply.code(400).send({ error: 'enabled(boolean) 必填' });
+      }
+      const entry = skillRegistry.get(name);
+      if (!entry) return reply.code(404).send({ error: 'skill not found' });
+      skillSettingsStore.setEnabled(name, enabled);
+      // 刷新 load_skill / install_skill 工具注册以同步 catalog
+      reloadSkillsAndTools();
+      const updated = skillRegistry.listAll().find((s) => s.name === name);
+      return reply.send(updated as SkillDescriptor);
+    },
+  );
 
   app.patch<{ Params: { name: string }; Body: UpdateToolRequest }>(
     '/api/tools/:name',
@@ -267,7 +291,7 @@ export async function buildServer(externalLogger?: Logger) {
       if (!project) return reply.code(404).send({ error: 'project not found' });
     }
 
-    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments);
+    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments, req.body?.autoMode);
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runTask(task);
 

@@ -3,7 +3,7 @@ import type { Task, Project } from "@aurevoy/shared";
 import { getRelativeTime } from "./status";
 import { t } from "../i18n";
 
-type MainView = "chat" | "search" | "tools" | "settings";
+type MainView = "chat" | "search" | "skills" | "settings";
 
 interface TaskHistorySidebarProps {
   activeTaskId?: string;
@@ -15,7 +15,7 @@ interface TaskHistorySidebarProps {
   onSelectTask: (task: Task) => void;
   onSelectProject: (projectId: string) => void;
   onOpenSearch: () => void;
-  onOpenTools: () => void;
+  onOpenSkills: () => void;
   onOpenSettings: () => void;
   onImportProject: () => void;
   onDeleteProject: (projectId: string) => void;
@@ -32,7 +32,7 @@ export function TaskHistorySidebar({
   onSelectTask,
   onSelectProject,
   onOpenSearch,
-  onOpenTools,
+  onOpenSkills,
   onOpenSettings,
   onImportProject,
   onDeleteProject,
@@ -127,8 +127,8 @@ export function TaskHistorySidebar({
         <button
           type="button"
           className="sidebar-action"
-          data-active={activeView === "tools"}
-          onClick={onOpenTools}
+          data-active={activeView === "skills"}
+          onClick={onOpenSkills}
         >
           <PluginIcon />
           <span>{t("nav.skills")}</span>

@@ -11,6 +11,7 @@ import { loadPersistedSettings } from './runtime/settings.js';
 import { ensurePythonReady, getPythonPath, getPythonVersion, isPythonInstalled } from './runtime/python-runtime.js';
 import { createLogger, getLogger } from './logging/logger.js';
 import { skillRegistry } from './skills/registry.js';
+import { startSkillWatcher } from './skills/reload.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -45,6 +46,7 @@ async function main() {
   registerLoadSkillTool();
   registerInstallSkillTool();
   log.info({ count: skillRegistry.list().length }, 'skill 模块已加载');
+  const stopSkillWatcher = startSkillWatcher();
 
   log.info(
     {
@@ -64,6 +66,7 @@ async function main() {
 
   const shutdown = async () => {
     log.info('正在关闭...');
+    stopSkillWatcher();
     await closeMcpTools();
     await app.close();
   };

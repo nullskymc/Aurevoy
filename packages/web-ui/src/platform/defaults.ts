@@ -16,6 +16,15 @@ export const browserPlatform: PlatformAdapter = {
     return () => {};
   },
 
+  async openFile(path: string): Promise<void> {
+    // 浏览器不能直接打开本地文件，复制路径到剪贴板
+    try {
+      await navigator.clipboard.writeText(path);
+    } catch {
+      // 剪贴板不可用时忽略
+    }
+  },
+
   async openFileDialog() {
     // 浏览器环境通过 <input type="file"> 实现（仅用于兼容）
     return null;

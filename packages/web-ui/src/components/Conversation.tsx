@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   ClarificationRequest,
+  ContentBlock,
   Message,
   MessageAttachment,
   PlanStep,
@@ -59,6 +60,8 @@ interface ConversationProps {
   onBranch?: (messageId: string) => void;
   /** 恢复中断的任务 */
   onResume?: () => void;
+  /** Agent 本轮通过 attach_content 工具的实时内容块 */
+  liveContentBlocks?: ContentBlock[];
 }
 
 interface ToolResultInfo {
@@ -133,6 +136,7 @@ export function Conversation({
   onUnrevert,
   onBranch,
   onResume,
+  liveContentBlocks = [],
 }: ConversationProps) {
   const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -227,6 +231,7 @@ export function Conversation({
                 output,
                 reasoning,
                 phase,
+                contentBlocks: liveContentBlocks,
               })}
               busy={true}
               defaultToolDetailsOpen={defaultToolDetailsOpen}

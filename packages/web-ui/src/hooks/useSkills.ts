@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SkillDescriptor, SkillInstallResponse } from "@aurevoy/shared";
-import { fetchSkills, installSkill, uninstallSkill } from "../api";
+import { fetchSkills, installSkill, reloadSkills, toggleSkill as toggleSkillApi, uninstallSkill } from "../api";
 
 interface UseSkillsResult {
   skills: SkillDescriptor[];
@@ -11,12 +11,16 @@ interface UseSkillsResult {
   installError: string | null;
   install: (url: string) => Promise<SkillInstallResponse>;
   uninstall: (name: string) => Promise<void>;
+  reloading: boolean;
+  reload: () => Promise<void>;
+  toggle: (name: string, enabled: boolean) => Promise<void>;
 }
 
 /**
  * 获取 skill 列表的 React hook。
  * 挂载时自动拉取，提供 refresh() 手动刷新。
  * 提供 install() 和 uninstall() 操作，操作后自动刷新列表。
+ * 提供 reload() 触发后端重新扫描所有 skill 目录并刷新列表。
  */
 export function useSkills(): UseSkillsResult {
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
@@ -24,6 +28,7 @@ export function useSkills(): UseSkillsResult {
   const [error, setError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
+  const [reloading, setReloading] = useState(false);
 
   const loadAsync = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -77,5 +82,27 @@ export function useSkills(): UseSkillsResult {
     }
   }, [loadAsync]);
 
-  return { skills, loading, error, refresh: load, installing, installError, install, uninstall };
+  const reload = useCallback(async (): Promise<void> => {
+    setReloading(true);
+    try {
+      const data = await reloadSkills();
+      setSkills(data);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReloading(false);
+    }
+  }, []);
+
+  const toggle = useCallback(async (name: string, enabled: boolean): Promise<void> => {
+    try {
+      const updated = await toggleSkillApi(name, enabled);
+      setSkills((prev) => prev.map((s) => (s.name === name ? { ...s, enabled: updated.enabled } : s)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  return { skills, loading, error, refresh: load, installing, installError, install, uninstall, reloading, reload, toggle };
 }

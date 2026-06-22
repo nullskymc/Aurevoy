@@ -1,7 +1,9 @@
 import { promises as fs } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
+  ContentBlock,
+  ContentBlockType,
   FileSnapshot,
   Message,
   MessageAttachment,
@@ -22,7 +24,7 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillCatalogMessage, totalTokens } from './context.js';
+import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillCatalogMessage, buildSystemContextMessage, totalTokens } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 
 import { runPlanAgent } from './plan-agent.js';
@@ -682,6 +684,7 @@ export function createTask(
   budget?: TaskBudget,
   projectId?: string,
   attachments?: MessageAttachment[],
+  autoMode?: boolean,
 ): Task {
   const now = new Date().toISOString();
   const parsed = parseSlashCommand(goal);
@@ -710,6 +713,7 @@ export function createTask(
     tokenUsage: { available: false, provider: getProviderName(), model: config.llm.model },
     projectId: projectId ?? undefined,
     planMode: parsed.planRequested ? 'manual' : undefined,
+    autoMode: autoMode ?? undefined,
     createdAt: now,
     updatedAt: now,
   };
@@ -991,6 +995,18 @@ export async function runTask(task: Task): Promise<void> {
         scoutReport: planOutput.scoutReport,
       });
 
+      // 自动模式：跳过计划审批直接执行
+      if (task.autoMode) {
+        task.plan = proposedPlan.map((step, index) => ({
+          ...step,
+          status: index === 0 ? 'running' : 'pending',
+        }));
+        taskEvents.publish({
+          type: 'plan_approval_resolved',
+          taskId: task.id,
+          approved: true,
+        });
+      } else {
       // 等待用户审批
       setRuntimePhase('waiting_approval', '等待审批执行计划…', 'paused');
       const decision = await waitForPlanApproval(task.id, abortController.signal);
@@ -1023,6 +1039,7 @@ export async function runTask(task: Task): Promise<void> {
           approved: false,
           reason: decision.reason,
         });
+      }
       }
     } else {
       // 默认任务：不自动调用 Plan Agent，单步直接进入 Default Agent。
@@ -1180,7 +1197,19 @@ export async function runTask(task: Task): Promise<void> {
       // Skill: 注入 skill catalog（轻量注册表，无状态）
       const toolDescriptors = toolRegistry.list();
       const skillCatalogMessage = buildSkillCatalogMessage();
+
+      // 环境上下文：日期、平台、工作区、配置目录、项目信息（始终注入，放在最前面）
+      const projectInfo = task.projectId
+        ? projectStore.get(task.projectId)
+        : undefined;
+      const envContextMessage = buildSystemContextMessage(
+        taskWorkspace,
+        dirname(config.dbPath),
+        projectInfo ? { name: projectInfo.name, path: projectInfo.path } : undefined,
+      );
+
       const requestMessages = [
+        envContextMessage,
         memoryMessage,
         skillCatalogMessage,
         attachmentSystemMessage,
@@ -1365,9 +1394,10 @@ export async function runTask(task: Task): Promise<void> {
       const toExecute = validatedCalls.filter(
         (v) => !v.skipReason && v.call.toolName !== 'ask_user',
       );
-      // 审批规则：read_file/list_directory/load_skill 免审批；其他工具只允许本对话中已批准的指纹通过。
+      // 审批规则：read_file/list_directory/load_skill 免审批；autoMode 下全部自动批准
       const sessionApprovedApprovalKeys = new Set(task.approvedApprovalKeys ?? []);
       const isAutoApproved = (v: ValidatedCall) =>
+        task.autoMode ||
         isApprovalFreeTool(v.call.toolName) ||
         sessionApprovedApprovalKeys.has(approvalKeyForCall(v.call)) ||
         sessionApprovedApprovalKeys.has(prefixApprovalKeyForCall(v.call));
@@ -1707,6 +1737,32 @@ function handleToolSideEffects(task: Task, call: ToolCall, result: ToolResult): 
       if (artifact) taskEvents.publish({ type: 'artifact_updated', taskId: task.id, artifact });
     }
   }
+  if (call.toolName === 'attach_content') {
+    const blockData = extractContentBlockData(result.output);
+    if (blockData) {
+      const block: ContentBlock = {
+        id: randomUUID(),
+        type: blockData.type,
+        content: blockData.content,
+        name: blockData.name,
+        mimeType: blockData.mimeType,
+        size: blockData.size,
+      };
+      // 找到最近一条 assistant 消息并附加 content block
+      const assistantMsg = [...task.messages].reverse().find(m => m.role === 'assistant');
+      if (assistantMsg) {
+        assistantMsg.contentBlocks = [...(assistantMsg.contentBlocks ?? []), block];
+        taskEvents.publish({
+          type: 'content_blocks_added',
+          taskId: task.id,
+          messageId: assistantMsg.id,
+          blocks: [block],
+        });
+      }
+      return { callId: call.id, ok: true, output: { ok: true, block } };
+    }
+    return { callId: call.id, ok: false, error: 'attach_content 返回格式非法' };
+  }
   return result;
 }
 
@@ -1727,6 +1783,28 @@ function extractArtifactDraft(output: unknown):
     content: record.content,
     type,
     mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
+  };
+}
+
+function extractContentBlockData(output: unknown): {
+  type: ContentBlockType;
+  content: string;
+  name?: string;
+  mimeType?: string;
+  size?: number;
+} | null {
+  if (!output || typeof output !== 'object') return null;
+  const data = (output as { contentBlock?: unknown }).contentBlock;
+  if (!data || typeof data !== 'object') return null;
+  const record = data as Record<string, unknown>;
+  if (typeof record.type !== 'string' || typeof record.content !== 'string') return null;
+  if (!['file_reference', 'image', 'link'].includes(record.type)) return null;
+  return {
+    type: record.type as ContentBlockType,
+    content: record.content,
+    name: typeof record.name === 'string' ? record.name : undefined,
+    mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
+    size: typeof record.size === 'number' ? record.size : undefined,
   };
 }
 

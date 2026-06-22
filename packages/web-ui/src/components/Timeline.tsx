@@ -8,11 +8,13 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type {
+  ContentBlock,
   Message,
   MessageToolCall,
   PlanStep,
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { usePlatform } from "../platform/context";
 import { ThinkingCard } from "./ThinkingTimeline";
 
 /* ============ 类型定义 ============ */
@@ -51,6 +53,7 @@ export interface AgentRoundData {
   summary: string;
   reasoning?: string;
   markdownOutput?: string;
+  contentBlocks?: ContentBlock[];
   status: "pending" | "running" | "completed" | "failed";
 }
 
@@ -253,6 +256,7 @@ export function buildAgentRoundFromMessage(
     summary,
     reasoning: message.reasoningContent,
     markdownOutput: message.content,
+    contentBlocks: message.contentBlocks,
     status: "completed",
   };
 }
@@ -264,8 +268,9 @@ export function buildLiveAgentRoundData(params: {
   output?: string;
   reasoning?: string;
   phase?: string | null;
+  contentBlocks?: ContentBlock[];
 }): AgentRoundData {
-  const { plan, liveToolActivity, output, reasoning, phase } = params;
+  const { plan, liveToolActivity, output, reasoning, phase, contentBlocks } = params;
   const steps: TimelineStepData[] = liveToolActivity.map((act) => {
     const kind = detectStepKind(act.name);
     const args = typeof act.args === "object" && act.args !== null
@@ -322,6 +327,7 @@ export function buildLiveAgentRoundData(params: {
     summary,
     reasoning,
     markdownOutput: output,
+    contentBlocks,
     status: isFailed ? "failed" : steps.some((s) => s.status === "running") ? "running" : "completed",
   };
 }
@@ -514,6 +520,90 @@ function PlanStepGroup({
     </div>
   );
 }
+
+/* ============ 内容块渲染 ============ */
+
+/** Agent 通过 attach_content 工具附加的富内容块。 */
+function ContentBlockView({ block }: { block: ContentBlock }) {
+  const platform = usePlatform();
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  const showFeedback = (msg: string) => {
+    setFeedback(msg);
+    setTimeout(() => setFeedback(null), 2000);
+  };
+
+  switch (block.type) {
+    case "file_reference": {
+      const handleFileClick = async () => {
+        try {
+          if (platform.openFile) {
+            await platform.openFile(block.content);
+            showFeedback("已打开");
+            return;
+          }
+        } catch { /* 平台不支持打开文件，回退到复制路径 */ }
+        try {
+          await navigator.clipboard.writeText(block.content);
+          showFeedback("已复制路径");
+        } catch {
+          showFeedback("无法打开文件");
+        }
+      };
+      return (
+        <div
+          className={`content-block is-file ${feedback ? "is-active" : ""}`}
+          onClick={handleFileClick}
+          title={block.content}
+        >
+          <svg className="content-block-icon" viewBox="0 0 16 16" width="16" height="16" fill="none">
+            <path d="M2 1h7.5L13 4.5V14a1 1 0 01-1 1H2a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.2"/>
+            <path d="M9 1v3.5H12.5" stroke="currentColor" strokeWidth="1.2"/>
+          </svg>
+          <span className="content-block-name">
+            {block.name || block.content.split("/").pop() || block.content}
+          </span>
+          <span className="content-block-path">
+            {feedback || block.content}
+          </span>
+        </div>
+      );
+    }
+    case "image": {
+      const src = platform.filePathToUrl(block.content);
+      if (!src) return null;
+      return (
+        <div className="content-block is-image">
+          <img
+            src={src}
+            alt={block.name || "agent image"}
+            className="content-block-image"
+          />
+          {block.name && <span className="content-block-caption">{block.name}</span>}
+        </div>
+      );
+    }
+    case "link": {
+      return (
+        <a
+          className="content-block is-link"
+          href={block.content}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <svg className="content-block-icon" viewBox="0 0 16 16" width="14" height="14" fill="none">
+            <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1V8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            <path d="M11 1h4v4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            <path d="M15 1L7 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+          </svg>
+          <span>{block.name || block.content}</span>
+        </a>
+      );
+    }
+    default:
+      return null;
+  }
+}
 /* ============ 主组件 ============ */
 
 /**
@@ -596,6 +686,15 @@ export function AgentRound({
             {hasLiveRunning && <span className="stream-caret" aria-hidden="true" />}
           </div>
         </article>
+      )}
+
+      {/* Agent 附加的富内容块（文件引用/图片/超链接） */}
+      {data.contentBlocks && data.contentBlocks.length > 0 && (
+        <div className="content-blocks">
+          {data.contentBlocks.map((block) => (
+            <ContentBlockView key={block.id} block={block} />
+          ))}
+        </div>
       )}
     </div>
   );

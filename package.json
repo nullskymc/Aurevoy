@@ -23,7 +23,6 @@
     "typecheck": "npm run build:shared && npm run build:web-ui && npm run typecheck --workspaces --if-present",
     "clean": "rimraf \"packages/*/dist\" \"apps/*/dist\"",
     "build:web-ui": "npm run build -w @aurevoy/web-ui",
-    "build:android": "bash scripts/sync-android-assets.sh",
     "dev:web": "npm run dev:web -w @aurevoy/web-ui",
     "dev:watch-web-ui": "npm run dev -w @aurevoy/web-ui"
   },

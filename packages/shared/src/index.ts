@@ -66,6 +66,21 @@ export interface MessageAttachment {
   type: 'file' | 'image';
 }
 
+/** Agent 主动发送到对话框的富内容块类型 */
+export type ContentBlockType = 'file_reference' | 'image' | 'link';
+
+/** Agent 主动附加到消息的富内容块，可嵌入对话中呈现为文件引用、图片或超链接。 */
+export interface ContentBlock {
+  id: string;
+  type: ContentBlockType;
+  /** file_reference: 文件路径; image: 图片路径; link: URL */
+  content: string;
+  /** 显示名称（可选） */
+  name?: string;
+  mimeType?: string;
+  size?: number;
+}
+
 /** 一条对话消息 */
 export interface Message {
   id: string;
@@ -80,6 +95,8 @@ export interface Message {
   reasoningContent?: string;
   /** 用户消息携带的文件附件（路径引用）；Agent 据此注入文件上下文 */
   attachments?: MessageAttachment[];
+  /** Agent 主动附加的富内容块（文件引用、图片、超链接），由 attach_content 工具生成 */
+  contentBlocks?: ContentBlock[];
 }
 
 /** 计划中的一个步骤 */
@@ -236,6 +253,8 @@ export interface Task {
   fileSnapshots?: FileSnapshot[];
   /** Plan Agent 触发方式；manual 表示用户通过 /plan 显式请求规划。 */
   planMode?: 'manual';
+  /** 自动模式：Agent 执行所有操作无需用户审批工具和计划 */
+  autoMode?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -451,6 +470,7 @@ export type AgentEvent =
   | { type: 'skill_deactivated'; taskId: string; previousSkill?: string | null }
   | { type: 'skill_installed'; taskId: string; skillNames: string[]; repoUrl: string }
   | { type: 'skill_uninstalled'; taskId: string; skillName: string }
+  | { type: 'content_blocks_added'; taskId: string; messageId: string; blocks: ContentBlock[] }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
   | { type: 'task_deleted'; taskId: string };
@@ -465,6 +485,8 @@ export interface CreateTaskRequest {
   budget?: TaskBudget;
   projectId?: string;
   attachments?: MessageAttachment[];
+  /** 自动模式：Agent 执行所有操作无需用户审批 */
+  autoMode?: boolean;
 }
 
 export interface CreateTaskResponse {
@@ -751,12 +773,16 @@ export interface SkillDescriptor {
   compatibility?: string;
   metadata?: Record<string, string>;
   sourceDir: 'builtin' | 'user' | 'workspace';
+  /** 来源目录名，如 .aurevoy、.claude、.agents、.codex。优先级最高的工作区会附加 "(workspace)"。 */
+  sourcePath: string;
   /** SKILL.md 文件的绝对路径（供模型 file-read 激活用）。 */
   location?: string;
   /** 安装来源 Git 仓库 URL（仅通过 install 安装的 skill）。 */
   installUrl?: string;
   /** 安装时间 ISO 时间戳。 */
   installedAt?: string;
+  /** 是否启用；禁用的 skill 不会出现在 Agent 的 skill catalog 中，也不能被 load_skill 加载。 */
+  enabled: boolean;
 }
 
 /** POST /api/skills/install — 从 Git 仓库安装 skill */

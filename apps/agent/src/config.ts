@@ -109,10 +109,18 @@ export const config = {
     userDir: process.env.AUREVOY_SKILLS_USER_DIR ?? resolveUserSkillsDir(),
     /** 用户级 skill 目录 — .agents/skills（跨客户端标准路径）。 */
     agentsUserDir: process.env.AUREVOY_SKILLS_AGENTS_USER_DIR ?? resolveAgentsUserSkillsDir(),
+    /** 用户级 skill 目录 — .claude/skills（Claude Code/Desktop 路径）。 */
+    claudeUserDir: process.env.AUREVOY_SKILLS_CLAUDE_USER_DIR ?? resolveClaudeUserSkillsDir(),
+    /** 用户级 skill 目录 — .codex/skills（Codex CLI 路径）。 */
+    codexUserDir: process.env.AUREVOY_SKILLS_CODEX_USER_DIR ?? resolveCodexUserSkillsDir(),
     /** 工作区级 skill 子目录名 — .aurevoy/skills（Aurevoy 原生路径）。 */
     workspaceSubDir: process.env.AUREVOY_SKILLS_WORKSPACE_SUBDIR ?? '.aurevoy/skills',
     /** 工作区级 skill 子目录名 — .agents/skills（跨客户端标准路径）。 */
     agentsWorkspaceSubDir: process.env.AUREVOY_SKILLS_AGENTS_WORKSPACE_SUBDIR ?? '.agents/skills',
+    /** 工作区级 skill 子目录名 — .claude/skills（Claude Code 项目级路径）。 */
+    claudeWorkspaceSubDir: process.env.AUREVOY_SKILLS_CLAUDE_WORKSPACE_SUBDIR ?? '.claude/skills',
+    /** 工作区级 skill 子目录名 — .codex/skills（Codex CLI 项目级路径）。 */
+    codexWorkspaceSubDir: process.env.AUREVOY_SKILLS_CODEX_WORKSPACE_SUBDIR ?? '.codex/skills',
     /** 预装 skill 目录（随 Agent 分发，优先级最低，可被用户/工作区覆盖）。 */
     builtinDir: process.env.AUREVOY_SKILLS_BUILTIN_DIR ?? resolveBuiltinSkillsDir(),
   },
@@ -262,6 +270,24 @@ function resolveAgentsUserSkillsDir(): string {
     return resolve(homedir(), '.agents', 'skills');
   } catch {
     return './.agents/skills';
+  }
+}
+
+/** 解析用户级 .claude/skills 目录（Claude Code/Desktop 路径）。 */
+function resolveClaudeUserSkillsDir(): string {
+  try {
+    return resolve(homedir(), '.claude', 'skills');
+  } catch {
+    return './.claude/skills';
+  }
+}
+
+/** 解析用户级 .codex/skills 目录（Codex CLI 路径）。 */
+function resolveCodexUserSkillsDir(): string {
+  try {
+    return resolve(homedir(), '.codex', 'skills');
+  } catch {
+    return './.codex/skills';
   }
 }
 

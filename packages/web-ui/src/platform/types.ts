@@ -14,6 +14,9 @@ export interface PlatformAdapter {
   /** 打开外部链接（默认浏览器/自定义标签页） */
   openExternal?(url: string): void | Promise<void>;
 
+  /** 以系统默认方式打开本地文件路径。浏览器环境会回退到复制路径。 */
+  openFile?(path: string): Promise<void>;
+
   /** 注册原生文件拖拽事件回调，返回取消监听的函数 */
   onFileDrop?(
     callback: (paths: string[]) => void,
@@ -42,4 +45,11 @@ export interface PlatformAdapter {
     error?: string | null;
     message?: string;
   } | null>;
+
+  /**
+   * 设置窗口拖拽区域（桌面壳 Tauri/Electron）。
+   * 将 className 对应的元素设为窗口拖拽手柄，不影响内部按钮的点击交互。
+   * 浏览器环境无需实现。
+   */
+  setupWindowDrag?(dragSelector: string, noDragSelector?: string): void;
 }

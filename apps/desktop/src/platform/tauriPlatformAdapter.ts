@@ -13,6 +13,23 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
  * - 外部链接：@tauri-apps/plugin-opener（动态 import）
  */
 export const tauriPlatformAdapter: PlatformAdapter = {
+  setupWindowDrag(dragSelector: string, noDragSelector = 'button, input, select, textarea'): void {
+    const win = getCurrentWindow();
+    const el = document.querySelector<HTMLElement>(dragSelector);
+    if (!el) return;
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return; // 仅左键拖动
+      const target = e.target as HTMLElement;
+      if (target.closest(noDragSelector)) return; // 交互元素不触发拖动
+      // macOS 要求 startDragging() 在 mousedown 同步调用，
+      // 且不能阻止默认事件，否则 native drag 无法获取位置
+      win.startDragging();
+    };
+
+    el.addEventListener('mousedown', onMouseDown);
+    // 平台适配器不负责清理（App 生命周期内常驻）
+  },
   filePathToUrl(filePath: string): string | null {
     try {
       return convertFileSrc(filePath);
@@ -24,6 +41,11 @@ export const tauriPlatformAdapter: PlatformAdapter = {
   async openExternal(url: string): Promise<void> {
     const { openUrl } = await import('@tauri-apps/plugin-opener');
     await openUrl(url);
+  },
+
+  async openFile(path: string): Promise<void> {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl(`file://${encodeURI(path)}`);
   },
 
   onFileDrop(callback: (paths: string[]) => void): (() => void) {

@@ -48,10 +48,28 @@ export function isInsideExternalPath(target: string, externalPaths?: string[]): 
 /** Agent 数据目录（skills/config/logs 等）始终可访问，不受工作区沙盒限制。 */
 function getTrustedDirs(): string[] {
   const home = homedir();
-  return [
+  const dirs = [
     resolve(home, '.aurevoy'),
     resolve(home, '.agents'),
+    resolve(home, '.claude'),
+    resolve(home, '.codex'),
   ];
+  // 内置 skill 目录（随 Agent 分发，可能不在工作区内）
+  try {
+    dirs.push(resolve(config.skills.builtinDir));
+  } catch { /* 忽略 */ }
+  // 工作区级 skill 子目录
+  try {
+    for (const sub of [
+      config.skills.workspaceSubDir,
+      config.skills.agentsWorkspaceSubDir,
+      config.skills.claudeWorkspaceSubDir,
+      config.skills.codexWorkspaceSubDir,
+    ]) {
+      dirs.push(resolve(config.workspaceDir, sub));
+    }
+  } catch { /* 忽略 */ }
+  return dirs;
 }
 
 function isInsideTrustedDir(target: string): boolean {
@@ -870,6 +888,46 @@ toolRegistry.register({
     await assertRealPathInside(file, root, extPaths);
     await fs.writeFile(file, artifact.content, 'utf8');
     return { artifactId, path: relative(root, file), bytesWritten: Buffer.byteLength(artifact.content) };
+  },
+});
+
+// ---- attach_content（safe：Agent 在对话框中附加文件引用/图片/超链接）----
+toolRegistry.register({
+  descriptor: {
+    name: 'attach_content',
+    description: '在对话中附加文件引用、图片或超链接，使用户可以直观地访问文件或查看内容。通过此工具向用户展示文件位置、显示图片或提供重要链接。附加的内容会内联显示在对话消息中。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['file_reference', 'image', 'link'],
+          description: '内容类型：file_reference 文件路径引用 / image 内联显示图片 / link 超链接',
+        },
+        content: { type: 'string', description: '文件路径、图片路径或 URL' },
+        name: { type: 'string', description: '显示名称（可选，缺省用文件名或 URL）' },
+        mimeType: { type: 'string', description: 'MIME 类型（可选，自动推断时可不传）' },
+        size: { type: 'number', description: '文件大小（可选，仅文件引用类型建议传）' },
+      },
+      required: ['type', 'content'],
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+  },
+  async execute(args) {
+    const type = args.type as string;
+    if (!['file_reference', 'image', 'link'].includes(type)) {
+      return { ok: false, error: `不支持的内容类型: ${type}` };
+    }
+    return {
+      contentBlock: {
+        type,
+        content: String(args.content),
+        name: typeof args.name === 'string' ? args.name : undefined,
+        mimeType: typeof args.mimeType === 'string' ? args.mimeType : undefined,
+        size: typeof args.size === 'number' ? args.size : undefined,
+      },
+    };
   },
 });
 

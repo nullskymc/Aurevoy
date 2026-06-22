@@ -34,17 +34,9 @@ logs/
 .vscode/*
 !.vscode/extensions.json
 
-# Android
-apps/android/.gradle/
-apps/android/local.properties
-apps/android/app/build/
-apps/android/gradle/wrapper/gradle-wrapper.jar
-
 # web-ui standalone build
 packages/web-ui/dist-web/
 packages/web-ui/dist/
 
-# Build temp (downloaded SDK/Gradle)
-/tmp/android-sdk/
-/tmp/gradle-*/
-/tmp/cmdline*
+# Personal blog / social media posts
+blog/

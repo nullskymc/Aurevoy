@@ -41,12 +41,30 @@ import {
 
 /** Agent 引擎地址。优先级：localStorage > 运行时注入 > Vite 环境变量 > 默认值 */
 const AGENT_URL_STORAGE_KEY = 'aurevoy.agentBaseUrl';
-const BASE_URL =
-  (typeof window !== 'undefined' && window.localStorage.getItem(AGENT_URL_STORAGE_KEY)) ??
-  (typeof globalThis !== 'undefined' &&
-    (globalThis as unknown as Record<string, string | undefined>).__AUREVOY_AGENT_BASE_URL__) ??
-  (import.meta.env.VITE_AGENT_BASE_URL as string | undefined) ??
-  AGENT_DEFAULT_BASE_URL;
+
+function resolveBaseUrl(): string {
+  return (
+    (typeof window !== 'undefined' ? window.localStorage.getItem(AGENT_URL_STORAGE_KEY) : null) ??
+    (typeof globalThis !== 'undefined'
+      ? (globalThis as unknown as Record<string, string | undefined>).__AUREVOY_AGENT_BASE_URL__
+      : null) ??
+    (import.meta.env.VITE_AGENT_BASE_URL as string | undefined) ??
+    AGENT_DEFAULT_BASE_URL
+  );
+}
+
+let BASE_URL = resolveBaseUrl();
+
+export function getBaseUrl(): string {
+  return BASE_URL;
+}
+
+export function setBaseUrl(url: string): void {
+  BASE_URL = url.replace(/\/+$/, '');
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(AGENT_URL_STORAGE_KEY, BASE_URL);
+  }
+}
 
 export async function checkHealth(): Promise<HealthResponse> {
   const res = await fetch(`${BASE_URL}/api/health`);
@@ -58,11 +76,12 @@ export async function createTask(
   goal: string,
   projectId?: string,
   attachments?: MessageAttachment[],
+  autoMode?: boolean,
 ): Promise<CreateTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal, projectId, attachments }),
+    body: JSON.stringify({ goal, projectId, attachments, autoMode }),
   });
   if (!res.ok) throw new Error(`create task failed: ${res.status}`);
   return res.json();
@@ -231,6 +250,26 @@ export async function listTools(): Promise<ToolDescriptor[]> {
 export async function fetchSkills(): Promise<SkillDescriptor[]> {
   const res = await fetch(`${BASE_URL}/api/skills`);
   if (!res.ok) return [];
+  const data = (await res.json()) as { skills: SkillDescriptor[] };
+  return data.skills ?? [];
+}
+
+export async function toggleSkill(name: string, enabled: boolean): Promise<SkillDescriptor> {
+  const res = await fetch(`${BASE_URL}/api/skills/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `toggle skill failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function reloadSkills(): Promise<SkillDescriptor[]> {
+  const res = await fetch(`${BASE_URL}/api/skills/reload`, { method: 'POST' });
+  if (!res.ok) throw new Error(`reload skills failed: ${res.status}`);
   const data = (await res.json()) as { skills: SkillDescriptor[] };
   return data.skills ?? [];
 }

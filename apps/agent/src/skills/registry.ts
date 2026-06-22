@@ -5,7 +5,7 @@
  * 激活时懒加载 SKILL.md body + 附属资源（Tier 2）。
  *
  * 工作区 skill 优先级高于全局 skill（同名时工作区覆盖）。
- * 支持 .aurevoy/skills/ 和 .agents/skills/ 两个发现路径。
+ * 支持 .aurevoy/skills/、.agents/skills/、.claude/skills/ 和 .codex/skills/ 四个发现路径。
  */
 
 import type { SkillCatalogEntry, SkillContent } from './types.js';
@@ -14,6 +14,7 @@ import { discoverSkills, loadSkillContent } from './loader.js';
 import { config } from '../config.js';
 import { getLogger } from '../logging/logger.js';
 import { resolve } from 'node:path';
+import { skillSettingsStore } from '../store/db.js';
 
 class SkillRegistry {
   private catalog = new Map<string, SkillCatalogEntry>();
@@ -31,11 +32,15 @@ class SkillRegistry {
     const userDirs = [
       resolve(config.skills.userDir),
       resolve(config.skills.agentsUserDir),
+      resolve(config.skills.claudeUserDir),
+      resolve(config.skills.codexUserDir),
     ];
 
     const workspaceDirs = [
       resolve(config.workspaceDir, config.skills.workspaceSubDir),
       resolve(config.workspaceDir, config.skills.agentsWorkspaceSubDir),
+      resolve(config.workspaceDir, config.skills.claudeWorkspaceSubDir),
+      resolve(config.workspaceDir, config.skills.codexWorkspaceSubDir),
     ];
 
     log.info({ builtinDir, userDirs, workspaceDirs }, '发现 skill 文件...');
@@ -104,21 +109,50 @@ class SkillRegistry {
   /** 列出所有 skill 的摘要信息（供前端 API + 模型 catalog 使用）。 */
   listAll(): SkillDescriptor[] {
     return [...this.catalog.values()]
-      .map((s) => ({
-        name: s.frontmatter.name,
-        description: s.frontmatter.description,
-        allowedTools: s.frontmatter['allowed-tools'],
-        license: s.frontmatter.license,
-        compatibility: s.frontmatter.compatibility,
-        metadata: s.frontmatter.metadata,
-        sourceDir: s.sourceDir,
-        location: s.location,
-        installUrl: s.installUrl,
-        installedAt: s.installedAt,
-      }))
+      .map((s) => {
+        const stored = skillSettingsStore.isEnabled(s.frontmatter.name);
+        const sourcePath = deriveSourcePath(s.location || s.skillDir);
+        return {
+          name: s.frontmatter.name,
+          description: s.frontmatter.description,
+          allowedTools: s.frontmatter['allowed-tools'],
+          license: s.frontmatter.license,
+          compatibility: s.frontmatter.compatibility,
+          metadata: s.frontmatter.metadata,
+          sourceDir: s.sourceDir,
+          sourcePath,
+          location: s.location,
+          installUrl: s.installUrl,
+          installedAt: s.installedAt,
+          // 未显式设置的：.aurevoy 路径默认启用，其他默认禁用
+          enabled: stored !== null ? stored : sourcePath === '.aurevoy',
+        };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** 判断 skill 是否启用。未设置的 skill 根据来源目录决定默认值。 */
+  isEnabled(name: string): boolean {
+    const stored = skillSettingsStore.isEnabled(name);
+    if (stored !== null) return stored;
+    const entry = this.catalog.get(name);
+    if (!entry) return false;
+    const sourcePath = deriveSourcePath(entry.location || entry.skillDir);
+    return sourcePath === '.aurevoy';
   }
 
 }
 
 export const skillRegistry = new SkillRegistry();
+
+/** 从 skill 的路径中提取来源目录名（.aurevoy / .claude / .agents / .codex / builtin）。 */
+function deriveSourcePath(path: string): string {
+  const known = ['.aurevoy', '.claude', '.agents', '.codex'];
+  for (const dir of known) {
+    if (path.includes(`/${dir}/`)) return dir;
+  }
+  if (path.includes('/builtin/')) return 'builtin';
+  // 工作区 skill 可能通过 workspaceSubDir 发现，尝试匹配
+  if (path.includes('/workspace/')) return 'workspace';
+  return 'other';
+}

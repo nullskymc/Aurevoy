@@ -7,6 +7,7 @@ import type {
   RuntimeSettings,
 } from "@aurevoy/shared";
 import { t, type Locale } from "../i18n";
+import { setBaseUrl } from "../api";
 
 interface SettingsDraft {
   baseUrl: string;
@@ -47,6 +48,7 @@ interface SettingsPanelProps {
   onToggleMemory: (id: string, enabled: boolean) => void;
   onEditMemory: (id: string, content: string, category: MemoryCategory) => void;
   onDeleteMemory: (id: string) => void;
+  onConnectionChange?: () => void;
 }
 
 type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory";
@@ -112,6 +114,7 @@ export function SettingsPanel({
   onToggleMemory,
   onEditMemory,
   onDeleteMemory,
+  onConnectionChange,
 }: SettingsPanelProps) {
   const safeInitialSection = normalizeSettingsSection(initialSection);
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(safeInitialSection);
@@ -200,6 +203,7 @@ export function SettingsPanel({
               onDraftChange={setDraft}
               onWorkModeChange={onWorkModeChange}
               onSave={onSave}
+              onConnectionChange={onConnectionChange}
             />
           )}
 
@@ -350,6 +354,7 @@ function GeneralSettings({
   onDraftChange,
   onWorkModeChange,
   onSave,
+  onConnectionChange,
 }: {
   draft: SettingsDraft;
   dataStatus: DataStatusResponse | null;
@@ -359,10 +364,30 @@ function GeneralSettings({
   onDraftChange: (draft: SettingsDraft) => void;
   onWorkModeChange: (mode: WorkMode) => void;
   onSave: (draft: SettingsDraft) => void;
+  onConnectionChange?: () => void;
 }) {
   const [agentUrl, setAgentUrl] = useState<string>(
     typeof window !== "undefined" ? window.localStorage.getItem("aurevoy.agentBaseUrl") ?? "" : ""
   );
+  const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+
+  async function testAndConnect() {
+    const url = agentUrl.replace(/\/+$/, '');
+    if (!url) return;
+    setTestState('testing');
+    try {
+      const res = await fetch(`${url}/api/health`);
+      if (res.ok) {
+        setTestState('ok');
+        setBaseUrl(url);
+        onConnectionChange?.();
+      } else {
+        setTestState('fail');
+      }
+    } catch {
+      setTestState('fail');
+    }
+  }
 
   return (
     <>
@@ -456,14 +481,22 @@ function GeneralSettings({
                 type="url"
                 placeholder={t("settings.agentServerUrlPlaceholder")}
                 value={agentUrl}
-                onChange={(e) => setAgentUrl(e.currentTarget.value)}
-                onBlur={() => {
-                  if (agentUrl && agentUrl !== localStorage.getItem("aurevoy.agentBaseUrl")) {
-                    localStorage.setItem("aurevoy.agentBaseUrl", agentUrl);
-                    window.location.reload();
-                  }
-                }}
+                onChange={(e) => { setAgentUrl(e.currentTarget.value); setTestState('idle'); }}
               />
+              <button
+                type="button"
+                className="settings-inline-btn"
+                disabled={!agentUrl.trim() || testState === 'testing'}
+                onClick={testAndConnect}
+              >
+                {testState === 'testing'
+                  ? t("settings.testing")
+                  : testState === 'ok'
+                    ? t("settings.connectionSuccess")
+                    : testState === 'fail'
+                      ? t("settings.connectionFailed")
+                      : t("settings.testConnection")}
+              </button>
             </div>
           }
         />
