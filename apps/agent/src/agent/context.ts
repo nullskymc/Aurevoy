@@ -554,3 +554,45 @@ export function buildMemorySystemMessage(
     createdAt: new Date().toISOString(),
   };
 }
+
+/**
+ * 构建环境上下文系统消息（始终注入）。
+ *
+ * 提供模型感知世界所必需的基础信息：
+ * - 当前日期/时间（让模型知道"今天"）
+ * - 操作系统与平台（让命令决策有平台意识）
+ * - 工作区目录（让模型知道文件系统的锚点）
+ * - 项目名称/路径（让模型知道自己在做什么项目）
+ */
+export function buildSystemContextMessage(
+  workspaceDir: string,
+  projectInfo?: { name: string; path: string },
+): Message {
+  const now = new Date();
+  const timeStr = now.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  const lines: string[] = [];
+  lines.push('<system_context>');
+  lines.push(`Today: ${timeStr}`);
+  lines.push(`Platform: ${process.platform} ${process.arch}`);
+  lines.push(`Shell: ${process.env.SHELL ?? 'unknown'}`);
+  lines.push('');
+  lines.push(`Workspace: ${workspaceDir}`);
+  if (projectInfo) {
+    lines.push(`Project: ${projectInfo.name}`);
+    lines.push(`Project path: ${projectInfo.path}`);
+  }
+  lines.push('</system_context>');
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content: lines.join('\n'),
+    createdAt: now.toISOString(),
+  };
+}

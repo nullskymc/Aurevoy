@@ -113,6 +113,7 @@ async function runScoutPhase(
       content:
         '你是 Aurevoy 的侦查 Agent。你的任务是快速了解工作区的文件结构和关键信息，' +
         '为后续的任务规划提供依据。\n\n' +
+        `当前环境：${process.platform} ${process.arch}，工作区：${workspaceDir}\n\n` +
         '约束：\n' +
         '- 只能使用 list_directory、read_file、search_files 工具\n' +
         '- 不要修改任何文件，不要执行命令\n' +
@@ -282,6 +283,8 @@ async function generatePlanViaLLM(
       role: 'system',
       content:
         '你是 Aurevoy 的任务规划器。根据用户目标和侦查报告，将任务分解为 2-8 个有序执行步骤。\n\n' +
+        `当前环境：${process.platform} ${process.arch}\n` +
+        `当前日期：${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n\n` +
         '输出要求：\n' +
         '- 严格输出 JSON，不要加任何前缀或后缀文字\n' +
         '- 每个步骤描述清晰、可独立验证\n' +

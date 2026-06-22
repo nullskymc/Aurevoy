@@ -22,7 +22,7 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillCatalogMessage, totalTokens } from './context.js';
+import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillCatalogMessage, buildSystemContextMessage, totalTokens } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 
 import { runPlanAgent } from './plan-agent.js';
@@ -1180,7 +1180,18 @@ export async function runTask(task: Task): Promise<void> {
       // Skill: 注入 skill catalog（轻量注册表，无状态）
       const toolDescriptors = toolRegistry.list();
       const skillCatalogMessage = buildSkillCatalogMessage();
+
+      // 环境上下文：日期、平台、工作区、项目信息（始终注入，放在最前面）
+      const projectInfo = task.projectId
+        ? projectStore.get(task.projectId)
+        : undefined;
+      const envContextMessage = buildSystemContextMessage(
+        taskWorkspace,
+        projectInfo ? { name: projectInfo.name, path: projectInfo.path } : undefined,
+      );
+
       const requestMessages = [
+        envContextMessage,
         memoryMessage,
         skillCatalogMessage,
         attachmentSystemMessage,

@@ -56,6 +56,8 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
       role: 'system',
       content:
         '你是 Aurevoy 的子代理。你的任务是完成主代理委托给你的子任务。\n\n' +
+        `当前环境：${process.platform} ${process.arch}，工作区：${subTask.workspaceDir}\n` +
+        `当前日期：${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n\n` +
         '约束：\n' +
         '- 只能使用提供的只读工具\n' +
         '- 不要修改任何文件\n' +
