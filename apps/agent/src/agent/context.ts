@@ -10,13 +10,12 @@ import { skillRegistry } from '../skills/registry.js';
  * 当无可用 skill 时返回 null（标准要求不展示空 catalog）。
  */
 export function buildSkillCatalogMessage(): Message | null {
-  const descriptors = skillRegistry.listAll();
+  const all = skillRegistry.listAll();
+  const descriptors = all.filter((s) => s.enabled);
   if (descriptors.length === 0) return null;
 
   const catalogLines = descriptors.map((s) => {
-    let line = `- **${s.name}**: ${s.description}`;
-    if (s.location) line += ` (location: ${s.location})`;
-    return line;
+    return `- **${s.name}**: ${s.description}`;
   }).join('\n');
 
   const content =
@@ -559,13 +558,15 @@ export function buildMemorySystemMessage(
  * 构建环境上下文系统消息（始终注入）。
  *
  * 提供模型感知世界所必需的基础信息：
- * - 当前日期/时间（让模型知道"今天"）
- * - 操作系统与平台（让命令决策有平台意识）
- * - 工作区目录（让模型知道文件系统的锚点）
- * - 项目名称/路径（让模型知道自己在做什么项目）
+ * - 当前日期/时间
+ * - 操作系统与平台
+ * - 工作区目录（文件沙箱边界）
+ * - Aurevoy 配置目录（skills / DB / 设置所在）
+ * - 项目名称/路径
  */
 export function buildSystemContextMessage(
   workspaceDir: string,
+  configDir?: string,
   projectInfo?: { name: string; path: string },
 ): Message {
   const now = new Date();
@@ -578,11 +579,13 @@ export function buildSystemContextMessage(
 
   const lines: string[] = [];
   lines.push('<system_context>');
+  lines.push(`Current time: ${now.toISOString()}`);
   lines.push(`Today: ${timeStr}`);
   lines.push(`Platform: ${process.platform} ${process.arch}`);
   lines.push(`Shell: ${process.env.SHELL ?? 'unknown'}`);
   lines.push('');
   lines.push(`Workspace: ${workspaceDir}`);
+  if (configDir) lines.push(`Config dir: ${configDir}`);
   if (projectInfo) {
     lines.push(`Project: ${projectInfo.name}`);
     lines.push(`Project path: ${projectInfo.path}`);

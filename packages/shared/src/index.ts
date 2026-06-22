@@ -751,12 +751,16 @@ export interface SkillDescriptor {
   compatibility?: string;
   metadata?: Record<string, string>;
   sourceDir: 'builtin' | 'user' | 'workspace';
+  /** 来源目录名，如 .aurevoy、.claude、.agents、.codex。优先级最高的工作区会附加 "(workspace)"。 */
+  sourcePath: string;
   /** SKILL.md 文件的绝对路径（供模型 file-read 激活用）。 */
   location?: string;
   /** 安装来源 Git 仓库 URL（仅通过 install 安装的 skill）。 */
   installUrl?: string;
   /** 安装时间 ISO 时间戳。 */
   installedAt?: string;
+  /** 是否启用；禁用的 skill 不会出现在 Agent 的 skill catalog 中，也不能被 load_skill 加载。 */
+  enabled: boolean;
 }
 
 /** POST /api/skills/install — 从 Git 仓库安装 skill */

@@ -253,6 +253,26 @@ export async function fetchSkills(): Promise<SkillDescriptor[]> {
   return data.skills ?? [];
 }
 
+export async function toggleSkill(name: string, enabled: boolean): Promise<SkillDescriptor> {
+  const res = await fetch(`${BASE_URL}/api/skills/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `toggle skill failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function reloadSkills(): Promise<SkillDescriptor[]> {
+  const res = await fetch(`${BASE_URL}/api/skills/reload`, { method: 'POST' });
+  if (!res.ok) throw new Error(`reload skills failed: ${res.status}`);
+  const data = (await res.json()) as { skills: SkillDescriptor[] };
+  return data.skills ?? [];
+}
+
 export async function installSkill(repoUrl: string): Promise<SkillInstallResponse> {
   const res = await fetch(`${BASE_URL}/api/skills/install`, {
     method: 'POST',

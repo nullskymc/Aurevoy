@@ -42,4 +42,11 @@ export interface PlatformAdapter {
     error?: string | null;
     message?: string;
   } | null>;
+
+  /**
+   * 设置窗口拖拽区域（桌面壳 Tauri/Electron）。
+   * 将 className 对应的元素设为窗口拖拽手柄，不影响内部按钮的点击交互。
+   * 浏览器环境无需实现。
+   */
+  setupWindowDrag?(dragSelector: string, noDragSelector?: string): void;
 }

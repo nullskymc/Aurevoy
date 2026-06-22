@@ -15,15 +15,18 @@ import { skillRegistry } from '../skills/registry.js';
 import { getLogger } from '../logging/logger.js';
 
 export function registerLoadSkillTool(): void {
-  const availableNames = skillRegistry.list();
+  const allDescriptors = skillRegistry.listAll();
+  const enabledDescriptors = allDescriptors.filter((s) => s.enabled);
 
-  if (availableNames.length === 0) {
+  if (enabledDescriptors.length === 0) {
     return;
   }
 
-  const catalogLines = skillRegistry.listAll().map((s) =>
+  const catalogLines = enabledDescriptors.map((s) =>
     `- ${s.name}: ${s.description}`,
   ).join('\n');
+
+  const enabledNames = enabledDescriptors.map((s) => s.name);
 
   toolRegistry.register({
     descriptor: {
@@ -38,7 +41,7 @@ export function registerLoadSkillTool(): void {
           name: {
             type: 'string',
             description: '要加载的技能名称。',
-            enum: availableNames,
+            enum: enabledNames,
           },
         },
         required: ['name'],
@@ -67,6 +70,12 @@ export function registerLoadSkillTool(): void {
         return {
           error: `未知技能 "${name}"。可用技能：${available}`,
           availableSkills: skillRegistry.list(),
+        };
+      }
+
+      if (!skillRegistry.isEnabled(name)) {
+        return {
+          error: `技能 "${name}" 已被禁用，无法加载。请先在设置中启用。`,
         };
       }
 

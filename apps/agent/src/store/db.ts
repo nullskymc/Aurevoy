@@ -95,6 +95,12 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS skill_settings (
+    name       TEXT PRIMARY KEY,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS projects (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
@@ -647,6 +653,37 @@ function rowToProject(row: ProjectRow): Project {
     updatedAt: row.updated_at,
   };
 }
+
+export const skillSettingsStore = {
+  setEnabled(name: string, enabled: boolean): void {
+    db.prepare(
+      `INSERT INTO skill_settings (name, enabled, updated_at)
+       VALUES (@name, @enabled, @updatedAt)
+       ON CONFLICT(name) DO UPDATE SET
+         enabled=excluded.enabled,
+         updated_at=excluded.updated_at`,
+    ).run({
+      name,
+      enabled: enabled ? 1 : 0,
+      updatedAt: new Date().toISOString(),
+    });
+  },
+
+  isEnabled(name: string): boolean | null {
+    const row = db.prepare(
+      'SELECT enabled FROM skill_settings WHERE name = ?',
+    ).get(name) as { enabled: number } | undefined;
+    return row ? row.enabled === 1 : null; // null = 未设置，由上层决定默认值
+  },
+
+  list(): Map<string, boolean> {
+    const rows = db.prepare('SELECT name, enabled FROM skill_settings').all() as Array<{
+      name: string;
+      enabled: number;
+    }>;
+    return new Map(rows.map((row) => [row.name, row.enabled === 1]));
+  },
+};
 
 export const projectStore = {
   create(project: Project): Project {

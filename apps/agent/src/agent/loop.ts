@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
   FileSnapshot,
@@ -1181,12 +1181,13 @@ export async function runTask(task: Task): Promise<void> {
       const toolDescriptors = toolRegistry.list();
       const skillCatalogMessage = buildSkillCatalogMessage();
 
-      // 环境上下文：日期、平台、工作区、项目信息（始终注入，放在最前面）
+      // 环境上下文：日期、平台、工作区、配置目录、项目信息（始终注入，放在最前面）
       const projectInfo = task.projectId
         ? projectStore.get(task.projectId)
         : undefined;
       const envContextMessage = buildSystemContextMessage(
         taskWorkspace,
+        dirname(config.dbPath),
         projectInfo ? { name: projectInfo.name, path: projectInfo.path } : undefined,
       );
 

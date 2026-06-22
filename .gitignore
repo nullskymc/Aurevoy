@@ -37,3 +37,6 @@ logs/
 # web-ui standalone build
 packages/web-ui/dist-web/
 packages/web-ui/dist/
+
+# Personal blog / social media posts
+blog/

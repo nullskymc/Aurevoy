@@ -71,7 +71,7 @@ import { getPhaseLabel, getStatusLabel } from "./components/status";
 import { setLocale, t, type Locale } from "./i18n";
 import "./App.css";
 
-type MainView = "chat" | "search" | "tools" | "settings";
+type MainView = "chat" | "search" | "skills" | "settings";
 type ContentMode = "conversation" | "artifacts";
 type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory";
 type ThemeMode = "system" | "light" | "dark";
@@ -207,6 +207,9 @@ function mergeById<T extends { id: string }>(items: T[], next: T): T[] {
 
 function App() {
   const platform = usePlatform();
+  useEffect(() => {
+    platform.setupWindowDrag?.(".topbar");
+  }, [platform]);
   const [activeView, setActiveView] = useState<MainView>("chat");
   const [contentMode, setContentMode] = useState<ContentMode>("conversation");
   const [events, setEvents] = useState<FeedItem[]>([]);
@@ -280,7 +283,7 @@ function App() {
   } = useSettings();
   const { projects, setProjects } = useProjects();
   const { memories, setMemories } = useMemories();
-  const { skills, refresh: refreshSkills, installing, installError, install, uninstall } = useSkills();
+  const { skills, refresh: refreshSkills, installing, installError, install, reloading, reload, toggle } = useSkills();
   const { mergeArtifact } = useArtifacts(setCurrentTask, updateTaskList);
 
   const [draftProjectId, setDraftProjectId] = useState<string | undefined>();
@@ -1085,9 +1088,9 @@ function App() {
     setInspectorOpen(false);
   }
 
-  function handleOpenTools(): void {
+  function handleOpenSkills(): void {
     setModelDrawerOpen(false);
-    setActiveView("tools");
+    setActiveView("skills");
     setInspectorOpen(false);
     void refreshRuntime();
   }
@@ -1337,7 +1340,7 @@ function App() {
         onSelectTask={handleSelectTask}
         onSelectProject={setDraftProjectId}
         onOpenSearch={handleOpenSearch}
-        onOpenTools={handleOpenTools}
+        onOpenSkills={handleOpenSkills}
         onOpenSettings={handleOpenSettings}
         onImportProject={handleImportProject}
         onDeleteProject={handleDeleteProject}
@@ -1352,7 +1355,7 @@ function App() {
       />
 
       <main className="main">
-        <header className="topbar">
+        <header className="topbar" data-tauri-drag-region>
           <div className="topbar-left-tools">
             <button
               type="button"
@@ -1442,13 +1445,15 @@ function App() {
             onQueryChange={setSearchQuery}
             onSelectTask={handleSelectTask}
           />
-        ) : activeView === "tools" ? (
+        ) : activeView === "skills" ? (
           <SkillsPage
             skills={skills}
             installing={installing}
             installError={installError}
+            reloading={reloading}
             onInstall={install}
-            onUninstall={uninstall}
+            onReload={reload}
+            onToggle={toggle}
           />
         ) : activeView === "settings" ? (
           <SettingsPanel
@@ -1643,7 +1648,7 @@ function SidebarIcon({ collapsed }: { collapsed: boolean }) {
 
 function getMainViewTitle(view: MainView): string {
   if (view === "search") return t("nav.search");
-  if (view === "tools") return t("nav.skills");
+  if (view === "skills") return t("nav.skills");
   if (view === "settings") return t("nav.settings");
   return t("mode.conversation");
 }
@@ -1694,18 +1699,31 @@ function SkillsPage({
   skills,
   installing,
   installError,
+  reloading,
   onInstall,
-  onUninstall,
+  onReload,
+  onToggle,
 }: {
   skills: SkillDescriptor[];
   installing: boolean;
   installError: string | null;
+  reloading: boolean;
   onInstall: (url: string) => Promise<SkillInstallResponse>;
-  onUninstall: (name: string) => Promise<void>;
+  onReload: () => Promise<void>;
+  onToggle: (name: string, enabled: boolean) => Promise<void>;
 }) {
   const [url, setUrl] = useState("");
+  const [query, setQuery] = useState("");
   const [lastResult, setLastResult] = useState<SkillInstallResponse | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [installOpen, setInstallOpen] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set(["workspace", "user"]));
+
+  const filtered = query.trim()
+    ? skills.filter((s) => {
+        const q = query.toLowerCase();
+        return s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q);
+      })
+    : skills;
 
   async function handleInstall() {
     const trimmed = url.trim();
@@ -1714,104 +1732,171 @@ function SkillsPage({
       const result = await onInstall(trimmed);
       setLastResult(result);
       setUrl("");
+      setInstallOpen(false);
     } catch {
       /* error shown via installError prop */
     }
   }
 
-  async function handleUninstall(name: string) {
-    if (confirmDelete !== name) {
-      setConfirmDelete(name);
-      return;
-    }
-    setConfirmDelete(null);
-    try {
-      await onUninstall(name);
-    } catch {
-      /* error shown via installError prop */
-    }
+  function toggleGroup(id: string) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
+
+  // Group skills by source directory
+  const groups = useMemo(() => {
+    const map = new Map<string, SkillDescriptor[]>();
+    for (const skill of filtered) {
+      const key = skill.sourceDir;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(skill);
+    }
+    // Sort groups by priority: workspace first, then user, then builtin
+    const order = ["workspace", "user", "builtin"];
+    const result: Array<{ key: string; labelKey: string; skills: SkillDescriptor[] }> = [];
+    for (const key of order) {
+      const items = map.get(key);
+      if (items) {
+        result.push({ key, labelKey: `skillsPage.group.${key}`, skills: items });
+        map.delete(key);
+      }
+    }
+    // Any remaining (future source types)
+    for (const [key, items] of map) {
+      result.push({ key, labelKey: "skillsPage.group.other", skills: items });
+    }
+    return result;
+  }, [filtered]);
 
   return (
     <section className="page-panel">
-      <div className="skill-install-bar">
+      <header className="skills-page-header">
+        <div>
+          <h1>{t("nav.skills")}</h1>
+          <p className="skills-page-summary">{skills.length} skills</p>
+        </div>
+        <div className="skills-page-actions">
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={onReload}
+            disabled={reloading}
+            title={t("skillsPage.reload")}
+          >
+            {reloading ? t("skillsPage.reloading") : t("skillsPage.reload")}
+          </button>
+          {lastResult && !installError && (
+            <span className="skill-install-success">
+              {t("skillsPage.reloadSuccess")} ({(lastResult as SkillInstallResponse).installedSkills?.length ?? skills.length})
+            </span>
+          )}
+        </div>
+      </header>
+
+      <div className="skills-search-bar">
         <input
           type="text"
-          value={url}
-          onChange={(e) => {
-            setUrl(e.target.value);
-            setLastResult(null);
-          }}
-          placeholder={t("skillsPage.installPlaceholder")}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleInstall();
-          }}
-          disabled={installing}
+          className="skills-search-input"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("skillsPage.search")}
         />
         <button
           type="button"
-          className="btn-primary"
-          onClick={handleInstall}
-          disabled={installing || !url.trim()}
+          className="ghost-btn"
+          onClick={() => setInstallOpen(!installOpen)}
         >
-          {installing ? t("skillsPage.installing") : t("skillsPage.install")}
+          {installOpen ? t("skillsPage.installHide") : t("skillsPage.installShow")}
         </button>
       </div>
-      {installError && (
-        <p className="skill-install-error">{t("skillsPage.installFailed")}{installError}</p>
+
+      {installOpen && (
+        <div className="skills-install-area">
+          <div className="skills-install-row">
+            <input
+              type="text"
+              value={url}
+              onChange={(e) => {
+                setUrl(e.target.value);
+                setLastResult(null);
+              }}
+              placeholder={t("skillsPage.installPlaceholder")}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleInstall();
+              }}
+              disabled={installing}
+            />
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleInstall}
+              disabled={installing || !url.trim()}
+            >
+              {installing ? t("skillsPage.installing") : t("skillsPage.install")}
+            </button>
+          </div>
+          {installError && (
+            <p className="skill-install-error">{t("skillsPage.installFailed")}{installError}</p>
+          )}
+        </div>
       )}
-      {lastResult && !installError && (
-        <p className="skill-install-success">
-          {t("skillsPage.installSuccess")}{lastResult.installedSkills.join(", ")}
-        </p>
-      )}
-      <div className="skill-page-grid">
-        {skills.length === 0 ? (
-          <p className="page-empty">{t("skillsPage.empty")}</p>
-        ) : (
-          skills.map((skill) => (
-            <article key={skill.name} className="skill-page-card">
-              <header>
-                <strong>{skill.name}</strong>
-                <span>{skillSourceLabel(skill.sourceDir)}</span>
-                {skill.sourceDir === "user" && (
-                  <button
-                    type="button"
-                    className={`skill-delete-btn${confirmDelete === skill.name ? " confirm" : ""}`}
-                    onClick={() => handleUninstall(skill.name)}
-                    onBlur={() => setConfirmDelete(null)}
-                    title={confirmDelete === skill.name ? t("skillsPage.deleteConfirm") : t("action.delete")}
-                  >
-                    {confirmDelete === skill.name ? "Confirm" : "\u00d7"}
-                  </button>
-                )}
-              </header>
-              <p>{skill.description}</p>
-              {skill.compatibility && (
-                <p className="skill-page-compatibility">{skill.compatibility}</p>
-              )}
-              <div className="skill-page-meta">
-                {skill.metadata?.version && <span>{skill.metadata.version}</span>}
-                {skill.license && <span>{skill.license}</span>}
-                <span>{formatAllowedTools(skill.allowedTools)}</span>
+
+      {filtered.length === 0 ? (
+        <p className="page-empty">{query ? t("search.placeholder") : t("skillsPage.empty")}</p>
+      ) : (
+        groups.map((group) => (
+          <section key={group.key} className="skills-group-section">
+            <button
+              type="button"
+              className="skills-group-header"
+              onClick={() => toggleGroup(group.key)}
+              aria-expanded={expandedGroups.has(group.key)}
+            >
+              <span className="skills-group-arrow">{expandedGroups.has(group.key) ? "\u25be" : "\u25b8"}</span>
+              <span>{t(group.labelKey as "skillsPage.group.workspace").replace("{n}", String(group.skills.length))}</span>
+              <span className="skills-group-count">{group.skills.length}</span>
+            </button>
+            {expandedGroups.has(group.key) && (
+              <div className="skills-group-body">
+                {group.skills.map((skill) => (
+                  <article key={skill.name} className="skills-card">
+                    <header className="skills-card-head">
+                      <label className="skills-card-toggle" title={skill.enabled ? t("memory.disable") : t("memory.enable")}>
+                        <input
+                          type="checkbox"
+                          checked={skill.enabled}
+                          onChange={() => onToggle(skill.name, !skill.enabled)}
+                        />
+                      </label>
+                      <strong>{skill.name}</strong>
+                      <span className={`skills-card-badge source-${skill.sourceDir}`}>
+                        {skill.sourcePath}
+                      </span>
+                    </header>
+                    <p className="skills-card-desc">{skill.description}</p>
+                    <div className="skills-card-meta">
+                      {skill.metadata?.version && <span className="skills-card-meta-item">{skill.metadata.version}</span>}
+                      {skill.license && <span className="skills-card-meta-item">{skill.license}</span>}
+                      <span className="skills-card-meta-item">{formatAllowedTools(skill.allowedTools)}</span>
+                    </div>
+                    {skill.installUrl && (
+                      <p className="skills-card-source" title={skill.installUrl}>
+                        {t("skillsPage.installedFrom")}: {skill.installUrl}
+                      </p>
+                    )}
+                  </article>
+                ))}
               </div>
-              {skill.installUrl && (
-                <p className="skill-page-source" title={skill.installUrl}>
-                  {t("skillsPage.installedFrom")}: {skill.installUrl}
-                </p>
-              )}
-            </article>
-          ))
-        )}
-      </div>
+            )}
+          </section>
+        ))
+      )}
     </section>
   );
-}
-
-function skillSourceLabel(source: SkillDescriptor["sourceDir"]): string {
-  if (source === "builtin") return t("skillsPage.sourceBuiltin");
-  if (source === "workspace") return t("skillsPage.sourceWorkspace");
-  return t("skillsPage.sourceUser");
 }
 
 function formatAllowedTools(allowedTools?: string[]): string {

@@ -48,10 +48,28 @@ export function isInsideExternalPath(target: string, externalPaths?: string[]): 
 /** Agent 数据目录（skills/config/logs 等）始终可访问，不受工作区沙盒限制。 */
 function getTrustedDirs(): string[] {
   const home = homedir();
-  return [
+  const dirs = [
     resolve(home, '.aurevoy'),
     resolve(home, '.agents'),
+    resolve(home, '.claude'),
+    resolve(home, '.codex'),
   ];
+  // 内置 skill 目录（随 Agent 分发，可能不在工作区内）
+  try {
+    dirs.push(resolve(config.skills.builtinDir));
+  } catch { /* 忽略 */ }
+  // 工作区级 skill 子目录
+  try {
+    for (const sub of [
+      config.skills.workspaceSubDir,
+      config.skills.agentsWorkspaceSubDir,
+      config.skills.claudeWorkspaceSubDir,
+      config.skills.codexWorkspaceSubDir,
+    ]) {
+      dirs.push(resolve(config.workspaceDir, sub));
+    }
+  } catch { /* 忽略 */ }
+  return dirs;
 }
 
 function isInsideTrustedDir(target: string): boolean {
