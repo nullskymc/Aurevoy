@@ -5,7 +5,7 @@
  * 激活时懒加载 SKILL.md body + 附属资源（Tier 2）。
  *
  * 工作区 skill 优先级高于全局 skill（同名时工作区覆盖）。
- * 支持 .aurevoy/skills/ 和 .agents/skills/ 两个发现路径。
+ * 支持 .aurevoy/skills/、.agents/skills/、.claude/skills/ 和 .codex/skills/ 四个发现路径。
  */
 
 import type { SkillCatalogEntry, SkillContent } from './types.js';
@@ -31,11 +31,15 @@ class SkillRegistry {
     const userDirs = [
       resolve(config.skills.userDir),
       resolve(config.skills.agentsUserDir),
+      resolve(config.skills.claudeUserDir),
+      resolve(config.skills.codexUserDir),
     ];
 
     const workspaceDirs = [
       resolve(config.workspaceDir, config.skills.workspaceSubDir),
       resolve(config.workspaceDir, config.skills.agentsWorkspaceSubDir),
+      resolve(config.workspaceDir, config.skills.claudeWorkspaceSubDir),
+      resolve(config.workspaceDir, config.skills.codexWorkspaceSubDir),
     ];
 
     log.info({ builtinDir, userDirs, workspaceDirs }, '发现 skill 文件...');
