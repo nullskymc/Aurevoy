@@ -684,6 +684,7 @@ export function createTask(
   budget?: TaskBudget,
   projectId?: string,
   attachments?: MessageAttachment[],
+  autoMode?: boolean,
 ): Task {
   const now = new Date().toISOString();
   const parsed = parseSlashCommand(goal);
@@ -712,6 +713,7 @@ export function createTask(
     tokenUsage: { available: false, provider: getProviderName(), model: config.llm.model },
     projectId: projectId ?? undefined,
     planMode: parsed.planRequested ? 'manual' : undefined,
+    autoMode: autoMode ?? undefined,
     createdAt: now,
     updatedAt: now,
   };
@@ -993,6 +995,18 @@ export async function runTask(task: Task): Promise<void> {
         scoutReport: planOutput.scoutReport,
       });
 
+      // 自动模式：跳过计划审批直接执行
+      if (task.autoMode) {
+        task.plan = proposedPlan.map((step, index) => ({
+          ...step,
+          status: index === 0 ? 'running' : 'pending',
+        }));
+        taskEvents.publish({
+          type: 'plan_approval_resolved',
+          taskId: task.id,
+          approved: true,
+        });
+      } else {
       // 等待用户审批
       setRuntimePhase('waiting_approval', '等待审批执行计划…', 'paused');
       const decision = await waitForPlanApproval(task.id, abortController.signal);
@@ -1025,6 +1039,7 @@ export async function runTask(task: Task): Promise<void> {
           approved: false,
           reason: decision.reason,
         });
+      }
       }
     } else {
       // 默认任务：不自动调用 Plan Agent，单步直接进入 Default Agent。
@@ -1379,9 +1394,10 @@ export async function runTask(task: Task): Promise<void> {
       const toExecute = validatedCalls.filter(
         (v) => !v.skipReason && v.call.toolName !== 'ask_user',
       );
-      // 审批规则：read_file/list_directory/load_skill 免审批；其他工具只允许本对话中已批准的指纹通过。
+      // 审批规则：read_file/list_directory/load_skill 免审批；autoMode 下全部自动批准
       const sessionApprovedApprovalKeys = new Set(task.approvedApprovalKeys ?? []);
       const isAutoApproved = (v: ValidatedCall) =>
+        task.autoMode ||
         isApprovalFreeTool(v.call.toolName) ||
         sessionApprovedApprovalKeys.has(approvalKeyForCall(v.call)) ||
         sessionApprovedApprovalKeys.has(prefixApprovalKeyForCall(v.call));

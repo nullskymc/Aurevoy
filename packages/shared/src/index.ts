@@ -253,6 +253,8 @@ export interface Task {
   fileSnapshots?: FileSnapshot[];
   /** Plan Agent 触发方式；manual 表示用户通过 /plan 显式请求规划。 */
   planMode?: 'manual';
+  /** 自动模式：Agent 执行所有操作无需用户审批工具和计划 */
+  autoMode?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -483,6 +485,8 @@ export interface CreateTaskRequest {
   budget?: TaskBudget;
   projectId?: string;
   attachments?: MessageAttachment[];
+  /** 自动模式：Agent 执行所有操作无需用户审批 */
+  autoMode?: boolean;
 }
 
 export interface CreateTaskResponse {

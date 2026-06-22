@@ -291,7 +291,7 @@ export async function buildServer(externalLogger?: Logger) {
       if (!project) return reply.code(404).send({ error: 'project not found' });
     }
 
-    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments);
+    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments, req.body?.autoMode);
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runTask(task);
 

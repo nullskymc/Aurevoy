@@ -1156,6 +1156,10 @@ button:disabled {
   background: var(--accent-soft-bg, rgba(99, 102, 241, 0.06));
 }
 
+.auto-mode-btn.is-active {
+  color: var(--accent, #6366f1) !important;
+}
+
 /* 附件 chip 容器 */
 .composer-attachments {
   display: flex;

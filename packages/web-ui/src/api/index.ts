@@ -76,11 +76,12 @@ export async function createTask(
   goal: string,
   projectId?: string,
   attachments?: MessageAttachment[],
+  autoMode?: boolean,
 ): Promise<CreateTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal, projectId, attachments }),
+    body: JSON.stringify({ goal, projectId, attachments, autoMode }),
   });
   if (!res.ok) throw new Error(`create task failed: ${res.status}`);
   return res.json();

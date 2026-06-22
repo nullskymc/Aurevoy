@@ -234,6 +234,9 @@ function App() {
   const [workMode, setWorkMode] = useState<WorkMode>(() =>
     readStoredOption(WORK_MODE_KEY, defaultToolDetailsOpen ? "coding" : "daily", ["coding", "daily"] as const),
   );
+  const [autoMode, setAutoMode] = useState(() =>
+    readStoredBoolean("aurevoy.autoMode", false),
+  );
   const [themeMode, setThemeMode] = useState<ThemeMode>(() =>
     readStoredOption(THEME_MODE_KEY, "system", ["system", "light", "dark"] as const),
   );
@@ -797,7 +800,7 @@ function App() {
     closeStream();
 
     try {
-      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach);
+      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach, autoMode);
       setCurrentTask(task);
       setPhase(task.phase);
       setTraces([]);
@@ -1425,6 +1428,18 @@ function App() {
                 </div>
                 <button
                   type="button"
+                  className={"mode-btn auto-mode-btn" + (autoMode ? " is-active" : "")}
+                  onClick={() => {
+                    const n = !autoMode;
+                    setAutoMode(n);
+                    window.localStorage.setItem("aurevoy.autoMode", n ? "true" : "false");
+                  }}
+                  title={autoMode ? "Auto mode on" : "Auto mode off"}
+                >
+                  Auto
+                </button>
+                <button
+                  type="button"
                   className="ghost-btn"
                   onClick={() => setInspectorOpen((open) => !open)}
                 >
@@ -1438,6 +1453,18 @@ function App() {
                 <span className="topbar-kicker">Aurevoy Agent</span>
               </div>
               <div className="topbar-actions">
+                <button
+                  type="button"
+                  className={"mode-btn auto-mode-btn" + (autoMode ? " is-active" : "")}
+                  onClick={() => {
+                    const n = !autoMode;
+                    setAutoMode(n);
+                    window.localStorage.setItem("aurevoy.autoMode", n ? "true" : "false");
+                  }}
+                  title={autoMode ? "Auto mode on" : "Auto mode off"}
+                >
+                  Auto
+                </button>
                 <button
                   type="button"
                   className="ghost-btn"
