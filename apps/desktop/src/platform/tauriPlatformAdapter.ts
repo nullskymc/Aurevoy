@@ -43,6 +43,11 @@ export const tauriPlatformAdapter: PlatformAdapter = {
     await openUrl(url);
   },
 
+  async openFile(path: string): Promise<void> {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl(`file://${encodeURI(path)}`);
+  },
+
   onFileDrop(callback: (paths: string[]) => void): (() => void) {
     let unlisten: (() => void) | undefined;
     const win = getCurrentWindow();

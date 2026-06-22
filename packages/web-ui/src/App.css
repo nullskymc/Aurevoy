@@ -3828,6 +3828,89 @@ textarea:focus-visible,
 }
 
 /* ============================================================
+   Agent 内容块（文件引用/图片/超链接）
+   ============================================================ */
+
+.content-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 20px 12px;
+}
+
+.content-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #e0e0e0);
+  background: var(--surface, #f8f9fa);
+  cursor: pointer;
+  transition: background 0.15s;
+  max-width: 520px;
+}
+.content-block:hover {
+  background: var(--bg-hover, #eef0f2);
+}
+
+.content-block-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary, #666);
+}
+
+.content-block-name {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text-primary, #1a1a1a);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-block-path {
+  font-size: 11px;
+  color: var(--text-tertiary, #999);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.content-block.is-active .content-block-path {
+  color: var(--accent-color, #2563eb);
+  font-weight: 500;
+}
+
+.content-block.is-image {
+  cursor: default;
+  padding: 4px;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 420px;
+}
+.content-block-image {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 6px;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+.content-block-caption {
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  padding: 0 4px 4px;
+}
+
+.content-block.is-link {
+  text-decoration: none;
+  color: var(--accent-color, #2563eb);
+}
+.content-block.is-link:hover {
+  text-decoration: underline;
+}
+
+/* ============================================================
    图片查看器（lightbox）
    ============================================================ */
 .image-viewer-backdrop {

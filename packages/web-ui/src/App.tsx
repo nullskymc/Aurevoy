@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerE
 import { createPortal } from "react-dom";
 import type {
   AgentEvent,
+  ContentBlock,
   HealthResponse,
   MemoryCategory,
   Message,
@@ -245,6 +246,7 @@ function App() {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [liveContentBlocks, setLiveContentBlocks] = useState<ContentBlock[]>([]);
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const {
@@ -545,6 +547,7 @@ function App() {
           if (event.phase === "thinking") {
             setOutput("");
             setReasoning("");
+            setLiveContentBlocks([]);
           }
         }
         break;
@@ -636,6 +639,20 @@ function App() {
       case "artifact_created":
       case "artifact_updated":
         mergeArtifact(event.artifact);
+        break;
+      case "content_blocks_added":
+        setCurrentTask((previous) => {
+          if (!previous) return previous;
+          const messages = (previous.messages ?? []).map((msg) =>
+            msg.id === event.messageId
+              ? { ...msg, contentBlocks: [...(msg.contentBlocks ?? []), ...event.blocks] }
+              : msg,
+          );
+          const nextTask = { ...previous, messages };
+          updateTaskList(nextTask);
+          return nextTask;
+        });
+        setLiveContentBlocks((prev) => [...prev, ...event.blocks]);
         break;
       case "checkpoint_created":
         setCurrentTask((previous) => {
@@ -733,6 +750,7 @@ function App() {
                 : "finalizing",
         });
         closeStream();
+        setLiveContentBlocks([]);
         void refreshRuntime();
         void refreshTaskTraces(event.taskId);
         // 工具结果等消息只持久化、不走 live message 事件，拉取完整快照补全本轮线程
@@ -1504,6 +1522,7 @@ function App() {
                 reasoning={reasoning}
                 busy={busy}
                 liveToolActivity={liveToolActivity}
+                liveContentBlocks={liveContentBlocks}
                 defaultToolDetailsOpen={defaultToolDetailsOpen}
                 online={online}
                 onToolDecision={handleToolDecision}

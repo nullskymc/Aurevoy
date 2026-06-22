@@ -891,6 +891,46 @@ toolRegistry.register({
   },
 });
 
+// ---- attach_content（safe：Agent 在对话框中附加文件引用/图片/超链接）----
+toolRegistry.register({
+  descriptor: {
+    name: 'attach_content',
+    description: '在对话中附加文件引用、图片或超链接，使用户可以直观地访问文件或查看内容。通过此工具向用户展示文件位置、显示图片或提供重要链接。附加的内容会内联显示在对话消息中。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['file_reference', 'image', 'link'],
+          description: '内容类型：file_reference 文件路径引用 / image 内联显示图片 / link 超链接',
+        },
+        content: { type: 'string', description: '文件路径、图片路径或 URL' },
+        name: { type: 'string', description: '显示名称（可选，缺省用文件名或 URL）' },
+        mimeType: { type: 'string', description: 'MIME 类型（可选，自动推断时可不传）' },
+        size: { type: 'number', description: '文件大小（可选，仅文件引用类型建议传）' },
+      },
+      required: ['type', 'content'],
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+  },
+  async execute(args) {
+    const type = args.type as string;
+    if (!['file_reference', 'image', 'link'].includes(type)) {
+      return { ok: false, error: `不支持的内容类型: ${type}` };
+    }
+    return {
+      contentBlock: {
+        type,
+        content: String(args.content),
+        name: typeof args.name === 'string' ? args.name : undefined,
+        mimeType: typeof args.mimeType === 'string' ? args.mimeType : undefined,
+        size: typeof args.size === 'number' ? args.size : undefined,
+      },
+    };
+  },
+});
+
 // ---- execute_command（dangerous，默认禁用）----
 toolRegistry.register({
   descriptor: {

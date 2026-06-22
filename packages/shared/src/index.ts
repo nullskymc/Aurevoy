@@ -66,6 +66,21 @@ export interface MessageAttachment {
   type: 'file' | 'image';
 }
 
+/** Agent 主动发送到对话框的富内容块类型 */
+export type ContentBlockType = 'file_reference' | 'image' | 'link';
+
+/** Agent 主动附加到消息的富内容块，可嵌入对话中呈现为文件引用、图片或超链接。 */
+export interface ContentBlock {
+  id: string;
+  type: ContentBlockType;
+  /** file_reference: 文件路径; image: 图片路径; link: URL */
+  content: string;
+  /** 显示名称（可选） */
+  name?: string;
+  mimeType?: string;
+  size?: number;
+}
+
 /** 一条对话消息 */
 export interface Message {
   id: string;
@@ -80,6 +95,8 @@ export interface Message {
   reasoningContent?: string;
   /** 用户消息携带的文件附件（路径引用）；Agent 据此注入文件上下文 */
   attachments?: MessageAttachment[];
+  /** Agent 主动附加的富内容块（文件引用、图片、超链接），由 attach_content 工具生成 */
+  contentBlocks?: ContentBlock[];
 }
 
 /** 计划中的一个步骤 */
@@ -451,6 +468,7 @@ export type AgentEvent =
   | { type: 'skill_deactivated'; taskId: string; previousSkill?: string | null }
   | { type: 'skill_installed'; taskId: string; skillNames: string[]; repoUrl: string }
   | { type: 'skill_uninstalled'; taskId: string; skillName: string }
+  | { type: 'content_blocks_added'; taskId: string; messageId: string; blocks: ContentBlock[] }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
   | { type: 'task_deleted'; taskId: string };

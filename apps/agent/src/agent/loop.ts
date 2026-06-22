@@ -2,6 +2,8 @@ import { promises as fs } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
+  ContentBlock,
+  ContentBlockType,
   FileSnapshot,
   Message,
   MessageAttachment,
@@ -1719,6 +1721,32 @@ function handleToolSideEffects(task: Task, call: ToolCall, result: ToolResult): 
       if (artifact) taskEvents.publish({ type: 'artifact_updated', taskId: task.id, artifact });
     }
   }
+  if (call.toolName === 'attach_content') {
+    const blockData = extractContentBlockData(result.output);
+    if (blockData) {
+      const block: ContentBlock = {
+        id: randomUUID(),
+        type: blockData.type,
+        content: blockData.content,
+        name: blockData.name,
+        mimeType: blockData.mimeType,
+        size: blockData.size,
+      };
+      // 找到最近一条 assistant 消息并附加 content block
+      const assistantMsg = [...task.messages].reverse().find(m => m.role === 'assistant');
+      if (assistantMsg) {
+        assistantMsg.contentBlocks = [...(assistantMsg.contentBlocks ?? []), block];
+        taskEvents.publish({
+          type: 'content_blocks_added',
+          taskId: task.id,
+          messageId: assistantMsg.id,
+          blocks: [block],
+        });
+      }
+      return { callId: call.id, ok: true, output: { ok: true, block } };
+    }
+    return { callId: call.id, ok: false, error: 'attach_content 返回格式非法' };
+  }
   return result;
 }
 
@@ -1739,6 +1767,28 @@ function extractArtifactDraft(output: unknown):
     content: record.content,
     type,
     mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
+  };
+}
+
+function extractContentBlockData(output: unknown): {
+  type: ContentBlockType;
+  content: string;
+  name?: string;
+  mimeType?: string;
+  size?: number;
+} | null {
+  if (!output || typeof output !== 'object') return null;
+  const data = (output as { contentBlock?: unknown }).contentBlock;
+  if (!data || typeof data !== 'object') return null;
+  const record = data as Record<string, unknown>;
+  if (typeof record.type !== 'string' || typeof record.content !== 'string') return null;
+  if (!['file_reference', 'image', 'link'].includes(record.type)) return null;
+  return {
+    type: record.type as ContentBlockType,
+    content: record.content,
+    name: typeof record.name === 'string' ? record.name : undefined,
+    mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
+    size: typeof record.size === 'number' ? record.size : undefined,
   };
 }
 
