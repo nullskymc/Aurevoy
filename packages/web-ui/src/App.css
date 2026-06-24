@@ -1160,6 +1160,111 @@ button:disabled {
   color: var(--accent, #6366f1) !important;
 }
 
+.auto-mode-btn.is-active.warning {
+  color: #f59e0b !important;
+  animation: auto-mode-pulse 2s ease-in-out infinite;
+}
+
+@keyframes auto-mode-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.auto-mode-btn .auto-mode-badge {
+  display: inline-block;
+  font-size: 9px;
+  background: var(--accent, #6366f1);
+  color: #fff;
+  border-radius: 8px;
+  padding: 0 4px;
+  margin-left: 2px;
+  line-height: 14px;
+  vertical-align: top;
+}
+
+/* 输入框内嵌的 auto mode 按钮 — 与 composer-project-badge 统一风格 */
+.auto-mode-btn-composer {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  border: none;
+  border-radius: var(--ui-radius-md);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0 var(--ui-space-2);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s, background 0.15s;
+}
+
+.auto-mode-btn-composer:hover {
+  color: var(--text-secondary);
+  background: var(--surface-hover, var(--surface));
+}
+
+.auto-mode-btn-composer.is-active {
+  color: var(--accent, #6366f1);
+  background: color-mix(in srgb, var(--accent, #6366f1) 8%, transparent);
+}
+
+.auto-mode-btn-composer.is-active:hover {
+  color: var(--accent, #6366f1);
+}
+
+.auto-mode-btn-composer.auto-mode-paused {
+  color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 8%, transparent);
+  animation: auto-mode-pulse 2s ease-in-out infinite;
+}
+
+/* 状态指示灯 */
+.auto-mode-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  flex: 0 0 auto;
+}
+
+.auto-mode-dot.off {
+  background: var(--text-tertiary);
+}
+
+.auto-mode-dot.plan {
+  background: #a78bfa;
+}
+
+.auto-mode-dot.auto-edit {
+  background: var(--accent, #6366f1);
+}
+
+.auto-mode-dot.full {
+  background: #22c55e;
+}
+
+.auto-mode-dot.paused {
+  background: #f59e0b;
+}
+
+/* Plan auto-approval badge */
+.auto-mode-plan-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent, #6366f1) 12%, transparent);
+  color: var(--accent, #6366f1);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
 /* 附件 chip 容器 */
 .composer-attachments {
   display: flex;
@@ -1420,9 +1525,22 @@ button:disabled {
 
 .composer-footer-external {
   display: flex;
-  justify-content: flex-start;
+  justify-content: space-between;
+  align-items: center;
   margin-top: 8px;
   padding-left: 4px;
+}
+
+.composer-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.composer-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .composer-project-badge {

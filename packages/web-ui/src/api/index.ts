@@ -76,12 +76,12 @@ export async function createTask(
   goal: string,
   projectId?: string,
   attachments?: MessageAttachment[],
-  autoMode?: boolean,
+  autoModeLevel?: 'off' | 'plan' | 'auto-edit' | 'full',
 ): Promise<CreateTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal, projectId, attachments, autoMode }),
+    body: JSON.stringify({ goal, projectId, attachments, autoModeLevel }),
   });
   if (!res.ok) throw new Error(`create task failed: ${res.status}`);
   return res.json();
@@ -91,6 +91,22 @@ export async function listTasks(): Promise<Task[]> {
   const res = await fetch(`${BASE_URL}/api/tasks`);
   if (!res.ok) throw new Error(`list tasks failed: ${res.status}`);
   return res.json();
+}
+
+/** 恢复已暂停的 auto mode */
+export async function resumeAutoMode(taskId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/auto-mode-resume`, { method: 'POST' });
+  if (!res.ok) throw new Error(`resume auto mode failed: ${res.status}`);
+}
+
+/** 运行时切换当前任务的 auto mode 等级 */
+export async function updateTaskAutoMode(taskId: string, level: 'off' | 'plan' | 'auto-edit' | 'full'): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/auto-mode`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ autoModeLevel: level }),
+  });
+  if (!res.ok) throw new Error(`update auto mode failed: ${res.status}`);
 }
 
 /** 读取单个任务的完整快照（含工具结果等持久化消息） */

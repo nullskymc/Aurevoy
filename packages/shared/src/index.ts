@@ -219,6 +219,8 @@ export interface PendingToolApproval {
   call: ToolCall;
   riskLevel: ToolRiskLevel;
   createdAt: string;
+  /** auto mode 语境下需要审批的原因 */
+  autoModeReason?: 'blocked_by_rule' | 'not_covered' | 'paused';
 }
 
 /** 一个用户任务（Agent 的工作单元） */
@@ -253,8 +255,10 @@ export interface Task {
   fileSnapshots?: FileSnapshot[];
   /** Plan Agent 触发方式；manual 表示用户通过 /plan 显式请求规划。 */
   planMode?: 'manual';
-  /** 自动模式：Agent 执行所有操作无需用户审批工具和计划 */
-  autoMode?: boolean;
+  /** 自动模式等级（Agent 的自主执行程度） */
+  autoModeLevel?: AutoModeLevel;
+  /** 自动模式运行时统计与状态 */
+  autoModeState?: AutoModeState;
   createdAt: string;
   updatedAt: string;
 }
@@ -280,6 +284,31 @@ export interface Project {
  * - dangerous: 破坏性或高风险，执行前必须用户确认（如写文件、删除）
  */
 export type ToolRiskLevel = 'safe' | 'caution' | 'dangerous';
+
+/**
+ * Auto Mode 等级。
+ * - off: 每次工具调用都需要用户审批（缺省）
+ * - auto-edit: 文件读写编辑等安全工具自动批准；shell/网络等需要审批
+ * - full: 所有工具自动批准，受安全规则约束
+ */
+export type AutoModeLevel = 'off' | 'plan' | 'auto-edit' | 'full';
+
+/** Auto Mode 在运行时中的统计与状态 */
+export interface AutoModeState {
+  level: AutoModeLevel;
+  /** 自动批准的工具调用累计次数 */
+  autoApprovedCalls: number;
+  /** 被安全规则拦截的次数 */
+  blockedByRules: number;
+  /** 当前是否因安全限制被暂停 */
+  paused: boolean;
+  /** 暂停原因（paused 时有效） */
+  pausedReason?: string;
+  /** 连续自动批准数（达到阈值后会暂停） */
+  consecutiveAutoCalls: number;
+  /** 自动模式降级回退的累计次数 */
+  fallbackCount: number;
+}
 
 /** 任务轨迹记录类型，用于审计、诊断和回放。 */
 export type TaskTraceKind =
@@ -420,6 +449,7 @@ export type AgentEvent =
       taskId: string;
       call: ToolCall;
       riskLevel: ToolRiskLevel;
+      autoModeReason?: 'blocked_by_rule' | 'not_covered' | 'paused';
     } // 执行非 safe 工具前请求用户确认
   | {
       type: 'clarification_request';
@@ -471,6 +501,7 @@ export type AgentEvent =
   | { type: 'skill_installed'; taskId: string; skillNames: string[]; repoUrl: string }
   | { type: 'skill_uninstalled'; taskId: string; skillName: string }
   | { type: 'content_blocks_added'; taskId: string; messageId: string; blocks: ContentBlock[] }
+  | { type: 'auto_mode_state'; taskId: string; state: AutoModeState }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
   | { type: 'task_deleted'; taskId: string };
@@ -485,8 +516,8 @@ export interface CreateTaskRequest {
   budget?: TaskBudget;
   projectId?: string;
   attachments?: MessageAttachment[];
-  /** 自动模式：Agent 执行所有操作无需用户审批 */
-  autoMode?: boolean;
+  /** 自动模式等级（默认 off：需人工审批工具和计划） */
+  autoModeLevel?: AutoModeLevel;
 }
 
 export interface CreateTaskResponse {
@@ -847,6 +878,10 @@ export interface RuntimeSettings {
   commandExecutionEnabled: boolean;
   mcpServersJson: string;
   cleanupPolicyDays: number;
+  /** 缺省 auto mode 等级（创建任务时继承） */
+  autoModeLevel: AutoModeLevel;
+  /** 是否启用 auto mode 安全规则（拦截 destroy/exfiltrate 等危险操作） */
+  autoModeSafetyEnabled: boolean;
   dbPath: string;
 }
 
@@ -868,6 +903,8 @@ export interface UpdateRuntimeSettingsRequest {
   commandExecutionEnabled?: boolean;
   mcpServersJson?: string;
   cleanupPolicyDays?: number;
+  autoModeLevel?: AutoModeLevel;
+  autoModeSafetyEnabled?: boolean;
 }
 
 export interface ModelListResponse {

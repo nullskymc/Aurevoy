@@ -1,4 +1,4 @@
-import type { RuntimeSettings, UpdateRuntimeSettingsRequest } from '@aurevoy/shared';
+import type { AutoModeLevel, RuntimeSettings, UpdateRuntimeSettingsRequest } from '@aurevoy/shared';
 import { config, parseMcpServers, parseNumber } from '../config.js';
 import { resetProviderCache } from '../llm/provider.js';
 import { settingsStore } from '../store/db.js';
@@ -11,7 +11,7 @@ const SETTING_KEYS = {
   llmVisionModel: 'llm.visionModel',
   llmAvailableModels: 'llm.availableModels',
   llmEnabledModels: 'llm.enabledModels',
-  /** 旧版本字段：曾同时表示“已获取列表”和“主界面可选列表”，现在只作为迁移来源。 */
+  /** 旧版本字段：曾同时表示”已获取列表”和”主界面可选列表”，现在只作为迁移来源。 */
   llmModelOptions: 'llm.modelOptions',
   llmTemperature: 'llm.temperature',
   llmTimeoutMs: 'llm.timeoutMs',
@@ -19,6 +19,8 @@ const SETTING_KEYS = {
   commandExecutionEnabled: 'sandbox.commandExecutionEnabled',
   mcpServersJson: 'mcpServersJson',
   cleanupPolicyDays: 'cleanupPolicyDays',
+  autoModeLevel: 'autoMode.level',
+  autoModeSafetyEnabled: 'autoMode.safetyEnabled',
 } as const;
 
 const DEFAULT_CLEANUP_POLICY_DAYS = 30;
@@ -74,6 +76,8 @@ export function readRuntimeSettings(): RuntimeSettings {
     commandExecutionEnabled: config.sandbox.commandExecutionEnabled,
     mcpServersJson: settingsStore.get(SETTING_KEYS.mcpServersJson) ?? stringifyMcpServers(),
     cleanupPolicyDays: readCleanupPolicyDays(),
+    autoModeLevel: readAutoModeLevel(),
+    autoModeSafetyEnabled: readAutoModeSafetyEnabled(),
     dbPath: config.dbPath,
   };
 }
@@ -141,6 +145,15 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   if (body.commandExecutionEnabled !== undefined) {
     config.sandbox.commandExecutionEnabled = body.commandExecutionEnabled;
     settingsStore.set(SETTING_KEYS.commandExecutionEnabled, String(body.commandExecutionEnabled));
+  }
+
+  if (body.autoModeLevel !== undefined) {
+    const valid = (['off', 'plan', 'auto-edit', 'full'] as const).includes(body.autoModeLevel as never);
+    if (valid) settingsStore.set(SETTING_KEYS.autoModeLevel, body.autoModeLevel);
+  }
+
+  if (body.autoModeSafetyEnabled !== undefined) {
+    settingsStore.set(SETTING_KEYS.autoModeSafetyEnabled, String(body.autoModeSafetyEnabled));
   }
 
   if (body.mcpServersJson !== undefined) {
@@ -227,4 +240,15 @@ function clampNumber(value: number, min: number, max: number, label: string): nu
 function stringifyMcpServers(): string {
   if (config.mcpServers.length === 0) return '';
   return JSON.stringify({ mcpServers: Object.fromEntries(config.mcpServers.map((s) => [s.name, s])) }, null, 2);
+}
+
+function readAutoModeLevel(): AutoModeLevel {
+  const stored = settingsStore.get(SETTING_KEYS.autoModeLevel);
+  if (stored === 'off' || stored === 'plan' || stored === 'auto-edit' || stored === 'full') return stored;
+  return 'off';
+}
+
+function readAutoModeSafetyEnabled(): boolean {
+  const stored = settingsStore.get(SETTING_KEYS.autoModeSafetyEnabled);
+  return stored === undefined ? true : stored !== 'false';
 }

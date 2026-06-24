@@ -63,7 +63,9 @@ import {
   resolveApproval,
   resolveClarificationAnswer,
   resolvePlanApproval,
+  resumeAutoMode,
   revertTask,
+  updateTaskAutoMode,
   runTask,
   unrevertTask,
 } from './agent/loop.js';
@@ -291,7 +293,7 @@ export async function buildServer(externalLogger?: Logger) {
       if (!project) return reply.code(404).send({ error: 'project not found' });
     }
 
-    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments, req.body?.autoMode);
+    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments, req.body?.autoModeLevel);
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runTask(task);
 
@@ -347,6 +349,24 @@ export async function buildServer(externalLogger?: Logger) {
       streamUrl: `/api/tasks/${resumed.id}/stream`,
     };
     return reply.code(202).send(body);
+  });
+
+  // 恢复已暂停的 auto mode（重置连续计数，继续自动执行）
+  app.post<{ Params: { id: string } }>('/api/tasks/:id/auto-mode-resume', (req, reply) => {
+    const ok = resumeAutoMode(req.params.id);
+    if (!ok) return reply.code(409).send({ error: 'auto mode 未处于暂停状态' });
+    return reply.code(200).send({ ok: true });
+  });
+
+  // 运行时切换 auto mode 等级（直接影响当前任务）
+  app.patch<{ Params: { id: string }; Body: { autoModeLevel?: string } }>('/api/tasks/:id/auto-mode', (req, reply) => {
+    const level = req.body?.autoModeLevel;
+    if (!level || !['off', 'plan', 'auto-edit', 'full'].includes(level)) {
+      return reply.code(400).send({ error: 'autoModeLevel 必须是 off/plan/auto-edit/full' });
+    }
+    const ok = updateTaskAutoMode(req.params.id, level as 'off' | 'plan' | 'auto-edit' | 'full');
+    if (!ok) return reply.code(404).send({ error: 'task not found' });
+    return reply.code(200).send({ ok: true, autoModeLevel: level });
   });
 
   // 编辑重跑（Phase 1）：截断到目标消息之前，回到该点状态；前端随后用 continue 端点
