@@ -357,6 +357,10 @@ export const zh = {
   // 模型配置
   "settings.providerConfig": "模型配置",
   "settings.baseUrlDesc": "OpenAI-compatible API endpoint。",
+  "settings.providerTitle": "Provider 类型",
+  "settings.providerDesc": "选择 LLM 后端提供商。",
+  "settings.maxTokensTitle": "最大输出 Token",
+  "settings.maxTokensDesc": "每次请求的最大输出 token 数（Anthropic 必填）。",
   "settings.modelDescFetchedPrefix": "已获取",
   "settings.modelDescFetchedMid": "个模型，主界面启用",
   "settings.modelDescFetchedSuffix": "个。",

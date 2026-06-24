@@ -15,6 +15,7 @@ const SETTING_KEYS = {
   llmModelOptions: 'llm.modelOptions',
   llmTemperature: 'llm.temperature',
   llmTimeoutMs: 'llm.timeoutMs',
+  llmMaxTokens: 'llm.maxTokens',
   workspaceDir: 'workspaceDir',
   commandExecutionEnabled: 'sandbox.commandExecutionEnabled',
   mcpServersJson: 'mcpServersJson',
@@ -51,6 +52,7 @@ export function loadPersistedSettings(): void {
   config.llm.visionModel = entries[SETTING_KEYS.llmVisionModel] ?? config.llm.visionModel;
   config.llm.temperature = parseNumber(entries[SETTING_KEYS.llmTemperature], config.llm.temperature);
   config.llm.timeoutMs = parseNumber(entries[SETTING_KEYS.llmTimeoutMs], config.llm.timeoutMs);
+  config.llm.maxTokens = parseNumber(entries[SETTING_KEYS.llmMaxTokens], config.llm.maxTokens);
   config.workspaceDir = entries[SETTING_KEYS.workspaceDir] || config.workspaceDir;
   config.sandbox.commandExecutionEnabled =
     entries[SETTING_KEYS.commandExecutionEnabled] === undefined
@@ -62,7 +64,7 @@ export function loadPersistedSettings(): void {
 export function readRuntimeSettings(): RuntimeSettings {
   return {
     llm: {
-      provider: 'openai',
+      provider: config.llm.provider as RuntimeSettings['llm']['provider'],
       baseUrl: config.llm.baseUrl,
       model: config.llm.model,
       visionModel: config.llm.visionModel,
@@ -70,6 +72,7 @@ export function readRuntimeSettings(): RuntimeSettings {
       enabledModels: readEnabledModels(),
       temperature: config.llm.temperature,
       timeoutMs: config.llm.timeoutMs,
+      maxTokens: config.llm.maxTokens,
       apiKeyConfigured: config.llm.apiKey.trim().length > 0,
     },
     workspaceDir: config.workspaceDir,
@@ -124,6 +127,11 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     if (body.llm.timeoutMs !== undefined) {
       config.llm.timeoutMs = clampNumber(body.llm.timeoutMs, 1000, 10 * 60 * 1000, 'timeoutMs');
       settingsStore.set(SETTING_KEYS.llmTimeoutMs, String(config.llm.timeoutMs));
+      providerChanged = true;
+    }
+    if (body.llm.maxTokens !== undefined) {
+      config.llm.maxTokens = clampNumber(body.llm.maxTokens, 256, 65536, 'maxTokens');
+      settingsStore.set(SETTING_KEYS.llmMaxTokens, String(config.llm.maxTokens));
       providerChanged = true;
     }
     if (body.llm.apiKey !== undefined) {
@@ -209,10 +217,16 @@ function ensureCurrentModelEnabled(models: string[]): string[] {
   return models.includes(currentModel) ? models : [currentModel, ...models];
 }
 
-function normalizeProvider(provider: string): 'openai' {
+type NormalizedProvider = 'openai' | 'anthropic' | 'openai-response';
+
+function normalizeProvider(provider: string): NormalizedProvider {
   const value = provider.trim().toLowerCase();
   if (value === 'openai' || value === 'openai-compatible') return 'openai';
-  throw new Error('当前仅支持 openai / OpenAI 兼容 Provider');
+  if (value === 'anthropic') return 'anthropic';
+  if (value === 'openai-response') return 'openai-response';
+  throw new Error(
+    `不支持的 Provider: "${provider}"。支持: openai / openai-compatible / anthropic / openai-response`,
+  );
 }
 
 function validateBaseUrl(raw: string): string {

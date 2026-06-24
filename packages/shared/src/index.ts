@@ -867,7 +867,7 @@ export interface MemoryListResponse {
 
 export interface RuntimeSettings {
   llm: {
-    provider: 'openai';
+    provider: 'openai' | 'anthropic' | 'openai-response';
     baseUrl: string;
     model: string;
   /** 视觉子模型：当消息带图片附件时自动切换此模型（空则用主模型） */
@@ -878,6 +878,7 @@ export interface RuntimeSettings {
     enabledModels: string[];
     temperature: number;
     timeoutMs: number;
+    maxTokens: number;
     apiKeyConfigured: boolean;
   };
   workspaceDir: string;
@@ -893,7 +894,7 @@ export interface RuntimeSettings {
 
 export interface UpdateRuntimeSettingsRequest {
   llm?: Partial<{
-    provider: 'openai';
+    provider: 'openai' | 'anthropic' | 'openai-response';
     baseUrl: string;
     model: string;
   /** 视觉子模型：空字符串表示清除 */
@@ -902,6 +903,7 @@ export interface UpdateRuntimeSettingsRequest {
     enabledModels: string[];
     temperature: number;
     timeoutMs: number;
+    maxTokens: number;
   /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
     apiKey: string;
   }>;

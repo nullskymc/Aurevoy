@@ -357,6 +357,10 @@ export const ja = {
   // Model configuration
   "settings.providerConfig": "モデル設定",
   "settings.baseUrlDesc": "OpenAI互換APIエンドポイント。",
+  "settings.providerTitle": "Provider タイプ",
+  "settings.providerDesc": "LLM プロバイダーを選択してください。",
+  "settings.maxTokensTitle": "最大出力トークン数",
+  "settings.maxTokensDesc": "リクエストごとの最大出力トークン数（Anthropic 必須）。",
   "settings.modelDescFetchedPrefix": "取得済み ",
   "settings.modelDescFetchedMid": " モデル中、メイン画面で ",
   "settings.modelDescFetchedSuffix": " 個有効。",

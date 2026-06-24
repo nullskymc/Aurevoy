@@ -357,6 +357,10 @@ export const ko = {
   // Model configuration
   "settings.providerConfig": "모델 설정",
   "settings.baseUrlDesc": "OpenAI 호환 API 엔드포인트입니다.",
+  "settings.providerTitle": "Provider 유형",
+  "settings.providerDesc": "LLM 백엔드 제공자를 선택하세요.",
+  "settings.maxTokensTitle": "최대 출력 토큰",
+  "settings.maxTokensDesc": "요청당 최대 출력 토큰 수 (Anthropic 필수).",
   "settings.modelDescFetchedPrefix": "가져온 ",
   "settings.modelDescFetchedMid": "개 모델 중 메인 인터페이스에서 ",
   "settings.modelDescFetchedSuffix": "개 활성화됨.",

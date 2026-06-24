@@ -10,6 +10,7 @@ import { t, type Locale } from "../i18n";
 import { setBaseUrl } from "../api";
 
 interface SettingsDraft {
+  provider: string;
   baseUrl: string;
   model: string;
   visionModel: string;
@@ -17,6 +18,7 @@ interface SettingsDraft {
   workspaceDir: string;
   temperature: number;
   timeoutMs: number;
+  maxTokens: number;
   commandExecutionEnabled: boolean;
   mcpServersJson: string;
   cleanupPolicyDays: number;
@@ -603,6 +605,21 @@ function ProviderSettings({
   return (
     <SettingsGroup title={t("settings.providerConfig")}>
       <SettingsActionRow
+        title={t("settings.providerTitle")}
+        description={t("settings.providerDesc")}
+        control={
+          <select
+            className="settings-inline-select"
+            value={draft.provider}
+            onChange={(event) => onDraftChange({ ...draft, provider: event.currentTarget.value })}
+          >
+            <option value="openai">OpenAI Compatible</option>
+            <option value="anthropic">Anthropic Claude</option>
+            <option value="openai-response">OpenAI Responses API</option>
+          </select>
+        }
+      />
+      <SettingsActionRow
         title="Base URL"
         description={t("settings.baseUrlDesc")}
         control={
@@ -744,6 +761,22 @@ function ProviderSettings({
           />
         }
       />
+      {draft.provider === "anthropic" && (
+        <SettingsActionRow
+          title={t("settings.maxTokensTitle")}
+          description={t("settings.maxTokensDesc")}
+          control={
+            <input
+              className="settings-number-input"
+              type="number"
+              min={256}
+              step={256}
+              value={draft.maxTokens}
+              onChange={(event) => onDraftChange({ ...draft, maxTokens: Number(event.currentTarget.value) })}
+            />
+          }
+        />
+      )}
       <SettingsActionRow
         title={t("settings.saveProviderTitle")}
         description={t("settings.saveProviderDesc")}
@@ -1130,6 +1163,7 @@ function SettingsSwitchRow({
 
 function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
   return {
+    provider: settings?.llm.provider ?? "openai",
     baseUrl: settings?.llm.baseUrl ?? "",
     model: settings?.llm.model ?? "",
     visionModel: settings?.llm.visionModel ?? "",
@@ -1137,6 +1171,7 @@ function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
     workspaceDir: settings?.workspaceDir ?? "",
     temperature: settings?.llm.temperature ?? 0.7,
     timeoutMs: settings?.llm.timeoutMs ?? 120000,
+    maxTokens: settings?.llm.maxTokens ?? 8192,
     commandExecutionEnabled: settings?.commandExecutionEnabled ?? false,
     mcpServersJson: settings?.mcpServersJson ?? "",
     cleanupPolicyDays: settings?.cleanupPolicyDays ?? 30,

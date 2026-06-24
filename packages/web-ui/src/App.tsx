@@ -1157,13 +1157,14 @@ function App() {
 
     const body: UpdateRuntimeSettingsRequest = {
       llm: {
-        provider: "openai",
+        provider: draft.provider as 'openai' | 'anthropic' | 'openai-response',
         baseUrl: draft.baseUrl,
         model: draft.model,
         visionModel: draft.visionModel,
         enabledModels: mergedEnabled,
         temperature: draft.temperature,
         timeoutMs: draft.timeoutMs,
+        maxTokens: draft.maxTokens,
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
       },
       workspaceDir: draft.workspaceDir,

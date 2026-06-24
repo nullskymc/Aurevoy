@@ -357,6 +357,10 @@ export const en = {
   // Model configuration
   "settings.providerConfig": "Model Configuration",
   "settings.baseUrlDesc": "OpenAI-compatible API endpoint.",
+  "settings.providerTitle": "Provider",
+  "settings.providerDesc": "Select the LLM provider backend.",
+  "settings.maxTokensTitle": "Max Output Tokens",
+  "settings.maxTokensDesc": "Maximum output tokens per request (required by Anthropic).",
   "settings.modelDescFetchedPrefix": "Fetched ",
   "settings.modelDescFetchedMid": " models, ",
   "settings.modelDescFetchedSuffix": " enabled in the main interface.",
