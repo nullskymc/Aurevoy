@@ -184,8 +184,27 @@ function buildModeSystemMessage(level: AutoModeLevel): Message | null {
   };
 }
 
+/**
+ * 检测任务是否足够复杂，需要自动进入 Plan Mode。
+ * 基于目标文本的启发式规则，配合可选的 Plan Agent scout 结果。
+ */
+function shouldAutoPlan(goal: string): boolean {
+  if (!goal || goal.length < 80) return false;
+  // 关键词匹配
+  const complexKeywords = [
+    /design/i, /architecture/i, /refactor/i, /restructure/i,
+    /migrate/i, /redesign/i, /overhaul/i, /reorganize/i,
+    /multi[-\s]?(step|stage|phase|tier)/i, /cross[-\s]cutting/i,
+    /integration/i, /scaffold/i, /from\s+scratch/i,
+  ];
+  const matchCount = complexKeywords.filter((re) => re.test(goal)).length;
+  if (matchCount >= 2) return true;
+  if (goal.length >= 150 && matchCount >= 1) return true;
+  return false;
+}
+
 /** 初始化 AutoModeState */
-function initAutoModeState(level: AutoModeLevel): AutoModeState {
+function initAutoModeState(level: AutoModeLevel, preMode?: AutoModeLevel): AutoModeState {
   return {
     level,
     autoApprovedCalls: 0,
@@ -193,6 +212,8 @@ function initAutoModeState(level: AutoModeLevel): AutoModeState {
     paused: false,
     consecutiveAutoCalls: 0,
     fallbackCount: 0,
+    planReady: false,
+    planPreMode: preMode,
   };
 }
 
@@ -1134,6 +1155,20 @@ export async function runTask(task: Task): Promise<void> {
   // ---- 计划阶段：按需调用 Plan Agent ----
   const hasApprovedPlan = task.plan.length > 1 && task.plan.some((s) => s.status === 'running');
   if (!hasApprovedPlan) {
+    // 自动 Plan Mode：当 auto-edit/full 检测到任务复杂时，自动切入 plan mode
+    if ((task.autoModeLevel === 'auto-edit' || task.autoModeLevel === 'full') && task.autoModeState && !task.autoModeState.paused && shouldAutoPlan(task.goal)) {
+      const preMode = task.autoModeLevel;
+      task.autoModeLevel = 'plan';
+      task.autoModeState.level = 'plan';
+      task.autoModeState.planReady = false;
+      task.autoModeState.planPreMode = preMode;
+      touch();
+      writeTrace(task.id, 'phase', 'planning', {
+        ok: true,
+        summary: '检测到复杂任务，自动切入 Plan Mode',
+        data: { goal: task.goal, previousMode: task.autoModeLevel },
+      });
+    }
     if (task.planMode === 'manual') {
       // 按需启动 Plan Agent：侦查 + LLM 生成计划
       setRuntimePhase('planning', '用户通过 /plan 请求生成执行计划…', 'planning');
@@ -1485,6 +1520,41 @@ export async function runTask(task: Task): Promise<void> {
 
       // ---------- 情况 B：模型直接给出最终回复 ----------
       if (finishReason !== 'tool_calls' || toolCalls.length === 0) {
+        // Plan Mode: 捕获计划内容，请求审批后自动切换执行模式
+        if (currentAutoModeLevel === 'plan' && task.autoModeState && !task.autoModeState.planReady) {
+          const planContent = textBuffer || reasoningContent || '(empty plan)';
+          task.autoModeState.planReady = true;
+          task.autoModeState.planContent = planContent;
+          touch();
+
+          const msg = makeAssistant(textBuffer, reasoningContent);
+          messages.push(msg);
+          taskEvents.publish({ type: 'message', taskId: task.id, message: msg });
+
+          setRuntimePhase('waiting_approval', 'Agent 已完成勘探，等待用户审批计划', 'paused');
+          taskEvents.publish({
+            type: 'plan_approval_request',
+            taskId: task.id,
+            plan: [{ id: 'plan', description: planContent.slice(0, 500), status: 'proposed', source: 'llm' }],
+            reasoning: 'Plan Mode 完成勘探，请审阅计划并批准以开始执行',
+          });
+
+          await waitForPlanApproval(task.id, abortController.signal);
+          if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+
+          // 从 plan 模式切换到执行模式
+          const targetMode = task.autoModeState.planPreMode ?? 'auto-edit';
+          task.autoModeLevel = targetMode;
+          task.autoModeState.level = targetMode;
+          task.autoModeState.planPreMode = undefined;
+          task.autoModeState.planContent = undefined;
+          touch();
+
+          // 批准后继续执行循环（下一轮使用执行模式提示词）
+          setRuntimePhase('thinking', `计划已批准，以 ${targetMode} 模式开始执行`, 'running');
+          continue;
+        }
+
         setRuntimePhase('finalizing', '模型给出最终回复', 'running');
         const msg = makeAssistant(textBuffer, reasoningContent);
         messages.push(msg);

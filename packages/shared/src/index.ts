@@ -308,6 +308,12 @@ export interface AutoModeState {
   consecutiveAutoCalls: number;
   /** 自动模式降级回退的累计次数 */
   fallbackCount: number;
+  /** Plan Mode: Agent 是否已完成勘探并输出了计划 */
+  planReady?: boolean;
+  /** Plan Mode: Agent 输出的计划内容 */
+  planContent?: string;
+  /** Plan Mode: 自动切入前的原始 auto mode（用于批准后恢复） */
+  planPreMode?: AutoModeLevel;
 }
 
 /** 任务轨迹记录类型，用于审计、诊断和回放。 */
