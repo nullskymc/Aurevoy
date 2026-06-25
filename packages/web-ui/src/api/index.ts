@@ -411,6 +411,51 @@ export async function deleteMemory(id: string): Promise<void> {
   if (!res.ok) throw new Error(`delete memory failed: ${res.status}`);
 }
 
+// ===== 知识库 (M8) =====
+
+export interface KbDir {
+  id: string;
+  dirPath: string;
+  recursive: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KbIndexStatus {
+  totalFiles: number;
+  totalChunks: number;
+  lastIndexed: string | null;
+}
+
+export async function listKbDirs(): Promise<KbDir[]> {
+  const res = await fetch(`${BASE_URL}/api/knowledge-base/dirs`);
+  if (!res.ok) throw new Error(`list kb dirs failed: ${res.status}`);
+  const body = (await res.json()) as { dirs: KbDir[] };
+  return body.dirs;
+}
+
+export async function createKbDir(dirPath: string, recursive?: boolean): Promise<KbDir> {
+  const res = await fetch(`${BASE_URL}/api/knowledge-base/dirs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dirPath, recursive }),
+  });
+  if (!res.ok) throw new Error(`create kb dir failed: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteKbDir(id: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/knowledge-base/dirs/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`delete kb dir failed: ${res.status}`);
+}
+
+export async function getKbStatus(): Promise<KbIndexStatus> {
+  const res = await fetch(`${BASE_URL}/api/knowledge-base/status`);
+  if (!res.ok) throw new Error(`get kb status failed: ${res.status}`);
+  return res.json();
+}
+
 // ===== 项目 (Projects) =====
 
 export async function listProjects(): Promise<Project[]> {

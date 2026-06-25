@@ -9,6 +9,21 @@ import type {
 import { t, type Locale } from "../i18n";
 import { setBaseUrl } from "../api";
 
+interface KbDir {
+  id: string;
+  dirPath: string;
+  recursive: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface KbIndexStatus {
+  totalFiles: number;
+  totalChunks: number;
+  lastIndexed: string | null;
+}
+
 interface SettingsDraft {
   provider: string;
   baseUrl: string;
@@ -53,10 +68,10 @@ interface SettingsPanelProps {
   onConnectionChange?: () => void;
 }
 
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb";
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
-const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory"];
+const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb"];
 
 /** 每次调用都会重新计算 t()，确保语言切换后侧边栏标签即时更新 */
 function getSettingsGroups(): Array<{
@@ -82,13 +97,14 @@ function getSettingsGroups(): Array<{
     label: t("settings.group.data"),
     items: [
       { id: "data", label: t("settings.nav.data"), icon: "database" },
+      { id: "kb", label: t("settings.nav.knowledgeBase"), icon: "kb" },
       { id: "memory", label: t("settings.nav.memory"), icon: "memory" },
     ],
   },
 ];
 }
 
-type SettingsIconName = "appearance" | "database" | "memory" | "server" | "sliders" | "spark";
+type SettingsIconName = "appearance" | "database" | "kb" | "memory" | "server" | "sliders" | "spark";
 
 export function SettingsPanel({
   settings,
@@ -262,6 +278,12 @@ export function SettingsPanel({
               onDelete={onDeleteMemory}
             />
           )}
+
+          {activeSection === "kb" && (
+            <KbSettings
+              settings={settings}
+            />
+          )}
         </div>
       </main>
     </section>
@@ -334,6 +356,15 @@ function SettingsNavIcon({ name }: { name: SettingsIconName }) {
       <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
         <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.35" fill="none" />
         <path d="M10 6.5V10l2.5 1.5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  if (name === "kb") {
+    return (
+      <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+        <path d="M4 3.5h12v13H4z" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" />
+        <path d="M7 7.5h6M7 10.5h4" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
       </svg>
     );
   }
@@ -1046,6 +1077,122 @@ function MemorySettings({
     </>
   );
 }
+function KbSettings({ settings }: { settings: RuntimeSettings | null }) {
+  const [dirs, setDirs] = useState<KbDir[]>([]);
+  const [status, setStatus] = useState<KbIndexStatus | null>(null);
+  const [dirInput, setDirInput] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  async function loadData() {
+    try {
+      const { listKbDirs, getKbStatus } = await import("../api");
+      setDirs(await listKbDirs());
+      setStatus(await getKbStatus());
+    } catch { setError(t("kb.statusFailed")); }
+  }
+
+  async function addDir() {
+    const trimmed = dirInput.trim();
+    if (!trimmed) return;
+    setAdding(true);
+    try {
+      const { createKbDir } = await import("../api");
+      const dir = await createKbDir(trimmed);
+      setDirs((prev) => [...prev, dir]);
+      setDirInput("");
+      setError("");
+    } catch { setError(t("kb.addFailed")); }
+    setAdding(false);
+  }
+
+  async function removeDir(id: string) {
+    try {
+      const { deleteKbDir } = await import("../api");
+      await deleteKbDir(id);
+      setDirs((prev) => prev.filter((d) => d.id !== id));
+    } catch { setError(t("kb.deleteFailed")); }
+  }
+
+  const embedding = settings?.embedding;
+  const embeddingEnabled = embedding?.provider === "openai";
+
+  return (
+    <>
+      <SettingsGroup title={t("kb.embeddingTitle")}>
+        <div className="settings-row">
+          <div className="settings-info">
+            <span className="settings-label">{embeddingEnabled ? t("kb.embeddingEnabled") : t("kb.embeddingDisabled")}</span>
+            <span className="settings-description">{t("kb.embeddingDesc")}</span>
+          </div>
+          {embedding && (
+            <div className="settings-info" style={{ marginTop: 4 }}>
+              <span className="settings-label">{embedding.model} @ {embedding.baseUrl}</span>
+            </div>
+          )}
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("kb.dirsTitle")}>
+        <div className="memory-add">
+          <input
+            className="memory-add-input"
+            value={dirInput}
+            placeholder={t("kb.addDirPlaceholder")}
+            onChange={(e) => setDirInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addDir(); }}
+          />
+          <button type="button" className="memory-add-btn" onClick={addDir} disabled={adding || !dirInput.trim()}>
+            {t("kb.addDir")}
+          </button>
+        </div>
+        {error && <p className="memory-source" style={{ color: "var(--danger)", margin: "4px 0 0 14px" }}>{error}</p>}
+
+        {dirs.length === 0 ? (
+          <p className="memory-empty" style={{ padding: "12px 14px" }}>{t("kb.noDirs")}</p>
+        ) : (
+          <ul className="memory-list">
+            {dirs.map((dir) => (
+              <li key={dir.id} className="memory-item">
+                <code className="memory-content" style={{ fontSize: 13 }}>{dir.dirPath}</code>
+                <div className="memory-item-foot">
+                  <span className="memory-source">{dir.recursive ? "recursive" : "non-recursive"}</span>
+                  <button type="button" className="memory-link danger" onClick={() => removeDir(dir.id)}>
+                    {t("kb.removeDir")}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SettingsGroup>
+
+      {status && (
+        <SettingsGroup title={t("kb.statusTitle")}>
+          <div className="settings-row">
+            <div className="settings-info">
+              <span className="settings-label">{t("kb.totalFiles")}: {status.totalFiles}</span>
+            </div>
+          </div>
+          <div className="settings-row">
+            <div className="settings-info">
+              <span className="settings-label">{t("kb.totalChunks")}: {status.totalChunks}</span>
+            </div>
+          </div>
+          <div className="settings-row">
+            <div className="settings-info">
+              <span className="settings-label">{t("kb.lastIndexed")}: {status.lastIndexed ? new Date(status.lastIndexed).toLocaleString() : t("kb.emptyStatus")}</span>
+            </div>
+          </div>
+        </SettingsGroup>
+      )}
+    </>
+  );
+}
 
 function SettingsGroup({ children, title }: { children: React.ReactNode; title: string }) {
   return (
@@ -1055,6 +1202,7 @@ function SettingsGroup({ children, title }: { children: React.ReactNode; title: 
     </section>
   );
 }
+
 
 function SettingsChoiceGroup({ children, title }: { children: React.ReactNode; title: string }) {
   return (
