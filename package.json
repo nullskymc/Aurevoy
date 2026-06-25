@@ -1,8 +1,8 @@
 {
   "name": "aurevoy",
-  "version": "0.5.7-dev",
+  "version": "0.5.8-dev",
   "private": true,
-  "description": "Aurevoy — 让每个人都拥有属于自己的 AI Agent。通用个人 AI Agent 桌面产品。",
+  "description": "Aurevoy \u2014 \u8ba9\u6bcf\u4e2a\u4eba\u90fd\u62e5\u6709\u5c5e\u4e8e\u81ea\u5df1\u7684 AI Agent\u3002\u901a\u7528\u4e2a\u4eba AI Agent \u684c\u9762\u4ea7\u54c1\u3002",
   "workspaces": [
     "packages/*",
     "apps/*"
