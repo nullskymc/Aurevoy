@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import Database from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
 import type { MemoryEntry, Project, Task, TaskTraceEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
 
@@ -14,9 +15,21 @@ import { config } from '../config.js';
 // 确保 SQLite 文件父目录存在（安装版 app bundle 内 cwd 只读，数据在 ~/.aurevoy/）
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
-const db = new Database(config.dbPath);
+const db: DatabaseType = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+
+/** 导出 db 实例供其他模块（如 knowledge-base）使用。 */
+export { db };
+
+// 加载 sqlite-vec 向量扩展（失败时静默降级）
+try {
+  sqliteVec.load(db);
+  // 验证
+  db.prepare("SELECT vec_version()").get();
+} catch {
+  console.warn('[db] sqlite-vec 加载失败，向量检索将降级为纯关键词');
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS tasks (
@@ -156,6 +169,56 @@ for (const migration of memoryColumnMigrations) {
 }
 // 确保 name_slug 索引存在（列必须在索引之前创建）
 db.exec('CREATE INDEX IF NOT EXISTS idx_memories_name_slug ON memories(name_slug)');
+
+// M8: memory 表 embedding_updated_at 列（追踪哪些记忆需要向量化）
+const memoryColumnsM8 = db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>;
+if (!memoryColumnsM8.some((column) => column.name === 'embedding_updated_at')) {
+  db.exec('ALTER TABLE memories ADD COLUMN embedding_updated_at TEXT');
+}
+
+// M8: sqlite-vec 虚拟表 + KB 普通表（扩展未加载时虚拟表创建静默失败）
+try {
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(
+      memory_id TEXT PRIMARY KEY,
+      embedding FLOAT[768]
+    );
+    CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunk_vec USING vec0(
+      chunk_id TEXT PRIMARY KEY,
+      embedding FLOAT[768]
+    );
+    CREATE TABLE IF NOT EXISTS kb_dirs (
+      id TEXT PRIMARY KEY, dir_path TEXT NOT NULL UNIQUE,
+      recursive INTEGER NOT NULL DEFAULT 1, enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS kb_files (
+      id TEXT PRIMARY KEY, dir_id TEXT NOT NULL,
+      file_path TEXT NOT NULL, file_hash TEXT NOT NULL,
+      mtime TEXT NOT NULL, chunk_count INTEGER NOT NULL DEFAULT 0,
+      indexed_at TEXT NOT NULL,
+      FOREIGN KEY(dir_id) REFERENCES kb_dirs(id) ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_files_path ON kb_files(file_path);
+    CREATE TABLE IF NOT EXISTS kb_chunks (
+      id TEXT PRIMARY KEY, file_id TEXT NOT NULL,
+      chunk_index INTEGER NOT NULL, content TEXT NOT NULL,
+      char_count INTEGER NOT NULL, embedding_updated_at TEXT,
+      FOREIGN KEY(file_id) REFERENCES kb_files(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS memory_summary (
+      key TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      citations TEXT,
+      scored_ids TEXT NOT NULL,
+      total_enabled INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+} catch {
+  console.warn('[db] M8 向量/KB 表创建失败，相关功能将不可用');
+}
 
 interface TaskRow {
   id: string;
@@ -449,6 +512,7 @@ interface MemoryRow {
   name_slug: string | null;
   why: string | null;
   how_to_apply: string | null;
+  embedding_updated_at: string | null;
 }
 
 function rowToMemory(row: MemoryRow): MemoryEntry {
@@ -469,6 +533,7 @@ function rowToMemory(row: MemoryRow): MemoryEntry {
     nameSlug: row.name_slug ?? undefined,
     why: row.why ?? undefined,
     howToApply: row.how_to_apply ?? undefined,
+    embeddingUpdatedAt: row.embedding_updated_at ?? undefined,
     // linkedMemoryIds 从 content 中的 [[link]] 动态解析，不持久化独立列
   };
 }
@@ -524,7 +589,7 @@ export const memoryStore = {
     return rows.map(rowToMemory);
   },
 
-  update(id: string, patch: Partial<Pick<MemoryEntry, 'content' | 'category' | 'confidence' | 'enabled' | 'nameSlug' | 'why' | 'howToApply'>>): MemoryEntry | undefined {
+  update(id: string, patch: Partial<Pick<MemoryEntry, 'content' | 'category' | 'confidence' | 'enabled' | 'nameSlug' | 'why' | 'howToApply' | 'embeddingUpdatedAt'>>): MemoryEntry | undefined {
     const current = this.get(id);
     if (!current) return undefined;
     const next: MemoryEntry = {
@@ -536,11 +601,12 @@ export const memoryStore = {
       nameSlug: patch.nameSlug !== undefined ? patch.nameSlug : current.nameSlug,
       why: patch.why !== undefined ? patch.why : current.why,
       howToApply: patch.howToApply !== undefined ? patch.howToApply : current.howToApply,
+      embeddingUpdatedAt: patch.embeddingUpdatedAt !== undefined ? patch.embeddingUpdatedAt : current.embeddingUpdatedAt,
       updatedAt: new Date().toISOString(),
     };
     db.prepare(
       `UPDATE memories SET content=@content, category=@category, confidence=@confidence,
-         enabled=@enabled, name_slug=@nameSlug, why=@why, how_to_apply=@howToApply,
+         enabled=@enabled, name_slug=@nameSlug, why=@why, how_to_apply=@howToApply, embedding_updated_at=@embeddingUpdatedAt,
          updated_at=@updatedAt WHERE id=@id`,
     ).run({
       id,
@@ -551,6 +617,7 @@ export const memoryStore = {
       nameSlug: next.nameSlug ?? null,
       why: next.why ?? null,
       howToApply: next.howToApply ?? null,
+      embeddingUpdatedAt: next.embeddingUpdatedAt ?? null,
       updatedAt: next.updatedAt,
     });
     return next;
@@ -684,6 +751,219 @@ export const skillSettingsStore = {
     return new Map(rows.map((row) => [row.name, row.enabled === 1]));
   },
 };
+
+/**
+ * sqlite-vec 是否已成功加载。
+ * 可用于调用方判断是否启用向量检索。
+ */
+export function isVecLoaded(): boolean {
+  try {
+    db.prepare("SELECT vec_version()").get();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 将 Float32Array 序列化为 sqlite-vec 可接受的 BLOB。 */
+export function serializeVector(vec: Float32Array): Buffer {
+  return Buffer.from(vec.buffer);
+}
+
+/** 将 sqlite-vec BLOB 反序列化为 Float32Array。 */
+export function deserializeVector(buffer: Buffer): Float32Array {
+  return new Float32Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 4);
+}
+
+// ============================================================
+// M8: 记忆摘要缓存（避免每次 LLM 调用重算评分）
+// ============================================================
+
+export interface MemorySummaryRow {
+  key: string;
+  content: string;
+  citations: string | null;
+  scoredIds: string;
+  totalEnabled: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 读取缓存的记忆摘要。不存在时返回 undefined。 */
+export function getMemorySummary(goal?: string): MemorySummaryRow | undefined {
+  try {
+    const key = goal ? `goal:${hashString(goal).slice(0, 16)}` : 'default';
+    const row = db.prepare(
+      'SELECT * FROM memory_summary WHERE key = ?',
+    ).get(key) as MemorySummaryRow | undefined;
+    return row;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 写入记忆摘要缓存。 */
+export function setMemorySummary(
+  goal: string | undefined,
+  content: string,
+  citations: string,
+  scoredIds: string,
+  totalEnabled: number,
+): void {
+  try {
+    const key = goal ? `goal:${hashString(goal).slice(0, 16)}` : 'default';
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO memory_summary (key, content, citations, scored_ids, total_enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET
+         content=excluded.content, citations=excluded.citations,
+         scored_ids=excluded.scored_ids, total_enabled=excluded.total_enabled,
+         updated_at=excluded.updated_at`,
+    ).run(key, content, citations, scoredIds, totalEnabled, now, now);
+  } catch { /* 缓存失败不影响主流程 */ }
+}
+
+/** 清除记忆摘要缓存（记忆变更时调用）。 */
+export function invalidateMemorySummary(goal?: string): void {
+  try {
+    if (goal) {
+      const key = `goal:${hashString(goal).slice(0, 16)}`;
+      db.prepare('DELETE FROM memory_summary WHERE key = ?').run(key);
+    } else {
+      db.prepare('DELETE FROM memory_summary').run();
+    }
+  } catch { /* 忽略 */ }
+}
+
+function hashString(s: string): string {
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) {
+    const char = s.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return Math.abs(hash).toString(16);
+}
+
+/** 向量维度检测：若表存在 + vec 已加载，返回维度；否则 0。 */
+export function detectVectorDimensions(tableName: string): number {
+  if (!isVecLoaded()) return 0;
+  try {
+    const row = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string; type: string }>;
+    const embeddingCol = row.find(c => c.name === 'embedding');
+    if (embeddingCol) {
+      const match = embeddingCol.type.match(/FLOAT\[(\d+)\]/);
+      if (match) return parseInt(match[1], 10);
+    }
+  } catch { /* 忽略 */ }
+  return 0;
+}
+
+// ============================================================
+// M8: 向量存储辅助函数
+// ============================================================
+
+/** 向 memory_vec 表写入或更新记忆的 embedding 向量。 */
+export function upsertMemoryVec(memoryId: string, embedding: Float32Array): void {
+  if (!isVecLoaded()) return;
+  try {
+    db.prepare(
+      'INSERT INTO memory_vec (memory_id, embedding) VALUES (?, ?)'
+    ).run(memoryId, serializeVector(embedding));
+  } catch {
+    // 已存在则更新
+    try {
+      db.prepare('DELETE FROM memory_vec WHERE memory_id = ?').run(memoryId);
+      db.prepare(
+        'INSERT INTO memory_vec (memory_id, embedding) VALUES (?, ?)'
+      ).run(memoryId, serializeVector(embedding));
+    } catch { /* 降级 */ }
+  }
+}
+
+/** 从 memory_vec 删除一条记忆的向量。 */
+export function deleteMemoryVec(memoryId: string): void {
+  if (!isVecLoaded()) return;
+  try {
+    db.prepare('DELETE FROM memory_vec WHERE memory_id = ?').run(memoryId);
+  } catch { /* 忽略 */ }
+}
+
+/**
+ * 对查询文本执行 KNN 向量搜索，返回匹配的 memory_id 及距离。
+ * 向量维度必须与 memory_vec 表的 FLOAT[N] 一致。
+ */
+export function searchMemoryVec(
+  queryVec: Float32Array,
+  k: number,
+): Array<{ memoryId: string; distance: number }> {
+  if (!isVecLoaded()) return [];
+  try {
+    const rows = db.prepare(`
+      SELECT memory_id, distance
+      FROM memory_vec
+      WHERE embedding MATCH ? AND k = ?
+      ORDER BY distance
+    `).all(serializeVector(queryVec), k) as Array<{ memory_id: string; distance: number }>;
+    return rows.map(r => ({ memoryId: r.memory_id, distance: r.distance }));
+  } catch (err) {
+    console.warn('[db] memory_vec KNN 搜索失败:', err instanceof Error ? err.message : String(err));
+    return [];
+  }
+}
+
+/** 向 kb_chunk_vec 表写入块的 embedding 向量。 */
+export function upsertKbChunkVec(chunkId: string, embedding: Float32Array): void {
+  if (!isVecLoaded()) return;
+  try {
+    db.prepare(
+      'INSERT INTO kb_chunk_vec (chunk_id, embedding) VALUES (?, ?)'
+    ).run(chunkId, serializeVector(embedding));
+  } catch {
+    try {
+      db.prepare('DELETE FROM kb_chunk_vec WHERE chunk_id = ?').run(chunkId);
+      db.prepare(
+        'INSERT INTO kb_chunk_vec (chunk_id, embedding) VALUES (?, ?)'
+      ).run(chunkId, serializeVector(embedding));
+    } catch { /* 降级 */ }
+  }
+}
+
+/** 从 kb_chunk_vec 删除块的向量。批量删除用 chunkIds 数组。 */
+export function deleteKbChunkVec(chunkId: string): void;
+export function deleteKbChunkVec(chunkIds: string[]): void;
+export function deleteKbChunkVec(arg: string | string[]): void {
+  if (!isVecLoaded()) return;
+  const ids = Array.isArray(arg) ? arg : [arg];
+  if (ids.length === 0) return;
+  try {
+    const placeholders = ids.map(() => '?').join(',');
+    db.prepare(`DELETE FROM kb_chunk_vec WHERE chunk_id IN (${placeholders})`).run(...ids);
+  } catch { /* 忽略 */ }
+}
+
+/**
+ * 对查询文本执行 KB 块 KNN 向量搜索。
+ */
+export function searchKbChunkVec(
+  queryVec: Float32Array,
+  k: number,
+): Array<{ chunkId: string; distance: number }> {
+  if (!isVecLoaded()) return [];
+  try {
+    const rows = db.prepare(`
+      SELECT chunk_id, distance
+      FROM kb_chunk_vec
+      WHERE embedding MATCH ? AND k = ?
+      ORDER BY distance
+    `).all(serializeVector(queryVec), k) as Array<{ chunk_id: string; distance: number }>;
+    return rows.map(r => ({ chunkId: r.chunk_id, distance: r.distance }));
+  } catch (err) {
+    console.warn('[db] kb_chunk_vec KNN 搜索失败:', err instanceof Error ? err.message : String(err));
+    return [];
+  }
+}
 
 export const projectStore = {
   create(project: Project): Project {

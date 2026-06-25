@@ -219,6 +219,8 @@ export interface PendingToolApproval {
   call: ToolCall;
   riskLevel: ToolRiskLevel;
   createdAt: string;
+  /** auto mode 语境下需要审批的原因 */
+  autoModeReason?: 'blocked_by_rule' | 'not_covered' | 'paused';
 }
 
 /** 一个用户任务（Agent 的工作单元） */
@@ -253,8 +255,10 @@ export interface Task {
   fileSnapshots?: FileSnapshot[];
   /** Plan Agent 触发方式；manual 表示用户通过 /plan 显式请求规划。 */
   planMode?: 'manual';
-  /** 自动模式：Agent 执行所有操作无需用户审批工具和计划 */
-  autoMode?: boolean;
+  /** 自动模式等级（Agent 的自主执行程度） */
+  autoModeLevel?: AutoModeLevel;
+  /** 自动模式运行时统计与状态 */
+  autoModeState?: AutoModeState;
   createdAt: string;
   updatedAt: string;
 }
@@ -280,6 +284,37 @@ export interface Project {
  * - dangerous: 破坏性或高风险，执行前必须用户确认（如写文件、删除）
  */
 export type ToolRiskLevel = 'safe' | 'caution' | 'dangerous';
+
+/**
+ * Auto Mode 等级。
+ * - off: 每次工具调用都需要用户审批（缺省）
+ * - auto-edit: 文件读写编辑等安全工具自动批准；shell/网络等需要审批
+ * - full: 所有工具自动批准，受安全规则约束
+ */
+export type AutoModeLevel = 'off' | 'plan' | 'auto-edit' | 'full';
+
+/** Auto Mode 在运行时中的统计与状态 */
+export interface AutoModeState {
+  level: AutoModeLevel;
+  /** 自动批准的工具调用累计次数 */
+  autoApprovedCalls: number;
+  /** 被安全规则拦截的次数 */
+  blockedByRules: number;
+  /** 当前是否因安全限制被暂停 */
+  paused: boolean;
+  /** 暂停原因（paused 时有效） */
+  pausedReason?: string;
+  /** 连续自动批准数（达到阈值后会暂停） */
+  consecutiveAutoCalls: number;
+  /** 自动模式降级回退的累计次数 */
+  fallbackCount: number;
+  /** Plan Mode: Agent 是否已完成勘探并输出了计划 */
+  planReady?: boolean;
+  /** Plan Mode: Agent 输出的计划内容 */
+  planContent?: string;
+  /** Plan Mode: 自动切入前的原始 auto mode（用于批准后恢复） */
+  planPreMode?: AutoModeLevel;
+}
 
 /** 任务轨迹记录类型，用于审计、诊断和回放。 */
 export type TaskTraceKind =
@@ -420,6 +455,7 @@ export type AgentEvent =
       taskId: string;
       call: ToolCall;
       riskLevel: ToolRiskLevel;
+      autoModeReason?: 'blocked_by_rule' | 'not_covered' | 'paused';
     } // 执行非 safe 工具前请求用户确认
   | {
       type: 'clarification_request';
@@ -471,6 +507,7 @@ export type AgentEvent =
   | { type: 'skill_installed'; taskId: string; skillNames: string[]; repoUrl: string }
   | { type: 'skill_uninstalled'; taskId: string; skillName: string }
   | { type: 'content_blocks_added'; taskId: string; messageId: string; blocks: ContentBlock[] }
+  | { type: 'auto_mode_state'; taskId: string; state: AutoModeState }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
   | { type: 'task_deleted'; taskId: string };
@@ -485,8 +522,8 @@ export interface CreateTaskRequest {
   budget?: TaskBudget;
   projectId?: string;
   attachments?: MessageAttachment[];
-  /** 自动模式：Agent 执行所有操作无需用户审批 */
-  autoMode?: boolean;
+  /** 自动模式等级（默认 off：需人工审批工具和计划） */
+  autoModeLevel?: AutoModeLevel;
 }
 
 export interface CreateTaskResponse {
@@ -762,6 +799,8 @@ export interface MemoryEntry {
   howToApply?: string;
   /** P5: 关联的记忆 ID 列表 */
   linkedMemoryIds?: string[];
+  /** M8: 向量索引更新时间（有值表示已向量化，可用于语义搜索） */
+  embeddingUpdatedAt?: string;
 }
 
 /** Skill: 暴露给前端的 skill 摘要（Agent Skills 标准格式，不含 body）。 */
@@ -824,13 +863,44 @@ export interface MemoryListResponse {
   memories: MemoryEntry[];
 }
 
+/** M8: 引用来源类型 */
+export type CitationSourceType = 'memory' | 'kb_chunk' | 'kb_file';
+
+/** M8: 结构化引用信息，用于追溯搜索结果与注入记忆的来源。 */
+export interface Citation {
+  sourceId: string;
+  sourceType: CitationSourceType;
+  /** 原文片段（前 200 字符） */
+  content: string;
+  /** 相关度 0-1 */
+  score: number;
+  /** memory 专用 */
+  category?: MemoryCategory;
+  nameSlug?: string;
+  /** KB 专用 */
+  filePath?: string;
+  chunkIndex?: number;
+}
+
+/** M8: 含引用的搜索结果 */
+export interface SearchResultWithCitations {
+  results: Array<{
+    file: string;
+    snippet: string;
+    score: number;
+  }>;
+  citations: Citation[];
+  found: number;
+  note: string;
+}
+
 // ============================================================
 // M5 设置、工具管理与数据管理
 // ============================================================
 
 export interface RuntimeSettings {
   llm: {
-    provider: 'openai';
+    provider: 'openai' | 'anthropic' | 'openai-response';
     baseUrl: string;
     model: string;
   /** 视觉子模型：当消息带图片附件时自动切换此模型（空则用主模型） */
@@ -841,18 +911,30 @@ export interface RuntimeSettings {
     enabledModels: string[];
     temperature: number;
     timeoutMs: number;
+    maxTokens: number;
     apiKeyConfigured: boolean;
   };
   workspaceDir: string;
   commandExecutionEnabled: boolean;
   mcpServersJson: string;
   cleanupPolicyDays: number;
+  /** 缺省 auto mode 等级（创建任务时继承） */
+  autoModeLevel: AutoModeLevel;
+  /** 是否启用 auto mode 安全规则（拦截 destroy/exfiltrate 等危险操作） */
+  autoModeSafetyEnabled: boolean;
   dbPath: string;
+  /** M8: Embedding Provider 配置（OpenAI 兼容接口） */
+  embedding: {
+    provider: 'openai' | 'off';
+    model: string;
+    baseUrl: string;
+    apiKeyConfigured: boolean;
+  };
 }
 
 export interface UpdateRuntimeSettingsRequest {
   llm?: Partial<{
-    provider: 'openai';
+    provider: 'openai' | 'anthropic' | 'openai-response';
     baseUrl: string;
     model: string;
   /** 视觉子模型：空字符串表示清除 */
@@ -861,6 +943,7 @@ export interface UpdateRuntimeSettingsRequest {
     enabledModels: string[];
     temperature: number;
     timeoutMs: number;
+    maxTokens: number;
   /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
     apiKey: string;
   }>;
@@ -868,6 +951,16 @@ export interface UpdateRuntimeSettingsRequest {
   commandExecutionEnabled?: boolean;
   mcpServersJson?: string;
   cleanupPolicyDays?: number;
+  autoModeLevel?: AutoModeLevel;
+  autoModeSafetyEnabled?: boolean;
+  /** M8: Embedding Provider 配置（OpenAI 兼容接口） */
+  embedding?: Partial<{
+    provider: 'openai' | 'off';
+    model: string;
+    baseUrl: string;
+    /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
+    apiKey: string;
+  }>;
 }
 
 export interface ModelListResponse {
@@ -914,6 +1007,34 @@ export interface CleanupDataRequest {
 export interface CleanupDataResponse {
   deletedTasks: number;
   deletedTraces: number;
+}
+
+// ============================================================
+// M8: 知识库类型
+// ============================================================
+
+export interface KbDir {
+  id: string;
+  dirPath: string;
+  recursive: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KbDirListResponse {
+  dirs: KbDir[];
+}
+
+export interface KbIndexStatus {
+  totalFiles: number;
+  totalChunks: number;
+  lastIndexed: string | null;
+}
+
+export interface AddKbDirRequest {
+  dirPath: string;
+  recursive?: boolean;
 }
 
 // ============================================================

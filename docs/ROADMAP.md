@@ -118,16 +118,20 @@ GitHub Actions 多平台(macOS/Windows/Linux) typecheck + tag 触发 DMG 构建�
 > 浏览器自动化已通过 browser 预装 skill + Playwright MCP 提供基础能力。
 > 网页搜索已通过 web_search 工具 + web-search 预装 skill 落地。
 
-### M8.1 知识库与 RAG
+### M8.1 知识库与 RAG ✅
 
-短期不直接上向量库，先做文件搜索；满足触发条件后再引入语义召回。
+已引入 `sqlite-vec` 向量扩展 + 混合评分（关键词+向量），支持记忆语义检索和知识库文件索引。
 
-- [ ] 知识库设置入口（明确哪些目录被索引）
-- [ ] 索引状态表（文件路径、hash/mtime、chunk 数、索引时间）
-- [ ] 评估并引入 `sqlite-vec`
-- [ ] `index_files` + `recall` 工具
-- [ ] 前端展示来源（文件、片段、更新时间、置信度）
-- [ ] 禁用/删除知识库时索引必须可清理
+- [x] 评估并引入 `sqlite-vec`（已验证 better-sqlite3 兼容性、KNN 性能）
+- [x] Embedding Provider 工厂（Ollama 本地 / OpenAI 远程 / @xenova 进程内降级）
+- [x] 记忆向量化：`memory_vec` 表 + 混合评分（`α·keyword + (1-α)·vector`）
+- [x] 知识库设置入口（`/api/knowledge-base/dirs` CRUD）
+- [x] 索引状态表（`kb_dirs`/`kb_files`/`kb_chunks` + 变更检测）
+- [x] `index_files` + `recall` 工具（增量索引 + KNN 语义召回）
+- [x] 前端展示来源（MemoryPanel 向量化徽章、KB 结果文件路径+片段）
+- [x] 禁用/删除知识库时索引自动清理（级联删除）
+- [ ] 后端自动隐式 recall（Agent 自动对目标做 KB 检索注入上下文）
+- [ ] 前端 KB 设置面板 UI（当前仅 API 可用）
 
 ### M8.2 Agent 评测
 

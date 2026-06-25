@@ -10,6 +10,8 @@ interface SlashCommand {
   description?: string;
 }
 
+export type AutoModeUILevel = 'off' | 'plan' | 'auto-edit' | 'full';
+
 interface ComposerProps {
   value: string;
   busy: boolean;
@@ -39,6 +41,14 @@ interface ComposerProps {
   onPasteFiles?: (files: Array<{ name: string; dataUrl: string; mimeType: string }>) => void;
   /** 点击 "+" 按钮打开文件选择器 */
   onPickAttachments?: () => void;
+  /** Auto mode 等级 */
+  autoModeLevel?: AutoModeUILevel;
+  /** Auto mode 暂停状态 */
+  autoModePaused?: boolean;
+  /** 点击切换 auto mode */
+  onCycleAutoMode?: () => void;
+  /** 恢复暂停的 auto mode */
+  onResumeAutoMode?: () => void;
 }
 
 export function Composer({
@@ -60,6 +70,10 @@ export function Composer({
   onOpenModelSelector,
   modelButtonRef,
   onStop,
+  autoModeLevel,
+  autoModePaused,
+  onCycleAutoMode,
+  onResumeAutoMode,
 }: ComposerProps) {
   const platform = usePlatform();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -354,16 +368,57 @@ export function Composer({
       </div>
 
       <div className="composer-footer-external">
-        {projectName ? (
-          <span className="composer-project-badge" title={projectName}>
-            <FolderIcon />
-            <span>{projectName}</span>
-          </span>
-        ) : (
-          <span className="composer-project-badge is-standalone" title={t("projects.standalone")}>
-            <span>{t("projects.standalone")}</span>
-          </span>
-        )}
+        <div className="composer-footer-left">
+          {projectName ? (
+            <span className="composer-project-badge" title={projectName}>
+              <FolderIcon />
+              <span>{projectName}</span>
+            </span>
+          ) : (
+            <span className="composer-project-badge is-standalone" title={t("projects.standalone")}>
+              <span>{t("projects.standalone")}</span>
+            </span>
+          )}
+        </div>
+        <div className="composer-footer-right">
+          {autoModePaused ? (
+            <button
+              type="button"
+              className="auto-mode-btn-composer auto-mode-paused"
+              onClick={onResumeAutoMode}
+              title="Auto mode 已暂停，点击恢复"
+            >
+              <span className="auto-mode-dot paused" />
+              <span>Paused — resume</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={"auto-mode-btn-composer" + (autoModeLevel && autoModeLevel !== 'off' ? " is-active" : "")}
+              onClick={onCycleAutoMode}
+              title={
+                autoModeLevel === 'full'
+                  ? 'Full Auto — all tools auto-approved with safety rules. Plan: auto.'
+                  : autoModeLevel === 'auto-edit'
+                    ? 'Auto-edit — file ops auto, shell/network manual. Plan: auto.'
+                    : autoModeLevel === 'plan'
+                      ? 'Plan Mode — read-only exploration. Agent reads & plans, no writes until approved.'
+                      : 'Manual — all tools and plans require approval.'
+              }
+            >
+              <span className={"auto-mode-dot" + (autoModeLevel === 'full' ? ' full' : autoModeLevel === 'auto-edit' ? ' auto-edit' : autoModeLevel === 'plan' ? ' plan' : ' off')} />
+              <span>
+                {autoModeLevel === 'full'
+                  ? 'Full Auto'
+                  : autoModeLevel === 'auto-edit'
+                    ? 'Auto-edit'
+                    : autoModeLevel === 'plan'
+                      ? 'Plan'
+                      : 'Manual'}
+              </span>
+            </button>
+          )}
+        </div>
       </div>
       {viewingImage && (
         <ImageViewer

@@ -40,7 +40,9 @@ import {
   listProjects,
   listTaskTraces,
   listTasks,
+  resumeAutoMode as resumeAutoModeApi,
   resumeTask,
+  updateTaskAutoMode as updateTaskAutoModeApi,
   revertTask,
   unrevertTask,
   updateArtifact,
@@ -234,9 +236,14 @@ function App() {
   const [workMode, setWorkMode] = useState<WorkMode>(() =>
     readStoredOption(WORK_MODE_KEY, defaultToolDetailsOpen ? "coding" : "daily", ["coding", "daily"] as const),
   );
-  const [autoMode, setAutoMode] = useState(() =>
-    readStoredBoolean("aurevoy.autoMode", false),
-  );
+  const [autoModeLevel, setAutoModeLevel] = useState<'off' | 'plan' | 'auto-edit' | 'full'>(() => {
+    const stored = localStorage.getItem("aurevoy.autoModeLevel");
+    if (stored === 'plan' || stored === 'auto-edit' || stored === 'full') return stored;
+    // 迁移旧版 boolean: autoMode=true → full
+    if (localStorage.getItem("aurevoy.autoMode") === 'true') return 'full';
+    return 'off';
+  });
+  const [autoModeState, setAutoModeState] = useState<{ paused?: boolean; pausedReason?: string; autoApprovedCalls?: number; consecutiveAutoCalls?: number } | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() =>
     readStoredOption(THEME_MODE_KEY, "system", ["system", "light", "dark"] as const),
   );
@@ -381,6 +388,27 @@ function App() {
       unlistenDrop?.();
     };
   }, []);
+  async function handleResumeAutoMode(): Promise<void> {
+    if (!currentTask?.id) return;
+    try {
+      await resumeAutoModeApi(currentTask.id);
+      setAutoModeState((prev) => prev ? { ...prev, paused: false, pausedReason: undefined, consecutiveAutoCalls: 0 } : null);
+    } catch (err) {
+      setNotice(`恢复 auto mode 失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function cycleAutoModeLevel(): void {
+    const next = autoModeLevel === 'off' ? 'plan' : autoModeLevel === 'plan' ? 'auto-edit' : autoModeLevel === 'auto-edit' ? 'full' : 'off';
+    setAutoModeLevel(next);
+    localStorage.setItem("aurevoy.autoModeLevel", next);
+    localStorage.removeItem("aurevoy.autoMode");
+    // 有正在活动的任务时，实时同步到后端
+    if (currentTask?.id) {
+      updateTaskAutoModeApi(currentTask.id, next).catch(() => {});
+    }
+  }
+
   async function handleImportProjectPath(dirPath: string): Promise<void> {
     try {
       const project = await createProject({ path: dirPath });
@@ -720,6 +748,9 @@ function App() {
       case "skill_uninstalled":
         refreshSkills();
         break;
+      case "auto_mode_state":
+        setAutoModeState({ ...event.state });
+        break;
       case "task_deleted":
         // 任务被删除（可能来自其他客户端或本端），关流并清理
         closeStream();
@@ -743,6 +774,7 @@ function App() {
               : "finalizing",
         );
         setBusy(false);
+        setAutoModeState(null);
         patchCurrentTask({
           status: event.status,
           phase:
@@ -800,7 +832,7 @@ function App() {
     closeStream();
 
     try {
-      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach, autoMode);
+      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach, autoModeLevel === 'off' ? undefined : autoModeLevel);
       setCurrentTask(task);
       setPhase(task.phase);
       setTraces([]);
@@ -1125,19 +1157,26 @@ function App() {
 
     const body: UpdateRuntimeSettingsRequest = {
       llm: {
-        provider: "openai",
+        provider: draft.provider as 'openai' | 'anthropic' | 'openai-response',
         baseUrl: draft.baseUrl,
         model: draft.model,
         visionModel: draft.visionModel,
         enabledModels: mergedEnabled,
         temperature: draft.temperature,
         timeoutMs: draft.timeoutMs,
+        maxTokens: draft.maxTokens,
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
       },
       workspaceDir: draft.workspaceDir,
       commandExecutionEnabled: draft.commandExecutionEnabled,
       mcpServersJson: draft.mcpServersJson,
       cleanupPolicyDays: draft.cleanupPolicyDays,
+      embedding: {
+        provider: draft.embeddingProvider as 'openai' | 'off',
+        model: draft.embeddingModel,
+        baseUrl: draft.embeddingBaseUrl,
+        ...(draft.embeddingApiKey ? { apiKey: draft.embeddingApiKey } : {}),
+      },
     };
     setSettingsSaving(true);
     void updateSettings(body)
@@ -1428,18 +1467,6 @@ function App() {
                 </div>
                 <button
                   type="button"
-                  className={"mode-btn auto-mode-btn" + (autoMode ? " is-active" : "")}
-                  onClick={() => {
-                    const n = !autoMode;
-                    setAutoMode(n);
-                    window.localStorage.setItem("aurevoy.autoMode", n ? "true" : "false");
-                  }}
-                  title={autoMode ? "Auto mode on" : "Auto mode off"}
-                >
-                  Auto
-                </button>
-                <button
-                  type="button"
                   className="ghost-btn"
                   onClick={() => setInspectorOpen((open) => !open)}
                 >
@@ -1453,18 +1480,6 @@ function App() {
                 <span className="topbar-kicker">Aurevoy Agent</span>
               </div>
               <div className="topbar-actions">
-                <button
-                  type="button"
-                  className={"mode-btn auto-mode-btn" + (autoMode ? " is-active" : "")}
-                  onClick={() => {
-                    const n = !autoMode;
-                    setAutoMode(n);
-                    window.localStorage.setItem("aurevoy.autoMode", n ? "true" : "false");
-                  }}
-                  title={autoMode ? "Auto mode on" : "Auto mode off"}
-                >
-                  Auto
-                </button>
                 <button
                   type="button"
                   className="ghost-btn"
@@ -1592,6 +1607,10 @@ function App() {
                 onOpenModelSelector={handleOpenModelSelector}
                 modelButtonRef={modelButtonRef}
                 onStop={handleStopStream}
+                autoModeLevel={autoModeLevel}
+                autoModePaused={!!autoModeState?.paused}
+                onCycleAutoMode={cycleAutoModeLevel}
+                onResumeAutoMode={handleResumeAutoMode}
               />
               <ModelSelectorDrawer
                 open={modelDrawerOpen}
@@ -1626,6 +1645,10 @@ function App() {
               onOpenModelSelector={handleOpenModelSelector}
               modelButtonRef={modelButtonRef}
               onStop={handleStopStream}
+              autoModeLevel={autoModeLevel}
+              autoModePaused={!!autoModeState?.paused}
+              onCycleAutoMode={cycleAutoModeLevel}
+              onResumeAutoMode={handleResumeAutoMode}
             />
             <ModelSelectorDrawer
               open={modelDrawerOpen}

@@ -93,22 +93,24 @@ ReAct 工具调用循环不引入 `openai` SDK、Vercel AI SDK 或 LangChain.js�
 - M3 回归使用 `scripts/m3-regression.mjs` 启动真实后端、临时 OpenAI-compatible fixture、
   临时 MCP stdio server 和临时 SQLite；测试替身只存在于回归脚本，不进入生产路径。
 
-### 2.10 长期记忆检索：先结构化，暂不引入向量库
+### 2.10 长期记忆检索：结构化 + 向量混合（M8）
 
-M4 已评估 `sqlite-vec` 与 LanceDB，当前结论是**暂不作为主路径依赖**：
+M8 已验证并引入了 `sqlite-vec`（v0.1.x）作为向量检索扩展：
 
-- `sqlite-vec` 更适合继续保持单 SQLite 文件、本地优先和轻部署，但仍需要 embedding 生成、
-  索引版本、重建策略和跨平台原生扩展验证。
-- LanceDB 更适合后续文档级 RAG、批量向量数据和 ANN 检索，但会引入新的存储目录、
-  索引生命周期和打包验证成本。
-- 当前长期记忆是用户偏好、目录、模型偏好、习惯和事实，规模小且强可解释；
-  直接注入启用记忆并保留来源/置信度，比提前引入语义召回更可控。
+- **选型理由**：与现有 better-sqlite3 共享同一 SQLite 文件，零额外服务、零新存储目录。
+  同步 load/dump/备份策略不变。原生扩展在 macOS/Windows/Linux 可用（`npm install` 自动重编）。
+- **混合评分**：`context.ts` 中的 `scoreMemoriesHybrid()` 将关键词命中、分类加权、
+  置信度、时间衰减（关键词评分）与余弦相似度（向量评分）以权重 α 融合，默认 α=0.5。
+- **降级路径**：无 embedding Provider 或 sqlite-vec 未加载时，静默降级为纯关键词评分。
 
-引入向量检索的触发条件：
+**重要性能约束**：
+- 必须使用 `MATCH ? AND k = N` 的 KNN 运算符，不可用 `vec_distance_cosine() ORDER BY distance`（慢 190×）。
+- 向量维度需与 embedding Provider 输出一致（`memory_vec`/`kb_chunk_vec` 均使用 FLOAT[768]）。
 
-- 启用记忆数量超过上下文预算，且简单的分类、更新时间、置信度筛选不能保证召回质量。
-- 增加本地知识库/RAG 文档能力，需要根据当前任务语义召回片段。
-- 已有可配置 embedding Provider、索引重建流程、隐私说明和回归用例。
+Embedding 通过 OpenAI 兼容 API 接入（`/v1/embeddings`），`baseUrl` 指向任一兼容后端即可：
+- **Ollama**：`http://127.0.0.1:11434/v1`，模型 `nomic-embed-text`（768 维）
+- **OpenAI**：`https://api.openai.com/v1`，模型 `text-embedding-3-small`（1536 维）
+- **LiteLLM / OpenRouter** 等：任意 OpenAI 兼容端点
 
 ## 3. 依赖管理纪律
 

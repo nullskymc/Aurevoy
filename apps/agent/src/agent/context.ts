@@ -1,7 +1,9 @@
-import type { MemoryEntry, Message } from '@aurevoy/shared';
+import type { Citation, MemoryEntry, Message } from '@aurevoy/shared';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 import { getProvider } from '../llm/provider.js';
+import { getEmbeddingProvider } from '../embedding/provider.js';
+import { searchMemoryVec, isVecLoaded, getMemorySummary, setMemorySummary } from '../store/db.js';
 import { skillRegistry } from '../skills/registry.js';
 
 /**
@@ -363,6 +365,12 @@ export function buildContextWindow(
 /** 注入上下文的记忆条数上限（防止记忆膨胀挤占预算）。 */
 const MAX_INJECTED_MEMORIES = 20;
 
+/** M8: buildMemorySystemMessage 的返回值，包含消息本身和结构化引用列表。 */
+export interface MemorySystemMessage {
+  message: Message | null;
+  citations: Citation[];
+}
+
 const CATEGORY_LABEL: Record<MemoryEntry['category'], string> = {
   preference: '偏好',
   directory: '常用目录',
@@ -446,6 +454,167 @@ function scoreMemories(
   });
 }
 
+// ---- M8: Time-aware 时间上下文 ----
+
+/** 时间上下文类型 */
+type TimeContext = 'recent' | 'past' | 'neutral' | 'future';
+
+/**
+ * 从 goal 中检测时间上下文。
+ * 影响评分中的时间衰减系数。
+ */
+function detectTimeContext(goal: string): TimeContext {
+  const lower = goal.toLowerCase();
+
+  // 近期上下文
+  if (/\b(当前|现在|最近|目前|today|current|recent|just now|now)\b/i.test(lower)) {
+    return 'recent';
+  }
+
+  // 过往上下文
+  if (/\b(之前|以前|过去|上周|上个月|昨天|before|past|previous|last|earlier|ago|yesterday)\b/i.test(lower)) {
+    return 'past';
+  }
+
+  // 未来上下文
+  if (/\b(计划|打算|将要|明天|下周|下个月|future|plan|next|tomorrow|upcoming)\b/i.test(lower)) {
+    return 'future';
+  }
+
+  return 'neutral';
+}
+
+/**
+ * 根据时间上下文调整时间衰减系数。
+ * "recent" → 降低衰减速度（近期内容更重要）
+ * "past"   → 降低衰减速度（回忆过往内容）
+ * "future" → 正常衰减
+ * "neutral" → 正常衰减
+ */
+function timeDecayMultiplier(context: TimeContext): number {
+  switch (context) {
+    case 'recent': return 4.0;  // 衰减速度减为 1/4（相当于 120 天半衰期）
+    case 'past':   return 3.0;  // 衰减速度减为 1/3
+    case 'future': return 1.0;  // 正常衰减
+    case 'neutral': return 1.0; // 正常衰减
+  }
+}
+
+/**
+ * 带时间上下文的评分函数。
+ * 在 scoreMemories 基础上，通过 timeDecayMultiplier 调整时间衰减速率。
+ */
+function scoreMemoriesWithTimeContext(
+  memories: MemoryEntry[],
+  goal: string,
+  recentTopics: string[],
+  timeContext: TimeContext,
+): ScoredMemory[] {
+  const baseScores = scoreMemories(memories, goal, recentTopics);
+  const multiplier = timeDecayMultiplier(timeContext);
+
+  // 只有非 neutral 时才调整
+  if (multiplier === 1.0) return baseScores;
+
+  return baseScores.map((scored) => {
+    const ageDays =
+      (Date.now() - new Date(scored.entry.updatedAt).getTime()) / (1000 * 86400);
+    // 原始 score 中已经包含了一次时间衰减 (Math.pow(0.5, ageDays/30))
+    // 我们需要把它还原再重新应用调整后的衰减
+    const originalDecay = Math.pow(0.5, ageDays / 30);
+    const adjustedDecay = Math.pow(0.5, ageDays / (30 * multiplier));
+    // 如果原衰减 > 0，用调整后的衰减替换；否则保持原分
+    if (originalDecay > 0 && originalDecay !== 1.0) {
+      const scoreWithoutDecay = scored.score / originalDecay;
+      return {
+        entry: scored.entry,
+        score: scoreWithoutDecay * adjustedDecay,
+      };
+    }
+    return scored;
+  });
+}
+
+// ---- M8: 混合评分（关键词 + 向量） ----
+
+/** 混合评分权重 alpha：0=纯向量，1=纯关键词，默认 0.5 等权。 */
+let _hybridAlpha = 0.5;
+
+/** 设置混合评分权重（设置界面可调）。 */
+export function setHybridScoringAlpha(alpha: number): void {
+  _hybridAlpha = Math.max(0, Math.min(1, alpha));
+}
+
+/** 获取当前混合评分权重。 */
+export function getHybridScoringAlpha(): number {
+  return _hybridAlpha;
+}
+
+/**
+ * M8: 混合相关性评分（关键词 + 向量语义）。
+ *
+ * 在现有关键词评分基础上，叠加向量语义相似度。
+ * 向量搜索仅在以下条件同时满足时启用：
+ * 1. sqlite-vec 已加载
+ * 2. embedding provider 已配置
+ * 3. memory_vec 表存在数据
+ *
+ * 无法满足时静默降级为纯关键词评分（保持现有行为）。
+ */
+export async function scoreMemoriesHybrid(
+  memories: MemoryEntry[],
+  goal: string,
+  recentTopics: string[],
+): Promise<ScoredMemory[]> {
+  // 1. 检测时间上下文（影响时间衰减系数）
+  const timeContext = detectTimeContext(goal);
+
+  // 2. 关键词评分（复用现有逻辑，但传入调整后的时间上下文）
+  const keywordScores = scoreMemoriesWithTimeContext(memories, goal, recentTopics, timeContext);
+
+  // 3. 向量评分（如果有 embedding provider + sqlite-vec）
+
+  // 2. 向量评分（如果有 embedding provider + sqlite-vec）
+  if (!isVecLoaded()) return keywordScores;
+
+  const embProvider = getEmbeddingProvider();
+  if (!embProvider) return keywordScores;
+
+  const queryText = [goal, ...recentTopics]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  if (!queryText) return keywordScores;
+
+  try {
+    const queryVec = await embProvider.embed(queryText);
+    const vecResults = searchMemoryVec(queryVec, MAX_INJECTED_MEMORIES * 2);
+    const vectorScores = new Map<string, number>();
+    for (const r of vecResults) {
+      // 距离 0~2，转为相似度 1~0
+      vectorScores.set(r.memoryId, Math.max(0, 1 - r.distance));
+    }
+
+    // 3. 混合评分
+    const alpha = _hybridAlpha;
+    return memories.map((m) => {
+      const kw = keywordScores.find((s) => s.entry.id === m.id);
+      const kwScore = kw?.score ?? 0;
+      const vecScore = vectorScores.get(m.id) ?? 0;
+      return {
+        entry: m,
+        score: alpha * kwScore + (1 - alpha) * vecScore,
+      };
+    });
+  } catch (err) {
+    console.warn(
+      '[context] 向量评分失败，降级为纯关键词:',
+      err instanceof Error ? err.message : String(err),
+    );
+    return keywordScores;
+  }
+}
+
 // ---- P5: [[link]] 引用解析 ----
 
 /** 从记忆内容中解析 [[link]] 引用，返回被引用记忆的 nameSlug 列表。 */
@@ -488,39 +657,52 @@ function expandLinkedMemories(
   return [...expanded.values()].sort((a, b) => b.score - a.score);
 }
 
+// ---- M8: 记忆摘要缓存 ----
+
 /**
- * P5: 把启用的长期记忆构建为一条 system 消息，注入到 LLM 上下文最前面。
- *
- * 增强：
- * - 按目标相关性评分排序，只取 top-N
- * - 解析 [[link]] 引用，拉入关联记忆
- * - 标注截断数量
- * - 已禁用的记忆不会出现在这里
+ * 刷新记忆摘要缓存。
+ * 对给定目标执行完整的 score + expand + format，写入 memory_summary 表。
+ * 不阻塞调用方（void fire-and-forget）。
  */
-export function buildMemorySystemMessage(
+export async function refreshMemorySummary(memories: MemoryEntry[], goal?: string): Promise<void> {
+  try {
+    const recentTopics: string[] = [];
+    const result = await buildMemorySystemMessageInner(memories, goal, recentTopics);
+    if (result.message) {
+      setMemorySummary(
+        goal,
+        result.message.content,
+        JSON.stringify(result.citations),
+        JSON.stringify(result.citations.map((c) => c.sourceId)),
+        memories.filter((m) => m.enabled).length,
+      );
+    }
+  } catch {
+    // 缓存刷新失败不影响主流程
+  }
+}
+
+/** buildMemorySystemMessage 的内部实现，供 refreshMemorySummary 共享。 */
+async function buildMemorySystemMessageInner(
   memories: MemoryEntry[],
   goal?: string,
   recentTopics?: string[],
-): Message | null {
+): Promise<MemorySystemMessage> {
+  // (内部实现与 public 函数相同，见下方)
   const enabled = memories.filter((m) => m.enabled);
-  if (enabled.length === 0) return null;
+  if (enabled.length === 0) return { message: null, citations: [] };
 
-  // 有 goal 时做相关性评分；否则按更新时间取最近
   let selected: ScoredMemory[];
   let truncated = 0;
 
   if (goal) {
-    const scored = scoreMemories(enabled, goal, recentTopics ?? [])
+    const scored = (await scoreMemoriesHybrid(enabled, goal, recentTopics ?? []))
       .filter((s) => s.score > 0.05)
       .sort((a, b) => b.score - a.score);
-
-    // 展开 [[link]] 引用
     const expanded = expandLinkedMemories(scored, enabled);
-
     selected = expanded.slice(0, MAX_INJECTED_MEMORIES);
     truncated = expanded.length - selected.length;
   } else {
-    // 无 goal（兼容旧调用）：按更新时间取最近
     const sorted = enabled
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, MAX_INJECTED_MEMORIES);
@@ -528,7 +710,16 @@ export function buildMemorySystemMessage(
     truncated = enabled.length - sorted.length;
   }
 
-  if (selected.length === 0) return null;
+  if (selected.length === 0) return { message: null, citations: [] };
+
+  const citations: Citation[] = selected.map((s) => ({
+    sourceId: s.entry.id,
+    sourceType: 'memory' as const,
+    content: s.entry.content.slice(0, 200),
+    score: Math.round(s.score * 100) / 100,
+    category: s.entry.category,
+    nameSlug: s.entry.nameSlug,
+  }));
 
   const lines = selected.map((s) => {
     const label = CATEGORY_LABEL[s.entry.category];
@@ -547,11 +738,42 @@ export function buildMemorySystemMessage(
   }
 
   return {
-    id: randomUUID(),
-    role: 'system',
-    content,
-    createdAt: new Date().toISOString(),
+    message: { id: randomUUID(), role: 'system', content, createdAt: new Date().toISOString() },
+    citations,
   };
+}
+
+/**
+ * P5: 把启用的长期记忆构建为一条 system 消息，注入到 LLM 上下文最前面。
+ *
+ * M8: 优先使用缓存。记忆变更后调用方应触发 invalidateMemorySummary。
+ * 缓存命中时直接返回，避免重复的 LLM 调用和 embedding 请求。
+ */
+export async function buildMemorySystemMessage(
+  memories: MemoryEntry[],
+  goal?: string,
+  recentTopics?: string[],
+): Promise<MemorySystemMessage> {
+  // M8: 尝试命中缓存
+  try {
+    const cached = getMemorySummary(goal);
+    if (cached) {
+      const citations: Citation[] = cached.citations
+        ? (JSON.parse(cached.citations) as Citation[])
+        : [];
+      return {
+        message: cached.content
+          ? { id: randomUUID(), role: 'system', content: cached.content, createdAt: new Date().toISOString() }
+          : null,
+        citations,
+      };
+    }
+  } catch {
+    // 缓存读取失败，继续实时计算
+  }
+
+  // 未命中缓存，实时计算
+  return buildMemorySystemMessageInner(memories, goal, recentTopics);
 }
 
 /**

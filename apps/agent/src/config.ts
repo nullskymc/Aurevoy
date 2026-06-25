@@ -44,10 +44,20 @@ export const config = {
 
   /** LLM Provider 配置。未配置 apiKey 时引擎会在执行任务时明确报错（不再回退占位实现）。 */
   llm: {
-    /** 'openai'（OpenAI 兼容协议，支持 OpenAI/DeepSeek/Ollama 等） */
+    /**
+     * 提供商标识。支持:
+     * - 'openai' / 'openai-compatible' — OpenAI 兼容协议（/chat/completions），支持 OpenAI/DeepSeek/Ollama 等
+     * - 'anthropic' — Anthropic Messages API（/v1/messages），原生 Claude
+     * - 'openai-response' — OpenAI Responses API（/v1/responses），新一代 API
+     */
     provider: (process.env.AUREVOY_LLM_PROVIDER ?? 'openai').toLowerCase(),
     apiKey: process.env.AUREVOY_LLM_API_KEY ?? '',
-    /** OpenAI 兼容端点的基础地址，不含 /chat/completions */
+    /**
+     * Provider 端点基础地址：
+     * - 'openai' / 'openai-compatible': 不含 /chat/completions，如 https://api.openai.com/v1
+     * - 'anthropic': https://api.anthropic.com
+     * - 'openai-response': https://api.openai.com/v1
+     */
     baseUrl: process.env.AUREVOY_LLM_BASE_URL ?? 'https://api.openai.com/v1',
     model: process.env.AUREVOY_LLM_MODEL ?? 'gpt-4o-mini',
     /** 视觉子模型：消息带图片附件时自动切换此模型（空则用主模型，可能不支持视觉） */
@@ -55,6 +65,8 @@ export const config = {
     temperature: parseNumber(process.env.AUREVOY_LLM_TEMPERATURE, 0.7),
     /** 单轮 LLM 调用超时（毫秒）；防止半开连接导致任务永久挂起 */
     timeoutMs: parseNumber(process.env.AUREVOY_LLM_TIMEOUT_MS, 120000),
+    /** 单轮最大输出 token 数（Anthropic 必填，OpenAI 可选） */
+    maxTokens: parseNumber(process.env.AUREVOY_LLM_MAX_TOKENS, 8192),
   },
 
   agent: {
@@ -162,6 +174,16 @@ export const config = {
    * {"mcpServers":{"name":{"command":"node","args":["server.js"]}}}
    */
   mcpServers: parseMcpServers(process.env.AUREVOY_MCP_SERVERS_JSON),
+
+  /** M8: Embedding Provider 配置。通过 OpenAI 兼容 API 接入（支持 Ollama/LiteLLM/OpenAI 等）。
+   *  默认复用 LLM 配置（baseUrl/apiKey），用户可单独覆盖。 */
+  embedding: {
+    provider: (process.env.AUREVOY_EMBEDDING_PROVIDER ?? 'off') as 'openai' | 'off',
+    model: process.env.AUREVOY_EMBEDDING_MODEL ?? 'nomic-embed-text',
+    baseUrl: process.env.AUREVOY_EMBEDDING_BASE_URL ?? '',
+    apiKey: process.env.AUREVOY_EMBEDDING_API_KEY ?? '',
+    timeoutMs: parseNumber(process.env.AUREVOY_EMBEDDING_TIMEOUT_MS, 10000),
+  },
 };
 
 /** 解析数字环境变量，非法或缺失时回退默认值（避免 NaN 污染配置）。 */

@@ -9,7 +9,23 @@ import type {
 import { t, type Locale } from "../i18n";
 import { setBaseUrl } from "../api";
 
+interface KbDir {
+  id: string;
+  dirPath: string;
+  recursive: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface KbIndexStatus {
+  totalFiles: number;
+  totalChunks: number;
+  lastIndexed: string | null;
+}
+
 interface SettingsDraft {
+  provider: string;
   baseUrl: string;
   model: string;
   visionModel: string;
@@ -17,9 +33,14 @@ interface SettingsDraft {
   workspaceDir: string;
   temperature: number;
   timeoutMs: number;
+  maxTokens: number;
   commandExecutionEnabled: boolean;
   mcpServersJson: string;
   cleanupPolicyDays: number;
+  embeddingProvider: string;
+  embeddingModel: string;
+  embeddingBaseUrl: string;
+  embeddingApiKey: string;
 }
 
 interface SettingsPanelProps {
@@ -51,10 +72,10 @@ interface SettingsPanelProps {
   onConnectionChange?: () => void;
 }
 
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb";
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
-const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory"];
+const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb"];
 
 /** 每次调用都会重新计算 t()，确保语言切换后侧边栏标签即时更新 */
 function getSettingsGroups(): Array<{
@@ -80,13 +101,14 @@ function getSettingsGroups(): Array<{
     label: t("settings.group.data"),
     items: [
       { id: "data", label: t("settings.nav.data"), icon: "database" },
+      { id: "kb", label: t("settings.nav.knowledgeBase"), icon: "kb" },
       { id: "memory", label: t("settings.nav.memory"), icon: "memory" },
     ],
   },
 ];
 }
 
-type SettingsIconName = "appearance" | "database" | "memory" | "server" | "sliders" | "spark";
+type SettingsIconName = "appearance" | "database" | "kb" | "memory" | "server" | "sliders" | "spark";
 
 export function SettingsPanel({
   settings,
@@ -260,6 +282,12 @@ export function SettingsPanel({
               onDelete={onDeleteMemory}
             />
           )}
+
+          {activeSection === "kb" && (
+            <KbSettings
+              settings={settings}
+            />
+          )}
         </div>
       </main>
     </section>
@@ -332,6 +360,15 @@ function SettingsNavIcon({ name }: { name: SettingsIconName }) {
       <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
         <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.35" fill="none" />
         <path d="M10 6.5V10l2.5 1.5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  if (name === "kb") {
+    return (
+      <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+        <path d="M4 3.5h12v13H4z" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" />
+        <path d="M7 7.5h6M7 10.5h4" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
       </svg>
     );
   }
@@ -601,7 +638,23 @@ function ProviderSettings({
   }
 
   return (
+    <>
     <SettingsGroup title={t("settings.providerConfig")}>
+      <SettingsActionRow
+        title={t("settings.providerTitle")}
+        description={t("settings.providerDesc")}
+        control={
+          <select
+            className="settings-inline-select"
+            value={draft.provider}
+            onChange={(event) => onDraftChange({ ...draft, provider: event.currentTarget.value })}
+          >
+            <option value="openai">OpenAI Compatible</option>
+            <option value="anthropic">Anthropic Claude</option>
+            <option value="openai-response">OpenAI Responses API</option>
+          </select>
+        }
+      />
       <SettingsActionRow
         title="Base URL"
         description={t("settings.baseUrlDesc")}
@@ -744,6 +797,22 @@ function ProviderSettings({
           />
         }
       />
+      {draft.provider === "anthropic" && (
+        <SettingsActionRow
+          title={t("settings.maxTokensTitle")}
+          description={t("settings.maxTokensDesc")}
+          control={
+            <input
+              className="settings-number-input"
+              type="number"
+              min={256}
+              step={256}
+              value={draft.maxTokens}
+              onChange={(event) => onDraftChange({ ...draft, maxTokens: Number(event.currentTarget.value) })}
+            />
+          }
+        />
+      )}
       <SettingsActionRow
         title={t("settings.saveProviderTitle")}
         description={t("settings.saveProviderDesc")}
@@ -759,6 +828,65 @@ function ProviderSettings({
         }
       />
     </SettingsGroup>
+
+    <SettingsGroup title={t("settings.embeddingTitle")}>
+      <SettingsActionRow
+        title={t("settings.embeddingProviderTitle")}
+        description={t("settings.embeddingProviderDesc")}
+        control={
+          <select
+            className="settings-inline-select"
+            value={draft.embeddingProvider}
+            onChange={(event) => onDraftChange({ ...draft, embeddingProvider: event.currentTarget.value })}
+          >
+            <option value="off">{t("settings.embeddingProviderOff")}</option>
+            <option value="openai">OpenAI Compatible</option>
+          </select>
+        }
+      />
+      {draft.embeddingProvider !== "off" && (
+        <>
+          <SettingsActionRow
+            title={t("settings.embeddingModelTitle")}
+            description={t("settings.embeddingModelDesc")}
+            control={
+              <input
+                className="settings-inline-input"
+                value={draft.embeddingModel}
+                placeholder="nomic-embed-text"
+                onChange={(event) => onDraftChange({ ...draft, embeddingModel: event.currentTarget.value })}
+              />
+            }
+          />
+          <SettingsActionRow
+            title={t("settings.embeddingBaseUrlTitle")}
+            description={t("settings.embeddingBaseUrlDesc")}
+            control={
+              <input
+                className="settings-inline-input"
+                value={draft.embeddingBaseUrl}
+                placeholder="http://127.0.0.1:11434/v1"
+                onChange={(event) => onDraftChange({ ...draft, embeddingBaseUrl: event.currentTarget.value })}
+              />
+            }
+          />
+          <SettingsActionRow
+            title={t("settings.embeddingApiKeyTitle")}
+            description={t("settings.embeddingApiKeyDesc")}
+            control={
+              <input
+                className="settings-inline-input"
+                type="password"
+                value={draft.embeddingApiKey}
+                placeholder={t("settings.apiKeyKeepPlaceholder")}
+                onChange={(event) => onDraftChange({ ...draft, embeddingApiKey: event.currentTarget.value })}
+              />
+            }
+          />
+        </>
+      )}
+    </SettingsGroup>
+    </>
   );
 }
 
@@ -1013,6 +1141,105 @@ function MemorySettings({
     </>
   );
 }
+function KbSettings({ settings: _settings }: { settings: RuntimeSettings | null }) {
+  const [dirs, setDirs] = useState<KbDir[]>([]);
+  const [status, setStatus] = useState<KbIndexStatus | null>(null);
+  const [dirInput, setDirInput] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  async function loadData() {
+    try {
+      const { listKbDirs, getKbStatus } = await import("../api");
+      setDirs(await listKbDirs());
+      setStatus(await getKbStatus());
+    } catch { setError(t("kb.statusFailed")); }
+  }
+
+  async function addDir() {
+    const trimmed = dirInput.trim();
+    if (!trimmed) return;
+    setAdding(true);
+    try {
+      const { createKbDir } = await import("../api");
+      const dir = await createKbDir(trimmed);
+      setDirs((prev) => [...prev, dir]);
+      setDirInput("");
+      setError("");
+    } catch { setError(t("kb.addFailed")); }
+    setAdding(false);
+  }
+
+  async function removeDir(id: string) {
+    try {
+      const { deleteKbDir } = await import("../api");
+      await deleteKbDir(id);
+      setDirs((prev) => prev.filter((d) => d.id !== id));
+    } catch { setError(t("kb.deleteFailed")); }
+  }
+
+return (
+    <>
+<SettingsGroup title={t("kb.dirsTitle")}>
+        <div className="memory-add">
+          <input
+            className="memory-add-input"
+            value={dirInput}
+            placeholder={t("kb.addDirPlaceholder")}
+            onChange={(e) => setDirInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addDir(); }}
+          />
+          <button type="button" className="memory-add-btn" onClick={addDir} disabled={adding || !dirInput.trim()}>
+            {t("kb.addDir")}
+          </button>
+        </div>
+        {error && <p className="memory-source" style={{ color: "var(--danger)", margin: "4px 0 0 14px" }}>{error}</p>}
+
+        {dirs.length === 0 ? (
+          <p className="memory-empty" style={{ padding: "12px 14px" }}>{t("kb.noDirs")}</p>
+        ) : (
+          <ul className="memory-list">
+            {dirs.map((dir) => (
+              <li key={dir.id} className="memory-item">
+                <code className="memory-content" style={{ fontSize: 13 }}>{dir.dirPath}</code>
+                <div className="memory-item-foot">
+                  <span className="memory-source">{dir.recursive ? "recursive" : "non-recursive"}</span>
+                  <button type="button" className="memory-link danger" onClick={() => removeDir(dir.id)}>
+                    {t("kb.removeDir")}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SettingsGroup>
+
+      {status && (
+        <SettingsGroup title={t("kb.statusTitle")}>
+          <div className="settings-row">
+            <div className="settings-info">
+              <span className="settings-label">{t("kb.totalFiles")}: {status.totalFiles}</span>
+            </div>
+          </div>
+          <div className="settings-row">
+            <div className="settings-info">
+              <span className="settings-label">{t("kb.totalChunks")}: {status.totalChunks}</span>
+            </div>
+          </div>
+          <div className="settings-row">
+            <div className="settings-info">
+              <span className="settings-label">{t("kb.lastIndexed")}: {status.lastIndexed ? new Date(status.lastIndexed).toLocaleString() : t("kb.emptyStatus")}</span>
+            </div>
+          </div>
+        </SettingsGroup>
+      )}
+    </>
+  );
+}
 
 function SettingsGroup({ children, title }: { children: React.ReactNode; title: string }) {
   return (
@@ -1022,6 +1249,7 @@ function SettingsGroup({ children, title }: { children: React.ReactNode; title: 
     </section>
   );
 }
+
 
 function SettingsChoiceGroup({ children, title }: { children: React.ReactNode; title: string }) {
   return (
@@ -1130,6 +1358,7 @@ function SettingsSwitchRow({
 
 function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
   return {
+    provider: settings?.llm.provider ?? "openai",
     baseUrl: settings?.llm.baseUrl ?? "",
     model: settings?.llm.model ?? "",
     visionModel: settings?.llm.visionModel ?? "",
@@ -1137,9 +1366,15 @@ function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
     workspaceDir: settings?.workspaceDir ?? "",
     temperature: settings?.llm.temperature ?? 0.7,
     timeoutMs: settings?.llm.timeoutMs ?? 120000,
+    maxTokens: settings?.llm.maxTokens ?? 8192,
     commandExecutionEnabled: settings?.commandExecutionEnabled ?? false,
     mcpServersJson: settings?.mcpServersJson ?? "",
     cleanupPolicyDays: settings?.cleanupPolicyDays ?? 30,
+    // 默认复用 LLM 配置（都是 OpenAI 兼容 API）
+    embeddingProvider: settings?.embedding?.provider ?? "off",
+    embeddingModel: settings?.embedding?.model ?? "nomic-embed-text",
+    embeddingBaseUrl: settings?.embedding?.baseUrl || settings?.llm.baseUrl || "",
+    embeddingApiKey: "",
   };
 }
 

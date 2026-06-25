@@ -8,6 +8,9 @@ import type { MemoryCategory, MemoryEntry, TaskArtifact } from '@aurevoy/shared'
 import { config } from '../config.js';
 import { toolRegistry } from './registry.js';
 import { memoryStore } from '../store/db.js';
+import { upsertMemoryVec } from '../store/db.js';
+import { invalidateMemorySummary } from '../store/db.js';
+import { getEmbeddingProvider } from '../embedding/provider.js';
 import { commandExecutor } from '../sandbox/command-executor.js';
 import { runSubTask } from '../agent/subagent.js';
 
@@ -705,6 +708,26 @@ toolRegistry.register({
 const MEMORY_CATEGORIES: readonly MemoryCategory[] = ['preference', 'directory', 'model', 'habit', 'fact', 'other'];
 const MAX_MEMORY_CONTENT = 2000;
 
+/**
+ * M8: 异步为记忆生成并存储向量索引。
+ * 嵌入成功时同时更新 embedding_updated_at 时间戳。
+ * 嵌入失败时静默降级，不阻塞工具调用。
+ */
+async function generateMemoryEmbedding(memoryId: string, content: string): Promise<void> {
+  try {
+    const provider = getEmbeddingProvider();
+    if (!provider) return;
+    const vec = await provider.embed(content.slice(0, 2000));
+    upsertMemoryVec(memoryId, vec);
+    // 更新向量化时间戳
+    memoryStore.update(memoryId, { embeddingUpdatedAt: new Date().toISOString() });
+    // 记忆变更 → 清除摘要缓存
+    invalidateMemorySummary();
+  } catch {
+    // 静默降级 — 不影响主流程
+  }
+}
+
 /** P5: Jaccard 相似度（基于关键词集合）。 */
 function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 && b.size === 0) return 0;
@@ -783,6 +806,8 @@ toolRegistry.register({
         why: why ?? duplicate.why,
         howToApply: howToApply ?? duplicate.howToApply,
       });
+      // M8: 后台异步更新向量索引
+      void generateMemoryEmbedding(duplicate.id, content);
       return {
         stored: true,
         id: duplicate.id,
@@ -807,6 +832,8 @@ toolRegistry.register({
       updatedAt: now,
     };
     memoryStore.create(entry);
+    // M8: 后台异步生成向量索引
+    void generateMemoryEmbedding(entry.id, content);
     return { stored: true, id: entry.id, category, confidence, note: '已记入长期记忆，用户可在记忆面板管理。' };
   },
 });
@@ -1162,6 +1189,124 @@ toolRegistry.register({
       note: result.ok
         ? `子代理完成，${result.iterations} 轮，${result.toolCallCount} 次工具调用。`
         : `子代理失败：${result.error ?? '未知错误'}`,
+    };
+  },
+});
+// ---- index_files（safe）----
+toolRegistry.register({
+  descriptor: {
+    name: 'index_files',
+    description:
+      '索引指定目录中的代码/文档文件到知识库，支持语义搜索。' +
+      '对新增/变更文件做分块 + 向量化，已删除文件自动清理。' +
+      '需要先配置 embedding provider（如 Ollama/nomic-embed-text）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dirs: { type: 'array', items: { type: 'string' }, description: '待索引目录列表（默认使用已配置目录）' },
+        force: { type: 'boolean', description: '是否强制重新索引所有文件（默认 false，仅增量）' },
+      },
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+  },
+  async execute(args) {
+    const { indexKbDirs } = await import('../knowledge-base/index.js');
+    const dirs = Array.isArray(args.dirs) ? args.dirs.filter((d) => typeof d === 'string') : undefined;
+    const force = args.force === true;
+    const results = await indexKbDirs(dirs, force);
+    const total = results.reduce((s, r) => s + r.indexed, 0);
+    const totalChunks = results.reduce((s, r) => s + r.totalChunks, 0);
+    const removed = results.reduce((s, r) => s + r.removed, 0);
+    return {
+      indexed: total,
+      totalChunks,
+      removed,
+      details: results,
+      note: total > 0
+        ? `已索引 ${total} 个文件（${totalChunks} 个文本块）`
+        : '无变更，全部跳过',
+    };
+  },
+});
+
+// ---- recall（safe）----
+toolRegistry.register({
+  descriptor: {
+    name: 'recall',
+    description:
+      '从知识库中语义搜索与当前任务相关的文件片段。' +
+      '使用向量相似度匹配，需要先配置 embedding provider 并索引文件。' +
+      '返回结果包含文件路径、内容片段和相关度评分。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '搜索关键词或自然语言描述' },
+        topK: { type: 'number', description: '返回结果数（默认 5）' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+  },
+  async execute(args) {
+    const { recallKb } = await import('../knowledge-base/index.js');
+    const query = typeof args.query === 'string' ? args.query.trim() : '';
+    if (!query) throw new Error('query 不能为空');
+    const topK = typeof args.topK === 'number' && args.topK > 0 ? Math.min(args.topK, 20) : 5;
+    const { results, citations } = await recallKb(query, topK);
+    if (results.length === 0) {
+      return {
+        found: 0,
+        results: [],
+        citations: [],
+        note: '未找到匹配结果。请先添加知识库目录并通过 index_files 工具索引文件，或检查 embedding provider 配置。',
+      };
+    }
+    return {
+      found: results.length,
+      results: results.map((r) => ({
+        file: r.filePath,
+        snippet: r.content,
+        score: Math.round(r.score * 100) / 100,
+      })),
+      citations,
+      note: `找到 ${results.length} 个相关片段`,
+    };
+  },
+});
+
+// ---- run_dreams（safe）----
+toolRegistry.register({
+  descriptor: {
+    name: 'run_dreams',
+    description:
+      '执行记忆后台维护：补全向量索引、合并重复记忆、自动禁用低置信度记忆。' +
+      '通常在任务结束后自动触发，也可手动调用查看维护报告。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        backfillEmbeddings: { type: 'boolean', description: '是否补全缺失的向量索引（默认 true）' },
+        dedupMerge: { type: 'boolean', description: '是否合并相似重复记忆（默认 true）' },
+        lowConfidenceSweep: { type: 'boolean', description: '是否禁用低置信度记忆（默认 true）' },
+      },
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+  },
+  async execute(args) {
+    const { runDreams } = await import('../memory/dreams.js');
+    const options = {
+      backfillEmbeddings: args.backfillEmbeddings !== false,
+      dedupMerge: args.dedupMerge !== false,
+      lowConfidenceSweep: args.lowConfidenceSweep !== false,
+    };
+    const report = await runDreams(options);
+    return {
+      ...report,
+      note: report.errors.length > 0
+        ? `维护完成（${report.durationMs}ms），${report.errors.length} 个错误`
+        : `维护完成（${report.durationMs}ms），无错误`,
     };
   },
 });

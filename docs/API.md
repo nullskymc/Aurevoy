@@ -257,6 +257,20 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 > Agent 侧通过内置 `remember` 工具写入记忆（`source.origin='agent'`，自动记录来源任务与目标），
 > 调用会留下工具轨迹可审计。删除/禁用始终由用户掌控（agent 无删除工具）。
 
+### 知识库 `/api/knowledge-base`  (M8.1)
+知识库文件索引与向量检索。需要先配置 Embedding Provider（如 Ollama/nomic-embed-text）。
+
+- `GET /api/knowledge-base/dirs` → `{ dirs: KbDir[] }`。列出已配置的索引目录。
+- `POST /api/knowledge-base/dirs`（`{ dirPath, recursive? }`）→ `201 KbDir`。添加索引目录。路径重复 → `409`。
+- `DELETE /api/knowledge-base/dirs/:id` → `200 { id, deleted: true }`。删除目录并级联清理索引。
+  目录不存在 → `404`。
+- `GET /api/knowledge-base/status` → `{ totalFiles, totalChunks, lastIndexed }`。索引状态统计。
+
+工具侧：
+- `index_files`（Agent 工具）：遍历已配置目录，对新增/变更文件增量索引（分块+向量化），
+  已删除文件自动清理。需先配置目录和 Embedding Provider。
+- `recall`（Agent 工具）：对查询进行向量 KNN 搜索，返回 top-K 匹配片段（含文件路径、内容、评分）。
+
 ### 项目 `/api/projects`
 
 导入文件夹作为项目。项目目录即为该项目下对话的工作区（文件工具/命令执行的作用域）。

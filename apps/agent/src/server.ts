@@ -63,12 +63,14 @@ import {
   resolveApproval,
   resolveClarificationAnswer,
   resolvePlanApproval,
+  resumeAutoMode,
   revertTask,
+  updateTaskAutoMode,
   runTask,
   unrevertTask,
 } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
-import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore } from './store/db.js';
+import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore, invalidateMemorySummary } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
 import { skillRegistry } from './skills/registry.js';
 import { installFromGit, uninstallSkill } from './skills/installer.js';
@@ -291,7 +293,7 @@ export async function buildServer(externalLogger?: Logger) {
       if (!project) return reply.code(404).send({ error: 'project not found' });
     }
 
-    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments, req.body?.autoMode);
+    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments, req.body?.autoModeLevel);
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runTask(task);
 
@@ -347,6 +349,24 @@ export async function buildServer(externalLogger?: Logger) {
       streamUrl: `/api/tasks/${resumed.id}/stream`,
     };
     return reply.code(202).send(body);
+  });
+
+  // 恢复已暂停的 auto mode（重置连续计数，继续自动执行）
+  app.post<{ Params: { id: string } }>('/api/tasks/:id/auto-mode-resume', (req, reply) => {
+    const ok = resumeAutoMode(req.params.id);
+    if (!ok) return reply.code(409).send({ error: 'auto mode 未处于暂停状态' });
+    return reply.code(200).send({ ok: true });
+  });
+
+  // 运行时切换 auto mode 等级（直接影响当前任务）
+  app.patch<{ Params: { id: string }; Body: { autoModeLevel?: string } }>('/api/tasks/:id/auto-mode', (req, reply) => {
+    const level = req.body?.autoModeLevel;
+    if (!level || !['off', 'plan', 'auto-edit', 'full'].includes(level)) {
+      return reply.code(400).send({ error: 'autoModeLevel 必须是 off/plan/auto-edit/full' });
+    }
+    const ok = updateTaskAutoMode(req.params.id, level as 'off' | 'plan' | 'auto-edit' | 'full');
+    if (!ok) return reply.code(404).send({ error: 'task not found' });
+    return reply.code(200).send({ ok: true, autoModeLevel: level });
   });
 
   // 编辑重跑（Phase 1）：截断到目标消息之前，回到该点状态；前端随后用 continue 端点
@@ -609,6 +629,7 @@ export async function buildServer(externalLogger?: Logger) {
       updatedAt: now,
     };
     memoryStore.create(entry);
+    invalidateMemorySummary();
     return reply.code(201).send(entry);
   });
 
@@ -632,6 +653,7 @@ export async function buildServer(externalLogger?: Logger) {
       if (body.confidence !== undefined) patch.confidence = clampConfidence(body.confidence);
       if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
       const updated = memoryStore.update(req.params.id, patch);
+      invalidateMemorySummary();
       return reply.send(updated);
     },
   );
@@ -640,8 +662,38 @@ export async function buildServer(externalLogger?: Logger) {
   app.delete<{ Params: { id: string } }>('/api/memories/:id', async (req, reply) => {
     const deleted = memoryStore.delete(req.params.id);
     if (!deleted) return reply.code(404).send({ error: 'memory not found' });
+    invalidateMemorySummary();
     return reply.send({ id: req.params.id, deleted: true });
   });
+
+  // ===== M8: 知识库 API =====
+  const { listKbDirs, addKbDir, deleteKbDir, getKbIndexStatus } = await import("./knowledge-base/index.js");
+
+  app.get("/api/knowledge-base/dirs", async () => {
+    return { dirs: listKbDirs() };
+  });
+
+  app.post<{ Body: { dirPath: string; recursive?: boolean } }>("/api/knowledge-base/dirs", async (req, reply) => {
+    const { dirPath, recursive } = req.body ?? {};
+    if (!dirPath?.trim()) return reply.code(400).send({ error: "dirPath 不能为空" });
+    try {
+      return reply.code(201).send(addKbDir(dirPath.trim(), recursive !== false));
+    } catch (err) {
+      return reply.code(409).send({ error: err instanceof Error ? err.message : "添加目录失败" });
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/knowledge-base/dirs/:id", async (req, reply) => {
+    const deleted = deleteKbDir(req.params.id);
+    if (!deleted) return reply.code(404).send({ error: "kb dir not found" });
+    return reply.send({ id: req.params.id, deleted: true });
+  });
+
+  app.get("/api/knowledge-base/status", async () => {
+    return getKbIndexStatus();
+  });
+
+
 
   // SSE 事件流：订阅某个任务的实时输出
   app.get<{ Params: { id: string } }>('/api/tasks/:id/stream', (req, reply) => {
