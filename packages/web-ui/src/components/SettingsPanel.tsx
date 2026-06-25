@@ -37,6 +37,10 @@ interface SettingsDraft {
   commandExecutionEnabled: boolean;
   mcpServersJson: string;
   cleanupPolicyDays: number;
+  embeddingProvider: string;
+  embeddingModel: string;
+  embeddingBaseUrl: string;
+  embeddingApiKey: string;
 }
 
 interface SettingsPanelProps {
@@ -634,6 +638,7 @@ function ProviderSettings({
   }
 
   return (
+    <>
     <SettingsGroup title={t("settings.providerConfig")}>
       <SettingsActionRow
         title={t("settings.providerTitle")}
@@ -823,6 +828,65 @@ function ProviderSettings({
         }
       />
     </SettingsGroup>
+
+    <SettingsGroup title={t("settings.embeddingTitle")}>
+      <SettingsActionRow
+        title={t("settings.embeddingProviderTitle")}
+        description={t("settings.embeddingProviderDesc")}
+        control={
+          <select
+            className="settings-inline-select"
+            value={draft.embeddingProvider}
+            onChange={(event) => onDraftChange({ ...draft, embeddingProvider: event.currentTarget.value })}
+          >
+            <option value="off">{t("settings.embeddingProviderOff")}</option>
+            <option value="openai">OpenAI Compatible</option>
+          </select>
+        }
+      />
+      {draft.embeddingProvider !== "off" && (
+        <>
+          <SettingsActionRow
+            title={t("settings.embeddingModelTitle")}
+            description={t("settings.embeddingModelDesc")}
+            control={
+              <input
+                className="settings-inline-input"
+                value={draft.embeddingModel}
+                placeholder="nomic-embed-text"
+                onChange={(event) => onDraftChange({ ...draft, embeddingModel: event.currentTarget.value })}
+              />
+            }
+          />
+          <SettingsActionRow
+            title={t("settings.embeddingBaseUrlTitle")}
+            description={t("settings.embeddingBaseUrlDesc")}
+            control={
+              <input
+                className="settings-inline-input"
+                value={draft.embeddingBaseUrl}
+                placeholder="http://127.0.0.1:11434/v1"
+                onChange={(event) => onDraftChange({ ...draft, embeddingBaseUrl: event.currentTarget.value })}
+              />
+            }
+          />
+          <SettingsActionRow
+            title={t("settings.embeddingApiKeyTitle")}
+            description={t("settings.embeddingApiKeyDesc")}
+            control={
+              <input
+                className="settings-inline-input"
+                type="password"
+                value={draft.embeddingApiKey}
+                placeholder={t("settings.apiKeyKeepPlaceholder")}
+                onChange={(event) => onDraftChange({ ...draft, embeddingApiKey: event.currentTarget.value })}
+              />
+            }
+          />
+        </>
+      )}
+    </SettingsGroup>
+    </>
   );
 }
 
@@ -1077,7 +1141,7 @@ function MemorySettings({
     </>
   );
 }
-function KbSettings({ settings }: { settings: RuntimeSettings | null }) {
+function KbSettings({ settings: _settings }: { settings: RuntimeSettings | null }) {
   const [dirs, setDirs] = useState<KbDir[]>([]);
   const [status, setStatus] = useState<KbIndexStatus | null>(null);
   const [dirInput, setDirInput] = useState("");
@@ -1118,26 +1182,9 @@ function KbSettings({ settings }: { settings: RuntimeSettings | null }) {
     } catch { setError(t("kb.deleteFailed")); }
   }
 
-  const embedding = settings?.embedding;
-  const embeddingEnabled = embedding?.provider === "openai";
-
-  return (
+return (
     <>
-      <SettingsGroup title={t("kb.embeddingTitle")}>
-        <div className="settings-row">
-          <div className="settings-info">
-            <span className="settings-label">{embeddingEnabled ? t("kb.embeddingEnabled") : t("kb.embeddingDisabled")}</span>
-            <span className="settings-description">{t("kb.embeddingDesc")}</span>
-          </div>
-          {embedding && (
-            <div className="settings-info" style={{ marginTop: 4 }}>
-              <span className="settings-label">{embedding.model} @ {embedding.baseUrl}</span>
-            </div>
-          )}
-        </div>
-      </SettingsGroup>
-
-      <SettingsGroup title={t("kb.dirsTitle")}>
+<SettingsGroup title={t("kb.dirsTitle")}>
         <div className="memory-add">
           <input
             className="memory-add-input"
@@ -1323,6 +1370,11 @@ function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
     commandExecutionEnabled: settings?.commandExecutionEnabled ?? false,
     mcpServersJson: settings?.mcpServersJson ?? "",
     cleanupPolicyDays: settings?.cleanupPolicyDays ?? 30,
+    // 默认复用 LLM 配置（都是 OpenAI 兼容 API）
+    embeddingProvider: settings?.embedding?.provider ?? "off",
+    embeddingModel: settings?.embedding?.model ?? "nomic-embed-text",
+    embeddingBaseUrl: settings?.embedding?.baseUrl || settings?.llm.baseUrl || "",
+    embeddingApiKey: "",
   };
 }
 

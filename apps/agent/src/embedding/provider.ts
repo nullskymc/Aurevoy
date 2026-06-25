@@ -20,14 +20,18 @@ export function getEmbeddingProvider(): EmbeddingProvider | null {
     return null;
   }
 
+  // 未单独设置 embedding baseUrl 时复用 LLM baseUrl（都是 OpenAI 兼容 API）
+  const baseUrl = config.embedding.baseUrl || config.llm.baseUrl;
+  const apiKey = config.embedding.apiKey || config.llm.apiKey;
+
   cachedProvider = new OpenAIEmbeddingProvider({
-    baseUrl: config.embedding.baseUrl,
+    baseUrl: baseUrl || 'http://127.0.0.1:11434/v1',
     model: config.embedding.model,
-    apiKey: config.embedding.apiKey,
+    apiKey,
     timeoutMs: config.embedding.timeoutMs,
   });
 
-  console.info(`[embedding] 已加载: ${config.embedding.baseUrl}/${config.embedding.model}`);
+  console.info(`[embedding] 已加载: ${baseUrl}/${config.embedding.model}`);
   return cachedProvider;
 }
 

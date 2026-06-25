@@ -175,11 +175,12 @@ export const config = {
    */
   mcpServers: parseMcpServers(process.env.AUREVOY_MCP_SERVERS_JSON),
 
-  /** M8: Embedding Provider 配置。通过 OpenAI 兼容 API 接入（支持 Ollama/LiteLLM/OpenAI 等）。 */
+  /** M8: Embedding Provider 配置。通过 OpenAI 兼容 API 接入（支持 Ollama/LiteLLM/OpenAI 等）。
+   *  默认复用 LLM 配置（baseUrl/apiKey），用户可单独覆盖。 */
   embedding: {
     provider: (process.env.AUREVOY_EMBEDDING_PROVIDER ?? 'off') as 'openai' | 'off',
     model: process.env.AUREVOY_EMBEDDING_MODEL ?? 'nomic-embed-text',
-    baseUrl: process.env.AUREVOY_EMBEDDING_BASE_URL ?? 'http://127.0.0.1:11434/v1',
+    baseUrl: process.env.AUREVOY_EMBEDDING_BASE_URL ?? '',
     apiKey: process.env.AUREVOY_EMBEDDING_API_KEY ?? '',
     timeoutMs: parseNumber(process.env.AUREVOY_EMBEDDING_TIMEOUT_MS, 10000),
   },

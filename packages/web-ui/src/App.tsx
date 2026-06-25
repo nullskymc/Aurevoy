@@ -1171,6 +1171,12 @@ function App() {
       commandExecutionEnabled: draft.commandExecutionEnabled,
       mcpServersJson: draft.mcpServersJson,
       cleanupPolicyDays: draft.cleanupPolicyDays,
+      embedding: {
+        provider: draft.embeddingProvider as 'openai' | 'off',
+        model: draft.embeddingModel,
+        baseUrl: draft.embeddingBaseUrl,
+        ...(draft.embeddingApiKey ? { apiKey: draft.embeddingApiKey } : {}),
+      },
     };
     setSettingsSaving(true);
     void updateSettings(body)
