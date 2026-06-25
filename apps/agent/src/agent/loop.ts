@@ -1399,12 +1399,12 @@ export async function runTask(task: Task): Promise<void> {
         });
       }
 
-      // P5: 长期记忆——按目标相关性评分 + [[link]] 展开后注入（禁用的不注入）
+      // P5 + M8: 长期记忆——混合评分（关键词 + 向量）+ [[link]] 展开后注入（禁用的不注入）
       const recentTopics = messages
         .filter((m) => m.role === 'user')
         .slice(-3)
         .map((m) => m.content);
-      const memoryMessage = buildMemorySystemMessage(
+      const { message: memoryMessage } = await buildMemorySystemMessage(
         memoryStore.listEnabled(),
         task.goal,
         recentTopics,
@@ -2051,6 +2051,9 @@ function finishCompleted(
   taskEvents.publish({ type: 'status', taskId: task.id, status: 'completed' });
   taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'finalizing', detail: '任务完成' });
   taskEvents.publish({ type: 'done', taskId: task.id, status: 'completed' });
+
+  // M8: 任务完成后触发一轮 Dreams 后台维护（fire-and-forget）
+  void import('../memory/dreams.js').then(({ runDreams }) => runDreams());
 }
 
 function finishCancelled(

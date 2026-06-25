@@ -70,7 +70,7 @@ import {
   unrevertTask,
 } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
-import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore } from './store/db.js';
+import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore, invalidateMemorySummary } from './store/db.js';
 import { toolRegistry } from './tools/registry.js';
 import { skillRegistry } from './skills/registry.js';
 import { installFromGit, uninstallSkill } from './skills/installer.js';
@@ -629,6 +629,7 @@ export async function buildServer(externalLogger?: Logger) {
       updatedAt: now,
     };
     memoryStore.create(entry);
+    invalidateMemorySummary();
     return reply.code(201).send(entry);
   });
 
@@ -652,6 +653,7 @@ export async function buildServer(externalLogger?: Logger) {
       if (body.confidence !== undefined) patch.confidence = clampConfidence(body.confidence);
       if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
       const updated = memoryStore.update(req.params.id, patch);
+      invalidateMemorySummary();
       return reply.send(updated);
     },
   );
@@ -660,8 +662,38 @@ export async function buildServer(externalLogger?: Logger) {
   app.delete<{ Params: { id: string } }>('/api/memories/:id', async (req, reply) => {
     const deleted = memoryStore.delete(req.params.id);
     if (!deleted) return reply.code(404).send({ error: 'memory not found' });
+    invalidateMemorySummary();
     return reply.send({ id: req.params.id, deleted: true });
   });
+
+  // ===== M8: 知识库 API =====
+  const { listKbDirs, addKbDir, deleteKbDir, getKbIndexStatus } = await import("./knowledge-base/index.js");
+
+  app.get("/api/knowledge-base/dirs", async () => {
+    return { dirs: listKbDirs() };
+  });
+
+  app.post<{ Body: { dirPath: string; recursive?: boolean } }>("/api/knowledge-base/dirs", async (req, reply) => {
+    const { dirPath, recursive } = req.body ?? {};
+    if (!dirPath?.trim()) return reply.code(400).send({ error: "dirPath 不能为空" });
+    try {
+      return reply.code(201).send(addKbDir(dirPath.trim(), recursive !== false));
+    } catch (err) {
+      return reply.code(409).send({ error: err instanceof Error ? err.message : "添加目录失败" });
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/knowledge-base/dirs/:id", async (req, reply) => {
+    const deleted = deleteKbDir(req.params.id);
+    if (!deleted) return reply.code(404).send({ error: "kb dir not found" });
+    return reply.send({ id: req.params.id, deleted: true });
+  });
+
+  app.get("/api/knowledge-base/status", async () => {
+    return getKbIndexStatus();
+  });
+
+
 
   // SSE 事件流：订阅某个任务的实时输出
   app.get<{ Params: { id: string } }>('/api/tasks/:id/stream', (req, reply) => {

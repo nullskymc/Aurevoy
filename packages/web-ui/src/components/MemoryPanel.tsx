@@ -159,6 +159,9 @@ function MemoryItem({
         <span className="memory-confidence" title={t("memory.confidence")}>
           {Math.round(memory.confidence * 100)}%
         </span>
+        {memory.embeddingUpdatedAt && (
+          <span className="memory-vec-badge" title="已向量化，支持语义检索">🧠</span>
+        )}
         <label className="memory-toggle" title={memory.enabled ? t("memory.enabledTitle") : t("memory.disabledTitle")}>
           <input
             type="checkbox"

@@ -80,6 +80,17 @@ async function main() {
   try {
     await app.listen({ host: config.host, port: config.port });
     log.info(`Aurevoy Agent 引擎已启动: http://${config.host}:${config.port}`);
+
+    // M8: 启动后延迟执行一轮 Dreams 维护（不阻塞启动）
+    setTimeout(async () => {
+      try {
+        const { runDreams } = await import('./memory/dreams.js');
+        const report = await runDreams({ backfillEmbeddings: true, dedupMerge: true, lowConfidenceSweep: true });
+        if (report.backfilled > 0 || report.dedupMerged > 0 || report.lowConfidenceDisabled > 0) {
+          log.info(report, 'Dreams 启动维护完成');
+        }
+      } catch { /* 维护失败不影响引擎运行 */ }
+    }, 30_000);
     if (mcp.configuredServers > 0) {
       log.info(
         { connected: mcp.connectedServers, configured: mcp.configuredServers, tools: mcp.registeredTools },

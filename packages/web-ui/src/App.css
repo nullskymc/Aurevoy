@@ -3462,6 +3462,12 @@ button:disabled {
   color: var(--text-muted, #6b7280);
 }
 
+.memory-vec-badge {
+  font-size: 12px;
+  cursor: help;
+  opacity: 0.7;
+}
+
 .memory-toggle {
 
   display: inline-flex;

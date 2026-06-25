@@ -799,6 +799,8 @@ export interface MemoryEntry {
   howToApply?: string;
   /** P5: 关联的记忆 ID 列表 */
   linkedMemoryIds?: string[];
+  /** M8: 向量索引更新时间（有值表示已向量化，可用于语义搜索） */
+  embeddingUpdatedAt?: string;
 }
 
 /** Skill: 暴露给前端的 skill 摘要（Agent Skills 标准格式，不含 body）。 */
@@ -861,6 +863,37 @@ export interface MemoryListResponse {
   memories: MemoryEntry[];
 }
 
+/** M8: 引用来源类型 */
+export type CitationSourceType = 'memory' | 'kb_chunk' | 'kb_file';
+
+/** M8: 结构化引用信息，用于追溯搜索结果与注入记忆的来源。 */
+export interface Citation {
+  sourceId: string;
+  sourceType: CitationSourceType;
+  /** 原文片段（前 200 字符） */
+  content: string;
+  /** 相关度 0-1 */
+  score: number;
+  /** memory 专用 */
+  category?: MemoryCategory;
+  nameSlug?: string;
+  /** KB 专用 */
+  filePath?: string;
+  chunkIndex?: number;
+}
+
+/** M8: 含引用的搜索结果 */
+export interface SearchResultWithCitations {
+  results: Array<{
+    file: string;
+    snippet: string;
+    score: number;
+  }>;
+  citations: Citation[];
+  found: number;
+  note: string;
+}
+
 // ============================================================
 // M5 设置、工具管理与数据管理
 // ============================================================
@@ -890,6 +923,13 @@ export interface RuntimeSettings {
   /** 是否启用 auto mode 安全规则（拦截 destroy/exfiltrate 等危险操作） */
   autoModeSafetyEnabled: boolean;
   dbPath: string;
+  /** M8: Embedding Provider 配置（OpenAI 兼容接口） */
+  embedding: {
+    provider: 'openai' | 'off';
+    model: string;
+    baseUrl: string;
+    apiKeyConfigured: boolean;
+  };
 }
 
 export interface UpdateRuntimeSettingsRequest {
@@ -913,6 +953,14 @@ export interface UpdateRuntimeSettingsRequest {
   cleanupPolicyDays?: number;
   autoModeLevel?: AutoModeLevel;
   autoModeSafetyEnabled?: boolean;
+  /** M8: Embedding Provider 配置（OpenAI 兼容接口） */
+  embedding?: Partial<{
+    provider: 'openai' | 'off';
+    model: string;
+    baseUrl: string;
+    /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
+    apiKey: string;
+  }>;
 }
 
 export interface ModelListResponse {
@@ -959,6 +1007,34 @@ export interface CleanupDataRequest {
 export interface CleanupDataResponse {
   deletedTasks: number;
   deletedTraces: number;
+}
+
+// ============================================================
+// M8: 知识库类型
+// ============================================================
+
+export interface KbDir {
+  id: string;
+  dirPath: string;
+  recursive: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KbDirListResponse {
+  dirs: KbDir[];
+}
+
+export interface KbIndexStatus {
+  totalFiles: number;
+  totalChunks: number;
+  lastIndexed: string | null;
+}
+
+export interface AddKbDirRequest {
+  dirPath: string;
+  recursive?: boolean;
 }
 
 // ============================================================

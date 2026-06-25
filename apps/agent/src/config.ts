@@ -174,6 +174,15 @@ export const config = {
    * {"mcpServers":{"name":{"command":"node","args":["server.js"]}}}
    */
   mcpServers: parseMcpServers(process.env.AUREVOY_MCP_SERVERS_JSON),
+
+  /** M8: Embedding Provider 配置。通过 OpenAI 兼容 API 接入（支持 Ollama/LiteLLM/OpenAI 等）。 */
+  embedding: {
+    provider: (process.env.AUREVOY_EMBEDDING_PROVIDER ?? 'off') as 'openai' | 'off',
+    model: process.env.AUREVOY_EMBEDDING_MODEL ?? 'nomic-embed-text',
+    baseUrl: process.env.AUREVOY_EMBEDDING_BASE_URL ?? 'http://127.0.0.1:11434/v1',
+    apiKey: process.env.AUREVOY_EMBEDDING_API_KEY ?? '',
+    timeoutMs: parseNumber(process.env.AUREVOY_EMBEDDING_TIMEOUT_MS, 10000),
+  },
 };
 
 /** 解析数字环境变量，非法或缺失时回退默认值（避免 NaN 污染配置）。 */

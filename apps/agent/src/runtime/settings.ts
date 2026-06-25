@@ -1,6 +1,7 @@
 import type { AutoModeLevel, RuntimeSettings, UpdateRuntimeSettingsRequest } from '@aurevoy/shared';
 import { config, parseMcpServers, parseNumber } from '../config.js';
 import { resetProviderCache } from '../llm/provider.js';
+import { resetEmbeddingCache } from '../embedding/provider.js';
 import { settingsStore } from '../store/db.js';
 
 const SETTING_KEYS = {
@@ -22,6 +23,10 @@ const SETTING_KEYS = {
   cleanupPolicyDays: 'cleanupPolicyDays',
   autoModeLevel: 'autoMode.level',
   autoModeSafetyEnabled: 'autoMode.safetyEnabled',
+  embeddingProvider: 'embedding.provider',
+  embeddingModel: 'embedding.model',
+  embeddingBaseUrl: 'embedding.baseUrl',
+  embeddingApiKey: 'embedding.apiKey',
 } as const;
 
 const DEFAULT_CLEANUP_POLICY_DAYS = 30;
@@ -35,6 +40,24 @@ export interface SettingsUpdateResult {
 export function loadPersistedSettings(): void {
   const entries = settingsStore.entries();
   const mcpJson = entries[SETTING_KEYS.mcpServersJson];
+
+  // M8: Embedding settings
+  if (entries[SETTING_KEYS.embeddingProvider] === 'openai') {
+    config.embedding.provider = 'openai';
+  }
+  if (entries[SETTING_KEYS.embeddingProvider] === 'off') {
+    config.embedding.provider = 'off';
+  }
+  if (entries[SETTING_KEYS.embeddingModel]) {
+    config.embedding.model = entries[SETTING_KEYS.embeddingModel];
+  }
+  if (entries[SETTING_KEYS.embeddingBaseUrl]) {
+    config.embedding.baseUrl = entries[SETTING_KEYS.embeddingBaseUrl];
+  }
+  const embKey = entries[SETTING_KEYS.embeddingApiKey];
+  if (embKey) {
+    config.embedding.apiKey = embKey;
+  }
 
   const envKey = process.env.AUREVOY_LLM_API_KEY?.trim();
   if (envKey) {
@@ -82,6 +105,12 @@ export function readRuntimeSettings(): RuntimeSettings {
     autoModeLevel: readAutoModeLevel(),
     autoModeSafetyEnabled: readAutoModeSafetyEnabled(),
     dbPath: config.dbPath,
+    embedding: {
+      provider: config.embedding.provider,
+      model: config.embedding.model,
+      baseUrl: config.embedding.baseUrl,
+      apiKeyConfigured: config.embedding.apiKey.trim().length > 0,
+    },
   };
 }
 
@@ -174,6 +203,31 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   if (body.cleanupPolicyDays !== undefined) {
     const days = clampNumber(body.cleanupPolicyDays, 1, 3650, 'cleanupPolicyDays');
     settingsStore.set(SETTING_KEYS.cleanupPolicyDays, String(days));
+  }
+
+  // M8: Embedding settings（OpenAI 兼容 API）
+  if (body.embedding) {
+    if (body.embedding.provider === 'openai' || body.embedding.provider === 'off') {
+      config.embedding.provider = body.embedding.provider;
+      settingsStore.set(SETTING_KEYS.embeddingProvider, config.embedding.provider);
+    }
+    if (body.embedding.model !== undefined) {
+      config.embedding.model = body.embedding.model;
+      settingsStore.set(SETTING_KEYS.embeddingModel, config.embedding.model);
+    }
+    if (body.embedding.baseUrl !== undefined) {
+      config.embedding.baseUrl = body.embedding.baseUrl;
+      settingsStore.set(SETTING_KEYS.embeddingBaseUrl, config.embedding.baseUrl);
+    }
+    if (body.embedding.apiKey !== undefined) {
+      config.embedding.apiKey = body.embedding.apiKey;
+      if (body.embedding.apiKey.trim().length > 0) {
+        settingsStore.set(SETTING_KEYS.embeddingApiKey, body.embedding.apiKey, true);
+      } else {
+        settingsStore.delete(SETTING_KEYS.embeddingApiKey);
+      }
+    }
+    resetEmbeddingCache();
   }
 
   if (providerChanged) resetProviderCache();
