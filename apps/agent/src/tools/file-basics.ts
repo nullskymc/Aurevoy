@@ -402,7 +402,7 @@ toolRegistry.register({
         return {
           path: relative(root, file),
           created: false,
-          note: '文件已存在，未做任何修改。如需修改内容，使用 replace_lines、append_file 或 edit_file。',
+          note: '文件已存在，未做任何修改。如需修改内容，使用 replace_lines 或 append_file。',
         };
       }
       throw new Error(`路径已存在但不是文件: ${file}`);
@@ -426,9 +426,8 @@ toolRegistry.register({
     description:
       '精确替换文件中指定行范围（start_line 到 end_line，闭区间，1-indexed）的内容。' +
       '用 content 参数替换掉目标范围的全部行。' +
-      '使用前务必先用 open_file 确认行号准确。' +
-      '如需追加内容到文件末尾，使用 append_file。' +
-      '如需小范围文本匹配替换，也支持 edit_file（基于 diff 匹配）。',
+      '使用前务必先用 search_grep 或 open_file 确认行号准确。' +
+      '如需追加内容到文件末尾，使用 append_file。',
     inputSchema: {
       type: 'object',
       properties: {

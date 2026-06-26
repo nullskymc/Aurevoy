@@ -1164,10 +1164,15 @@ function toolTargetLabel(item: ToolActivity): string {
   const argsObj = item.args as Record<string, unknown> | null;
   if (!argsObj || typeof argsObj !== "object") return "";
   if (item.name === "execute_command") return toolApprovalLabel(item);
+  if (item.name === "search_grep") {
+    const pattern = argsObj.pattern;
+    return typeof pattern === "string" ? truncateCommandLine(pattern) : "";
+  }
   const target =
     argsObj.TargetFile ??
     argsObj.AbsolutePath ??
     argsObj.path ??
+    argsObj.file ??
     argsObj.filePath ??
     argsObj.CommandLine ??
     argsObj.Query;

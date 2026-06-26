@@ -21,7 +21,7 @@ import { toolRegistry } from '../tools/registry.js';
 import { config } from '../config.js';
 import { taskEvents } from './events.js';
 
-const SCOUT_TOOL_NAMES = new Set(['list_directory', 'read_file', 'search_files']);
+const SCOUT_TOOL_NAMES = new Set(['list_directory', 'open_file', 'scroll', 'search_grep']);
 
 export interface PlanAgentInput {
   taskId: string;

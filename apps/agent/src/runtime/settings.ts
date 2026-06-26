@@ -82,6 +82,11 @@ export function loadPersistedSettings(): void {
       ? config.sandbox.commandExecutionEnabled
       : entries[SETTING_KEYS.commandExecutionEnabled] === 'true';
   if (mcpJson !== undefined) config.mcpServers = parseMcpServers(mcpJson);
+
+  const autoModeStored = entries[SETTING_KEYS.autoModeLevel];
+  if (autoModeStored === 'off' || autoModeStored === 'plan' || autoModeStored === 'auto-edit' || autoModeStored === 'full') {
+    config.autoMode.level = autoModeStored;
+  }
 }
 
 export function readRuntimeSettings(): RuntimeSettings {
@@ -102,7 +107,7 @@ export function readRuntimeSettings(): RuntimeSettings {
     commandExecutionEnabled: config.sandbox.commandExecutionEnabled,
     mcpServersJson: settingsStore.get(SETTING_KEYS.mcpServersJson) ?? stringifyMcpServers(),
     cleanupPolicyDays: readCleanupPolicyDays(),
-    autoModeLevel: readAutoModeLevel(),
+    autoModeLevel: config.autoMode.level as AutoModeLevel,
     autoModeSafetyEnabled: readAutoModeSafetyEnabled(),
     dbPath: config.dbPath,
     embedding: {
@@ -186,7 +191,10 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
 
   if (body.autoModeLevel !== undefined) {
     const valid = (['off', 'plan', 'auto-edit', 'full'] as const).includes(body.autoModeLevel as never);
-    if (valid) settingsStore.set(SETTING_KEYS.autoModeLevel, body.autoModeLevel);
+    if (valid) {
+      settingsStore.set(SETTING_KEYS.autoModeLevel, body.autoModeLevel);
+      config.autoMode.level = body.autoModeLevel;
+    }
   }
 
   if (body.autoModeSafetyEnabled !== undefined) {
@@ -308,12 +316,6 @@ function clampNumber(value: number, min: number, max: number, label: string): nu
 function stringifyMcpServers(): string {
   if (config.mcpServers.length === 0) return '';
   return JSON.stringify({ mcpServers: Object.fromEntries(config.mcpServers.map((s) => [s.name, s])) }, null, 2);
-}
-
-function readAutoModeLevel(): AutoModeLevel {
-  const stored = settingsStore.get(SETTING_KEYS.autoModeLevel);
-  if (stored === 'off' || stored === 'plan' || stored === 'auto-edit' || stored === 'full') return stored;
-  return 'off';
 }
 
 function readAutoModeSafetyEnabled(): boolean {

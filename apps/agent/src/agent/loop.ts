@@ -26,7 +26,7 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillCatalogMessage, buildSystemContextMessage, totalTokens } from './context.js';
+import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillCatalogMessage, buildSystemContextMessage, buildToolGuidanceMessage, totalTokens } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 
 import { runPlanAgent } from './plan-agent.js';
@@ -54,48 +54,30 @@ const DUPLICATE_CALL_LIMIT = 3;
 /** 单轮最多并行工具调用数 */
 const MAX_TOOL_CALLS_PER_TURN = 10;
 /** P6: 写入类工具（需要执行前文件快照） */
-const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_artifact', 'copy_file', 'move_file', 'rename_file']);
+const WRITE_TOOLS = new Set(['apply_artifact', 'copy_file', 'move_file', 'rename_file', 'create_file', 'replace_lines', 'append_file']);
 /** 基础只读工具免审批；其余工具仅允许当前任务会话内临时批准。 */
-const APPROVAL_FREE_TOOLS = new Set(['read_file', 'list_directory', 'load_skill']);
+const APPROVAL_FREE_TOOLS = new Set(['list_directory', 'load_skill', 'open_file', 'scroll', 'search_grep']);
 
 /** plan 模式下允许自动批准的只读勘探工具 */
 const PLANMODE_TOOLS = new Set([
-  'read_file', 'list_directory', 'search_files', 'glob', 'get_current_time', 'load_skill',
+  'list_directory', 'glob', 'get_current_time', 'load_skill',
+  'open_file', 'scroll', 'search_grep',
 ]);
 
 /** auto-edit 等级下自动批准的安全文件工具（读写+搜索，不自动批准 shell/网络） */
 const AUTO_EDIT_TOOLS = new Set([
   ...PLANMODE_TOOLS,
-  'write_file', 'edit_file', 'apply_artifact', 'move_file', 'copy_file', 'rename_file',
+  'apply_artifact', 'move_file', 'copy_file', 'rename_file',
+  'create_file', 'replace_lines', 'append_file',
   'create_artifact',
 ]);
 
-/** 即使在 full auto 模式下也要拦截的破坏性操作模式（安全规则） */
-const BLOCK_RULES: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /^git\s+push\s+(--force|origin\s+\w+)/i, reason: 'force push / push to branch 需要确认' },
-  { pattern: /^(rm|rmdir|rmtree)\s+(-rf?|-fr?)?\s+\/|^rm\s+-rf?\s+\./i, reason: '递归删除根目录/当前目录' },
-  { pattern: /^(chmod|chown)\s+777/i, reason: '开放文件权限为 777 需要确认' },
-  { pattern: /^(dd|mkfs|fdisk|parted|format)\s/, reason: '磁盘/分区操作需要确认' },
-  { pattern: /^curl\s+.*\b(api\.openai|api\.anthropic|secret|token|key|password)\b.*/i, reason: '疑似向外部发送凭据' },
-  { pattern: /^git\s+config\s+(--global|--system)/i, reason: '修改全局 git 配置需要确认' },
-  { pattern: /^(pip|npm|gem|brew|apt|yum|dnf)\s+install\s+--no-input/i, reason: '包安装需要确认' },
-  { pattern: /^(systemctl|service|launchctl)\s+(start|stop|restart|enable|disable)/i, reason: '系统服务管理需要确认' },
-];
-
-/** 安全规则检查：在 full auto 中仍要拦截的危险操作 */
-function checkBlockRules(toolName: string, args: Record<string, unknown>): string | null {
-  if (toolName !== 'execute_command') return null;
-  const command = typeof args.command === 'string' ? args.command.trim() : '';
-  if (!command) return null;
-  for (const rule of BLOCK_RULES) {
-    if (rule.pattern.test(command)) return rule.reason;
-  }
-  return null;
-}
-
-/** 将旧版 boolean autoMode 迁移为新版 AutoModeLevel */
-function resolveAutoModeLevel(autoModeLevel?: AutoModeLevel): AutoModeLevel {
-  if (autoModeLevel && ['off', 'plan', 'auto-edit', 'full'].includes(autoModeLevel)) return autoModeLevel;
+/** 获取当前有效的 auto mode level：全局 config 为准，任务级 plan mode 降级覆盖 */
+function getEffectiveAutoModeLevel(task: Task): AutoModeLevel {
+  const override = task.autoModeState?.level;
+  if (override && override !== (config.autoMode.level as AutoModeLevel)) return override;
+  const level = config.autoMode.level;
+  if (level === 'off' || level === 'plan' || level === 'auto-edit' || level === 'full') return level;
   return 'off';
 }
 
@@ -103,7 +85,7 @@ function resolveAutoModeLevel(autoModeLevel?: AutoModeLevel): AutoModeLevel {
  * 判断工具在 auto mode 下需要审批的原因。
  * - off/paused → 'paused' (auto mode 关闭或暂停)
  * - plan + 不在 PLANMODE_TOOLS → 'not_covered'（写工具被 plan mode 拦截）
- * - full + blocked_by_rule → 'blocked_by_rule'
+ * - full → 始终自动批准，无原因
  * - auto-edit + 不在 AUTO_EDIT_TOOLS → 'not_covered'
  * - 否则自动批准，无原因
  */
@@ -111,16 +93,13 @@ function autoModeApprovalReason(
   level: AutoModeLevel,
   paused: boolean,
   toolName: string,
-  args: Record<string, unknown>,
-): 'blocked_by_rule' | 'not_covered' | 'paused' | undefined {
+): 'not_covered' | 'paused' | undefined {
   if (level === 'off' || paused) return 'paused';
   if (level === 'plan') {
     if (PLANMODE_TOOLS.has(toolName)) return undefined;
     return 'not_covered'; // 写工具在 plan mode 中被拦截
   }
   if (level === 'full') {
-    const blocked = checkBlockRules(toolName, args);
-    if (blocked) return 'blocked_by_rule';
     return undefined;
   }
   if (level === 'auto-edit') {
@@ -167,10 +146,9 @@ function buildModeSystemMessage(level: AutoModeLevel): Message | null {
     modePrompt =
       'You are in **Full Auto Mode**.\n\n' +
       'Rules:\n' +
-      '1. **All tools are auto-approved** and execute immediately.\n' +
-      '2. Built-in safety rules still block destructive operations (force push, recursive delete, etc.) — those will prompt for approval.\n' +
-      '3. Proceed autonomously: explore, edit, run commands, and iterate as needed.\n' +
-      '4. After long runs of auto-approved actions, the system may pause and ask you to confirm before continuing.\n\n' +
+      '1. **All tools are auto-approved** and execute immediately — no approval prompts.\n' +
+      '2. Proceed autonomously: explore, edit, run commands, and iterate as needed.\n' +
+      '3. After long runs of auto-approved actions, the system may pause and ask you to confirm before continuing.\n\n' +
       'Focus on: getting the job done efficiently.';
   } else {
     return null;
@@ -219,8 +197,6 @@ function initAutoModeState(level: AutoModeLevel, preMode?: AutoModeLevel): AutoM
 
 /** 全自动下连续批准上限（超过此值触发暂停降级） */
 const AUTO_MODE_MAX_CONSECUTIVE = 50;
-/** 安全规则拦截上限（超过此值触发暂停降级） */
-const AUTO_MODE_MAX_BLOCKED = 5;
 /** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
 const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'running', 'paused'];
 /** 进行中任务的取消句柄 */
@@ -687,23 +663,6 @@ export function addUserTurn(
  * 恢复已暂停的 auto mode（重置连续计数 + 取消暂停状态）。
  * 前端通过 API 调用，允许用户在一次安全暂停后继续自动执行。
  */
-/**
- * 在任务运行时切换 auto mode 等级。
- * 返回是否切换成功（任务存在且等级合法）。
- */
-export function updateTaskAutoMode(taskId: string, newLevel: AutoModeLevel): boolean {
-  const task = taskStore.get(taskId);
-  if (!task) return false;
-  const valid = ['off', 'plan', 'auto-edit', 'full'].includes(newLevel);
-  if (!valid) return false;
-  task.autoModeLevel = newLevel;
-  task.autoModeState = newLevel !== 'off' ? initAutoModeState(newLevel) : undefined;
-  task.updatedAt = new Date().toISOString();
-  taskStore.save(task);
-  taskEvents.publish({ type: 'auto_mode_state', taskId, state: task.autoModeState ?? { level: 'off', autoApprovedCalls: 0, blockedByRules: 0, paused: false, consecutiveAutoCalls: 0, fallbackCount: 0 } });
-  return true;
-}
-
 export function resumeAutoMode(taskId: string): boolean {
   const task = taskStore.get(taskId);
   if (!task?.autoModeState?.paused) return false;
@@ -883,7 +842,6 @@ export function createTask(
   budget?: TaskBudget,
   projectId?: string,
   attachments?: MessageAttachment[],
-  autoModeLevel?: AutoModeLevel,
 ): Task {
   const now = new Date().toISOString();
   const parsed = parseSlashCommand(goal);
@@ -912,8 +870,6 @@ export function createTask(
     tokenUsage: { available: false, provider: getProviderName(), model: config.llm.model },
     projectId: projectId ?? undefined,
     planMode: parsed.planRequested ? 'manual' : undefined,
-    autoModeLevel: resolveAutoModeLevel(autoModeLevel),
-    autoModeState: autoModeLevel && autoModeLevel !== 'off' ? initAutoModeState(autoModeLevel) : undefined,
     createdAt: now,
     updatedAt: now,
   };
@@ -1156,17 +1112,17 @@ export async function runTask(task: Task): Promise<void> {
   const hasApprovedPlan = task.plan.length > 1 && task.plan.some((s) => s.status === 'running');
   if (!hasApprovedPlan) {
     // 自动 Plan Mode：当 auto-edit/full 检测到任务复杂时，自动切入 plan mode
-    if ((task.autoModeLevel === 'auto-edit' || task.autoModeLevel === 'full') && task.autoModeState && !task.autoModeState.paused && shouldAutoPlan(task.goal)) {
-      const preMode = task.autoModeLevel;
-      task.autoModeLevel = 'plan';
+    const prePlanMode = getEffectiveAutoModeLevel(task);
+    if ((prePlanMode === 'auto-edit' || prePlanMode === 'full') && !task.autoModeState?.paused && shouldAutoPlan(task.goal)) {
+      task.autoModeState = task.autoModeState ?? initAutoModeState(prePlanMode);
       task.autoModeState.level = 'plan';
       task.autoModeState.planReady = false;
-      task.autoModeState.planPreMode = preMode;
+      task.autoModeState.planPreMode = prePlanMode;
       touch();
       writeTrace(task.id, 'phase', 'planning', {
         ok: true,
         summary: '检测到复杂任务，自动切入 Plan Mode',
-        data: { goal: task.goal, previousMode: task.autoModeLevel },
+        data: { goal: task.goal, previousMode: prePlanMode },
       });
     }
     if (task.planMode === 'manual') {
@@ -1210,7 +1166,8 @@ export async function runTask(task: Task): Promise<void> {
       });
 
       // 自动模式：plan/auto-edit/full 均跳过计划审批
-      if (task.autoModeLevel && task.autoModeLevel !== 'off' && !task.autoModeState?.paused) {
+      const effectiveMode = getEffectiveAutoModeLevel(task);
+      if (effectiveMode !== 'off' && !task.autoModeState?.paused) {
         task.plan = proposedPlan.map((step, index) => ({
           ...step,
           status: index === 0 ? 'running' : 'pending',
@@ -1354,7 +1311,7 @@ export async function runTask(task: Task): Promise<void> {
         budget: effectiveBudget(task),
       });
       setRuntimePhase('thinking', `第 ${iteration + 1} 轮模型思考`, 'running');
-      const currentAutoModeLevel = task.autoModeLevel ?? 'off';
+      const currentAutoModeLevel = getEffectiveAutoModeLevel(task);
       const currentAutoModePaused = !!task.autoModeState?.paused;
 
       let textBuffer = '';
@@ -1363,6 +1320,7 @@ export async function runTask(task: Task): Promise<void> {
       let tokenUsage: TokenUsage | null | undefined;
       let toolCalls: AccumulatedToolCall[] = [];
       const llmStartedAt = Date.now();
+      const announcedToolCallIds = new Set<string>();
 
       // P4: 自动语义压缩（token 感知，LLM 摘要旧消息）
       const compactResult = await autoCompactIfNeeded(messages);
@@ -1429,8 +1387,12 @@ export async function runTask(task: Task): Promise<void> {
         ? null
         : buildModeSystemMessage(currentAutoModeLevel);
 
+      // 工具使用引导（始终注入）
+      const toolGuidanceMessage = buildToolGuidanceMessage();
+
       const requestMessages = [
         envContextMessage,
+        toolGuidanceMessage,
         modeMessage,
         memoryMessage,
         skillCatalogMessage,
@@ -1469,6 +1431,15 @@ export async function runTask(task: Task): Promise<void> {
               if (chunk.reasoningContentDelta) {
                 reasoningContent += chunk.reasoningContentDelta;
                 taskEvents.publish({ type: 'reasoning', taskId: task.id, delta: chunk.reasoningContentDelta });
+              }
+              if (chunk.toolCallsSnapshot) {
+                for (const tc of chunk.toolCallsSnapshot) {
+                  if (tc.function.name && tc.id && !announcedToolCallIds.has(tc.id)) {
+                    announcedToolCallIds.add(tc.id);
+                    const earlyCall: ToolCall = { id: tc.id, toolName: tc.function.name, args: {} };
+                    taskEvents.publish({ type: 'tool_call', taskId: task.id, call: earlyCall });
+                  }
+                }
               }
               if (chunk.done) {
                 finishReason = chunk.finishReason;
@@ -1542,9 +1513,8 @@ export async function runTask(task: Task): Promise<void> {
           await waitForPlanApproval(task.id, abortController.signal);
           if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
 
-          // 从 plan 模式切换到执行模式
+          // 从 plan 模式切换到执行模式：清除 autoModeState 覆盖，回退到全局 config
           const targetMode = task.autoModeState.planPreMode ?? 'auto-edit';
-          task.autoModeLevel = targetMode;
           task.autoModeState.level = targetMode;
           task.autoModeState.planPreMode = undefined;
           task.autoModeState.planContent = undefined;
@@ -1597,7 +1567,7 @@ export async function runTask(task: Task): Promise<void> {
         }
 
         // plan 模式：写工具直接跳过，不询问用户
-        if (!skipReason && task.autoModeLevel === 'plan' && !PLANMODE_TOOLS.has(name)) {
+        if (!skipReason && currentAutoModeLevel === 'plan' && !PLANMODE_TOOLS.has(name)) {
           skipReason = `工具 "${name}" 在 Plan Mode 中不可用。请先退出 Plan Mode（提交计划并等待审批进入执行阶段）后才能使用此工具。建议：完成勘探和计划后，用最终回复输出你的计划。`;
         }
 
@@ -1671,12 +1641,6 @@ export async function runTask(task: Task): Promise<void> {
         }
         // 等级检查
         if (currentAutoModeLevel === 'full') {
-          // 即使 full 也要检查安全规则
-          const blockedReason = checkBlockRules(v.call.toolName, v.call.args);
-          if (blockedReason) {
-            // 记录拦截，用于 fallback 追踪
-            return false;
-          }
           return true;
         }
         if (currentAutoModeLevel === 'auto-edit') {
@@ -1817,7 +1781,7 @@ export async function runTask(task: Task): Promise<void> {
 
         // 非命令工具——每次只弹一个确认，审批后立即执行
         for (const v of sequentialApproval) {
-          const approvalReason = autoModeApprovalReason(currentAutoModeLevel, currentAutoModePaused, v.call.toolName, v.call.args);
+          const approvalReason = autoModeApprovalReason(currentAutoModeLevel, currentAutoModePaused, v.call.toolName);
           addPendingApproval(task, v.call, v.risk, approvalReason);
           taskEvents.publish({
             type: 'approval_request',
@@ -1855,7 +1819,7 @@ export async function runTask(task: Task): Promise<void> {
         // execute_command 保持并行
         if (cmdApproval.length > 0) {
           for (const v of cmdApproval) {
-            const approvalReason = autoModeApprovalReason(currentAutoModeLevel, currentAutoModePaused, v.call.toolName, v.call.args);
+            const approvalReason = autoModeApprovalReason(currentAutoModeLevel, currentAutoModePaused, v.call.toolName);
             addPendingApproval(task, v.call, v.risk, approvalReason);
             taskEvents.publish({
               type: 'approval_request',
@@ -1930,51 +1894,24 @@ export async function runTask(task: Task): Promise<void> {
           ams.consecutiveAutoCalls = (ams.consecutiveAutoCalls ?? 0) + autoThisTurn;
           publishAutoModeState();
         }
-        // 统计被安全规则拦截的工具数（full 模式下才检查）
-        if (needsApproval.length > 0 && currentAutoModeLevel === 'full') {
-          const blockedByRulesCount = needsApproval.filter(v =>
-            checkBlockRules(v.call.toolName, v.call.args) !== null,
-          ).length;
-          if (blockedByRulesCount > 0) {
-            ams.blockedByRules = (ams.blockedByRules ?? 0) + blockedByRulesCount;
+        if (currentAutoModeLevel !== 'full') {
+          if ((ams.consecutiveAutoCalls ?? 0) >= AUTO_MODE_MAX_CONSECUTIVE) {
+            ams.paused = true;
+            ams.pausedReason = `auto mode 已连续自动批准 ${ams.consecutiveAutoCalls} 次工具调用，已暂停。请确认继续运行。`;
+            ams.fallbackCount = (ams.fallbackCount ?? 0) + 1;
             publishAutoModeState();
+            taskEvents.publish({
+              type: 'phase',
+              taskId: task.id,
+              phase: 'waiting_approval',
+              detail: ams.pausedReason,
+            });
+            writeTrace(task.id, 'phase', 'waiting_approval', {
+              ok: true,
+              summary: ams.pausedReason,
+              data: { autoModeState: { ...ams } },
+            });
           }
-        }
-        // 安全暂停触发条件：连续自动批准过多
-        if ((ams.consecutiveAutoCalls ?? 0) >= AUTO_MODE_MAX_CONSECUTIVE) {
-          ams.paused = true;
-          ams.pausedReason = `auto mode 已连续自动批准 ${ams.consecutiveAutoCalls} 次工具调用，已暂停。请确认继续运行。`;
-          ams.fallbackCount = (ams.fallbackCount ?? 0) + 1;
-          publishAutoModeState();
-          taskEvents.publish({
-            type: 'phase',
-            taskId: task.id,
-            phase: 'waiting_approval',
-            detail: ams.pausedReason,
-          });
-          writeTrace(task.id, 'phase', 'waiting_approval', {
-            ok: true,
-            summary: ams.pausedReason,
-            data: { autoModeState: { ...ams } },
-          });
-        }
-        // 安全暂停触发条件：安全规则拦截过多
-        if ((ams.blockedByRules ?? 0) >= AUTO_MODE_MAX_BLOCKED) {
-          ams.paused = true;
-          ams.pausedReason = `auto mode 已被安全规则拦截 ${ams.blockedByRules} 次，已自动暂停。`;
-          ams.fallbackCount = (ams.fallbackCount ?? 0) + 1;
-          publishAutoModeState();
-          taskEvents.publish({
-            type: 'phase',
-            taskId: task.id,
-            phase: 'waiting_approval',
-            detail: ams.pausedReason,
-          });
-          writeTrace(task.id, 'phase', 'waiting_approval', {
-            ok: true,
-            summary: ams.pausedReason,
-            data: { autoModeState: { ...ams } },
-          });
         }
         touch();
       }

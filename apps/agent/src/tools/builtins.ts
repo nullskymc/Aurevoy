@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs';
-import { execFile } from 'node:child_process';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -24,15 +23,9 @@ import { runSubTask } from '../agent/subagent.js';
  * - 跨平台：macOS 优先，BSD 系命令。
  */
 
-const MAX_READ_BYTES = 256 * 1024;
-const MAX_SEARCH_RESULTS = 50;
-const MAX_SNIPPET_CHARS = 240;
 const MAX_FETCH_BYTES = 1024 * 1024;
 const FETCH_TIMEOUT_MS = 20000;
 const MAX_FETCH_REDIRECTS = 3;
-const MAX_CONTEXT_LINES = 5;
-const MAX_GREP_MATCHES = 200;
-const DEFAULT_GREP_MATCHES = 50;
 
 // ---- 路径安全校验（Node.js 层，命令执行前）----
 
@@ -165,25 +158,9 @@ function rootAndExternals(context?: {
  * 执行系统命令，返回 stdout。
  * grep 退出码 1（无匹配）视为正常空结果，不抛错。
  */
-function execCmd(command: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, { maxBuffer: MAX_READ_BYTES * 4, timeout: 15000 }, (err, stdout, stderr) => {
-      if (err) {
-        if (err.code === 1 && command === 'grep') { resolve(''); return; }
-        reject(new Error(stderr || err.message));
-      } else {
-        resolve(stdout);
-      }
-    });
-  });
-}
 
 // ---- 工具函数 ----
 
-function clampInteger(value: unknown, min: number, max: number, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isInteger(value)) return fallback;
-  return Math.min(max, Math.max(min, value));
-}
 
 function readNonEmptyString(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`${label} 必须是非空字符串`);
@@ -195,20 +172,6 @@ async function pathExists(path: string): Promise<boolean> {
   catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false; throw err; }
 }
 
-/** glob 最后一个路径片段转为 find -name 模式；'**​/*' 返回 null 表示不过滤 */
-function globToFindName(glob: string): string | null {
-  const last = glob.split('/').pop()!;
-  if (last === '**' || last === '*') return null;
-  return last;
-}
-
-/** 以匹配位置为中心截取片段 */
-function makeSnippet(line: string, query: string): string {
-  const idx = line.toLowerCase().indexOf(query.toLowerCase());
-  const start = Math.max(0, idx - Math.floor((MAX_SNIPPET_CHARS - query.length) / 2));
-  const end = Math.min(line.length, start + MAX_SNIPPET_CHARS);
-  return `${start > 0 ? '…' : ''}${line.slice(start, end)}${end < line.length ? '…' : ''}`;
-}
 
 // ---- list_directory（safe）：ls -1p ----
 toolRegistry.register({
@@ -237,233 +200,8 @@ toolRegistry.register({
   },
 });
 
-// ---- read_file（safe）----
-// 三种模式：
-// 1. 普通（offset/limit）→ dd if=file bs=1 skip=N count=M
-// 2. grep → grep -n -C <n> <pattern> <file>
-// 3. 兼容旧调用 → 默认 offset=0 limit=256KB
-toolRegistry.register({
-  descriptor: {
-    name: 'read_file',
-    description:
-      '读取工作区内文本文件。dd 分片读取（offset/limit）或 grep 按行搜索（grep/contextLines）。' +
-      '大文件用 offset 分片，或 grep 定位关键行。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的文件路径' },
-        offset: { type: 'integer', description: '起始字节偏移（0-based），默认 0' },
-        limit: { type: 'integer', description: '最大读取字节数，默认 262144，上限 262144' },
-        grep: { type: 'string', description: '按行过滤：只返回包含此字符串的行' },
-        caseSensitive: { type: 'boolean', description: 'grep 是否区分大小写，默认 false' },
-        contextLines: { type: 'integer', description: 'grep 上下文行数，默认 0，上限 5' },
-        maxMatches: { type: 'integer', description: 'grep 最多返回匹配数，默认 50，上限 200' },
-      },
-      required: ['path'],
-      additionalProperties: false,
-    },
-    riskLevel: 'safe',
-  },
-  async execute(args, context) {
-    const { root, externalPaths: extPaths } = rootAndExternals(context);
-    const file = resolveInWorkspace(args.path, root, extPaths);
-    await assertRealPathInside(file, root, extPaths);
-    const stat = await fs.stat(file);
-    if (!stat.isFile()) throw new Error('目标不是文件');
-
-    const grep = typeof args.grep === 'string' && args.grep.length > 0 ? args.grep : undefined;
-
-    // ---- grep 模式 ----
-    if (grep) {
-      const caseSensitive = args.caseSensitive === true;
-      const contextLines = clampInteger(args.contextLines, 0, MAX_CONTEXT_LINES, 0);
-      const maxMatches = clampInteger(args.maxMatches, 1, MAX_GREP_MATCHES, DEFAULT_GREP_MATCHES);
-
-      const grepArgs = ['-n'];
-      if (!caseSensitive) grepArgs.push('-i');
-      if (contextLines > 0) grepArgs.push(`-C${contextLines}`);
-      grepArgs.push('-m', String(maxMatches + 1), '--', grep, file);
-
-      const out = await execCmd('grep', grepArgs);
-      const lines = out.trim().split('\n').filter(Boolean);
-      const matchCount = lines.length;
-      const truncated = matchCount > maxMatches;
-      const displayLines = truncated ? lines.slice(0, maxMatches) : lines;
-
-      // 解析 grep -n 输出：行号:内容
-      const matches = displayLines.map((l) => {
-        const colon = l.indexOf(':');
-        const lineNum = Number(colon >= 0 ? l.slice(0, colon) : 0);
-        const text = colon >= 0 ? l.slice(colon + 1) : l;
-        return { line: lineNum, text };
-      });
-
-      return {
-        path: relative(root, file),
-        size: stat.size,
-        grep,
-        caseSensitive,
-        contextLines,
-        matchCount,
-        matches,
-        truncated,
-        suggestion: truncated
-          ? `匹配数 ${matchCount} 超过上限 ${maxMatches}，仅返回前 ${matches.length} 条。`
-          : matchCount === 0
-            ? '未找到匹配行。'
-            : undefined,
-      };
-    }
-
-    // ---- 普通模式：dd 分片读取 ----
-    const offset = clampInteger(args.offset, 0, stat.size, 0);
-    const limit = clampInteger(args.limit, 1, MAX_READ_BYTES, MAX_READ_BYTES);
-    const bytesToRead = Math.min(stat.size - offset, limit);
-
-    const out = await execCmd('dd', ['if=' + file, 'bs=1', `skip=${offset}`, `count=${bytesToRead}`, 'status=none']);
-    const bytesRead = Buffer.byteLength(out);
-    const hasReplacement = out.includes('�');
-    const truncated = offset + bytesRead < stat.size;
-
-    if (hasReplacement) {
-      return {
-        path: relative(root, file),
-        size: stat.size,
-        encoding: 'utf8',
-        ok: false,
-        diagnostic: '文件无法可靠按 UTF-8 解码，内容可能是二进制或其他编码。',
-        suggestion: '请转换为 UTF-8 文本。',
-        offset,
-        bytesRead,
-        truncated,
-      };
-    }
-
-    return {
-      path: relative(root, file),
-      size: stat.size,
-      encoding: 'utf8',
-      offset,
-      bytesRead,
-      truncated,
-      content: out,
-      suggestion: truncated
-        ? `已读取 ${offset}-${offset + bytesRead} / ${stat.size} 字节；用 offset=${offset + bytesRead} 继续。`
-        : undefined,
-    };
-  },
-});
-
-// ---- search_files（safe）：find + grep ----
-toolRegistry.register({
-  descriptor: {
-    name: 'search_files',
-    description:
-      '在工作区内搜索文件：find 按 glob 匹配文件名，grep 按行搜索内容。' +
-      '返回路径、匹配行号、片段、大小与 mtime。默认不区分大小写。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的起始目录，缺省为根目录' },
-        glob: { type: 'string', description: '文件名 glob，例如 *.ts 或 *.md' },
-        query: { type: 'string', description: '要搜索的文本内容；省略时只按文件名匹配' },
-        caseSensitive: { type: 'boolean', description: '是否区分大小写，默认 false（不区分）' },
-        maxResults: { type: 'integer', description: '最多返回结果数，默认 50，上限 50' },
-      },
-      additionalProperties: false,
-    },
-    riskLevel: 'safe',
-  },
-  async execute(args, context) {
-    const { root, externalPaths: extPaths } = rootAndExternals(context);
-    await ensureWorkspace(root);
-    const searchRoot = resolveInWorkspace(typeof args.path === 'string' ? args.path : '.', root, extPaths);
-    await assertRealPathInside(searchRoot, root, extPaths);
-    const stat = await fs.stat(searchRoot).catch(() => null);
-    if (!stat?.isDirectory()) throw new Error('search_files 的 path 必须是目录');
-    const glob = typeof args.glob === 'string' && args.glob.trim() ? args.glob.trim() : '**/*';
-    const query = typeof args.query === 'string' && args.query.length > 0 ? args.query : undefined;
-    const caseSensitive = args.caseSensitive === true;
-    const maxResults = clampInteger(args.maxResults, 1, MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS);
-
-    const namePattern = globToFindName(glob);
-
-    if (!query) {
-      // 仅按文件名匹配：find
-      const findArgs = [searchRoot, '-type', 'f'];
-      if (namePattern) findArgs.push('-name', namePattern);
-      const out = await execCmd('find', findArgs);
-      const files = out.trim().split('\n').filter(Boolean).slice(0, maxResults);
-
-      const results: Array<Record<string, unknown>> = [];
-      for (const file of files) {
-        try {
-          const s = await fs.stat(file);
-          results.push({
-            path: relative(root, file),
-            size: s.size,
-            mtime: s.mtime.toISOString(),
-          });
-        } catch { /* skip */ }
-      }
-
-      return {
-        root: relative(root, searchRoot) || '.',
-        glob,
-        scannedFiles: files.length,
-        truncated: files.length >= maxResults,
-        results,
-      };
-    }
-
-    // 按内容搜索：find + grep
-    const findArgs = [searchRoot, '-type', 'f'];
-    if (namePattern) findArgs.push('-name', namePattern);
-    // -m 1 每个文件只取第一个匹配；-n 行号；-i 不区分大小写
-    const grepArgs = ['-n', '-m', '1'];
-    if (!caseSensitive) grepArgs.push('-i');
-    grepArgs.push('--', query);
-    findArgs.push('-exec', 'grep', ...grepArgs, '{}', '+');
-
-    const out = await execCmd('find', findArgs);
-    const lines = out.trim().split('\n').filter(Boolean).slice(0, maxResults);
-
-    const results: Array<Record<string, unknown>> = [];
-    for (const l of lines) {
-      const colon = l.indexOf(':');
-      const filePath = colon >= 0 ? l.slice(0, colon) : l;
-      const rest = colon >= 0 ? l.slice(colon + 1) : '';
-      const colon2 = rest.indexOf(':');
-      const lineNum = Number(colon2 >= 0 ? rest.slice(0, colon2) : 0);
-      const text = colon2 >= 0 ? rest.slice(colon2 + 1) : rest;
-
-      try {
-        const s = await fs.stat(filePath);
-        results.push({
-          path: relative(root, filePath),
-          size: s.size,
-          mtime: s.mtime.toISOString(),
-          match: {
-            query,
-            caseSensitive,
-            line: lineNum,
-            snippet: makeSnippet(text, query),
-          },
-        });
-      } catch { /* skip */ }
-    }
-
-    return {
-      root: relative(root, searchRoot) || '.',
-      glob,
-      query,
-      caseSensitive,
-      scannedFiles: lines.length,
-      truncated: lines.length >= maxResults,
-      results,
-    };
-  },
-});
+// read_file 已移除，由 file-basics 原语替代：open_file + scroll
+// search_files 已移除，由 file-basics 原语替代：search_grep
 
 // ---- copy_file（caution）----
 toolRegistry.register({
@@ -534,70 +272,7 @@ toolRegistry.register({
   descriptor: { ...moveFileTool.descriptor, name: 'rename_file', description: 'move_file 的别名：在工作区内重命名文件。' },
 });
 
-// ---- edit_file（dangerous）：P6 Diff 编辑 ----
-toolRegistry.register({
-  descriptor: {
-    name: 'edit_file',
-    description:
-      '在工作区内精确替换文件中的一段文本。匹配必须唯一，否则报错。' +
-      '这是推荐的编辑方式——比 write_file 更精确，且不丢失文件其他部分。' +
-      '要替换的文本必须与文件内容完全匹配（含缩进）。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的文件路径' },
-        oldString: { type: 'string', description: '要替换的文本（在文件中必须唯一匹配）' },
-        newString: { type: 'string', description: '替换后的文本' },
-        replaceAll: { type: 'boolean', description: '是否替换所有匹配（默认 false）' },
-      },
-      required: ['path', 'oldString', 'newString'],
-      additionalProperties: false,
-    },
-    riskLevel: 'dangerous',
-    fallback: {
-      tools: ['write_file'],
-      message: 'edit_file 匹配失败。改用 write_file 全量写入，或调整 oldString 使其唯一。',
-    },
-  },
-  async execute(args, context) {
-    const { root, externalPaths: extPaths } = rootAndExternals(context);
-    const file = resolveInWorkspace(args.path, root, extPaths);
-    await assertRealPathInside(file, root, extPaths);
-    const oldStr = readNonEmptyString(args.oldString, 'oldString');
-    const newStr = String(args.newString ?? '');
-    if (oldStr === newStr) throw new Error('oldString 和 newString 相同，无需替换');
-
-    const content = await fs.readFile(file, 'utf8');
-    const occurrences = content.split(oldStr).length - 1;
-
-    if (occurrences === 0) {
-      throw new Error(
-        `未在文件中找到 oldString。请确保 oldString 与文件内容完全匹配（含缩进和空格）。` +
-        `可以先 read_file 确认当前内容。`,
-      );
-    }
-
-    if (occurrences > 1 && args.replaceAll !== true) {
-      throw new Error(
-        `oldString 在文件中出现了 ${occurrences} 次，但 replaceAll 未设为 true。` +
-        `请扩展 oldString 使其唯一（含更多上下文），或设置 replaceAll=true 替换全部。`,
-      );
-    }
-
-    const newContent = args.replaceAll === true
-      ? content.replaceAll(oldStr, newStr)
-      : content.replace(oldStr, newStr);
-
-    await fs.writeFile(file, newContent, 'utf8');
-
-    return {
-      path: relative(root, file),
-      replaced: args.replaceAll === true ? occurrences : 1,
-      bytesBefore: Buffer.byteLength(content),
-      bytesAfter: Buffer.byteLength(newContent),
-    };
-  },
-});
+// edit_file 已移除，统一走 search_grep → replace_lines 路径
 
 // ---- delete_file（dangerous，默认禁用）----
 toolRegistry.register({
@@ -629,38 +304,6 @@ toolRegistry.register({
 });
 toolRegistry.setEnabled('delete_file', false);
 
-// ---- write_file（dangerous）----
-toolRegistry.register({
-  descriptor: {
-    name: 'write_file',
-    description:
-      '在工作区内写入文本文件。默认覆盖；传 mode=append 则在文件末尾追加。自动创建父目录。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的文件路径' },
-        content: { type: 'string', description: '要写入的文本内容' },
-        mode: { type: 'string', enum: ['overwrite', 'append'], description: '写入模式：overwrite（默认）或 append' },
-      },
-      required: ['path', 'content'],
-      additionalProperties: false,
-    },
-    riskLevel: 'dangerous',
-  },
-  async execute(args, context) {
-    const { root, externalPaths: extPaths } = rootAndExternals(context);
-    const file = resolveInWorkspace(args.path, root, extPaths);
-    const content = typeof args.content === 'string' ? args.content : String(args.content ?? '');
-    await fs.mkdir(join(file, '..'), { recursive: true });
-    await assertRealPathInside(file, root, extPaths);
-    if (args.mode === 'append') {
-      await fs.appendFile(file, content, 'utf8');
-    } else {
-      await fs.writeFile(file, content, 'utf8');
-    }
-    return { path: relative(root, file), bytesWritten: Buffer.byteLength(content), mode: args.mode === 'append' ? 'append' : 'overwrite' };
-  },
-});
 
 // ---- http_fetch（caution）----
 toolRegistry.register({
@@ -1136,7 +779,7 @@ function guessMimeType(name: string): string {
 }
 
 // ---- delegate_task（safe）：P7 子代理委托 ----
-const DEFAULT_SUBAGENT_TOOLS = ['list_directory', 'read_file', 'search_files', 'get_current_time'];
+const DEFAULT_SUBAGENT_TOOLS = ['list_directory', 'open_file', 'scroll', 'search_grep', 'get_current_time'];
 
 toolRegistry.register({
   descriptor: {

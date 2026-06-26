@@ -255,8 +255,6 @@ export interface Task {
   fileSnapshots?: FileSnapshot[];
   /** Plan Agent 触发方式；manual 表示用户通过 /plan 显式请求规划。 */
   planMode?: 'manual';
-  /** 自动模式等级（Agent 的自主执行程度） */
-  autoModeLevel?: AutoModeLevel;
   /** 自动模式运行时统计与状态 */
   autoModeState?: AutoModeState;
   createdAt: string;
@@ -522,8 +520,6 @@ export interface CreateTaskRequest {
   budget?: TaskBudget;
   projectId?: string;
   attachments?: MessageAttachment[];
-  /** 自动模式等级（默认 off：需人工审批工具和计划） */
-  autoModeLevel?: AutoModeLevel;
 }
 
 export interface CreateTaskResponse {
@@ -918,7 +914,7 @@ export interface RuntimeSettings {
   commandExecutionEnabled: boolean;
   mcpServersJson: string;
   cleanupPolicyDays: number;
-  /** 缺省 auto mode 等级（创建任务时继承） */
+  /** 全局 auto mode 等级，直接作用于审批层 */
   autoModeLevel: AutoModeLevel;
   /** 是否启用 auto mode 安全规则（拦截 destroy/exfiltrate 等危险操作） */
   autoModeSafetyEnabled: boolean;

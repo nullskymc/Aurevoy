@@ -42,11 +42,10 @@ import {
   listTasks,
   resumeAutoMode as resumeAutoModeApi,
   resumeTask,
-  updateTaskAutoMode as updateTaskAutoModeApi,
+  updateSettings,
   revertTask,
   unrevertTask,
   updateArtifact,
-  updateSettings,
   updateMemory,
 } from "./api";
 import { usePlatform } from "./platform/context";
@@ -403,10 +402,7 @@ function App() {
     setAutoModeLevel(next);
     localStorage.setItem("aurevoy.autoModeLevel", next);
     localStorage.removeItem("aurevoy.autoMode");
-    // 有正在活动的任务时，实时同步到后端
-    if (currentTask?.id) {
-      updateTaskAutoModeApi(currentTask.id, next).catch(() => {});
-    }
+    void updateSettings({ autoModeLevel: next }).catch(() => {});
   }
 
   async function handleImportProjectPath(dirPath: string): Promise<void> {
@@ -518,6 +514,7 @@ function App() {
         getDataStatus(),
       ]);
       setRuntimeSettings(settings);
+      setAutoModeLevel(settings.autoModeLevel);
       setMcpServers(mcp.servers);
       setDataStatus(data);
     } catch (err) {
@@ -832,7 +829,7 @@ function App() {
     closeStream();
 
     try {
-      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach, autoModeLevel === 'off' ? undefined : autoModeLevel);
+      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach);
       setCurrentTask(task);
       setPhase(task.phase);
       setTraces([]);

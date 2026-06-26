@@ -148,6 +148,10 @@ export const config = {
       .filter(Boolean),
   },
 
+  autoMode: {
+    level: 'off' as string,
+  },
+
   network: {
     /**
      * http_fetch 默认拒绝本机/私网地址；这里仅给受控开发或企业内网场景提供显式放行。

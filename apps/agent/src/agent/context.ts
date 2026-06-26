@@ -821,3 +821,33 @@ export function buildSystemContextMessage(
     createdAt: now.toISOString(),
   };
 }
+
+/**
+ * 工具使用引导消息——指导 LLM 使用行级原语工具操作文件。
+ *
+ * 始终注入，放在环境上下文之后。
+ */
+export function buildToolGuidanceMessage(): Message {
+  const content = [
+    '<tool_usage_rules>',
+    '文件读写必须使用行级原语工具，禁止一次性写入大量内容：',
+    '',
+    '**读取文件**：open_file 定位 → scroll 浏览 → search_grep 搜索',
+    '**写入新文件**：create_file 建空文件 → replace_lines 写入内容（大文件分批）',
+    '**修改已有文件**：search_grep 定位行号 → replace_lines 精确替换',
+    '**追加内容**：append_file（仅追加，不覆盖）',
+    '',
+    '规则：',
+    '- 编辑前必须先用 search_grep 定位目标行号，再用 replace_lines 替换',
+    '- 单次 replace_lines 的 content 不超过 200 行，超出则分批写入',
+    '- 不要用 append_file 写入整个文件内容——它是用来追加少量内容的',
+    '</tool_usage_rules>',
+  ].join('\n');
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content,
+    createdAt: new Date().toISOString(),
+  };
+}
