@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
+  AgentEvent,
   AutoModeLevel,
   AutoModeState,
   ContentBlock,
@@ -53,6 +54,8 @@ import {
 const DUPLICATE_CALL_LIMIT = 3;
 /** 单轮最多并行工具调用数 */
 const MAX_TOOL_CALLS_PER_TURN = 10;
+/** 流式生成期间单个 tool_call 参数的最大字符数；超过则中断流，避免 LLM 生成大段文件内容浪费时间。配合工具层 auto-chunking，放宽后大内容不再浪费——工具会处理。 */
+const MAX_TOOL_ARG_STREAM_CHARS = 50000;
 /** P6: 写入类工具（需要执行前文件快照） */
 const WRITE_TOOLS = new Set(['apply_artifact', 'copy_file', 'move_file', 'rename_file', 'create_file', 'replace_lines', 'append_file']);
 /** 基础只读工具免审批；其余工具仅允许当前任务会话内临时批准。 */
@@ -1405,6 +1408,8 @@ export async function runTask(task: Task): Promise<void> {
       task.contextTokens = contextTokenEstimate;
       taskEvents.publish({ type: 'context_snapshot', taskId: task.id, tokens: contextTokenEstimate });
 
+      let oversizedToolCall: { id: string; name: string; argChars: number } | null = null;
+
       // ---------- 调用 LLM（带重试） ----------
       try {
         await withRetry(
@@ -1415,6 +1420,7 @@ export async function runTask(task: Task): Promise<void> {
             finishReason = undefined;
             tokenUsage = undefined;
             toolCalls = [];
+            oversizedToolCall = null as typeof oversizedToolCall;
             const stream = getProvider().stream(requestMessages, {
               tools: toolDescriptors.length > 0 ? toolDescriptors : undefined,
               toolChoice: 'auto',
@@ -1439,8 +1445,12 @@ export async function runTask(task: Task): Promise<void> {
                     const earlyCall: ToolCall = { id: tc.id, toolName: tc.function.name, args: {} };
                     taskEvents.publish({ type: 'tool_call', taskId: task.id, call: earlyCall });
                   }
+                  if (tc.function.arguments.length > MAX_TOOL_ARG_STREAM_CHARS) {
+                    oversizedToolCall = { id: tc.id, name: tc.function.name, argChars: tc.function.arguments.length };
+                  }
                 }
               }
+              if (oversizedToolCall) break;
               if (chunk.done) {
                 finishReason = chunk.finishReason;
                 toolCalls = chunk.toolCallsSnapshot ?? [];
@@ -1475,6 +1485,34 @@ export async function runTask(task: Task): Promise<void> {
           summary: '模型调用失败',
         });
         throw err;
+      }
+
+      // ---------- 流式截断：tool_call 参数过大 ----------
+      type OversizedInfo = { id: string; name: string; argChars: number };
+      const oc = oversizedToolCall as OversizedInfo | null;
+      if (oc) {
+        const estimatedLines = Math.round(oc.argChars / 40);
+        writeTrace(task.id, 'llm', 'thinking', {
+          iteration: iteration + 1,
+          startedAtMs: llmStartedAt,
+          ok: false,
+          errorCategory: 'tool',
+          summary: `工具 ${oc.name} 参数流式生成超限（${oc.argChars} 字符 ≈ ${estimatedLines} 行），已中断`,
+        });
+        const errorMsg =
+          `工具 "${oc.name}" 的参数过大（已生成 ${oc.argChars} 字符，约 ${estimatedLines} 行），流式生成已中断。` +
+          `请将内容拆分后分批写入。`;
+        const assistantMsg = makeAssistantWithToolCalls(
+          textBuffer, reasoningContent,
+          [{ id: oc.id, index: 0, function: { name: oc.name, arguments: '{}' } }],
+        );
+        messages.push(assistantMsg);
+        taskEvents.publish({ type: 'message', taskId: task.id, message: assistantMsg });
+        const errorResult = { callId: oc.id, ok: false, error: errorMsg };
+        taskEvents.publish({ type: 'tool_result', taskId: task.id, result: errorResult });
+        messages.push(makeToolResult(oc.id, { error: errorMsg }));
+        touch();
+        continue;
       }
 
       // ---------- 情况 A：输出被截断 ----------
@@ -1713,12 +1751,16 @@ export async function runTask(task: Task): Promise<void> {
         const result = await toolRegistry.invokeWithTimeout(
           v.call,
           {
+            callId: v.call.id,
             taskId: task.id,
             taskGoal: task.goal,
             task,
             abortSignal: abortController.signal,
             workspaceDir: taskWorkspace,
             externalPaths,
+            publishEvent: (event) => {
+              taskEvents.publish(event as AgentEvent);
+            },
           },
           config.agent.toolTimeoutMs,
         );

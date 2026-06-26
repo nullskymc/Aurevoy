@@ -27,6 +27,11 @@ export interface ToolActivity {
   riskLevel?: ToolRiskLevel;
   output?: unknown;
   error?: string;
+  progress?: {
+    message: string;
+    chunk?: { current: number; total: number };
+    percent?: number;
+  };
 }
 
 interface ConversationProps {
@@ -636,6 +641,11 @@ function ToolChip({
         {toolStatusIcon(item.status)}
       </span>
       <span className="tool-chip-name">{item.name}</span>
+      {item.progress && item.status === "running" && (
+        <span className="tool-chip-progress">
+          {item.progress.percent != null ? `${item.progress.percent}%` : "..."}
+        </span>
+      )}
       {item.riskLevel && item.riskLevel !== "safe" && (
         <span className="tool-chip-risk" data-risk={item.riskLevel}>
           {item.riskLevel === "dangerous" ? t("tool.risk.dangerousShort") : t("tool.risk.cautionShort")}
@@ -739,6 +749,30 @@ function ToolActivityCard({
             <div className="tool-card-field">
               <span className="tool-card-field-label">{t("tool.field.args")}</span>
               <pre>{argsText}</pre>
+            </div>
+          )}
+          {item.progress && item.status === "running" && (
+            <div className="tool-card-progress">
+              {item.progress.percent != null ? (
+                <div className="progress-bar">
+                  <div
+                    className="progress-bar-fill"
+                    style={{ width: `${item.progress.percent}%` }}
+                  />
+                </div>
+              ) : (
+                <div className="progress-bar is-indeterminate">
+                  <div className="progress-bar-fill" />
+                </div>
+              )}
+              <span className="progress-text">
+                {item.progress.message}
+                {item.progress.chunk && (
+                  <span className="progress-chunk">
+                    {" "}({item.progress.chunk.current}/{item.progress.chunk.total})
+                  </span>
+                )}
+              </span>
             </div>
           )}
           {detail !== null && (

@@ -2223,6 +2223,60 @@ button:disabled {
   padding: 10px 14px 12px;
 }
 
+/* 工具进度条 */
+.tool-card-progress {
+  padding: 0 12px 10px;
+}
+
+.progress-bar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.progress-bar.is-indeterminate .progress-bar-fill {
+  width: 30%;
+  animation: indeterminate 1.5s ease-in-out infinite;
+}
+
+.progress-text {
+  font-size: 0.8em;
+  color: var(--text-secondary);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.progress-chunk {
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-chip-progress {
+  font-size: 0.75em;
+  color: var(--text-secondary);
+  margin-left: 4px;
+}
+
+.timeline-step-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
 .tool-card-field {
   display: grid;
   gap: 3px;

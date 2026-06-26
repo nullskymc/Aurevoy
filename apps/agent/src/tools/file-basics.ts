@@ -44,6 +44,8 @@ const SCROLL_DEFAULT_LINES = 50;
 const MAX_READ_BYTES = 512 * 1024;
 /** grep 最多返回结果数 */
 const MAX_GREP_RESULTS = 100;
+/** 单次写入操作的最大行数（replace_lines / append_file） */
+const MAX_WRITE_LINES = 200;
 
 // ---- 工具函数 ----
 
@@ -123,6 +125,30 @@ function formatViewport(
   }
 
   return { lineData, text: textLines.join('\n') };
+}
+
+/**
+ * 生成 replace_lines 修改点附近的预览（前后各 5 行，标记 changed）。
+ * resultLines：修改后的完整行数组
+ * startLine：替换起始行（1-indexed）
+ * newLinesCount：替换上去的新内容行数
+ * endLine：替换结束行（1-indexed）
+ */
+function buildPreview(
+  resultLines: string[],
+  startLine: number,
+  newLinesCount: number,
+  endLine: number,
+): Array<{ lineNumber: number; content: string; changed: boolean }> {
+  const previewStart = Math.max(0, startLine - 6);
+  const previewEnd = Math.min(resultLines.length, endLine + 4);
+  const preview: Array<{ lineNumber: number; content: string; changed: boolean }> = [];
+  for (let i = previewStart; i < previewEnd; i++) {
+    const lineNumber = i + 1;
+    const changed = lineNumber >= startLine && lineNumber < startLine + newLinesCount;
+    preview.push({ lineNumber, content: resultLines[i], changed });
+  }
+  return preview;
 }
 
 // ============================================================
@@ -425,9 +451,9 @@ toolRegistry.register({
     name: 'replace_lines',
     description:
       '精确替换文件中指定行范围（start_line 到 end_line，闭区间，1-indexed）的内容。' +
-      '用 content 参数替换掉目标范围的全部行。' +
+      '用 content 参数替换掉目标范围的全部行。建议单次不超过 200 行，超大内容自动分块（但写全量较慢）。' +
       '使用前务必先用 search_grep 或 open_file 确认行号准确。' +
-      '如需追加内容到文件末尾，使用 append_file。',
+      '大文件新增推荐用 create_file + 多次 append_file 增量写入。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -455,46 +481,102 @@ toolRegistry.register({
       throw new Error(`无效的行号范围: start_line=${args.start_line}, end_line=${args.end_line}（须满足 1 <= start_line <= end_line）`);
     }
 
+    const allNewLines = content.split('\n');
+    const totalNewLines = allNewLines.length;
+    const taskId = context?.taskId ?? '';
+    const callId = context?.callId ?? '';
+
     // 读取原文件全部行，校验范围
-    const lines = await readAllLines(file);
-    if (endLine > lines.length) {
+    const originalLines = await readAllLines(file);
+    if (endLine > originalLines.length) {
       throw new Error(
-        `结束行号 ${endLine} 超出文件总行数 ${lines.length}。` +
+        `结束行号 ${endLine} 超出文件总行数 ${originalLines.length}。` +
         `如需向文件追加内容，请使用 append_file 工具。`,
       );
     }
 
-    const newLines = content.split('\n');
     const replacedCount = endLine - startLine + 1;
-    const replacedContent = lines.slice(startLine - 1, endLine).join('\n');
+    const replacedContent = originalLines.slice(startLine - 1, endLine).join('\n');
 
-    // 构建新文件内容：保留首尾换行符行为
-    const resultLines = [
-      ...lines.slice(0, startLine - 1),
-      ...newLines,
-      ...lines.slice(endLine),
-    ];
-    const resultContent = resultLines.join('\n');
+    if (totalNewLines <= MAX_WRITE_LINES) {
+      // Fast path：直接替换（不改变原行为）
+      const resultLines = [
+        ...originalLines.slice(0, startLine - 1),
+        ...allNewLines,
+        ...originalLines.slice(endLine),
+      ];
+      const resultContent = resultLines.join('\n');
+      await fs.writeFile(file, resultContent, 'utf8');
 
-    await fs.writeFile(file, resultContent, 'utf8');
-
-    // 生成修改点附近的预览（前后各 5 行，标记 changed）
-    const previewStart = Math.max(0, startLine - 6);
-    const previewEnd = Math.min(resultLines.length, endLine + 4);
-    const preview: Array<{ lineNumber: number; content: string; changed: boolean }> = [];
-    for (let i = previewStart; i < previewEnd; i++) {
-      const lineNumber = i + 1;
-      const changed = lineNumber >= startLine && lineNumber < startLine + newLines.length;
-      preview.push({ lineNumber, content: resultLines[i], changed });
+      const preview = buildPreview(resultLines, startLine, allNewLines.length, endLine);
+      return {
+        path: relative(root, file),
+        start_line: startLine,
+        end_line: endLine,
+        replaced_lines: replacedCount,
+        new_lines_count: allNewLines.length,
+        bytes_written: Buffer.byteLength(resultContent, 'utf8'),
+        replaced_content: replacedContent,
+        preview,
+      };
     }
 
+    // Slow path：自动分块渐进写入
+    const totalChunks = Math.ceil(totalNewLines / MAX_WRITE_LINES);
+
+    // Chunk 1：替换原始范围
+    const chunk1Lines = allNewLines.slice(0, MAX_WRITE_LINES);
+    let currentLines = [
+      ...originalLines.slice(0, startLine - 1),
+      ...chunk1Lines,
+      ...originalLines.slice(endLine),
+    ];
+    await fs.writeFile(file, currentLines.join('\n'), 'utf8');
+
+    let cumulativeLines = chunk1Lines.length;
+    const chunk1End = Math.min(MAX_WRITE_LINES, totalNewLines);
+    context?.publishEvent?.({
+      type: 'tool_progress',
+      taskId,
+      callId,
+      message: `正在替换：第 1-${chunk1End} 行 / 共 ${totalNewLines} 行`,
+      chunk: { current: 1, total: totalChunks },
+      percent: Math.round((1 / totalChunks) * 100),
+    });
+
+    // Chunks 2+：在上一块结尾处插入后续行
+    for (let i = 1; i < totalChunks; i++) {
+      const chunkLines = allNewLines.slice(i * MAX_WRITE_LINES, (i + 1) * MAX_WRITE_LINES);
+      const insertPos = startLine - 1 + cumulativeLines;
+
+      currentLines = [
+        ...currentLines.slice(0, insertPos),
+        ...chunkLines,
+        ...currentLines.slice(insertPos),
+      ];
+      await fs.writeFile(file, currentLines.join('\n'), 'utf8');
+
+      cumulativeLines += chunkLines.length;
+      const chunkStart = i * MAX_WRITE_LINES + 1;
+      const chunkEnd = Math.min((i + 1) * MAX_WRITE_LINES, totalNewLines);
+      context?.publishEvent?.({
+        type: 'tool_progress',
+        taskId,
+        callId,
+        message: `正在替换：第 ${chunkStart}-${chunkEnd} 行 / 共 ${totalNewLines} 行`,
+        chunk: { current: i + 1, total: totalChunks },
+        percent: Math.round(((i + 1) / totalChunks) * 100),
+      });
+    }
+
+    const preview = buildPreview(currentLines, startLine, allNewLines.length, endLine);
     return {
       path: relative(root, file),
       start_line: startLine,
       end_line: endLine,
       replaced_lines: replacedCount,
-      new_lines_count: newLines.length,
-      bytes_written: Buffer.byteLength(resultContent, 'utf8'),
+      new_lines_count: totalNewLines,
+      bytes_written: Buffer.byteLength(currentLines.join('\n'), 'utf8'),
       replaced_content: replacedContent,
       preview,
     };
@@ -508,7 +590,8 @@ toolRegistry.register({
   descriptor: {
     name: 'append_file',
     description:
-      '在文件末尾追加内容。' +
+      '在文件末尾追加内容。大文件优先用多次 append_file 增量写入（效率高于一次 replace_lines）。' +
+      '超大内容会自动分块写入并推送进度。' +
       '如果文件不存在则创建新文件并写入。' +
       '如需替换文件中间某段内容，使用 replace_lines。',
     inputSchema: {
@@ -531,14 +614,49 @@ toolRegistry.register({
 
     const content = readNonEmptyString(args.content, 'content');
 
-    await fs.appendFile(file, content, 'utf8');
-    const st = await fs.stat(file);
+    const allLines = content.split('\n');
+    const totalLines = allLines.length;
+    const taskId = context?.taskId ?? '';
+    const callId = context?.callId ?? '';
 
+    if (totalLines <= MAX_WRITE_LINES) {
+      // Fast path：直接写入（不改变原行为）
+      await fs.appendFile(file, content, 'utf8');
+      const st = await fs.stat(file);
+      return {
+        path: relative(root, file),
+        bytes_written: Buffer.byteLength(content, 'utf8'),
+        total_size: st.size,
+        note: `已向 ${relative(root, file)} 追加 ${Buffer.byteLength(content, 'utf8')} 字节。`,
+      };
+    }
+
+    // Slow path：自动分块写入，每块推送进度
+    const totalChunks = Math.ceil(totalLines / MAX_WRITE_LINES);
+    for (let i = 0; i < totalChunks; i++) {
+      const chunkLines = allLines.slice(i * MAX_WRITE_LINES, (i + 1) * MAX_WRITE_LINES);
+      const chunkContent = chunkLines.join('\n') + (i < totalChunks - 1 ? '\n' : '');
+
+      await fs.appendFile(file, chunkContent, 'utf8');
+
+      const chunkStart = i * MAX_WRITE_LINES + 1;
+      const chunkEnd = Math.min((i + 1) * MAX_WRITE_LINES, totalLines);
+      context?.publishEvent?.({
+        type: 'tool_progress',
+        taskId,
+        callId,
+        message: `正在写入：第 ${chunkStart}-${chunkEnd} 行 / 共 ${totalLines} 行`,
+        chunk: { current: i + 1, total: totalChunks },
+        percent: Math.round(((i + 1) / totalChunks) * 100),
+      });
+    }
+
+    const st = await fs.stat(file);
     return {
       path: relative(root, file),
       bytes_written: Buffer.byteLength(content, 'utf8'),
       total_size: st.size,
-      note: `已向 ${relative(root, file)} 追加 ${Buffer.byteLength(content, 'utf8')} 字节。`,
+      note: `已向 ${relative(root, file)} 追加 ${Buffer.byteLength(content, 'utf8')} 字节（分 ${totalChunks} 次写入）。`,
     };
   },
 });

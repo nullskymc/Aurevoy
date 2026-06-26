@@ -36,6 +36,11 @@ export interface TimelineStepData {
   error?: string;
   args?: Record<string, unknown>;
   toolName?: string;
+  progress?: {
+    message: string;
+    chunk?: { current: number; total: number };
+    percent?: number;
+  };
 }
 
 /** 按计划步骤分组的工具调用集合 */
@@ -323,7 +328,7 @@ export function buildAgentRoundFromMessage(
 /** 从 SSE 实时数据 AgentRunningTimeline（即 ToolActivity[]）构建 AgentRoundData */
 export function buildLiveAgentRoundData(params: {
   plan: PlanStep[];
-  liveToolActivity: { id: string; name: string; args: unknown; status: string; output?: unknown; error?: string }[];
+  liveToolActivity: { id: string; name: string; args: unknown; status: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
   output?: string;
   reasoning?: string;
   phase?: string | null;
@@ -351,6 +356,7 @@ export function buildLiveAgentRoundData(params: {
       output: act.output != null ? formatOutput(act.output) : undefined,
       args,
       toolName: act.name,
+      progress: act.progress,
     };
   });
 
@@ -517,7 +523,20 @@ function TimelineStepNode({
           )}
           {step.status === "running" && (
             <div className="timeline-step-log is-running">
-              <span className="stream-caret" />
+              {step.progress ? (
+                <div className="timeline-step-progress">
+                  {step.progress.percent != null ? (
+                    <div className="progress-bar">
+                      <div className="progress-bar-fill" style={{ width: `${step.progress.percent}%` }} />
+                    </div>
+                  ) : (
+                    <span className="stream-caret" />
+                  )}
+                  <span className="progress-text">{step.progress.message}</span>
+                </div>
+              ) : (
+                <span className="stream-caret" />
+              )}
             </div>
           )}
         </div>

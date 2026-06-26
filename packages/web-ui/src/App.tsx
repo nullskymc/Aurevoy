@@ -159,6 +159,15 @@ function deriveToolActivityFromEvents(events: FeedItem[]): ToolActivity[] {
         existing.output = event.result.output;
         existing.error = event.result.error;
       }
+    } else if (event.type === "tool_progress") {
+      const existing = byId.get(event.callId);
+      if (existing) {
+        existing.progress = {
+          message: event.message,
+          chunk: event.chunk,
+          percent: event.percent,
+        };
+      }
     }
   }
   return order.map((id) => byId.get(id)!);
@@ -620,6 +629,7 @@ function App() {
         });
         break;
       case "tool_call":
+      case "tool_progress":
         break;
       case "approval_request":
         setStatus("paused");

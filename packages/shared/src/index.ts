@@ -449,6 +449,17 @@ export type AgentEvent =
   | { type: 'tool_call'; taskId: string; call: ToolCall }
   | { type: 'tool_result'; taskId: string; result: ToolResult }
   | {
+      type: 'tool_progress';
+      taskId: string;
+      callId: string;
+      /** 人类可读的进度描述 */
+      message: string;
+      /** 分块计数：当前块号 / 总块数 */
+      chunk?: { current: number; total: number };
+      /** 0-100 百分比；缺省或 -1 表示不确定进度 */
+      percent?: number;
+    } // 工具执行中的渐进进度
+  | {
       type: 'approval_request';
       taskId: string;
       call: ToolCall;

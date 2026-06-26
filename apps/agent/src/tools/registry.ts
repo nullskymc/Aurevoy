@@ -11,6 +11,10 @@ export interface ToolContext {
   workspaceDir: string;
   /** 用户拖拽/选择的文件/目录路径——这些路径不在工作区内但已获用户授权，跳过沙箱检查 */
   externalPaths?: string[];
+  /** 发布事件（如 tool_progress）到前端；由 Agent 循环注入，连接 taskEvents.publish */
+  publishEvent?: (event: Record<string, unknown>) => void;
+  /** 当前工具调用的 callId，用于关联进度事件 */
+  callId?: string;
 }
 
 /** 一个可被 Agent 调用的工具 */
