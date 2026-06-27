@@ -194,12 +194,16 @@ function mergePendingApprovalsIntoActivity(
 }
 
 function filterHistoricalToolActivity(live: ToolActivity[], messages: Message[]): ToolActivity[] {
-  const historicalCallIds = new Set<string>();
+  // 只过滤掉已有 tool-role 结果消息的工具（即已执行完毕的）。
+  // 不匹配 assistant message 里的 toolCalls —— 因为 assistant 消息在工具执行前
+  // 就被提交到 messages 了，运行中的工具如果被过滤掉会导致 live 进度展示丢失。
+  const resolvedCallIds = new Set<string>();
   for (const message of messages) {
-    for (const call of message.toolCalls ?? []) historicalCallIds.add(call.id);
-    if (message.toolCallId) historicalCallIds.add(message.toolCallId);
+    if (message.role === 'tool' && message.toolCallId) {
+      resolvedCallIds.add(message.toolCallId);
+    }
   }
-  return live.filter((item) => !historicalCallIds.has(item.id));
+  return live.filter((item) => !resolvedCallIds.has(item.id));
 }
 
 function createFeedItem(event: AgentEvent): FeedItem {
