@@ -193,17 +193,21 @@ function mergePendingApprovalsIntoActivity(
   return merged;
 }
 
-function filterHistoricalToolActivity(live: ToolActivity[], messages: Message[]): ToolActivity[] {
-  // 只过滤掉已有 tool-role 结果消息的工具（即已执行完毕的）。
-  // 不匹配 assistant message 里的 toolCalls —— 因为 assistant 消息在工具执行前
-  // 就被提交到 messages 了，运行中的工具如果被过滤掉会导致 live 进度展示丢失。
-  const resolvedCallIds = new Set<string>();
+function filterHistoricalToolActivity(live: ToolActivity[], messages: Message[], hasLiveTail: boolean): ToolActivity[] {
+  // 排除已在历史区渲染的 assistant 消息中的 tool call。
+  // 运行时被隐藏（hasLiveTail=true）的最后一条带 toolCalls 的 assistant 消息
+  // 不在此列——其 tool 仍在 live 中展示并接收进度事件。
+  const hiddenAssistantId = hasLiveTail
+    ? [...messages].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
+    : undefined;
+
+  const renderedCallIds = new Set<string>();
   for (const message of messages) {
-    if (message.role === 'tool' && message.toolCallId) {
-      resolvedCallIds.add(message.toolCallId);
+    if (message.role === 'assistant' && message.id !== hiddenAssistantId) {
+      for (const call of message.toolCalls ?? []) renderedCallIds.add(call.id);
     }
   }
-  return live.filter((item) => !resolvedCallIds.has(item.id));
+  return live.filter((item) => !renderedCallIds.has(item.id));
 }
 
 function createFeedItem(event: AgentEvent): FeedItem {
@@ -1378,12 +1382,15 @@ function App() {
     currentTask.status !== "paused";
 
   // 当前运行轮次的实时工具活动（来自事件流）；历史轮次由 Conversation 从消息派生
+  const derivedLive = mergePendingApprovalsIntoActivity(
+    deriveToolActivityFromEvents(events),
+    currentTask?.pendingApprovals ?? [],
+  );
+  const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0 || reasoning.trim().length > 0;
   const liveToolActivity = filterHistoricalToolActivity(
-    mergePendingApprovalsIntoActivity(
-      deriveToolActivityFromEvents(events),
-      currentTask?.pendingApprovals ?? [],
-    ),
+    derivedLive,
     currentTask?.messages ?? [],
+    hasLiveTail,
   );
   const shellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,

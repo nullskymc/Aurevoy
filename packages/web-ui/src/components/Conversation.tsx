@@ -191,6 +191,11 @@ export function Conversation({
   const messages = task.messages;
   const resultMap = buildToolResultMap(messages);
 
+  // 运行时避开最后一条带 toolCalls 的 assistant 消息与 live 尾巴重复
+  const lastAssistantToolCallId = hasLiveTail
+    ? [...messages].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
+    : undefined;
+
   return (
     <div className="conversation">
       <div ref={topRef} />
@@ -211,6 +216,8 @@ export function Conversation({
             );
           }
           if (message.role === "assistant") {
+            // 运行时跳过最后一条带 toolCalls 的 assistant 消息——live 尾巴已展示它
+            if (message.id === lastAssistantToolCallId) return null;
             return (
               <AgentRound
                 key={message.id}
