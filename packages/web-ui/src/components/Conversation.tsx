@@ -1018,8 +1018,8 @@ export function AgentRunningTimeline({
         </div>
       )}
 
-      {/* 思考链（ThinkingCard） */}
-      {showStreamingReasoning && (
+      {/* 思考链（ThinkingCard）— 已禁用打字机效果，保留为将来可配置选项 */}
+      {false && showStreamingReasoning && (
         <ThinkingCard data={{
           id: 'live-reasoning',
           phase: 1,
@@ -1029,8 +1029,8 @@ export function AgentRunningTimeline({
         }} />
       )}
 
-      {/* 流式输出文本（thinking 阶段实时打字机效果） */}
-      {showStreamingOutput && (
+      {/* 流式输出文本 — 已禁用打字机效果（无意义），改用 spinner 代表进行中 */}
+      {false && showStreamingOutput && (
         <article className="doc-block doc-block-agent">
           <DocumentMeta icon={<AgentIcon />} label="Aurevoy" />
           <div className="doc-body">

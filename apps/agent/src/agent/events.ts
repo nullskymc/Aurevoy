@@ -6,23 +6,55 @@ import type { AgentEvent } from '@aurevoy/shared';
  *
  * Agent 循环在执行时 emit 事件，SSE 路由订阅这些事件并推送给前端。
  * 每个任务用 taskId 作为 channel。
+ *
+ * 性能优化：
+ * - setMaxListeners(0) 支持多任务并发
+ * - 高频事件（tool_progress / token / reasoning）按 type 节流，
+ *   避免前端每秒接收数百个 progress 事件导致渲染卡顿
  */
+
+/** 节流配置：每种事件类型的最小发送间隔（毫秒），缺省 0 = 不节流 */
+const THROTTLE_MS: Record<string, number> = {
+  tool_progress: 250,    // max 4 fps
+  token: 32,             // max ~30 fps
+  reasoning: 32,
+};
+
 class TaskEventBus {
   private emitter = new EventEmitter();
 
+  /** 节流计时器：taskId → type → lastSentAt */
+  private lastSent = new Map<string, Map<string, number>>();
+
   constructor() {
-    // 单进程内可能有多个任务并发订阅
     this.emitter.setMaxListeners(0);
   }
 
   publish(event: AgentEvent): void {
+    const throttle = THROTTLE_MS[event.type];
+    if (throttle) {
+      const now = Date.now();
+      let byTask = this.lastSent.get(event.taskId);
+      if (!byTask) {
+        byTask = new Map();
+        this.lastSent.set(event.taskId, byTask);
+      }
+      const last = byTask.get(event.type) ?? 0;
+      if (now - last < throttle) return; // 节流丢弃该事件（不序列化、不 emit）
+      byTask.set(event.type, now);
+    }
+
     this.emitter.emit(event.taskId, event);
   }
 
   subscribe(taskId: string, listener: (event: AgentEvent) => void): () => void {
     this.emitter.on(taskId, listener);
-    // 返回取消订阅函数
     return () => this.emitter.off(taskId, listener);
+  }
+
+  /** 任务结束时清理节流状态防止内存泄漏 */
+  cleanup(taskId: string): void {
+    this.lastSent.delete(taskId);
   }
 }
 

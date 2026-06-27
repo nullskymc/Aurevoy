@@ -382,6 +382,28 @@ export const taskStore = {
     });
   },
 
+  /**
+   * 增量更新：只更新变更的列，避免全量 JSON.stringify。
+   * 传入的 fields 只会 SET 对应列，updated_at 自动刷新。
+   * 高频场景（每轮 touch）用此替代 save()。
+   */
+  patch(taskId: string, fields: Partial<Pick<Task, 'status' | 'phase' | 'budgetUsage' | 'tokenUsage' | 'contextTokens' | 'pendingApprovals' | 'approvedApprovalKeys'>>): void {
+    const now = new Date().toISOString();
+    const assignments: string[] = ['updated_at = ?'];
+    const values: unknown[] = [now];
+
+    if (fields.status !== undefined) { assignments.push('status = ?'); values.push(fields.status); }
+    if (fields.phase !== undefined) { assignments.push('phase = ?'); values.push(fields.phase); }
+    if (fields.budgetUsage !== undefined) { assignments.push('budget_usage = ?'); values.push(JSON.stringify(fields.budgetUsage)); }
+    if (fields.tokenUsage !== undefined) { assignments.push('token_usage = ?'); values.push(JSON.stringify(fields.tokenUsage)); }
+    if (fields.contextTokens !== undefined) { assignments.push('context_tokens = ?'); values.push(fields.contextTokens); }
+    if (fields.pendingApprovals !== undefined) { assignments.push('pending_approvals = ?'); values.push(JSON.stringify(fields.pendingApprovals)); }
+    if (fields.approvedApprovalKeys !== undefined) { assignments.push('approved_approval_keys = ?'); values.push(JSON.stringify(fields.approvedApprovalKeys)); }
+
+    values.push(taskId);
+    db.prepare(`UPDATE tasks SET ${assignments.join(', ')} WHERE id = ?`).run(...values);
+  },
+
   get(id: string): Task | undefined {
     const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as
       | TaskRow

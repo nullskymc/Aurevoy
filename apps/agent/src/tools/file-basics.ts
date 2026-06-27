@@ -1,31 +1,37 @@
 /**
- * 基础文件读写工具（行级视口模式）。
+ * 行级视口 + 新三件套写入原语。
  *
  * 设计思路：
- * 提供类似 IDE 编辑器的行级文件操作体验，替代原始的 byte-offset/dd 驱动方式。
- * 模型通过 open_file 定位文件 → scroll 浏览 → replace_lines 精准修改，
+ * 提供类似 IDE 编辑器的行级文件操作体验。
+ * 模型通过 open_file 定位文件 → scroll 浏览 → edit_lines 精准修改，
  * 形成完整的"定位-浏览-编辑"闭环。
  *
- * 定位（Read）：
+ * 读取（Read）：
  * - open_file：打开文件并定位到指定行，返回一个行窗口（视口）
  * - scroll：在已打开的文件中上下滚动视口
  * - search_grep：全局只读文本搜索（类似 grep -rn）
  *
- * 写入（Write）：
+ * 写入（Write）三件套：
+ * - write_file：原子全量写（≤50KB），新建或覆盖
+ * - edit_lines：行级精确替换（≤200行/8KB），局部编辑
+ * - session_open / session_write / session_close：分批构建大文件
+ *
+ * 辅助：
  * - create_file：新建空文件
- * - replace_lines：精确替换指定行范围（行号驱动）
- * - append_file：在文件末尾追加内容
+ * - append_file：尾部追加（≤200行/8KB）
  *
  * 工程约束：
  * - 行号均采用 1-indexed（第 1 行 = 文件开头）
  * - 视口 = 目标行前后各 VIEWPORT_CONTEXT_LINES 行
  * - 路径校验复用 builtins.ts 的 resolveInWorkspace / assertRealPathInside
- * - 所有工具无服务端状态：模型自行追踪当前文件与中心行号
+ * - 所有工具无服务端状态（session 状态驻留在内存 Map 中，进程级失效）
+ * - 任何写入操作都通过 write(tmp) → rename 实现原子性
  */
 
 import { promises as fs } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, relative } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import { toolRegistry } from './registry.js';
 import {
@@ -44,8 +50,50 @@ const SCROLL_DEFAULT_LINES = 50;
 const MAX_READ_BYTES = 512 * 1024;
 /** grep 最多返回结果数 */
 const MAX_GREP_RESULTS = 100;
-/** 单次写入操作的最大行数（replace_lines / append_file） */
-const MAX_WRITE_LINES = 200;
+
+/**
+ * 写入工具常量（新三件套契约）：
+ * - write_file: 原子全量写，content 上限 50KB
+ * - edit_lines: 行替换，content 上限 200 行 / 8KB
+ * - session_write: 单次追加上限 200 行 / 10KB
+ * - append_file: 单次追加上限 200 行 / 8KB
+ */
+const MAX_WRITE_BYTES = 50 * 1024;       // 50KB — write_file 单次上限
+const MAX_EDIT_LINES = 200;              // edit_lines 单次行数上限
+const MAX_EDIT_BYTES = 8 * 1024;         // 8KB — edit_lines content 上限
+const MAX_APPEND_LINES = 200;            // append_file 单次行数上限
+const MAX_APPEND_BYTES = 8 * 1024;       // 8KB — append_file content 上限
+const MAX_SESSION_WRITE_LINES = 200;     // session_write 单次行数上限
+const MAX_SESSION_WRITE_BYTES = 10 * 1024; // 10KB — session_write 单次上限
+/** Session 空闲超时（10 分钟无操作自动清理） */
+const SESSION_IDLE_MS = 10 * 60 * 1000;
+
+// ---- session 状态（进程内） ----
+
+interface SessionState {
+  id: string;
+  path: string;
+  tmpPath: string;
+  bytesWritten: number;
+  linesWritten: number;
+  startedAt: number;
+  lastActivityAt: number;
+}
+
+const activeSessions = new Map<string, SessionState>();
+
+// 每分钟扫描一次过期 session，自动清理
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _sessionCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [id, sess] of activeSessions) {
+    if (now - sess.lastActivityAt > SESSION_IDLE_MS) {
+      activeSessions.delete(id);
+      fs.unlink(sess.tmpPath).catch(() => { /* 忽略清理错误 */ });
+    }
+  }
+}, 60_000);
+_sessionCleanup.unref();
 
 // ---- 工具函数 ----
 
@@ -81,6 +129,11 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/** 确保父目录存在 */
+async function ensureParentDir(filePath: string): Promise<void> {
+  await fs.mkdir(join(filePath, '..'), { recursive: true });
+}
+
 /**
  * 读取文件全部行，返回行数组（1-indexed）。
  * 正确处理末尾换行符：文件 "a\nb\n" → ['a', 'b']（末尾空行不计为一行）
@@ -108,7 +161,6 @@ function calcViewport(totalLines: number, targetLine: number) {
 
 /**
  * 从行数组中截取视口窗口，并格式化为带行号的文本。
- * 返回结构化行数据 + 可直接展示的格式化文本。
  */
 function formatViewport(
   lines: string[],
@@ -128,11 +180,7 @@ function formatViewport(
 }
 
 /**
- * 生成 replace_lines 修改点附近的预览（前后各 5 行，标记 changed）。
- * resultLines：修改后的完整行数组
- * startLine：替换起始行（1-indexed）
- * newLinesCount：替换上去的新内容行数
- * endLine：替换结束行（1-indexed）
+ * 生成编辑点附近的预览（前后各 5 行，标记 changed）。
  */
 function buildPreview(
   resultLines: string[],
@@ -149,6 +197,31 @@ function buildPreview(
     preview.push({ lineNumber, content: resultLines[i], changed });
   }
   return preview;
+}
+
+/**
+ * 原子写入：先写临时文件再 rename，避免部分写入导致的损坏。
+ */
+async function atomicWrite(filePath: string, content: string): Promise<void> {
+  const tmpPath = filePath + '.tmp.' + randomUUID();
+  await fs.writeFile(tmpPath, content, 'utf8');
+  await fs.rename(tmpPath, filePath);
+}
+
+/** 发布进度事件（sync 到工具执行上下文） */
+function publishProgress(
+  context: { publishEvent?: (event: Record<string, unknown>) => void; taskId?: string; callId?: string } | undefined,
+  message: string,
+  percent: number,
+) {
+  if (!context?.publishEvent) return;
+  context.publishEvent({
+    type: 'tool_progress',
+    taskId: context.taskId ?? '',
+    callId: context.callId ?? '',
+    message,
+    percent,
+  });
 }
 
 // ============================================================
@@ -260,7 +333,6 @@ toolRegistry.register({
     const lines = await readAllLines(file);
     const totalLines = lines.length;
 
-    // 根据方向和步长计算新的中心行号
     let newCenterLine: number;
     switch (direction) {
       case 'top':
@@ -339,7 +411,6 @@ toolRegistry.register({
     const glob = typeof args.glob === 'string' && args.glob.trim() ? args.glob.trim() : undefined;
     const maxResults = clampInteger(args.maxResults, 1, MAX_GREP_RESULTS, 50);
 
-    // 构建 grep 参数：-rn = 递归 + 行号，--binary-files=without-match 跳过二进制
     const grepArgs: string[] = [
       '-rn',
       '--binary-files=without-match',
@@ -350,9 +421,8 @@ toolRegistry.register({
     }
     grepArgs.push('-e', pattern, searchRoot);
 
-  const grepResult = await new Promise<string>((resolvePromise, reject) => {
+    const grepResult = await new Promise<string>((resolvePromise, reject) => {
       execFile('grep', grepArgs, { maxBuffer: MAX_READ_BYTES, timeout: 15000 }, (err, stdout, stderr) => {
-        // grep 退出码 1 = 无匹配，视为正常空结果
         if (err && (err as { code: unknown }).code !== 1) {
           reject(new Error(stderr || err.message));
         } else {
@@ -365,7 +435,6 @@ toolRegistry.register({
     const truncated = rawLines.length > maxResults;
     const displayLines = truncated ? rawLines.slice(0, maxResults) : rawLines;
 
-    // 解析 grep -rn 的 "file:line:content" 格式
     const matches = displayLines.map((l) => {
       const firstColon = l.indexOf(':');
       const secondColon = firstColon >= 0 ? l.indexOf(':', firstColon + 1) : -1;
@@ -402,7 +471,7 @@ toolRegistry.register({
     description:
       '在工作区内创建一个新的空文件。' +
       '如果文件已存在则不覆盖，返回已存在状态。' +
-      '如需写入内容到新文件，创建后调用 replace_lines 或 append_file。',
+      '如需写入内容到新文件，创建后用 write_file 批量写入或 session_open/session_write/session_close 分批写入。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -418,8 +487,7 @@ toolRegistry.register({
     const { root, externalPaths } = rootAndExternals(context);
     const file = resolveInWorkspace(args.path, root, externalPaths);
 
-    // 确保父目录存在，再校验路径是否在沙箱内
-    await fs.mkdir(join(file, '..'), { recursive: true });
+    await ensureParentDir(file);
     await assertRealPathInside(file, root, externalPaths);
 
     if (await pathExists(file)) {
@@ -428,7 +496,7 @@ toolRegistry.register({
         return {
           path: relative(root, file),
           created: false,
-          note: '文件已存在，未做任何修改。如需修改内容，使用 replace_lines 或 append_file。',
+          note: '文件已存在，未做任何修改。如需修改内容，使用 edit_lines 或 write_file。',
         };
       }
       throw new Error(`路径已存在但不是文件: ${file}`);
@@ -444,23 +512,81 @@ toolRegistry.register({
 });
 
 // ============================================================
-// 5. replace_lines（dangerous）：精准行写入
+// 5. write_file（dangerous）：原子全量写
 // ============================================================
 toolRegistry.register({
   descriptor: {
-    name: 'replace_lines',
+    name: 'write_file',
+    description:
+      '原子全量写入文件（≤50KB）。文件不存在则创建，存在则覆盖。' +
+      '通过先写临时文件再 rename 实现原子写入，不会产生部分写入的文件。' +
+      '是新建文件或完全重写已有文件的首选方式。' +
+      '内容超过 50KB 时会返回错误——请改用 session_open/session_write/session_close 分批写入。' +
+      '如需局部修改现有文件，使用 edit_lines。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '相对工作区的文件路径' },
+        content: { type: 'string', description: '文件内容（≤50KB，UTF-8 文本）' },
+      },
+      required: ['path', 'content'],
+      additionalProperties: false,
+    },
+    riskLevel: 'dangerous',
+  },
+
+  async execute(args, context) {
+    const { root, externalPaths } = rootAndExternals(context);
+    const file = resolveInWorkspace(args.path, root, externalPaths);
+    await ensureParentDir(file);
+    await assertRealPathInside(file, root, externalPaths);
+
+    const content = readNonEmptyString(args.content, 'content');
+
+    // 检查大小上限
+    const bytes = Buffer.byteLength(content, 'utf8');
+    if (bytes > MAX_WRITE_BYTES) {
+      throw new Error(
+        `内容过大（${bytes} 字节，上限 ${MAX_WRITE_BYTES} 字节 ≈ ${Math.round(MAX_WRITE_BYTES / 40)} 行）。` +
+        `请改用 session_open/session_write/session_close 分批构建此文件。`,
+      );
+    }
+
+    // 原子写入
+    await atomicWrite(file, content);
+
+    const st = await fs.stat(file);
+    const lineCount = content.split('\n').length;
+
+    return {
+      path: relative(root, file),
+      bytes_written: bytes,
+      total_size: st.size,
+      lines_written: lineCount,
+      note: `文件 ${relative(root, file)} 已原子写入（${bytes} 字节，${lineCount} 行）。`,
+    };
+  },
+});
+
+// ============================================================
+// 6. edit_lines（dangerous）：行级精确替换
+// ============================================================
+toolRegistry.register({
+  descriptor: {
+    name: 'edit_lines',
     description:
       '精确替换文件中指定行范围（start_line 到 end_line，闭区间，1-indexed）的内容。' +
-      '用 content 参数替换掉目标范围的全部行。建议单次不超过 200 行，超大内容自动分块（但写全量较慢）。' +
+      'content 上限 200 行 / 8KB——适合局部编辑代码、修改配置等精确修改场景。' +
       '使用前务必先用 search_grep 或 open_file 确认行号准确。' +
-      '大文件新增推荐用 create_file + 多次 append_file 增量写入。',
+      '如需创建大文件（>200 行），用 session_open/session_write/session_close 分批写入。' +
+      '如需整体重写小文件（≤50KB），用 write_file 一步完成。',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: '相对工作区的文件路径' },
         start_line: { type: 'integer', description: '起始行号（1-indexed，包含）' },
         end_line: { type: 'integer', description: '结束行号（1-indexed，包含），必须 >= start_line' },
-        content: { type: 'string', description: '替换后的新内容（可包含多行文本）' },
+        content: { type: 'string', description: '替换后的新内容（≤200 行 / 8KB，可包含多行文本）' },
       },
       required: ['path', 'start_line', 'end_line', 'content'],
       additionalProperties: false,
@@ -478,15 +604,28 @@ toolRegistry.register({
     const content = readNonEmptyString(args.content, 'content');
 
     if (startLine <= 0 || endLine <= 0 || startLine > endLine) {
-      throw new Error(`无效的行号范围: start_line=${args.start_line}, end_line=${args.end_line}（须满足 1 <= start_line <= end_line）`);
+      throw new Error(
+        `无效的行号范围: start_line=${args.start_line}, end_line=${args.end_line}（须满足 1 <= start_line <= end_line）`,
+      );
     }
 
+    // 校验 content 上限：200 行 / 8KB
     const allNewLines = content.split('\n');
-    const totalNewLines = allNewLines.length;
-    const taskId = context?.taskId ?? '';
-    const callId = context?.callId ?? '';
+    const contentBytes = Buffer.byteLength(content, 'utf8');
+    if (allNewLines.length > MAX_EDIT_LINES) {
+      throw new Error(
+        `替换内容超出行数上限（${allNewLines.length} 行 > ${MAX_EDIT_LINES} 行）。` +
+        `请缩小编辑范围（如只改关键函数）或用 session_open/session_write/session_close 重建整个文件。`,
+      );
+    }
+    if (contentBytes > MAX_EDIT_BYTES) {
+      throw new Error(
+        `替换内容超出字符上限（${contentBytes} 字节 > ${MAX_EDIT_BYTES} 字节）。` +
+        `请缩小编辑范围。`,
+      );
+    }
 
-    // 读取原文件全部行，校验范围
+    // 读取原文件，校验范围
     const originalLines = await readAllLines(file);
     if (endLine > originalLines.length) {
       throw new Error(
@@ -498,85 +637,26 @@ toolRegistry.register({
     const replacedCount = endLine - startLine + 1;
     const replacedContent = originalLines.slice(startLine - 1, endLine).join('\n');
 
-    if (totalNewLines <= MAX_WRITE_LINES) {
-      // Fast path：直接替换（不改变原行为）
-      const resultLines = [
-        ...originalLines.slice(0, startLine - 1),
-        ...allNewLines,
-        ...originalLines.slice(endLine),
-      ];
-      const resultContent = resultLines.join('\n');
-      await fs.writeFile(file, resultContent, 'utf8');
-
-      const preview = buildPreview(resultLines, startLine, allNewLines.length, endLine);
-      return {
-        path: relative(root, file),
-        start_line: startLine,
-        end_line: endLine,
-        replaced_lines: replacedCount,
-        new_lines_count: allNewLines.length,
-        bytes_written: Buffer.byteLength(resultContent, 'utf8'),
-        replaced_content: replacedContent,
-        preview,
-      };
-    }
-
-    // Slow path：自动分块渐进写入
-    const totalChunks = Math.ceil(totalNewLines / MAX_WRITE_LINES);
-
-    // Chunk 1：替换原始范围
-    const chunk1Lines = allNewLines.slice(0, MAX_WRITE_LINES);
-    let currentLines = [
+    // 内存替换（小数据量，O(N) 安全）
+    const resultLines = [
       ...originalLines.slice(0, startLine - 1),
-      ...chunk1Lines,
+      ...allNewLines,
       ...originalLines.slice(endLine),
     ];
-    await fs.writeFile(file, currentLines.join('\n'), 'utf8');
+    const resultContent = resultLines.join('\n');
 
-    let cumulativeLines = chunk1Lines.length;
-    const chunk1End = Math.min(MAX_WRITE_LINES, totalNewLines);
-    context?.publishEvent?.({
-      type: 'tool_progress',
-      taskId,
-      callId,
-      message: `正在替换：第 1-${chunk1End} 行 / 共 ${totalNewLines} 行`,
-      chunk: { current: 1, total: totalChunks },
-      percent: Math.round((1 / totalChunks) * 100),
-    });
+    // 原子写入
+    await atomicWrite(file, resultContent);
 
-    // Chunks 2+：在上一块结尾处插入后续行
-    for (let i = 1; i < totalChunks; i++) {
-      const chunkLines = allNewLines.slice(i * MAX_WRITE_LINES, (i + 1) * MAX_WRITE_LINES);
-      const insertPos = startLine - 1 + cumulativeLines;
+    const preview = buildPreview(resultLines, startLine, allNewLines.length, endLine);
 
-      currentLines = [
-        ...currentLines.slice(0, insertPos),
-        ...chunkLines,
-        ...currentLines.slice(insertPos),
-      ];
-      await fs.writeFile(file, currentLines.join('\n'), 'utf8');
-
-      cumulativeLines += chunkLines.length;
-      const chunkStart = i * MAX_WRITE_LINES + 1;
-      const chunkEnd = Math.min((i + 1) * MAX_WRITE_LINES, totalNewLines);
-      context?.publishEvent?.({
-        type: 'tool_progress',
-        taskId,
-        callId,
-        message: `正在替换：第 ${chunkStart}-${chunkEnd} 行 / 共 ${totalNewLines} 行`,
-        chunk: { current: i + 1, total: totalChunks },
-        percent: Math.round(((i + 1) / totalChunks) * 100),
-      });
-    }
-
-    const preview = buildPreview(currentLines, startLine, allNewLines.length, endLine);
     return {
       path: relative(root, file),
       start_line: startLine,
       end_line: endLine,
       replaced_lines: replacedCount,
-      new_lines_count: totalNewLines,
-      bytes_written: Buffer.byteLength(currentLines.join('\n'), 'utf8'),
+      new_lines_count: allNewLines.length,
+      bytes_written: Buffer.byteLength(resultContent, 'utf8'),
       replaced_content: replacedContent,
       preview,
     };
@@ -584,21 +664,22 @@ toolRegistry.register({
 });
 
 // ============================================================
-// 6. append_file（dangerous）：尾部追加
+// 7. append_file（dangerous）：尾部追加
 // ============================================================
 toolRegistry.register({
   descriptor: {
     name: 'append_file',
     description:
-      '在文件末尾追加内容。大文件优先用多次 append_file 增量写入（效率高于一次 replace_lines）。' +
-      '超大内容会自动分块写入并推送进度。' +
+      '在文件末尾追加内容（≤200 行/8KB）。' +
       '如果文件不存在则创建新文件并写入。' +
-      '如需替换文件中间某段内容，使用 replace_lines。',
+      '如需追加多于 200 行，连续多次调用 append_file。' +
+      '如需替换文件中间某段内容，使用 edit_lines。' +
+      '如需新建大文件，使用 session_open/session_write/session_close 分批写入。',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: '相对工作区的文件路径' },
-        content: { type: 'string', description: '要追加的文本内容' },
+        content: { type: 'string', description: '要追加的文本内容（≤200 行/8KB）' },
       },
       required: ['path', 'content'],
       additionalProperties: false,
@@ -609,54 +690,267 @@ toolRegistry.register({
   async execute(args, context) {
     const { root, externalPaths } = rootAndExternals(context);
     const file = resolveInWorkspace(args.path, root, externalPaths);
-    await fs.mkdir(join(file, '..'), { recursive: true });
+    await ensureParentDir(file);
     await assertRealPathInside(file, root, externalPaths);
 
     const content = readNonEmptyString(args.content, 'content');
 
-    const allLines = content.split('\n');
-    const totalLines = allLines.length;
-    const taskId = context?.taskId ?? '';
-    const callId = context?.callId ?? '';
+    // 校验上限
+    const lines = content.split('\n');
+    if (lines.length > MAX_APPEND_LINES) {
+      throw new Error(
+        `追加内容超出行数上限（${lines.length} 行 > ${MAX_APPEND_LINES} 行）。` +
+        `请分批追加，每次不超过 ${MAX_APPEND_LINES} 行。`,
+      );
+    }
+    const bytes = Buffer.byteLength(content, 'utf8');
+    if (bytes > MAX_APPEND_BYTES) {
+      throw new Error(
+        `追加内容超出字节上限（${bytes} > ${MAX_APPEND_BYTES} 字节）。请分批追加。`,
+      );
+    }
 
-    if (totalLines <= MAX_WRITE_LINES) {
-      // Fast path：直接写入（不改变原行为）
-      await fs.appendFile(file, content, 'utf8');
-      const st = await fs.stat(file);
+    // 单次追加
+    await fs.appendFile(file, content, 'utf8');
+    const st = await fs.stat(file);
+
+    return {
+      path: relative(root, file),
+      bytes_written: bytes,
+      total_size: st.size,
+      note: `已向 ${relative(root, file)} 追加 ${bytes} 字节（${lines.length} 行）。`,
+    };
+  },
+});
+
+// ============================================================
+// 8. session_open（dangerous）：打开分批写入会话
+// ============================================================
+toolRegistry.register({
+  descriptor: {
+    name: 'session_open',
+    description:
+      '打开一个分批写入会话，用于构建大文件（>200 行 / >50KB）。' +
+      '返回一个 session_id，后续通过 session_write 分多次追加内容，' +
+      '最后用 session_close 完成写入。' +
+      '适用于：新建大型源文件、生成长篇文档、导出数据。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '相对工作区的目标文件路径' },
+      },
+      required: ['path'],
+      additionalProperties: false,
+    },
+    riskLevel: 'dangerous',
+  },
+
+  async execute(args, context) {
+    const { root, externalPaths } = rootAndExternals(context);
+    const file = resolveInWorkspace(args.path, root, externalPaths);
+    await ensureParentDir(file);
+    await assertRealPathInside(file, root, externalPaths);
+
+    // 创建临时文件
+    const tmpPath = file + '.session.' + randomUUID();
+    await fs.writeFile(tmpPath, '', 'utf8');
+
+    const id = randomUUID();
+    const state: SessionState = {
+      id,
+      path: relative(root, file),
+      tmpPath,
+      bytesWritten: 0,
+      linesWritten: 0,
+      startedAt: Date.now(),
+      lastActivityAt: Date.now(),
+    };
+    activeSessions.set(id, state);
+
+    return {
+      session_id: id,
+      path: state.path,
+      tmp_file: tmpPath,
+      note:
+        `分批写入会话已开始：目标 ${state.path}。` +
+        `使用 session_write("${id}", content) 分次写入内容，` +
+        `最后用 session_close("${id}") 完成。` +
+        `会话空闲 ${SESSION_IDLE_MS / 1000 / 60} 分钟未操作会自动清理。`,
+    };
+  },
+});
+
+// ============================================================
+// 9. session_write（dangerous）：向写作会话追加一段内容
+// ============================================================
+toolRegistry.register({
+  descriptor: {
+    name: 'session_write',
+    description:
+      '向一个分批写入会话追加一段内容（≤200 行/10KB 每次）。' +
+      '可连续多次调用，每段内容依次追加到临时文件。' +
+      '最后必须调用 session_close 完成写入。' +
+      '返回当前已写入的字节数和行数，便于跟踪进度。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'session_open 返回的 session_id' },
+        content: { type: 'string', description: '要追加的文本内容（≤200 行/10KB）' },
+      },
+      required: ['session_id', 'content'],
+      additionalProperties: false,
+    },
+    riskLevel: 'dangerous',
+  },
+
+  async execute(args, context) {
+    const sessionId = readNonEmptyString(args.session_id, 'session_id');
+    const content = readNonEmptyString(args.content, 'content');
+
+    const session = activeSessions.get(sessionId);
+    if (!session) {
+      throw new Error(
+        `会话 "${sessionId}" 不存在或已过期（${SESSION_IDLE_MS / 1000 / 60} 分钟无操作自动清理）。` +
+        `请重新 session_open 开始新的写入会话。`,
+      );
+    }
+
+    // 校验上限
+    const lines = content.split('\n');
+    if (lines.length > MAX_SESSION_WRITE_LINES) {
+      throw new Error(
+        `单次 session_write 超出行数上限（${lines.length} 行 > ${MAX_SESSION_WRITE_LINES} 行）。` +
+        `请分多次写入，每次不超过 ${MAX_SESSION_WRITE_LINES} 行。`,
+      );
+    }
+    const bytes = Buffer.byteLength(content, 'utf8');
+    if (bytes > MAX_SESSION_WRITE_BYTES) {
+      throw new Error(
+        `单次 session_write 超出字节上限（${bytes} > ${MAX_SESSION_WRITE_BYTES} 字节）。请分多次写入。`,
+      );
+    }
+
+    // 追加到临时文件
+    await fs.appendFile(session.tmpPath, content, 'utf8');
+
+    session.bytesWritten += bytes;
+    session.linesWritten += content.split('\n').length;
+    session.lastActivityAt = Date.now();
+
+    publishProgress(context, `已写入 ${session.linesWritten} 行 / ${session.bytesWritten} 字节`, 0);
+
+    return {
+      session_id: sessionId,
+      path: session.path,
+      bytes_written: session.bytesWritten,
+      lines_written: session.linesWritten,
+      note: `第 ${content.split('\n').length} 行已追加。累计：${session.linesWritten} 行 / ${session.bytesWritten} 字节。继续使用 session_write 追加，完成后调用 session_close。`,
+    };
+  },
+});
+
+// ============================================================
+// 10. session_close（dangerous）：完成分批写入
+// ============================================================
+toolRegistry.register({
+  descriptor: {
+    name: 'session_close',
+    description:
+      '完成分批写入会话：将临时文件原子地 rename 到目标路径，清理 session 状态。' +
+      '调用后 session_id 失效。文件写入完成，可正常读取。' +
+      '如果目标路径已存在，会被覆盖。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'session_open 返回的 session_id' },
+      },
+      required: ['session_id'],
+      additionalProperties: false,
+    },
+    riskLevel: 'dangerous',
+  },
+
+  async execute(args, context) {
+    const sessionId = readNonEmptyString(args.session_id, 'session_id');
+
+    const session = activeSessions.get(sessionId);
+    if (!session) {
+      throw new Error(
+        `会话 "${sessionId}" 不存在或已过期。` +
+        `如果临时文件还在，可通过文件系统查找并恢复。`,
+      );
+    }
+
+    // 从 session 清理
+    activeSessions.delete(sessionId);
+
+    const fullPath = resolveInWorkspace(
+      session.path,
+      rootAndExternals(context).root,
+      rootAndExternals(context).externalPaths,
+    );
+    await ensureParentDir(fullPath);
+
+    // 原子 rename 到目标路径
+    await fs.rename(session.tmpPath, fullPath);
+
+    const st = await fs.stat(fullPath);
+
+    publishProgress(context, `文件写入完成：${session.path}（${st.size} 字节）`, 100);
+
+    return {
+      session_id: sessionId,
+      path: session.path,
+      total_bytes: st.size,
+      total_lines: session.linesWritten,
+      duration_ms: Date.now() - session.startedAt,
+      note: `文件 ${session.path} 已成功写入（${st.size} 字节，${session.linesWritten} 行，耗时 ${Date.now() - session.startedAt}ms）。`,
+    };
+  },
+});
+
+// ============================================================
+// 11. session_abort（safe）：放弃分批写入
+// ============================================================
+toolRegistry.register({
+  descriptor: {
+    name: 'session_abort',
+    description:
+      '放弃一个进行中的分批写入会话，清理临时文件。' +
+      '目标路径不受影响（临时文件尚未 rename）。' +
+      '如果 session_id 已过期或不存在，返回已清理状态。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'session_open 返回的 session_id' },
+      },
+      required: ['session_id'],
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+  },
+
+  async execute(args) {
+    const sessionId = readNonEmptyString(args.session_id, 'session_id');
+
+    const session = activeSessions.get(sessionId);
+    if (!session) {
       return {
-        path: relative(root, file),
-        bytes_written: Buffer.byteLength(content, 'utf8'),
-        total_size: st.size,
-        note: `已向 ${relative(root, file)} 追加 ${Buffer.byteLength(content, 'utf8')} 字节。`,
+        session_id: sessionId,
+        cleaned: false,
+        note: `会话 "${sessionId}" 不存在或已过期，无需清理。`,
       };
     }
 
-    // Slow path：自动分块写入，每块推送进度
-    const totalChunks = Math.ceil(totalLines / MAX_WRITE_LINES);
-    for (let i = 0; i < totalChunks; i++) {
-      const chunkLines = allLines.slice(i * MAX_WRITE_LINES, (i + 1) * MAX_WRITE_LINES);
-      const chunkContent = chunkLines.join('\n') + (i < totalChunks - 1 ? '\n' : '');
+    activeSessions.delete(sessionId);
+    await fs.unlink(session.tmpPath).catch(() => { /* 忽略清理错误 */ });
 
-      await fs.appendFile(file, chunkContent, 'utf8');
-
-      const chunkStart = i * MAX_WRITE_LINES + 1;
-      const chunkEnd = Math.min((i + 1) * MAX_WRITE_LINES, totalLines);
-      context?.publishEvent?.({
-        type: 'tool_progress',
-        taskId,
-        callId,
-        message: `正在写入：第 ${chunkStart}-${chunkEnd} 行 / 共 ${totalLines} 行`,
-        chunk: { current: i + 1, total: totalChunks },
-        percent: Math.round(((i + 1) / totalChunks) * 100),
-      });
-    }
-
-    const st = await fs.stat(file);
     return {
-      path: relative(root, file),
-      bytes_written: Buffer.byteLength(content, 'utf8'),
-      total_size: st.size,
-      note: `已向 ${relative(root, file)} 追加 ${Buffer.byteLength(content, 'utf8')} 字节（分 ${totalChunks} 次写入）。`,
+      session_id: sessionId,
+      cleaned: true,
+      path: session.path,
+      partial_bytes: session.bytesWritten,
+      note: `会话已放弃，临时文件已清理。目标文件 ${session.path} 未受影响。`,
     };
   },
 });

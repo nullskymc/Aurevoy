@@ -68,8 +68,8 @@ export interface AgentRoundData {
 export function detectStepKind(toolName: string): StepKind {
   if (toolName === "execute_command") return "command";
   if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll") return "file_read";
-  if (toolName === "write_file" || toolName === "create_file" || toolName === "append_file") return "file_write";
-  if (toolName === "edit_file" || toolName === "apply_diff" || toolName === "replace_lines") return "edit";
+  if (toolName === "write_file" || toolName === "create_file" || toolName === "append_file" || toolName === "session_open" || toolName === "session_write" || toolName === "session_close" || toolName === "session_abort") return "file_write";
+  if (toolName === "edit_file" || toolName === "apply_diff" || toolName === "replace_lines" || toolName === "edit_lines") return "edit";
   if (toolName === "web_search" || toolName === "search_grep" || toolName === "search_files") return "search";
   if (toolName === "create_artifact" || toolName === "apply_artifact") return "artifact";
   if (toolName.startsWith("browser_")) return "browse";
@@ -154,14 +154,30 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
       : "";
     return truncateTitle([cmd, commandArgs].filter(Boolean).join(" ")) || "执行命令";
   }
-  if (toolName === "replace_lines") {
+  if (toolName === "replace_lines" || toolName === "edit_lines") {
     const path = typeof args.path === "string" ? args.path : "";
     const startLine = typeof args.start_line === "number" ? args.start_line : null;
     const endLine = typeof args.end_line === "number" ? args.end_line : null;
     if (path && startLine != null && endLine != null) {
       return truncateTitle(`${path} L${startLine}-${endLine}`);
     }
-    return truncateTitle(path) || "replace_lines";
+    return truncateTitle(path) || "edit_lines";
+  }
+  if (toolName === "write_file") {
+    const path = typeof args.path === "string" ? args.path : "";
+    return `write: ${truncateTitle(path)}` || "write_file";
+  }
+  if (toolName === "append_file") {
+    const path = typeof args.path === "string" ? args.path : "";
+    return `append: ${truncateTitle(path)}` || "append_file";
+  }
+  if (toolName === "session_open") {
+    const path = typeof args.path === "string" ? args.path : "";
+    return `session: ${truncateTitle(path)}` || "session_open";
+  }
+  if (toolName === "session_write" || toolName === "session_close" || toolName === "session_abort") {
+    const sid = typeof args.session_id === "string" ? args.session_id.slice(0, 8) : "";
+    return `${toolName} ${sid}`;
   }
   if (toolName === "open_file") {
     const path = typeof args.path === "string" ? args.path : "";
@@ -233,7 +249,7 @@ function extractLogContent(
     }
     return undefined;
   }
-  if (toolName === "replace_lines" || toolName === "write_file" || toolName === "append_file" || toolName === "edit_file" || toolName === "create_file") {
+  if (toolName === "replace_lines" || toolName === "edit_lines" || toolName === "write_file" || toolName === "append_file" || toolName === "edit_file" || toolName === "create_file") {
     const out = result.output;
     if (typeof out === "object" && out !== null) {
       const record = out as Record<string, unknown>;

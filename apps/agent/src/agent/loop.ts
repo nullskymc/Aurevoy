@@ -27,7 +27,7 @@ import type {
 } from '@aurevoy/shared';
 import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { autoCompactIfNeeded, buildContextWindow, buildMemorySystemMessage, buildSkillCatalogMessage, buildSystemContextMessage, buildToolGuidanceMessage, totalTokens } from './context.js';
+import { compactContext, buildMemorySystemMessage, buildSkillCatalogMessage, buildSystemContextMessage, buildToolGuidanceMessage, totalTokens } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
 
 import { runPlanAgent } from './plan-agent.js';
@@ -54,10 +54,10 @@ import {
 const DUPLICATE_CALL_LIMIT = 3;
 /** 单轮最多并行工具调用数 */
 const MAX_TOOL_CALLS_PER_TURN = 10;
-/** 流式生成期间单个 tool_call 参数的最大字符数；超过则中断流，避免 LLM 生成大段文件内容浪费时间。配合工具层 auto-chunking，放宽后大内容不再浪费——工具会处理。 */
-const MAX_TOOL_ARG_STREAM_CHARS = 50000;
+/** 流式生成期间单个 tool_call 参数的最大字符数（已提高至极大值——新写入原语由工具层做内容校验，不需要流式截断）。 */
+const MAX_TOOL_ARG_STREAM_CHARS = 1_000_000_000;
 /** P6: 写入类工具（需要执行前文件快照） */
-const WRITE_TOOLS = new Set(['apply_artifact', 'copy_file', 'move_file', 'rename_file', 'create_file', 'replace_lines', 'append_file']);
+const WRITE_TOOLS = new Set(['apply_artifact', 'copy_file', 'move_file', 'rename_file', 'create_file', 'write_file', 'edit_lines', 'append_file', 'session_open', 'session_write', 'session_close']);
 /** 基础只读工具免审批；其余工具仅允许当前任务会话内临时批准。 */
 const APPROVAL_FREE_TOOLS = new Set(['list_directory', 'load_skill', 'open_file', 'scroll', 'search_grep']);
 
@@ -71,7 +71,8 @@ const PLANMODE_TOOLS = new Set([
 const AUTO_EDIT_TOOLS = new Set([
   ...PLANMODE_TOOLS,
   'apply_artifact', 'move_file', 'copy_file', 'rename_file',
-  'create_file', 'replace_lines', 'append_file',
+  'create_file', 'write_file', 'edit_lines', 'append_file',
+  'session_open', 'session_write', 'session_close',
   'create_artifact',
 ]);
 
@@ -1062,7 +1063,23 @@ export async function runTask(task: Task): Promise<void> {
   const taskStartedAtMs = Date.now();
   const taskWorkspace = await resolveTaskWorkspace(task);
 
+  // ---- db 增量写入（Patch 而非 Save） ----
+  // 避免每轮全量 JSON.stringify(task.messages)，只更新高频变更列。
+  // 仍保持同步写入（崩溃安全），但去掉 messages/plan/artifacts 的序列化。
   const touch = () => {
+    task.updatedAt = new Date().toISOString();
+    taskStore.patch(task.id, {
+      status: task.status,
+      phase: task.phase,
+      budgetUsage: task.budgetUsage,
+      tokenUsage: task.tokenUsage,
+      contextTokens: task.contextTokens,
+      pendingApprovals: task.pendingApprovals,
+      approvedApprovalKeys: task.approvedApprovalKeys,
+    });
+  };
+  // 全量持久化（含 messages/plan），仅在关键变更点调用（计划生成/重放/分支等）
+  const saveFull = () => {
     task.updatedAt = new Date().toISOString();
     taskStore.save(task);
   };
@@ -1138,7 +1155,7 @@ export async function runTask(task: Task): Promise<void> {
         signal: abortController.signal,
       });
 
-      if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+      if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
 
       // 生成步骤并标记为 'proposed'（待审批）
       const proposedPlan: PlanStep[] = planOutput.steps.map((step, index) => ({
@@ -1153,7 +1170,7 @@ export async function runTask(task: Task): Promise<void> {
 
       // 推送计划审批卡片到前端
       task.plan = proposedPlan;
-      touch();
+      saveFull();
       taskEvents.publish({
         type: 'plan_generated',
         taskId: task.id,
@@ -1185,7 +1202,7 @@ export async function runTask(task: Task): Promise<void> {
       setRuntimePhase('waiting_approval', '等待审批执行计划…', 'paused');
       const decision = await waitForPlanApproval(task.id, abortController.signal);
 
-      if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+      if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
 
       if (decision.approved) {
         // 批准：将 proposed → running / pending
@@ -1287,6 +1304,10 @@ export async function runTask(task: Task): Promise<void> {
   const messages = task.messages;
   const callFingerprints = new Map<string, number>();
 
+  // prompt cache 前缀边界：上次成功发送的消息数。Snip/Microcompact 不修改缓存前缀，
+  // Context Collapse 修改时设置 collapsed=true → 此值重置为 0。
+  let lastCachedIndex = 0;
+
   // 收集用户提供的文件/目录路径作为受信任外部路径（跳过沙箱）
   const externalPaths = collectExternalPaths(task);
 
@@ -1301,7 +1322,7 @@ export async function runTask(task: Task): Promise<void> {
     taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
 
     for (let iteration = 0; ; iteration++) {
-      if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+      if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
       task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
       task.budgetUsage.iterations = iteration;
       updateWallTime(task, taskStartedAtMs);
@@ -1323,42 +1344,23 @@ export async function runTask(task: Task): Promise<void> {
       let tokenUsage: TokenUsage | null | undefined;
       let toolCalls: AccumulatedToolCall[] = [];
       const llmStartedAt = Date.now();
-      const announcedToolCallIds = new Set<string>();
 
-      // P4: 自动语义压缩（token 感知，LLM 摘要旧消息）
-      const compactResult = await autoCompactIfNeeded(messages);
-      if (compactResult.compressed) {
+      // ---- 上下文压缩管线：Snip → Microcompact → Collapse（cache-aware） ----
+      const compactResult = await compactContext(messages, lastCachedIndex);
+      if (compactResult.collapsed) {
+        // Context Collapse 修改了旧消息 → 缓存前缀无效
+        lastCachedIndex = 0;
+      }
+      if (compactResult.stats.snipped > 0 || compactResult.stats.microcompacted > 0) {
         writeTrace(task.id, 'phase', 'thinking', {
           iteration: iteration + 1,
           ok: true,
-          summary: `自动语义压缩：${compactResult.compressedGroupCount} 组消息 → 摘要，释放 ~${compactResult.savedTokens} tokens`,
-          data: {
-            originalTokens: compactResult.originalTokens,
-            finalTokens: compactResult.finalTokens,
-            compressedGroupCount: compactResult.compressedGroupCount,
-            savedTokens: compactResult.savedTokens,
-            tokenBudget: config.agent.contextTokenBudget,
-            threshold: config.agent.compactThreshold,
-          },
+          summary: `Snip ${compactResult.stats.snipped} 条空结果，Microcompact ${compactResult.stats.microcompacted} 条工具输出，释放 ~${compactResult.stats.savedTokens} tokens` +
+            (compactResult.stats.cachedPrefixPreserved ? '（缓存前缀未破坏）' : '（缓存已失效）'),
+          data: compactResult.stats,
         });
       }
-
-      // 会话级短期记忆：把完整历史压缩为本轮上下文窗口（非裸拼接）
-      const ctx = buildContextWindow(compactResult.messages);
-      if (ctx.compressed) {
-        writeTrace(task.id, 'phase', 'thinking', {
-          iteration: iteration + 1,
-          ok: true,
-          summary: `上下文压缩：${ctx.totalMessages} 条历史，${ctx.originalChars}→${ctx.finalChars} 字符，压缩 ${ctx.compressedCount} 条`,
-          data: {
-            originalChars: ctx.originalChars,
-            finalChars: ctx.finalChars,
-            compressedCount: ctx.compressedCount,
-            totalMessages: ctx.totalMessages,
-            charBudget: config.agent.contextCharBudget,
-          },
-        });
-      }
+      const ctxMessages = compactResult.messages;
 
       // P5 + M8: 长期记忆——混合评分（关键词 + 向量）+ [[link]] 展开后注入（禁用的不注入）
       const recentTopics = messages
@@ -1400,7 +1402,7 @@ export async function runTask(task: Task): Promise<void> {
         memoryMessage,
         skillCatalogMessage,
         attachmentSystemMessage,
-        ...ctx.messages,
+        ...ctxMessages,
       ].filter(Boolean) as Message[];
 
       // 估算当前上下文 token 数并推送前端
@@ -1432,7 +1434,7 @@ export async function runTask(task: Task): Promise<void> {
                 task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
                 task.budgetUsage.outputBytes += Buffer.byteLength(chunk.textDelta);
                 assertBudgetWithinLimits(task);
-                taskEvents.publish({ type: 'token', taskId: task.id, delta: chunk.textDelta });
+                taskEvents.publish({ type: 'token', taskId: task.id, delta: chunk.textDelta }); // 前端已弃用打字机效果，仅保留字符累积供历史回看
               }
               if (chunk.reasoningContentDelta) {
                 reasoningContent += chunk.reasoningContentDelta;
@@ -1440,11 +1442,8 @@ export async function runTask(task: Task): Promise<void> {
               }
               if (chunk.toolCallsSnapshot) {
                 for (const tc of chunk.toolCallsSnapshot) {
-                  if (tc.function.name && tc.id && !announcedToolCallIds.has(tc.id)) {
-                    announcedToolCallIds.add(tc.id);
-                    const earlyCall: ToolCall = { id: tc.id, toolName: tc.function.name, args: {} };
-                    taskEvents.publish({ type: 'tool_call', taskId: task.id, call: earlyCall });
-                  }
+                  // 流式阶段不发布 tool_call 事件（避免阶段仍是 thinking 时前端提前渲染工具卡片）
+                  // tool_call 事件延后到 phase 切换为 calling_tool 后统一发布
                   if (tc.function.arguments.length > MAX_TOOL_ARG_STREAM_CHARS) {
                     oversizedToolCall = { id: tc.id, name: tc.function.name, argChars: tc.function.arguments.length };
                   }
@@ -1487,6 +1486,10 @@ export async function runTask(task: Task): Promise<void> {
         throw err;
       }
 
+      // LLM 调用成功 → 更新 prompt cache 边界为当前消息数
+      // 下次迭代 Snip+Microcompact 只会处理此边界后的新增消息
+      lastCachedIndex = messages.length;
+
       // ---------- 流式截断：tool_call 参数过大 ----------
       type OversizedInfo = { id: string; name: string; argChars: number };
       const oc = oversizedToolCall as OversizedInfo | null;
@@ -1524,7 +1527,7 @@ export async function runTask(task: Task): Promise<void> {
         );
         messages.push(msg);
         taskEvents.publish({ type: 'message', taskId: task.id, message: msg });
-        return finishCompleted(task, updateStep, touch);
+        return finishCompleted(task, updateStep, saveFull);
       }
 
       // ---------- 情况 B：模型直接给出最终回复 ----------
@@ -1549,7 +1552,7 @@ export async function runTask(task: Task): Promise<void> {
           });
 
           await waitForPlanApproval(task.id, abortController.signal);
-          if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+          if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
 
           // 从 plan 模式切换到执行模式：清除 autoModeState 覆盖，回退到全局 config
           const targetMode = task.autoModeState.planPreMode ?? 'auto-edit';
@@ -1567,7 +1570,7 @@ export async function runTask(task: Task): Promise<void> {
         const msg = makeAssistant(textBuffer, reasoningContent);
         messages.push(msg);
         taskEvents.publish({ type: 'message', taskId: task.id, message: msg });
-        return finishCompleted(task, updateStep, touch);
+        return finishCompleted(task, updateStep, saveFull);
       }
 
       // ---------- 情况 C：模型请求调用工具 ----------
@@ -1653,7 +1656,7 @@ export async function runTask(task: Task): Promise<void> {
         setRuntimePhase('calling_tool', '等待用户补充信息', 'running');
         const toolMessage = await handleAskUserTool(askUserItem.call, iteration + 1);
         messages.push(toolMessage);
-        if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+        if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
         setRuntimePhase('thinking', '已收到追问回复，继续推理', 'running');
       }
 
@@ -1845,7 +1848,7 @@ export async function runTask(task: Task): Promise<void> {
           removePendingApproval(task, v.call.id);
           writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
 
-          if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+          if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
 
           // 人工审批重置连续自动批准计数（auto mode 安全机制）
           if (result.approved && task.autoModeState?.consecutiveAutoCalls) {
@@ -1893,7 +1896,7 @@ export async function runTask(task: Task): Promise<void> {
             }),
           );
 
-          if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+          if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
 
           setRuntimePhase('calling_tool', '执行已批准的命令', 'running');
           const cmdResults = await Promise.all(
@@ -1968,13 +1971,13 @@ export async function runTask(task: Task): Promise<void> {
       }
 
       // 每轮结束持久化，保证崩溃可恢复
-      touch();
-      if (abortController.signal.aborted) return finishCancelled(task, updateStep, touch);
+      saveFull();
+      if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
     }
 
   } catch (err) {
     if ((err as { name?: string })?.name === 'AbortError') {
-      return finishCancelled(task, updateStep, touch);
+      return finishCancelled(task, updateStep, saveFull);
     }
     task.status = 'failed';
     task.phase = 'failed';

@@ -705,12 +705,49 @@ export async function buildServer(externalLogger?: Logger) {
 
     let heartbeat: ReturnType<typeof setInterval>;
 
+    // ---- SSE 批量写入（cork + coalescing） ----
+    let sseBuf: string[] = [];
+    let sseTimer: ReturnType<typeof setImmediate> | null = null;
+
+    const sseFlush = () => {
+      sseTimer = null;
+      if (sseBuf.length === 0) return;
+      const batch = sseBuf;
+      sseBuf = [];
+      reply.raw.cork();
+      for (const line of batch) reply.raw.write(line);
+      reply.raw.uncork();
+    };
+
+    /** 需要立即刷入的事件类型 */
+    const DRAIN_EVENTS = new Set([
+      'done', 'task_deleted', 'error', 'status',
+      'plan_approval_request', 'plan_approval_resolved',
+      'clarification_request', 'clarification_resolved',
+      'approval_request',
+      'tool_result', 'message',
+    ]);
+
     const send = (event: AgentEvent) => {
-      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      const line = `data: ${JSON.stringify(event)}\n\n`;
+
       if (event.type === 'done' || event.type === 'task_deleted') {
+        if (sseBuf.length > 0) sseFlush();
+        reply.raw.write(line);
         clearInterval(heartbeat);
         unsubscribe();
+        taskEvents.cleanup(id);
         reply.raw.end();
+        return;
+      }
+
+      sseBuf.push(line);
+
+      if (DRAIN_EVENTS.has(event.type)) {
+        if (sseTimer) clearImmediate(sseTimer);
+        sseFlush();
+      } else if (!sseTimer) {
+        sseTimer = setImmediate(sseFlush);
       }
     };
 
@@ -753,10 +790,16 @@ export async function buildServer(externalLogger?: Logger) {
     }
 
     // 心跳，避免连接被中间层断开
-    heartbeat = setInterval(() => reply.raw.write(': ping\n\n'), 15000);
+    heartbeat = setInterval(() => {
+      reply.raw.cork();
+      reply.raw.write(': ping\n\n');
+      reply.raw.uncork();
+    }, 15000);
 
     req.raw.on('close', () => {
       clearInterval(heartbeat);
+      if (sseTimer) clearImmediate(sseTimer);
+      sseBuf = [];
       unsubscribe();
     });
   });

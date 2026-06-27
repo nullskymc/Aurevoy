@@ -586,12 +586,10 @@ function App() {
       case "phase":
         setPhase(event.phase);
         patchCurrentTask({ phase: event.phase });
-        // 进入新一轮思考时清空流式缓存，每轮独立展示
+        // 进入新一轮思考时清空 live 状态
         if (event.phase !== previousPhaseRef.current) {
           previousPhaseRef.current = event.phase;
           if (event.phase === "thinking") {
-            setOutput("");
-            setReasoning("");
             setLiveContentBlocks([]);
           }
         }
@@ -614,6 +612,7 @@ function App() {
         });
         break;
       case "token":
+        // 保留字符累积以防 history 回看需要完整文本
         setOutput((previous) => previous + event.delta);
         break;
       case "reasoning":
