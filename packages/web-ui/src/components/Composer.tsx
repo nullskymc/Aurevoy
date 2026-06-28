@@ -77,6 +77,7 @@ export function Composer({
 }: ComposerProps) {
   const platform = usePlatform();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
   const [cmdIndex, setCmdIndex] = useState(0);
   const [isDragOver, setIsDragOver] = useState(false);
   const [viewingImage, setViewingImage] = useState<string | null>(null);
@@ -148,8 +149,8 @@ export function Composer({
       }
     }
 
-    // Enter 提交，Shift+Enter 换行
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    // Enter 提交，Shift+Enter 换行（输入法组合期间不提交）
+    if (event.key === "Enter" && !event.shiftKey && !composingRef.current) {
       event.preventDefault();
       if (canSend) onSubmit();
     }
@@ -316,6 +317,8 @@ export function Composer({
           rows={1}
           onChange={(event) => onChange(event.currentTarget.value)}
           onKeyDown={handleKeyDown}
+          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionEnd={() => { composingRef.current = false; }}
         />
 
         <div className="composer-toolbar">

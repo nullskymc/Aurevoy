@@ -42,11 +42,10 @@ import {
   listTasks,
   resumeAutoMode as resumeAutoModeApi,
   resumeTask,
-  updateTaskAutoMode as updateTaskAutoModeApi,
+  updateSettings,
   revertTask,
   unrevertTask,
   updateArtifact,
-  updateSettings,
   updateMemory,
 } from "./api";
 import { usePlatform } from "./platform/context";
@@ -160,6 +159,15 @@ function deriveToolActivityFromEvents(events: FeedItem[]): ToolActivity[] {
         existing.output = event.result.output;
         existing.error = event.result.error;
       }
+    } else if (event.type === "tool_progress") {
+      const existing = byId.get(event.callId);
+      if (existing) {
+        existing.progress = {
+          message: event.message,
+          chunk: event.chunk,
+          percent: event.percent,
+        };
+      }
     }
   }
   return order.map((id) => byId.get(id)!);
@@ -185,13 +193,21 @@ function mergePendingApprovalsIntoActivity(
   return merged;
 }
 
-function filterHistoricalToolActivity(live: ToolActivity[], messages: Message[]): ToolActivity[] {
-  const historicalCallIds = new Set<string>();
+function filterHistoricalToolActivity(live: ToolActivity[], messages: Message[], hasLiveTail: boolean): ToolActivity[] {
+  // 排除已在历史区渲染的 assistant 消息中的 tool call。
+  // 运行时被隐藏（hasLiveTail=true）的最后一条带 toolCalls 的 assistant 消息
+  // 不在此列——其 tool 仍在 live 中展示并接收进度事件。
+  const hiddenAssistantId = hasLiveTail
+    ? [...messages].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
+    : undefined;
+
+  const renderedCallIds = new Set<string>();
   for (const message of messages) {
-    for (const call of message.toolCalls ?? []) historicalCallIds.add(call.id);
-    if (message.toolCallId) historicalCallIds.add(message.toolCallId);
+    if (message.role === 'assistant' && message.id !== hiddenAssistantId) {
+      for (const call of message.toolCalls ?? []) renderedCallIds.add(call.id);
+    }
   }
-  return live.filter((item) => !historicalCallIds.has(item.id));
+  return live.filter((item) => !renderedCallIds.has(item.id));
 }
 
 function createFeedItem(event: AgentEvent): FeedItem {
@@ -403,10 +419,7 @@ function App() {
     setAutoModeLevel(next);
     localStorage.setItem("aurevoy.autoModeLevel", next);
     localStorage.removeItem("aurevoy.autoMode");
-    // 有正在活动的任务时，实时同步到后端
-    if (currentTask?.id) {
-      updateTaskAutoModeApi(currentTask.id, next).catch(() => {});
-    }
+    void updateSettings({ autoModeLevel: next }).catch(() => {});
   }
 
   async function handleImportProjectPath(dirPath: string): Promise<void> {
@@ -518,6 +531,7 @@ function App() {
         getDataStatus(),
       ]);
       setRuntimeSettings(settings);
+      setAutoModeLevel(settings.autoModeLevel);
       setMcpServers(mcp.servers);
       setDataStatus(data);
     } catch (err) {
@@ -572,12 +586,10 @@ function App() {
       case "phase":
         setPhase(event.phase);
         patchCurrentTask({ phase: event.phase });
-        // 进入新一轮思考时清空流式缓存，每轮独立展示
+        // 进入新一轮思考时清空 live 状态
         if (event.phase !== previousPhaseRef.current) {
           previousPhaseRef.current = event.phase;
           if (event.phase === "thinking") {
-            setOutput("");
-            setReasoning("");
             setLiveContentBlocks([]);
           }
         }
@@ -600,6 +612,7 @@ function App() {
         });
         break;
       case "token":
+        // 保留字符累积以防 history 回看需要完整文本
         setOutput((previous) => previous + event.delta);
         break;
       case "reasoning":
@@ -623,6 +636,7 @@ function App() {
         });
         break;
       case "tool_call":
+      case "tool_progress":
         break;
       case "approval_request":
         setStatus("paused");
@@ -832,7 +846,7 @@ function App() {
     closeStream();
 
     try {
-      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach, autoModeLevel === 'off' ? undefined : autoModeLevel);
+      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach);
       setCurrentTask(task);
       setPhase(task.phase);
       setTraces([]);
@@ -1367,12 +1381,15 @@ function App() {
     currentTask.status !== "paused";
 
   // 当前运行轮次的实时工具活动（来自事件流）；历史轮次由 Conversation 从消息派生
+  const derivedLive = mergePendingApprovalsIntoActivity(
+    deriveToolActivityFromEvents(events),
+    currentTask?.pendingApprovals ?? [],
+  );
+  const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0 || reasoning.trim().length > 0;
   const liveToolActivity = filterHistoricalToolActivity(
-    mergePendingApprovalsIntoActivity(
-      deriveToolActivityFromEvents(events),
-      currentTask?.pendingApprovals ?? [],
-    ),
+    derivedLive,
     currentTask?.messages ?? [],
+    hasLiveTail,
   );
   const shellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,

@@ -65,7 +65,6 @@ import {
   resolvePlanApproval,
   resumeAutoMode,
   revertTask,
-  updateTaskAutoMode,
   runTask,
   unrevertTask,
 } from './agent/loop.js';
@@ -106,7 +105,7 @@ export async function buildServer(externalLogger?: Logger) {
   app.get('/api/health', async (): Promise<HealthResponse> => {
     return {
       status: 'ok',
-      version: '0.1.0',
+      version: '0.5.8',
       uptimeMs: Date.now() - startedAt,
       provider: getProviderName(),
       contextCharBudget: config.agent.contextCharBudget,
@@ -293,7 +292,7 @@ export async function buildServer(externalLogger?: Logger) {
       if (!project) return reply.code(404).send({ error: 'project not found' });
     }
 
-    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments, req.body?.autoModeLevel);
+    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments);
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runTask(task);
 
@@ -356,17 +355,6 @@ export async function buildServer(externalLogger?: Logger) {
     const ok = resumeAutoMode(req.params.id);
     if (!ok) return reply.code(409).send({ error: 'auto mode 未处于暂停状态' });
     return reply.code(200).send({ ok: true });
-  });
-
-  // 运行时切换 auto mode 等级（直接影响当前任务）
-  app.patch<{ Params: { id: string }; Body: { autoModeLevel?: string } }>('/api/tasks/:id/auto-mode', (req, reply) => {
-    const level = req.body?.autoModeLevel;
-    if (!level || !['off', 'plan', 'auto-edit', 'full'].includes(level)) {
-      return reply.code(400).send({ error: 'autoModeLevel 必须是 off/plan/auto-edit/full' });
-    }
-    const ok = updateTaskAutoMode(req.params.id, level as 'off' | 'plan' | 'auto-edit' | 'full');
-    if (!ok) return reply.code(404).send({ error: 'task not found' });
-    return reply.code(200).send({ ok: true, autoModeLevel: level });
   });
 
   // 编辑重跑（Phase 1）：截断到目标消息之前，回到该点状态；前端随后用 continue 端点
@@ -717,12 +705,49 @@ export async function buildServer(externalLogger?: Logger) {
 
     let heartbeat: ReturnType<typeof setInterval>;
 
+    // ---- SSE 批量写入（cork + coalescing） ----
+    let sseBuf: string[] = [];
+    let sseTimer: ReturnType<typeof setImmediate> | null = null;
+
+    const sseFlush = () => {
+      sseTimer = null;
+      if (sseBuf.length === 0) return;
+      const batch = sseBuf;
+      sseBuf = [];
+      reply.raw.cork();
+      for (const line of batch) reply.raw.write(line);
+      reply.raw.uncork();
+    };
+
+    /** 需要立即刷入的事件类型 */
+    const DRAIN_EVENTS = new Set([
+      'done', 'task_deleted', 'error', 'status',
+      'plan_approval_request', 'plan_approval_resolved',
+      'clarification_request', 'clarification_resolved',
+      'approval_request',
+      'tool_result', 'message',
+    ]);
+
     const send = (event: AgentEvent) => {
-      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      const line = `data: ${JSON.stringify(event)}\n\n`;
+
       if (event.type === 'done' || event.type === 'task_deleted') {
+        if (sseBuf.length > 0) sseFlush();
+        reply.raw.write(line);
         clearInterval(heartbeat);
         unsubscribe();
+        taskEvents.cleanup(id);
         reply.raw.end();
+        return;
+      }
+
+      sseBuf.push(line);
+
+      if (DRAIN_EVENTS.has(event.type)) {
+        if (sseTimer) clearImmediate(sseTimer);
+        sseFlush();
+      } else if (!sseTimer) {
+        sseTimer = setImmediate(sseFlush);
       }
     };
 
@@ -765,10 +790,16 @@ export async function buildServer(externalLogger?: Logger) {
     }
 
     // 心跳，避免连接被中间层断开
-    heartbeat = setInterval(() => reply.raw.write(': ping\n\n'), 15000);
+    heartbeat = setInterval(() => {
+      reply.raw.cork();
+      reply.raw.write(': ping\n\n');
+      reply.raw.uncork();
+    }, 15000);
 
     req.raw.on('close', () => {
       clearInterval(heartbeat);
+      if (sseTimer) clearImmediate(sseTimer);
+      sseBuf = [];
       unsubscribe();
     });
   });

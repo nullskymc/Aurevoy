@@ -37,89 +37,430 @@ export function buildSkillCatalogMessage(): Message | null {
 }
 
 /**
- * 会话级短期记忆 —— 上下文窗口管理（M4.2）。
+ * Cache-aware 上下文压缩管线（参考 Claude Code 四层压缩设计）。
  *
- * 目标：把任务的完整消息历史压缩成"喂给 LLM 的上下文窗口"，而不是裸拼接全部历史。
- * 原则（确定性、可解释、可审计）：
- *  - 用户消息（用户约束/目标）始终逐字保留——它们是任务的边界条件，且通常很短。
- *  - 最近 N 条消息逐字保留（近窗口边界），保证最新工具结果与思考可见。
- *  - 更早的 assistant/tool 内容若超预算则**就地截断为摘要**（保留引用，不删除消息），
- *    从而既压缩体积，又不破坏 OpenAI 的 assistant→tool 配对契约与消息顺序。
+ * 三层递进压缩（由轻到重）：
+ *   1. Snip（零成本） → 2. Microcompact（零成本） → 3. Context Collapse（LLM 摘要）
  *
- * 该模块只产出"本轮请求用"的消息副本；任务真实历史 `task.messages` 不被修改。
+ * Cache-aware：
+ *   - Snip 和 Microcompact 只作用于 cachedUpTo 之后的新消息，不破坏 prompt cache
+ *   - Context Collapse 修改旧消息 → 返回 collapsed=true，调用方重置缓存边界
+ *   - Read/Write/Edit 工具结果不压缩：截断会导致 LLM 重读，得不偿失
  */
 
-export interface ContextWindowOptions {
-  /** 历史消息总字符预算 */
-  charBudget: number;
-  /** 逐字保留的最近消息条数 */
-  recentWindow: number;
-  /** 被压缩消息的单条内容字符上限 */
-  compressedCharCap: number;
-}
+// ---- 工具类型分类 ----
 
-export interface ContextWindowResult {
-  /** 实际发送给 LLM 的消息（system 由 provider 另行前置） */
+/** 输出较大的工具（内容会被 Microcompact 结构化压缩） */
+const TOOLS_WITH_LARGE_OUTPUT = new Set([
+  'open_file', 'scroll', 'search_grep', 'http_fetch', 'web_search',
+  'execute_command', 'edit_lines', 'replace_lines',
+]);
+
+/** 写入/确认类工具（输出简短，不压缩） */
+const TOOLS_KEEP_VERBATIM = new Set([
+  'write_file', 'create_file', 'append_file', 'copy_file', 'move_file', 'rename_file',
+  'delete_file', 'session_open', 'session_write', 'session_close', 'session_abort',
+  'apply_artifact', 'create_artifact', 'remember', 'index_files', 'recall',
+]);
+
+// ---- 公共类型 ----
+
+export interface CompactContextResult {
+  /** 压缩后的消息列表 */
   messages: Message[];
-  /** 是否发生了压缩 */
-  compressed: boolean;
-  /** 压缩前历史总字符 */
-  originalChars: number;
-  /** 压缩后历史总字符 */
-  finalChars: number;
-  /** 历史消息总条数 */
-  totalMessages: number;
-  /** 被截断压缩的消息条数 */
-  compressedCount: number;
-}
-
-function defaultOptions(): ContextWindowOptions {
-  return {
-    charBudget: config.agent.contextCharBudget,
-    recentWindow: config.agent.recentMessageWindow,
-    compressedCharCap: config.agent.compressedMessageCharCap,
+  /** Context Collapse 是否执行了（true → 调用方应重置缓存边界） */
+  collapsed: boolean;
+  stats: {
+    snipped: number;
+    microcompacted: number;
+    cachedPrefixPreserved: boolean;
+    savedTokens: number;
+    originalTokens: number;
+    finalTokens: number;
   };
 }
 
-function contentChars(message: Message): number {
-  let n = message.content?.length ?? 0;
-  if (message.reasoningContent) n += message.reasoningContent.length;
-  // tool_calls 的参数也占用上下文
-  if (message.toolCalls?.length) {
-    for (const tc of message.toolCalls) n += tc.function.arguments?.length ?? 0;
+// ---- 1. Snip: 移除空/无意义的 tool_result ----
+
+/**
+ * 移除空的 tool_result 消息及其配对的 assistant（如果该 assistant 的所有工具结果都被移除）。
+ * 只操作 cachedUpTo 之后的消息，不破坏 prompt cache 前缀。
+ */
+function snipToolResults(messages: Message[], cachedUpTo: number): Message[] {
+  // 构建 toolCallId → toolName 映射
+  const toolCallToName = buildToolNameMap(messages);
+
+  // 找出可以 snip 的 tool_result index
+  const snipToolResultIndices = new Set<number>();
+  for (let i = cachedUpTo; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role !== 'tool' || !m.toolCallId) continue;
+
+    // 检查内容是否为空或仅含基本信息
+    const toolName = toolCallToName.get(m.toolCallId);
+    if (toolName && TOOLS_KEEP_VERBATIM.has(toolName)) continue; // 保留确认类结果
+
+    const content = m.content?.trim();
+    if (!content || content === '{}' || content === '{"ok":true}' || content === 'null' || content === 'undefined') {
+      snipToolResultIndices.add(i);
+    }
   }
-  return n;
+
+  if (snipToolResultIndices.size === 0) return messages;
+
+  // 同时检查配对的 assistant：如果它的所有 tool_results 都被 snip 了，也移除该 assistant
+  const snipAssistantIndices = new Set<number>();
+  for (let i = cachedUpTo; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role !== 'assistant' || !m.toolCalls?.length) continue;
+
+    const callIds = new Set(m.toolCalls.map(tc => tc.id));
+    let allSnipped = true;
+    let anyFound = false;
+    // 向后扫描配对的 tool 结果
+    for (let j = i + 1; j < messages.length && messages[j].role === 'tool'; j++) {
+      const tm = messages[j];
+      if (tm.toolCallId && callIds.has(tm.toolCallId)) {
+        anyFound = true;
+        if (!snipToolResultIndices.has(j)) {
+          allSnipped = false;
+          break;
+        }
+      }
+    }
+    if (anyFound && allSnipped) {
+      snipAssistantIndices.add(i);
+    }
+  }
+
+  const remove = new Set([...snipToolResultIndices, ...snipAssistantIndices]);
+  return messages.filter((_, i) => !remove.has(i));
 }
 
-function totalChars(messages: Message[]): number {
-  return messages.reduce((sum, m) => sum + contentChars(m), 0);
+// ---- 2. Microcompact: 结构化工具结果压缩 ----
+
+/** 构建 toolCallId → toolName 映射 */
+function buildToolNameMap(messages: Message[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && msg.toolCalls) {
+      for (const tc of msg.toolCalls) {
+        map.set(tc.id, tc.function.name);
+      }
+    }
+  }
+  return map;
 }
 
-/** 把一段内容截断为带摘要标记的压缩内容；空内容原样返回。 */
-function compressContent(content: string, cap: number): string {
-  if (!content || content.length <= cap) return content;
-  const kept = content.slice(0, cap);
-  const folded = content.length - cap;
-  return `${kept}\n…[此处省略 ${folded} 个字符；上下文压缩，完整内容见任务轨迹]`;
+/** 按工具类型对单个 tool_result 的 content 做结构化压缩。返回 null = 不需要压缩。 */
+function compactToolResult(toolName: string, rawContent: string): string | null {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(rawContent) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  switch (toolName) {
+    case 'open_file':
+    case 'scroll': {
+      const path = parsed.path as string | undefined;
+      const totalLines = parsed.total_lines as number | undefined;
+      const winStart = parsed.window_start as number | undefined;
+      const winEnd = parsed.window_end as number | undefined;
+      const center = parsed.center_line as number | undefined;
+      return JSON.stringify({
+        path,
+        total_lines: totalLines,
+        window_start: winStart,
+        window_end: winEnd,
+        center_line: center,
+        _compacted: true,
+        _note: `视口 ${winStart}-${winEnd}/${totalLines}，中心行 ${center}`,
+      });
+    }
+
+    case 'search_grep': {
+      const pattern = parsed.pattern as string | undefined;
+      const count = parsed.match_count as number | undefined;
+      const matches = Array.isArray(parsed.matches) ? parsed.matches as Record<string, unknown>[] : [];
+      return JSON.stringify({
+        pattern,
+        match_count: count,
+        truncated: parsed.truncated,
+        matches: matches.slice(0, 3).map(m => ({
+          file: m.file,
+          line: m.line,
+          content: String(m.content ?? '').slice(0, 200),
+        })),
+        _compacted: true,
+        _note: count && count > 3
+          ? `前 3/${count} 条匹配。用更精确的 pattern 缩小范围。`
+          : undefined,
+      });
+    }
+
+    case 'http_fetch':
+    case 'web_search': {
+      const url = parsed.url as string | undefined;
+      const status = parsed.status as number | undefined;
+      const text = (parsed.cleanedText as string | undefined) ?? (parsed.text as string | undefined) ?? '';
+      const links = Array.isArray(parsed.links) ? parsed.links as Record<string, unknown>[] : [];
+      return JSON.stringify({
+        url,
+        status,
+        contentType: parsed.contentType,
+        text_preview: text.slice(0, 300),
+        link_count: links.length,
+        _compacted: true,
+        _note: text.length > 300
+          ? `全文 ${text.length} 字符，已截取前 300 字符。`
+          : undefined,
+      });
+    }
+
+    case 'execute_command': {
+      const command = parsed.command as string | undefined;
+      const args = parsed.args as string[] | undefined;
+      const exitCode = parsed.exitCode as number | undefined;
+      const stdout = (parsed.stdout as string | undefined) ?? '';
+      const stderr = (parsed.stderr as string | undefined) ?? '';
+      const cmdStr = `${command}${args?.length ? ' ' + args.join(' ') : ''}`;
+      return JSON.stringify({
+        command: cmdStr,
+        exit_code: exitCode,
+        stdout_tail: stdout.slice(-500),
+        stderr_tail: stderr.slice(-500),
+        _compacted: true,
+        _note: `stdout ${stdout.length} 字符，stderr ${stderr.length} 字符，保留末尾 500 字符。`,
+      });
+    }
+
+    case 'edit_lines':
+    case 'replace_lines': {
+      const path = parsed.path as string | undefined;
+      const replaced = parsed.replaced_lines as number | undefined;
+      const newCount = parsed.new_lines_count as number | undefined;
+      const bytes = parsed.bytes_written as number | undefined;
+      return JSON.stringify({
+        path,
+        replaced_lines: replaced,
+        new_lines_count: newCount,
+        bytes_written: bytes,
+        _compacted: true,
+        _note: replaced
+          ? `替换 ${replaced} 行 → ${newCount} 行${bytes ? ` (${bytes} 字节)` : ''}`
+          : undefined,
+      });
+    }
+
+    default:
+      return null;
+  }
 }
 
-// ---- P4: Token 估算 ----
+/**
+ * 对 cachedUpTo 之后的新 tool_result 消息做结构化压缩。
+ * 保留 toolCallId 和 role，只压缩 content 字段。
+ */
+function microcompactToolResults(messages: Message[], cachedUpTo: number): Message[] {
+  const toolCallToName = buildToolNameMap(messages);
+  let changedCount = 0;
+
+  const result = messages.map((msg, i) => {
+    if (i < cachedUpTo) return msg;
+    if (msg.role !== 'tool' || !msg.toolCallId) return msg;
+
+    const toolName = toolCallToName.get(msg.toolCallId);
+    if (!toolName || !TOOLS_WITH_LARGE_OUTPUT.has(toolName)) return msg;
+
+    const compacted = compactToolResult(toolName, msg.content);
+    if (compacted === null) return msg;
+
+    changedCount++;
+    return { ...msg, content: compacted };
+  });
+
+  return result;
+}
+
+// ---- 3. Context Collapse: LLM 消息范围摘要 ----
+
+/**
+ * 当 token 超过预算阈值时，用 LLM 对最旧的一批消息范围做语义摘要。
+ * 替换为一个 system 摘要消息，保留最近 N 轮不变。
+ *
+ * 这会修改缓存前缀 → 返回 collapsed=true。
+ */
+async function contextCollapse(
+  messages: Message[],
+  tokenBudget: number,
+): Promise<{ messages: Message[]; finalTokens: number }> {
+  const originalTokens = totalTokens(messages);
+
+  if (originalTokens <= tokenBudget * config.agent.compactThreshold) {
+    return { messages, finalTokens: originalTokens };
+  }
+
+  // 找到活跃窗口边界（保留最近 compactKeepRecentTurns 轮次的 user 消息及其后全部消息）
+  const keepRecent = config.agent.compactKeepRecentTurns;
+  let recentBoundary = messages.length;
+  let userCount = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') userCount++;
+    if (userCount >= keepRecent) {
+      recentBoundary = i;
+      break;
+    }
+  }
+
+  // 收集可压缩的旧消息范围 [0..recentBoundary)
+  // 跳过最前面的 system 消息（它们是环境/记忆/技能上下文，不应被压缩）
+  let firstCompressible = 0;
+  while (firstCompressible < recentBoundary && messages[firstCompressible]?.role === 'system') {
+    firstCompressible++;
+  }
+
+  const compressible = messages.slice(firstCompressible, recentBoundary);
+  if (compressible.length <= 3) {
+    return { messages, finalTokens: originalTokens };
+  }
+
+  // 构建摘要请求：包含 user、assistant、tool 的完整轮次上下文
+  const transcript = compressible
+    .map(m => {
+      const role = m.role === 'tool' ? 'tool_result' : m.role;
+      const preview = m.content?.slice(0, 800) ?? '';
+      const hasToolCalls = m.toolCalls?.length ? ` [调用了 ${m.toolCalls.length} 个工具]` : '';
+      return `[${role}]${hasToolCalls}: ${preview}`;
+    })
+    .join('\n\n');
+
+  if (transcript.length < 50) {
+    return { messages, finalTokens: originalTokens };
+  }
+
+  let summaryText = '';
+  try {
+    const promptMessages: Message[] = [{
+      id: randomUUID(),
+      role: 'user',
+      content:
+        `以下是 AI Agent 执行任务的历史记录。请将其压缩为一段简洁的摘要（300 字以内），` +
+        `保留：已完成的关键操作、做出的决策、遇到的重要错误。只输出摘要文本，不要加前缀：\n\n${transcript}`,
+      createdAt: new Date().toISOString(),
+    }];
+    for await (const chunk of getProvider().stream(promptMessages)) {
+      if (chunk.textDelta) summaryText += chunk.textDelta;
+    }
+  } catch {
+    return { messages, finalTokens: originalTokens };
+  }
+
+  if (!summaryText.trim() || summaryText.length < 20) {
+    return { messages, finalTokens: originalTokens };
+  }
+
+  // 构建新的消息列表：system 前文 + 摘要 + 保留的活跃窗口
+  const keptBefore = messages.slice(0, firstCompressible);
+  const keptAfter = messages.slice(recentBoundary);
+
+  const summaryMessage: Message = {
+    id: randomUUID(),
+    role: 'system',
+    content: `[上下文摘要] ${summaryText.trim()}`,
+    createdAt: new Date().toISOString(),
+  };
+
+  const compactedMessages = [...keptBefore, summaryMessage, ...keptAfter];
+  const finalTokens = totalTokens(compactedMessages);
+
+  return { messages: compactedMessages, finalTokens };
+}
+
+// ---- 公共入口 ----
+
+/**
+ * 三层上下文压缩管线：
+ *   Snip → Microcompact → Collapse（仅在超预算时）
+ *
+ * cache-aware：
+ *   - cachedUpTo 之前的消息不动（它们在 prompt cache 中）
+ *   - Context Collapse 执行时返回 collapsed=true，调用方应重置缓存边界为 0
+ */
+export async function compactContext(
+  messages: Message[],
+  cachedUpTo: number,
+  tokenBudget?: number,
+): Promise<CompactContextResult> {
+  const budget = tokenBudget ?? config.agent.contextTokenBudget;
+  const originalTokens = totalTokens(messages);
+
+  // Step 1: Snip — 移除空 tool_result（仅新消息）
+  const afterSnip = snipToolResults(messages, cachedUpTo);
+  const snippedCount = messages.length - afterSnip.length;
+
+  // Step 2: Microcompact — 结构化压缩（仅新消息）
+  const afterMc = microcompactToolResults(afterSnip, cachedUpTo);
+
+  // 计算被 microcompact 的条数
+  let microCount = 0;
+  for (let i = cachedUpTo; i < afterMc.length; i++) {
+    if (afterMc[i]?.content !== messages[i]?.content) {
+      microCount++;
+    }
+  }
+
+  // Step 3: 检查是否需要 LLM Collapse
+  const afterTokens = totalTokens(afterMc);
+
+  if (afterTokens <= budget * config.agent.compactThreshold) {
+    return {
+      messages: afterMc,
+      collapsed: false,
+      stats: {
+        snipped: snippedCount,
+        microcompacted: microCount,
+        cachedPrefixPreserved: true,
+        savedTokens: originalTokens - afterTokens,
+        originalTokens,
+        finalTokens: afterTokens,
+      },
+    };
+  }
+
+  // Step 4: Context Collapse — LLM 语义摘要旧消息
+  const collapsed = await contextCollapse(afterMc, budget);
+
+  return {
+    messages: collapsed.messages,
+    collapsed: true,
+    stats: {
+      snipped: snippedCount,
+      microcompacted: microCount,
+      cachedPrefixPreserved: false,
+      savedTokens: originalTokens - collapsed.finalTokens,
+      originalTokens,
+      finalTokens: collapsed.finalTokens,
+    },
+  };
+}
+
+// ---- Token 估算（保留，供 loop 使用）----
 
 /**
  * 轻量 token 估算（不依赖 tiktoken）。
  * CJK 字符 ~1.5 token，拉丁/其他 ~0.25 token。
- * 误差通常在 ±30% 以内，适合做预算判断而非精确计数。
  */
 export function estimateTokens(text: string): number {
   let tokens = 0;
   for (const ch of text) {
     const code = ch.codePointAt(0) ?? 0;
-    // CJK 统一表意文字 + 扩展区
     if (
-      (code >= 0x4e00 && code <= 0x9fff) || // CJK Unified
-      (code >= 0x3400 && code <= 0x4dbf) || // CJK Ext-A
-      (code >= 0x20000 && code <= 0x2a6df) || // CJK Ext-B+
-      (code >= 0xf900 && code <= 0xfaff) // CJK Compat
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0x20000 && code <= 0x2a6df) ||
+      (code >= 0xf900 && code <= 0xfaff)
     ) {
       tokens += 1.5;
     } else {
@@ -142,224 +483,6 @@ function messageTokens(message: Message): number {
 
 export function totalTokens(messages: Message[]): number {
   return messages.reduce((sum, m) => sum + messageTokens(m), 0);
-}
-
-// ---- P4: 自动语义压缩 ----
-
-export interface AutoCompactResult {
-  messages: Message[];
-  compressed: boolean;
-  /** 被压缩的消息组数 */
-  compressedGroupCount: number;
-  /** 释放的估算 token 数 */
-  savedTokens: number;
-  /** 压缩前总 token */
-  originalTokens: number;
-  /** 压缩后总 token */
-  finalTokens: number;
-}
-
-/**
- * 当上下文 token 超过预算阈值时，用 LLM 对旧消息做语义摘要。
- *
- * 压缩策略：
- * - 跳过所有 user 消息（用户约束不可变）
- * - 跳过最近 N 轮（活跃上下文窗口）
- * - 跳过 tool 消息（保留 assistant→tool 配对契约）
- * - 压缩目标是旧 assistant 消息 → 替换为一条 system 摘要
- *
- * 不修改 task.messages——只返回本轮请求用的消息副本。
- */
-export async function autoCompactIfNeeded(
-  messages: Message[],
-  tokenBudget?: number,
-): Promise<AutoCompactResult> {
-  const budget = tokenBudget ?? config.agent.contextTokenBudget;
-  const originalTokens = totalTokens(messages);
-
-  if (originalTokens <= budget * config.agent.compactThreshold) {
-    return {
-      messages,
-      compressed: false,
-      compressedGroupCount: 0,
-      savedTokens: 0,
-      originalTokens,
-      finalTokens: originalTokens,
-    };
-  }
-
-  // 找可压缩的 assistant 消息范围：跳过 user 消息 + 最近 N 轮
-  const keepRecent = config.agent.compactKeepRecentTurns;
-  // 从尾部找最近 N 个 user 消息作为"活跃窗口"边界
-  let recentBoundary = messages.length;
-  let userCount = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') userCount++;
-    if (userCount >= keepRecent) {
-      recentBoundary = i;
-      break;
-    }
-  }
-
-  // 收集可压缩的 assistant 消息（在活跃窗口之前且非 user）
-  const compressible: { index: number; message: Message }[] = [];
-  for (let i = 0; i < recentBoundary; i++) {
-    const m = messages[i];
-    // 跳过 user（用户约束）和 tool（配对契约）和 system
-    if (m.role === 'assistant' && m.content && m.content.length > 50) {
-      compressible.push({ index: i, message: m });
-    }
-  }
-
-  if (compressible.length <= 2) {
-    return {
-      messages,
-      compressed: false,
-      compressedGroupCount: 0,
-      savedTokens: 0,
-      originalTokens,
-      finalTokens: originalTokens,
-    };
-  }
-
-  // 构建压缩请求：把可压缩消息拼接为摘要输入
-  const transcript = compressible
-    .map(({ message }) => `[assistant]: ${message.content.slice(0, 1200)}`)
-    .join('\n\n');
-
-  let summaryText = '';
-  try {
-    const promptMessages: Message[] = [
-      {
-        id: randomUUID(),
-        role: 'user',
-        content:
-          `请将以下对话记录压缩为一段简洁的摘要（300字以内），保留关键信息、决策和结论。只输出摘要文本，不要加前缀：\n\n${transcript}`,
-        createdAt: new Date().toISOString(),
-      },
-    ];
-    for await (const chunk of getProvider().stream(promptMessages)) {
-      if (chunk.textDelta) summaryText += chunk.textDelta;
-    }
-  } catch {
-    // LLM 压缩失败 → 不做压缩，继续原样
-    return {
-      messages,
-      compressed: false,
-      compressedGroupCount: 0,
-      savedTokens: 0,
-      originalTokens,
-      finalTokens: originalTokens,
-    };
-  }
-
-  if (!summaryText.trim()) {
-    return {
-      messages,
-      compressed: false,
-      compressedGroupCount: 0,
-      savedTokens: 0,
-      originalTokens,
-      finalTokens: originalTokens,
-    };
-  }
-
-  // 构建替换后的消息列表：移除被压缩的 assistant 消息，在最前面插入摘要
-  const compressedIndices = new Set(compressible.map((c) => c.index));
-  const compactedMessages: Message[] = [];
-
-  // 在被压缩范围前插入 system 摘要
-  const firstCompressedIndex = compressible[0].index;
-  for (let i = 0; i < firstCompressedIndex; i++) {
-    compactedMessages.push(messages[i]);
-  }
-
-  const summaryMessage: Message = {
-    id: randomUUID(),
-    role: 'system',
-    content: `[上下文摘要] ${summaryText.trim()}`,
-    createdAt: new Date().toISOString(),
-  };
-  compactedMessages.push(summaryMessage);
-
-  // 跳过被压缩的 assistant 消息，保留其余
-  for (let i = firstCompressedIndex; i < messages.length; i++) {
-    if (!compressedIndices.has(i)) {
-      compactedMessages.push(messages[i]);
-    }
-  }
-
-  const finalTokens = totalTokens(compactedMessages);
-
-  return {
-    messages: compactedMessages,
-    compressed: true,
-    compressedGroupCount: compressible.length,
-    savedTokens: originalTokens - finalTokens,
-    originalTokens,
-    finalTokens,
-  };
-}
-
-/**
- * 构建本轮 LLM 请求的上下文窗口。
- *
- * @param history 任务完整消息历史（user/assistant/tool，不含 system）
- */
-export function buildContextWindow(
-  history: Message[],
-  options: Partial<ContextWindowOptions> = {},
-): ContextWindowResult {
-  const opts = { ...defaultOptions(), ...options };
-  const originalChars = totalChars(history);
-  const totalMessages = history.length;
-
-  if (originalChars <= opts.charBudget) {
-    return {
-      messages: history,
-      compressed: false,
-      originalChars,
-      finalChars: originalChars,
-      totalMessages,
-      compressedCount: 0,
-    };
-  }
-
-  // 近窗口边界：最后 recentWindow 条逐字保留
-  const recentStart = Math.max(0, history.length - opts.recentWindow);
-  let compressedCount = 0;
-
-  const messages = history.map((message, index) => {
-    const inRecentWindow = index >= recentStart;
-    // 用户约束与近窗口逐字保留
-    if (inRecentWindow || message.role === 'user') return message;
-
-    const compressedContentText = compressContent(message.content ?? '', opts.compressedCharCap);
-    const reasoningCompressed = message.reasoningContent
-      ? compressContent(message.reasoningContent, opts.compressedCharCap)
-      : message.reasoningContent;
-
-    const changed =
-      compressedContentText !== message.content || reasoningCompressed !== message.reasoningContent;
-    if (!changed) return message;
-
-    compressedCount += 1;
-    // 浅拷贝 + 截断内容；保留 toolCalls / toolCallId / role 等结构，确保配对契约不被破坏
-    return {
-      ...message,
-      content: compressedContentText,
-      ...(message.reasoningContent ? { reasoningContent: reasoningCompressed } : {}),
-    };
-  });
-
-  return {
-    messages,
-    compressed: compressedCount > 0,
-    originalChars,
-    finalChars: totalChars(messages),
-    totalMessages,
-    compressedCount,
-  };
 }
 
 /** 注入上下文的记忆条数上限（防止记忆膨胀挤占预算）。 */
@@ -819,5 +942,54 @@ export function buildSystemContextMessage(
     role: 'system',
     content: lines.join('\n'),
     createdAt: now.toISOString(),
+  };
+}
+
+/**
+ * 工具使用引导消息——指导 LLM 使用行级原语工具操作文件。
+ *
+ * 始终注入，放在环境上下文之后。
+ */
+export function buildToolGuidanceMessage(): Message {
+  const content = [
+    '<tool_usage_rules>',
+    '文件读写必须使用行级原语工具：',
+    '',
+    '**读取文件**：open_file 定位 → scroll 浏览 → search_grep 搜索',
+    '',
+    '**写入文件三件套**：',
+    '',
+    '1. **write_file** — 原子全量写（≤50KB），新建或完全重写小文件',
+    '   - 文件不存在则创建，存在则覆盖；通过先写临时文件再 rename 保证不会损坏目标',
+    '   - 超 50KB 的内容返回错误——改用 session_open/session_write/session_close 分批写入',
+    '',
+    '2. **edit_lines** — 行级精确替换（≤200行/8KB），局部编辑',
+    '   - 用 search_grep 或 open_file 确认行号后再编辑',
+    '   - 适合：修 bug、改配置项、重写单个函数',
+    '   - 如需整体重写小文件，用 write_file 一步完成',
+    '   - 如需大范围新建，用 session_open/session_write/session_close',
+    '',
+    '3. **分批写入（大文件）**：',
+    '   - session_open(path) → 返回 session_id',
+    '   - session_write(session_id, content) × N 次（每次 ≤200行/10KB）',
+    '   - session_close(session_id) → 原子 rename 到目标路径',
+    '   - 场景：新建大型源文件、生成长篇文档、导出数据',
+    '',
+    '**辅助写入**：',
+    '   - append_file(path, content) — 尾部追加少量内容（≤200行/8KB）',
+    '   - create_file(path) — 建空文件占位',
+    '',
+    '**不要做的事**：',
+    '- 不要在一个工具调用中塞入超过 200 行的内容',
+    '- 不要用 edit_lines 一次写上千行——改用 session_* 分批',
+    '- 不要担心 session_* 是多次调用——这就是设计意图',
+    '</tool_usage_rules>',
+  ].join('\n');
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content,
+    createdAt: new Date().toISOString(),
   };
 }

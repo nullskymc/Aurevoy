@@ -17,7 +17,7 @@ import { toolRegistry } from '../tools/registry.js';
 import { config } from '../config.js';
 
 /** 子代理默认可用工具（safe 只读）。 */
-const DEFAULT_READONLY_TOOLS = ['list_directory', 'read_file', 'search_files', 'get_current_time'];
+const DEFAULT_READONLY_TOOLS = ['list_directory', 'open_file', 'scroll', 'search_grep', 'get_current_time'];
 
 export interface SubTask {
   goal: string;

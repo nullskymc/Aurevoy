@@ -36,6 +36,11 @@ export interface TimelineStepData {
   error?: string;
   args?: Record<string, unknown>;
   toolName?: string;
+  progress?: {
+    message: string;
+    chunk?: { current: number; total: number };
+    percent?: number;
+  };
 }
 
 /** 按计划步骤分组的工具调用集合 */
@@ -62,10 +67,10 @@ export interface AgentRoundData {
 /** 从工具名推断步骤类型 */
 export function detectStepKind(toolName: string): StepKind {
   if (toolName === "execute_command") return "command";
-  if (toolName === "read_file") return "file_read";
-  if (toolName === "write_file") return "file_write";
-  if (toolName === "edit_file" || toolName === "apply_diff") return "edit";
-  if (toolName === "web_search") return "search";
+  if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll") return "file_read";
+  if (toolName === "write_file" || toolName === "create_file" || toolName === "append_file" || toolName === "session_open" || toolName === "session_write" || toolName === "session_close" || toolName === "session_abort") return "file_write";
+  if (toolName === "edit_file" || toolName === "apply_diff" || toolName === "replace_lines" || toolName === "edit_lines") return "edit";
+  if (toolName === "web_search" || toolName === "search_grep" || toolName === "search_files") return "search";
   if (toolName === "create_artifact" || toolName === "apply_artifact") return "artifact";
   if (toolName.startsWith("browser_")) return "browse";
   if (toolName.startsWith("mcp_")) return "api";
@@ -93,9 +98,9 @@ export function computeSummaryFromSteps(steps: TimelineStepData[]): string {
     const key = step.kind === "command" ? "命令"
       : step.kind === "file_read" ? "读取文件"
       : step.kind === "file_write" ? "创建文件"
+      : step.kind === "edit" ? "编辑文件"
       : step.kind === "search" ? "搜索"
       : step.kind === "browse" ? "浏览网页"
-      : step.kind === "edit" ? "编辑文件"
       : step.kind === "artifact" ? "生成产物"
       : null;
     if (key) counts[key] = (counts[key] ?? 0) + 1;
@@ -149,6 +154,46 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
       : "";
     return truncateTitle([cmd, commandArgs].filter(Boolean).join(" ")) || "执行命令";
   }
+  if (toolName === "replace_lines" || toolName === "edit_lines") {
+    const path = typeof args.path === "string" ? args.path : "";
+    const startLine = typeof args.start_line === "number" ? args.start_line : null;
+    const endLine = typeof args.end_line === "number" ? args.end_line : null;
+    if (path && startLine != null && endLine != null) {
+      return truncateTitle(`${path} L${startLine}-${endLine}`);
+    }
+    return truncateTitle(path) || "edit_lines";
+  }
+  if (toolName === "write_file") {
+    const path = typeof args.path === "string" ? args.path : "";
+    return `write: ${truncateTitle(path)}` || "write_file";
+  }
+  if (toolName === "append_file") {
+    const path = typeof args.path === "string" ? args.path : "";
+    return `append: ${truncateTitle(path)}` || "append_file";
+  }
+  if (toolName === "session_open") {
+    const path = typeof args.path === "string" ? args.path : "";
+    return `session: ${truncateTitle(path)}` || "session_open";
+  }
+  if (toolName === "session_write" || toolName === "session_close" || toolName === "session_abort") {
+    const sid = typeof args.session_id === "string" ? args.session_id.slice(0, 8) : "";
+    return `${toolName} ${sid}`;
+  }
+  if (toolName === "open_file") {
+    const path = typeof args.path === "string" ? args.path : "";
+    const line = typeof args.line_number === "number" ? args.line_number : null;
+    if (path && line != null) return truncateTitle(`${path} :${line}`);
+    return truncateTitle(path) || "open_file";
+  }
+  if (toolName === "scroll") {
+    const file = typeof args.file === "string" ? args.file : "";
+    const dir = typeof args.direction === "string" ? args.direction : "";
+    return file ? truncateTitle(`${file} ${dir}`) : "scroll";
+  }
+  if (toolName === "search_grep") {
+    const pattern = typeof args.pattern === "string" ? args.pattern : "";
+    return pattern ? `grep: ${truncateTitle(pattern)}` : "search_grep";
+  }
   const target =
     (typeof args.TargetFile === "string" ? args.TargetFile :
      typeof args.AbsolutePath === "string" ? args.AbsolutePath :
@@ -183,9 +228,44 @@ function extractLogContent(
     }
     return undefined;
   }
-  if (toolName === "read_file") {
+  if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll") {
     const out = result.output;
     if (typeof out === "string") return out.slice(0, 2000);
+    if (typeof out === "object" && out !== null) {
+      const record = out as Record<string, unknown>;
+      if (typeof record.text === "string") return record.text.slice(0, 2000);
+    }
+    return undefined;
+  }
+  if (toolName === "search_grep" || toolName === "search_files") {
+    const out = result.output;
+    if (typeof out === "object" && out !== null) {
+      const record = out as Record<string, unknown>;
+      const matches = record.matches;
+      if (Array.isArray(matches)) {
+        return matches.slice(0, 20).map((m: Record<string, unknown>) =>
+          `${m.file}:${m.line}: ${m.content}`).join("\n");
+      }
+    }
+    return undefined;
+  }
+  if (toolName === "replace_lines" || toolName === "edit_lines" || toolName === "write_file" || toolName === "append_file" || toolName === "edit_file" || toolName === "create_file") {
+    const out = result.output;
+    if (typeof out === "object" && out !== null) {
+      const record = out as Record<string, unknown>;
+      const parts: string[] = [];
+      if (typeof record.bytes_written === "number") parts.push(`写入 ${record.bytes_written} 字节`);
+      if (typeof record.replaced_lines === "number") parts.push(`替换 ${record.replaced_lines} 行 → ${record.new_lines_count} 行`);
+      if (typeof record.note === "string") parts.push(record.note);
+      if (record.preview && Array.isArray(record.preview)) {
+        const previewText = record.preview
+          .slice(0, 15)
+          .map((p: Record<string, unknown>) => `${p.changed ? "+ " : "  "}${String(p.lineNumber).padStart(5)} | ${p.content}`)
+          .join("\n");
+        parts.push(previewText);
+      }
+      if (parts.length > 0) return parts.join("\n");
+    }
     return undefined;
   }
   return undefined;
@@ -264,7 +344,7 @@ export function buildAgentRoundFromMessage(
 /** 从 SSE 实时数据 AgentRunningTimeline（即 ToolActivity[]）构建 AgentRoundData */
 export function buildLiveAgentRoundData(params: {
   plan: PlanStep[];
-  liveToolActivity: { id: string; name: string; args: unknown; status: string; output?: unknown; error?: string }[];
+  liveToolActivity: { id: string; name: string; args: unknown; status: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
   output?: string;
   reasoning?: string;
   phase?: string | null;
@@ -276,16 +356,23 @@ export function buildLiveAgentRoundData(params: {
     const args = typeof act.args === "object" && act.args !== null
       ? act.args as Record<string, unknown>
       : {};
+    const rawStatus = act.status;
+    const status: TimelineStepData["status"] =
+      rawStatus === "ok" ? "success"
+      : rawStatus === "error" ? "failed"
+      : rawStatus === "awaiting" ? "pending"
+      : "running";
     return {
       id: act.id,
       kind,
       title: buildStepTitle(act.name, args),
-      status: act.status as TimelineStepData["status"],
-      logs: act.status === "running" ? undefined : act.output != null ? formatOutput(act.output) : undefined,
+      status,
+      logs: extractLogContent(act.name, act.status !== "running" ? { ok: act.status === "ok", output: act.output, error: act.error } : undefined),
       error: act.error,
       output: act.output != null ? formatOutput(act.output) : undefined,
       args,
       toolName: act.name,
+      progress: act.progress,
     };
   });
 
@@ -452,7 +539,20 @@ function TimelineStepNode({
           )}
           {step.status === "running" && (
             <div className="timeline-step-log is-running">
-              <span className="stream-caret" />
+              {step.progress ? (
+                <div className="timeline-step-progress">
+                  {step.progress.percent != null ? (
+                    <div className="progress-bar">
+                      <div className="progress-bar-fill" style={{ width: `${step.progress.percent}%` }} />
+                    </div>
+                  ) : (
+                    <span className="stream-caret" />
+                  )}
+                  <span className="progress-text">{step.progress.message}</span>
+                </div>
+              ) : (
+                <span className="stream-caret" />
+              )}
             </div>
           )}
         </div>

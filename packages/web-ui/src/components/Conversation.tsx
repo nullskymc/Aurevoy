@@ -27,6 +27,11 @@ export interface ToolActivity {
   riskLevel?: ToolRiskLevel;
   output?: unknown;
   error?: string;
+  progress?: {
+    message: string;
+    chunk?: { current: number; total: number };
+    percent?: number;
+  };
 }
 
 interface ConversationProps {
@@ -186,6 +191,11 @@ export function Conversation({
   const messages = task.messages;
   const resultMap = buildToolResultMap(messages);
 
+  // 运行时避开最后一条带 toolCalls 的 assistant 消息与 live 尾巴重复
+  const lastAssistantToolCallId = hasLiveTail
+    ? [...messages].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
+    : undefined;
+
   return (
     <div className="conversation">
       <div ref={topRef} />
@@ -206,6 +216,8 @@ export function Conversation({
             );
           }
           if (message.role === "assistant") {
+            // 运行时跳过最后一条带 toolCalls 的 assistant 消息——live 尾巴已展示它
+            if (message.id === lastAssistantToolCallId) return null;
             return (
               <AgentRound
                 key={message.id}
@@ -636,6 +648,11 @@ function ToolChip({
         {toolStatusIcon(item.status)}
       </span>
       <span className="tool-chip-name">{item.name}</span>
+      {item.progress && item.status === "running" && (
+        <span className="tool-chip-progress">
+          {item.progress.percent != null ? `${item.progress.percent}%` : "..."}
+        </span>
+      )}
       {item.riskLevel && item.riskLevel !== "safe" && (
         <span className="tool-chip-risk" data-risk={item.riskLevel}>
           {item.riskLevel === "dangerous" ? t("tool.risk.dangerousShort") : t("tool.risk.cautionShort")}
@@ -739,6 +756,30 @@ function ToolActivityCard({
             <div className="tool-card-field">
               <span className="tool-card-field-label">{t("tool.field.args")}</span>
               <pre>{argsText}</pre>
+            </div>
+          )}
+          {item.progress && item.status === "running" && (
+            <div className="tool-card-progress">
+              {item.progress.percent != null ? (
+                <div className="progress-bar">
+                  <div
+                    className="progress-bar-fill"
+                    style={{ width: `${item.progress.percent}%` }}
+                  />
+                </div>
+              ) : (
+                <div className="progress-bar is-indeterminate">
+                  <div className="progress-bar-fill" />
+                </div>
+              )}
+              <span className="progress-text">
+                {item.progress.message}
+                {item.progress.chunk && (
+                  <span className="progress-chunk">
+                    {" "}({item.progress.chunk.current}/{item.progress.chunk.total})
+                  </span>
+                )}
+              </span>
             </div>
           )}
           {detail !== null && (
@@ -977,8 +1018,8 @@ export function AgentRunningTimeline({
         </div>
       )}
 
-      {/* 思考链（ThinkingCard） */}
-      {showStreamingReasoning && (
+      {/* 思考链（ThinkingCard）— 已禁用打字机效果，保留为将来可配置选项 */}
+      {false && showStreamingReasoning && (
         <ThinkingCard data={{
           id: 'live-reasoning',
           phase: 1,
@@ -988,8 +1029,8 @@ export function AgentRunningTimeline({
         }} />
       )}
 
-      {/* 流式输出文本（thinking 阶段实时打字机效果） */}
-      {showStreamingOutput && (
+      {/* 流式输出文本 — 已禁用打字机效果（无意义），改用 spinner 代表进行中 */}
+      {false && showStreamingOutput && (
         <article className="doc-block doc-block-agent">
           <DocumentMeta icon={<AgentIcon />} label="Aurevoy" />
           <div className="doc-body">
@@ -1164,10 +1205,15 @@ function toolTargetLabel(item: ToolActivity): string {
   const argsObj = item.args as Record<string, unknown> | null;
   if (!argsObj || typeof argsObj !== "object") return "";
   if (item.name === "execute_command") return toolApprovalLabel(item);
+  if (item.name === "search_grep") {
+    const pattern = argsObj.pattern;
+    return typeof pattern === "string" ? truncateCommandLine(pattern) : "";
+  }
   const target =
     argsObj.TargetFile ??
     argsObj.AbsolutePath ??
     argsObj.path ??
+    argsObj.file ??
     argsObj.filePath ??
     argsObj.CommandLine ??
     argsObj.Query;
