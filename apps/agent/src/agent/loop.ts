@@ -1961,11 +1961,15 @@ export async function runTask(task: Task): Promise<void> {
         touch();
       }
 
-      // Step 6: 按原始 toolCalls 顺序将结果回填到 messages
+      // Step 6: 按原始 toolCalls 顺序将结果回填到 messages，并发布 message 事件
+      // 前端之前仅通过 done → getTask() HTTP 拉取工具结果；现在同时推送 SSE message
+      // 事件，确保工具结果在 SSE 流中实时可见（不再依赖 HTTP round-trip）。
       for (const tc of toolCalls) {
         const result = resultByCallId.get(tc.id);
         if (result) {
-          messages.push(makeToolResult(tc.id, result.output));
+          const toolMsg = makeToolResult(tc.id, result.output);
+          messages.push(toolMsg);
+          taskEvents.publish({ type: 'message', taskId: task.id, message: toolMsg });
         }
         // ask_user 的结果已在 Step 3 由 handleAskUserTool 推送
       }

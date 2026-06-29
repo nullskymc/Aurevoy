@@ -13,11 +13,15 @@ import type { AgentEvent } from '@aurevoy/shared';
  *   避免前端每秒接收数百个 progress 事件导致渲染卡顿
  */
 
-/** 节流配置：每种事件类型的最小发送间隔（毫秒），缺省 0 = 不节流 */
+/**
+ * 节流配置：每种事件类型的最小发送间隔（毫秒），缺省 0 = 不节流。
+ *
+ * token / reasoning 不在节流列表中 —— SSE send() 的 setImmediate coalescing
+ * + cork/uncork 已提供 socket 级无损批处理，事件总线层不需要丢弃数据。
+ * 仅 tool_progress 保留节流（每秒最多 4 次），避免前端工具进度渲染过于频繁。
+ */
 const THROTTLE_MS: Record<string, number> = {
   tool_progress: 250,    // max 4 fps
-  token: 32,             // max ~30 fps
-  reasoning: 32,
 };
 
 class TaskEventBus {

@@ -5,9 +5,7 @@ import type {
   ContentBlock,
   HealthResponse,
   MemoryCategory,
-  Message,
   MessageAttachment,
-  PendingToolApproval,
   RevertMode,
   SkillDescriptor,
   SkillInstallResponse,
@@ -64,11 +62,6 @@ import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/Model
 import { SettingsPanel, type SettingsDraft } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 
-interface FeedItem {
-  id: string;
-  event: AgentEvent;
-  createdAt: string;
-}
 import { getPhaseLabel, getStatusLabel } from "./components/status";
 import { setLocale, t, type Locale } from "./i18n";
 import "./App.css";
@@ -124,98 +117,71 @@ function parseProviderModel(provider?: string | null): string {
   return model ?? provider;
 }
 
-/** 从实时事件流派生工具调用活动（当前运行轮次使用） */
-function deriveToolActivityFromEvents(events: FeedItem[]): ToolActivity[] {
-  const byId = new Map<string, ToolActivity>();
+/**
+ * 实时工具活动状态（替代 deriveToolActivityFromEvents 的 events[] 全量扫描）。
+ *
+ * 用 useRef<Map> 做增量更新：每个 tool_call / tool_progress / tool_result SSE 事件
+ * 直接 mutate map，再通过 syncLiveActivity() 推入 state。React 18 自动批处理将
+ * 同一事件循环中的多次 sync 合并为单次 re-render，消除工具卡片的"打字机效果"。
+ */
+function createLiveActivityStore() {
+  const map = new Map<string, ToolActivity>();
   const order: string[] = [];
-  for (const { event } of events) {
-    if (event.type === "tool_call") {
-      if (!byId.has(event.call.id)) order.push(event.call.id);
-      byId.set(event.call.id, {
-        id: event.call.id,
-        name: event.call.toolName,
-        args: event.call.args,
-        status: "running",
-      });
-    } else if (event.type === "approval_request") {
-      const existing = byId.get(event.call.id);
-      if (existing) {
-        existing.status = "awaiting";
-        existing.riskLevel = event.riskLevel;
-      } else {
-        if (!byId.has(event.call.id)) order.push(event.call.id);
-        byId.set(event.call.id, {
-          id: event.call.id,
-          name: event.call.toolName,
-          args: event.call.args,
-          status: "awaiting",
-          riskLevel: event.riskLevel,
-        });
-      }
-    } else if (event.type === "tool_result") {
-      const existing = byId.get(event.result.callId);
-      if (existing) {
-        existing.status = event.result.ok ? "ok" : "error";
-        existing.output = event.result.output;
-        existing.error = event.result.error;
-      }
-    } else if (event.type === "tool_progress") {
-      const existing = byId.get(event.callId);
-      if (existing) {
-        existing.progress = {
-          message: event.message,
-          chunk: event.chunk,
-          percent: event.percent,
-        };
+
+  function upsert(id: string, patch: Partial<ToolActivity>) {
+    const existing = map.get(id);
+    if (existing) {
+      Object.assign(existing, patch);
+    } else {
+      order.push(id);
+      map.set(id, {
+        id,
+        name: '',
+        args: {} as Record<string, unknown>,
+        status: 'running',
+        ...patch,
+      } as ToolActivity);
+    }
+  }
+
+  function remove(id: string) {
+    map.delete(id);
+    const idx = order.indexOf(id);
+    if (idx >= 0) order.splice(idx, 1);
+  }
+
+  function has(id: string): boolean {
+    return map.has(id);
+  }
+
+  function snapshot(): ToolActivity[] {
+    return order.map((id) => map.get(id)!);
+  }
+
+  function clear() {
+    map.clear();
+    order.length = 0;
+  }
+
+  return { upsert, remove, has, snapshot, clear };
+}
+
+async function fetchWithRetry<T>(
+  fn: () => Promise<T>,
+  opts: { retries: number; baseDelayMs: number },
+): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i <= opts.retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < opts.retries) {
+        await new Promise((r) => setTimeout(r, opts.baseDelayMs * Math.pow(2, i)));
       }
     }
   }
-  return order.map((id) => byId.get(id)!);
-}
-
-function mergePendingApprovalsIntoActivity(
-  live: ToolActivity[],
-  pendingApprovals: PendingToolApproval[],
-): ToolActivity[] {
-  if (pendingApprovals.length === 0) return live;
-  const seen = new Set(live.map((item) => item.id));
-  const merged = [...live];
-  for (const approval of pendingApprovals) {
-    if (seen.has(approval.call.id)) continue;
-    merged.push({
-      id: approval.call.id,
-      name: approval.call.toolName,
-      args: approval.call.args,
-      status: "awaiting",
-      riskLevel: approval.riskLevel,
-    });
-  }
-  return merged;
-}
-
-function filterHistoricalToolActivity(live: ToolActivity[], messages: Message[], hasLiveTail: boolean): ToolActivity[] {
-  // 排除已在历史区渲染的 assistant 消息中的 tool call。
-  // 运行时被隐藏（hasLiveTail=true）的最后一条带 toolCalls 的 assistant 消息
-  // 不在此列——其 tool 仍在 live 中展示并接收进度事件。
-  const hiddenAssistantId = hasLiveTail
-    ? [...messages].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
-    : undefined;
-
-  const renderedCallIds = new Set<string>();
-  for (const message of messages) {
-    if (message.role === 'assistant' && message.id !== hiddenAssistantId) {
-      for (const call of message.toolCalls ?? []) renderedCallIds.add(call.id);
-    }
-  }
-  return live.filter((item) => !renderedCallIds.has(item.id));
-}
-
-function createFeedItem(event: AgentEvent): FeedItem {
-  return {
-    id: `${event.taskId}-${event.type}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    event,
-    createdAt: new Date().toISOString(),
-  };
+  throw lastErr;
 }
 
 function mergeById<T extends { id: string }>(items: T[], next: T): T[] {
@@ -231,7 +197,8 @@ function App() {
   }, [platform]);
   const [activeView, setActiveView] = useState<MainView>("chat");
   const [contentMode, setContentMode] = useState<ContentMode>("conversation");
-  const [events, setEvents] = useState<FeedItem[]>([]);
+  const liveActivityRef = useRef(createLiveActivityStore());
+  const [liveToolActivity, setLiveToolActivity] = useState<ToolActivity[]>([]);
   const [goal, setGoal] = useState("");
   const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -546,7 +513,8 @@ function App() {
     setPlan(task.plan);
     setOutput("");
     setGoal("");
-    setEvents([]);
+    liveActivityRef.current.clear();
+    setLiveToolActivity([]);
     void refreshTaskTraces(task.id);
     resetMainScroll();
   }
@@ -566,7 +534,6 @@ function App() {
   }
 
   function handleEvent(event: AgentEvent): void {
-    setEvents((previous) => [...previous, createFeedItem(event)]);
 
     switch (event.type) {
       case "task_created":
@@ -591,6 +558,8 @@ function App() {
           previousPhaseRef.current = event.phase;
           if (event.phase === "thinking") {
             setLiveContentBlocks([]);
+            setOutput("");
+            setReasoning("");
           }
         }
         break;
@@ -618,10 +587,12 @@ function App() {
       case "reasoning":
         setReasoning((previous) => previous + event.delta);
         break;
-      case "message":
+      case "message": {
+        // 工具已转为历史消息 → 从 live map 移除（避免与历史区重复渲染）
         if (event.message.role === "assistant") {
-          if ((event.message.reasoningContent ?? "").trim()) setReasoning("");
-          if (event.message.content.trim()) setOutput("");
+          for (const tc of event.message.toolCalls ?? []) {
+            liveActivityRef.current.remove(tc.id);
+          }
         }
         setCurrentTask((previous) => {
           const previousMessages = previous?.messages ?? [];
@@ -634,11 +605,32 @@ function App() {
           updateTaskList(nextTask);
           return nextTask;
         });
+        // 清理后同步 live 状态
+        setLiveToolActivity(liveActivityRef.current.snapshot());
         break;
+      }
       case "tool_call":
+        liveActivityRef.current.upsert(event.call.id, {
+          name: event.call.toolName,
+          args: event.call.args,
+          status: 'running',
+        });
+        setLiveToolActivity(liveActivityRef.current.snapshot());
+        break;
       case "tool_progress":
+        liveActivityRef.current.upsert(event.callId, {
+          progress: { message: event.message, chunk: event.chunk, percent: event.percent },
+        });
+        setLiveToolActivity(liveActivityRef.current.snapshot());
         break;
       case "approval_request":
+        liveActivityRef.current.upsert(event.call.id, {
+          name: event.call.toolName,
+          args: event.call.args,
+          status: 'awaiting',
+          riskLevel: event.riskLevel,
+        });
+        setLiveToolActivity(liveActivityRef.current.snapshot());
         setStatus("paused");
         setPhase("waiting_approval");
         setCurrentTask((previous) => {
@@ -658,6 +650,12 @@ function App() {
         });
         break;
       case "tool_result":
+        liveActivityRef.current.upsert(event.result.callId, {
+          status: event.result.ok ? 'ok' : 'error',
+          output: event.result.output,
+          error: event.result.error,
+        });
+        setLiveToolActivity(liveActivityRef.current.snapshot());
         setCurrentTask((previous) => {
           if (!previous) return previous;
           const nextApprovals = (previous.pendingApprovals ?? []).filter(
@@ -768,6 +766,8 @@ function App() {
       case "task_deleted":
         // 任务被删除（可能来自其他客户端或本端），关流并清理
         closeStream();
+        liveActivityRef.current.clear();
+        setLiveToolActivity([]);
         setTasks((prev) => prev.filter((t) => t.id !== event.taskId));
         if (currentTask?.id === event.taskId) {
           setCurrentTask(null);
@@ -779,6 +779,9 @@ function App() {
         }
         break;
       case "done":
+        // 同步清除 output/reasoning，配合 setBusy(false) 在同一帧使 hasLiveTail 变为 false
+        setOutput("");
+        setReasoning("");
         setStatus(event.status);
         setPhase(
           event.status === "cancelled"
@@ -799,23 +802,19 @@ function App() {
                 : "finalizing",
         });
         closeStream();
+        liveActivityRef.current.clear();
+        setLiveToolActivity([]);
         setLiveContentBlocks([]);
         void refreshRuntime();
         void refreshTaskTraces(event.taskId);
-        // 工具结果等消息只持久化、不走 live message 事件，拉取完整快照补全本轮线程
-        void getTask(event.taskId)
+        // 拉取完整快照补全本轮线程（带重试，3 次指数退避）
+        void fetchWithRetry(() => getTask(event.taskId), { retries: 3, baseDelayMs: 500 })
           .then((full) => {
             setCurrentTask((previous) => (previous?.id === full.id ? full : previous));
             updateTaskList(full);
-            if (full.messages.some((message) => message.role === "assistant" && (message.reasoningContent ?? "").trim())) {
-              setReasoning("");
-            }
-            if (full.messages.some((message) => message.role === "assistant" && message.content.trim())) {
-              setOutput("");
-            }
           })
           .catch(() => {
-            /* 拉取失败不影响已显示的流式结果 */
+            /* 3 次重试后仍失败：核心数据已通过 SSE message 事件覆盖 */
           });
         break;
       case "error":
@@ -835,7 +834,8 @@ function App() {
     if (!trimmed || busy) return;
 
     setBusy(true);
-    setEvents([]);
+  liveActivityRef.current.clear();
+    setLiveToolActivity([]);
     setTraces([]);
     setOutput("");
     setPlan([]);
@@ -877,7 +877,8 @@ function App() {
     if (!trimmed || busy || !currentTask) return;
 
     setBusy(true);
-    setEvents([]);
+  liveActivityRef.current.clear();
+    setLiveToolActivity([]);
     setTraces([]);
     setOutput("");
     setPlan([]);
@@ -932,7 +933,8 @@ function App() {
     setPhase(null);
     setPlan([]);
     setOutput("");
-    setEvents([]);
+  liveActivityRef.current.clear();
+    setLiveToolActivity([]);
     setTraces([]);
     setGoal("");
     setDraftProjectId(projectId);
@@ -946,7 +948,8 @@ function App() {
 
     closeStream();
     setBusy(false);
-    setEvents([]);
+  liveActivityRef.current.clear();
+    setLiveToolActivity([]);
     setTraces([]);
     setOutput("");
 
@@ -970,7 +973,8 @@ function App() {
     if (!currentTask || busy) return;
 
     setBusy(true);
-    setEvents([]);
+  liveActivityRef.current.clear();
+    setLiveToolActivity([]);
     setTraces([]);
     setOutput("");
     setPlan([]);
@@ -1380,17 +1384,38 @@ function App() {
     currentTask.status !== "planning" &&
     currentTask.status !== "paused";
 
-  // 当前运行轮次的实时工具活动（来自事件流）；历史轮次由 Conversation 从消息派生
-  const derivedLive = mergePendingApprovalsIntoActivity(
-    deriveToolActivityFromEvents(events),
-    currentTask?.pendingApprovals ?? [],
-  );
+  // 实时工具活动（ref map 增量更新，无逐条渲染的打字机效果）
+  const livePendingIds = new Set((currentTask?.pendingApprovals ?? []).map((pa) => pa.call.id));
+  const derivedLive = liveToolActivity.map((item) => {
+    if (livePendingIds.has(item.id) && item.status !== 'awaiting') {
+      return { ...item, status: 'awaiting' as const };
+    }
+    return item;
+  });
+  // 补上 pendingApprovals 中有但 live map 中没有的项（如从 DB 快照加载的初始审批）
+  for (const pa of currentTask?.pendingApprovals ?? []) {
+    if (!liveActivityRef.current.has(pa.call.id)) {
+      derivedLive.push({
+        id: pa.call.id,
+        name: pa.call.toolName,
+        args: pa.call.args,
+        status: 'awaiting' as const,
+        riskLevel: pa.riskLevel,
+      });
+    }
+  }
   const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0 || reasoning.trim().length > 0;
-  const liveToolActivity = filterHistoricalToolActivity(
-    derivedLive,
-    currentTask?.messages ?? [],
-    hasLiveTail,
-  );
+  // 过滤已在历史消息中渲染的工具（避免双重复）
+  const hiddenAssistantId = hasLiveTail
+    ? [...(currentTask?.messages ?? [])].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
+    : undefined;
+  const renderedCallIds = new Set<string>();
+  for (const message of currentTask?.messages ?? []) {
+    if (message.role === 'assistant' && message.id !== hiddenAssistantId) {
+      for (const call of message.toolCalls ?? []) renderedCallIds.add(call.id);
+    }
+  }
+  const displayedLiveActivity = derivedLive.filter((item) => !renderedCallIds.has(item.id));
   const shellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
     "--inspector-width": `${inspectorWidth}px`,
@@ -1580,7 +1605,7 @@ function App() {
                 output={output}
                 reasoning={reasoning}
                 busy={busy}
-                liveToolActivity={liveToolActivity}
+                liveToolActivity={displayedLiveActivity}
                 liveContentBlocks={liveContentBlocks}
                 defaultToolDetailsOpen={defaultToolDetailsOpen}
                 online={online}
