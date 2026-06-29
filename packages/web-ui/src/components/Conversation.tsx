@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   ClarificationRequest,
   ContentBlock,
@@ -17,6 +17,8 @@ import { t } from "../i18n";
 import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData } from "./Timeline";
 import { ThinkingCard } from "./ThinkingTimeline";
 import { usePlatform } from "../platform/context";
+import { ContextMenu } from "./ContextMenu";
+import type { ContextMenuItem } from "./ContextMenu";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
 export interface ToolActivity {
@@ -148,6 +150,35 @@ export function Conversation({
   const previousTaskIdRef = useRef<string | null>(null);
   const hasScrolledToTail = useRef(false);
 
+  // Context menu state
+  const [ctxMenu, setCtxMenu] = useState<{
+    open: boolean;
+    rect?: DOMRect;
+    items: ContextMenuItem[];
+  }>({ open: false, items: [] });
+
+  const closeCtxMenu = useCallback(() => {
+    setCtxMenu((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  function handleAgentContextMenu(e: React.MouseEvent, message: Message) {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      {
+        type: "item",
+        id: "copy-output",
+        label: t("action.copy"),
+        icon: <CopyIcon />,
+        action: () => navigator.clipboard.writeText(message.content).catch(() => {}),
+      },
+    ];
+    setCtxMenu({
+      open: true,
+      rect: e.currentTarget.getBoundingClientRect(),
+      items,
+    });
+  }
+
   const hasStreamingContent = output.trim().length > 0 || reasoning.trim().length > 0;
   const hasLiveTail = busy || liveToolActivity.length > 0 || phase === "waiting_approval" || hasStreamingContent;
 
@@ -219,12 +250,16 @@ export function Conversation({
             // 运行时跳过最后一条带 toolCalls 的 assistant 消息——live 尾巴已展示它
             if (message.id === lastAssistantToolCallId) return null;
             return (
-              <AgentRound
+              <div
                 key={message.id}
-                data={buildAgentRoundFromMessage(message, resultMap, task.plan)}
-                busy={false}
-                defaultToolDetailsOpen={defaultToolDetailsOpen}
-              />
+                onContextMenu={(e) => handleAgentContextMenu(e, message)}
+              >
+                <AgentRound
+                  data={buildAgentRoundFromMessage(message, resultMap, task.plan)}
+                  busy={false}
+                  defaultToolDetailsOpen={defaultToolDetailsOpen}
+                />
+              </div>
             );
           }
           if (message.role === "tool") return null;
@@ -297,6 +332,13 @@ export function Conversation({
 
         <div ref={bottomRef} />
       </div>
+
+      <ContextMenu
+        items={ctxMenu.items}
+        open={ctxMenu.open}
+        anchorRect={ctxMenu.rect}
+        onClose={closeCtxMenu}
+      />
     </div>
   );
 }
@@ -375,6 +417,56 @@ function UserBubble({
   const [draft, setDraft] = useState(content);
   const [viewingImage, setViewingImage] = useState<string | null>(null);
 
+  // User bubble context menu
+  const [ctxMenu, setCtxMenu] = useState<{
+    open: boolean;
+    rect?: DOMRect;
+    items: ContextMenuItem[];
+  }>({ open: false, items: [] });
+
+  function handleUserBubbleContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      {
+        type: "item",
+        id: "copy",
+        label: t("action.copy"),
+        icon: <CopyIcon />,
+        action: () => navigator.clipboard.writeText(content).catch(() => {}),
+      },
+      ...(onEdit
+        ? [
+            {
+              type: "item" as const,
+              id: "edit",
+              label: t("action.edit"),
+              icon: <PencilIcon />,
+              action: () => {
+                setDraft(content);
+                setEditing(true);
+              },
+            },
+          ]
+        : []),
+      ...(onBranch
+        ? [
+            {
+              type: "item" as const,
+              id: "branch",
+              label: t("action.branch"),
+              icon: <ForkIcon />,
+              action: () => onBranch(messageId),
+            },
+          ]
+        : []),
+    ];
+    setCtxMenu({
+      open: true,
+      rect: e.currentTarget.getBoundingClientRect(),
+      items,
+    });
+  }
+
   function confirmSave(): void {
     const trimmed = draft.trim();
     if (!trimmed) return;
@@ -422,7 +514,7 @@ function UserBubble({
   const imageAttachments = attachments?.filter((a) => a.type === 'image') ?? [];
 
   return (
-    <div className="user-bubble-row">
+    <div className="user-bubble-row" onContextMenu={handleUserBubbleContextMenu}>
       <div className="user-bubble-col">
         <div className="user-bubble">{content}</div>
         {imageAttachments.length > 0 && (
@@ -468,6 +560,13 @@ function UserBubble({
           </IconButton>
         )}
       </div>
+
+      <ContextMenu
+        items={ctxMenu.items}
+        open={ctxMenu.open}
+        anchorRect={ctxMenu.rect}
+        onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
+      />
     </div>
   );
 }

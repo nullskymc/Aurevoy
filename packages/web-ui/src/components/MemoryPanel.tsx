@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { MemoryCategory, MemoryEntry } from "@aurevoy/shared";
 import { t } from "../i18n";
+import { ContextMenu } from "./ContextMenu";
+import type { ContextMenuItem } from "./ContextMenu";
 
 interface MemoryPanelProps {
   open: boolean;
@@ -138,6 +140,47 @@ function MemoryItem({
   const [draft, setDraft] = useState(memory.content);
   const [draftCat, setDraftCat] = useState<MemoryCategory>(memory.category);
 
+  // Context menu
+  const [ctxMenu, setCtxMenu] = useState<{
+    open: boolean;
+    rect?: DOMRect;
+    items: ContextMenuItem[];
+  }>({ open: false, items: [] });
+
+  function handleMemoryContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      {
+        type: "item",
+        id: "edit",
+        label: t("action.edit"),
+        action: () => setEditing(true),
+      },
+      {
+        type: "item",
+        id: "copy-content",
+        label: "复制内容",
+        action: () =>
+          navigator.clipboard.writeText(memory.content).catch(() => {}),
+      },
+      {
+        type: "item",
+        id: "toggle",
+        label: memory.enabled ? t("memory.disable") : t("memory.enable"),
+        action: () => onToggle(memory.id, !memory.enabled),
+      },
+      { type: "separator" },
+      {
+        type: "item",
+        id: "delete",
+        label: t("action.delete"),
+        danger: true,
+        action: () => onDelete(memory.id),
+      },
+    ];
+    setCtxMenu({ open: true, rect: e.currentTarget.getBoundingClientRect(), items });
+  }
+
   function save() {
     const trimmed = draft.trim();
     if (!trimmed) return;
@@ -151,7 +194,11 @@ function MemoryItem({
       : `${t("memory.sourceAgent")}${memory.source.taskGoal ? `${t("memory.fromTaskPrefix")}${memory.source.taskGoal}${t("memory.fromTaskSuffix")}` : ""}`;
 
   return (
-    <li className="memory-item" data-disabled={!memory.enabled}>
+    <li
+      className="memory-item"
+      data-disabled={!memory.enabled}
+      onContextMenu={handleMemoryContextMenu}
+    >
       <div className="memory-item-head">
         <span className="memory-cat" data-cat={memory.category}>
           {categoryLabel(memory.category)}
@@ -218,6 +265,13 @@ function MemoryItem({
           </div>
         )}
       </div>
+
+      <ContextMenu
+        items={ctxMenu.items}
+        open={ctxMenu.open}
+        anchorRect={ctxMenu.rect}
+        onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
+      />
     </li>
   );
 }

@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { Task, Project } from "@aurevoy/shared";
 import { getRelativeTime } from "./status";
 import { t } from "../i18n";
+import { ContextMenu } from "./ContextMenu";
+import type { ContextMenuItem } from "./ContextMenu";
 
 type MainView = "chat" | "search" | "skills" | "settings";
 
@@ -44,6 +46,17 @@ export function TaskHistorySidebar({
     initial.add("__standalone__");
     return initial;
   });
+
+  // Context menu state
+  const [ctxMenu, setCtxMenu] = useState<{
+    open: boolean;
+    rect?: DOMRect;
+    items: ContextMenuItem[];
+  }>({ open: false, items: [] });
+
+  const closeCtxMenu = useCallback(() => {
+    setCtxMenu((prev) => ({ ...prev, open: false }));
+  }, []);
 
   // Auto-expand new projects as they appear
   const prevProjectIds = useMemo(() => new Set(projects.map((p) => p.id)), [projects]);
@@ -96,6 +109,66 @@ export function TaskHistorySidebar({
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
+    });
+  }
+
+  function handleProjectContextMenu(
+    e: React.MouseEvent,
+    project: Project,
+  ) {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      {
+        type: "item",
+        id: "new-conversation",
+        label: t("nav.newChat"),
+        icon: <PlusIcon />,
+        action: () => onNewTask(project.id),
+      },
+      { type: "separator" },
+      {
+        type: "item",
+        id: "delete-project",
+        label: t("projects.delete"),
+        icon: <TrashIcon />,
+        danger: true,
+        action: () => onDeleteProject(project.id),
+      },
+    ];
+    setCtxMenu({
+      open: true,
+      rect: e.currentTarget.getBoundingClientRect(),
+      items,
+    });
+  }
+
+  function handleTaskContextMenu(
+    e: React.MouseEvent,
+    task: Task,
+  ) {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      {
+        type: "item",
+        id: "select-task",
+        label: "选择对话",
+        icon: <ChatIcon />,
+        action: () => onSelectTask(task),
+      },
+      { type: "separator" },
+      {
+        type: "item",
+        id: "delete-task",
+        label: t("sidebar.deleteTask"),
+        icon: <TrashIcon />,
+        danger: true,
+        action: () => onDeleteTask(task.id),
+      },
+    ];
+    setCtxMenu({
+      open: true,
+      rect: e.currentTarget.getBoundingClientRect(),
+      items,
     });
   }
 
@@ -157,7 +230,11 @@ export function TaskHistorySidebar({
             const projectTasks = tasksByProject.map.get(project.id) ?? [];
             const expanded = expandedIds.has(project.id);
             return (
-              <div key={project.id} className="drawer-group">
+              <div
+                key={project.id}
+                className="drawer-group"
+                onContextMenu={(e) => handleProjectContextMenu(e, project)}
+              >
                 <div className="drawer-header-row">
                   <button
                     type="button"
@@ -198,6 +275,7 @@ export function TaskHistorySidebar({
                     activeTaskId={activeTaskId}
                     onSelectTask={onSelectTask}
                     onDeleteTask={onDeleteTask}
+                    onContextMenuTask={handleTaskContextMenu}
                     isChild={true}
                   />
                 )}
@@ -229,6 +307,7 @@ export function TaskHistorySidebar({
               activeTaskId={activeTaskId}
               onSelectTask={onSelectTask}
               onDeleteTask={onDeleteTask}
+              onContextMenuTask={handleTaskContextMenu}
             />
           )}
         </div>
@@ -245,6 +324,13 @@ export function TaskHistorySidebar({
           <span>{t("nav.settings")}</span>
         </button>
       </div>
+
+      <ContextMenu
+        items={ctxMenu.items}
+        open={ctxMenu.open}
+        anchorRect={ctxMenu.rect}
+        onClose={closeCtxMenu}
+      />
     </aside>
   );
 }
@@ -254,12 +340,14 @@ function TaskList({
   activeTaskId,
   onSelectTask,
   onDeleteTask,
+  onContextMenuTask,
   isChild = false,
 }: {
   tasks: Task[];
   activeTaskId?: string;
   onSelectTask: (task: Task) => void;
   onDeleteTask: (taskId: string) => void;
+  onContextMenuTask?: (e: React.MouseEvent, task: Task) => void;
   isChild?: boolean;
 }) {
   if (tasks.length === 0) {
@@ -288,7 +376,14 @@ function TaskList({
     >
       {tasks.map((task) => (
         <li key={task.id} role="option" aria-selected={task.id === activeTaskId}>
-          <div className={`conv-item-row ${isChild ? "child-chat-item-row" : ""}`}>
+          <div
+            className={`conv-item-row ${isChild ? "child-chat-item-row" : ""}`}
+            onContextMenu={
+              onContextMenuTask
+                ? (e) => onContextMenuTask(e, task)
+                : undefined
+            }
+          >
             <button
               type="button"
               className={`conv-item ${isChild ? "child-chat-item" : ""}`}

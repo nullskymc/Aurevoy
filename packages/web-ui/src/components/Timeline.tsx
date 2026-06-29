@@ -16,6 +16,8 @@ import type {
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { usePlatform } from "../platform/context";
 import { ThinkingCard } from "./ThinkingTimeline";
+import { ContextMenu } from "./ContextMenu";
+import type { ContextMenuItem } from "./ContextMenu";
 
 /* ============ 类型定义 ============ */
 
@@ -476,6 +478,73 @@ function TimelineStepNode({
   const [open, setOpen] = useState(defaultOpen ?? step.status === "running");
   const prevStatusRef = useRef(step.status);
 
+  // Context menu
+  const [ctxMenu, setCtxMenu] = useState<{
+    open: boolean;
+    rect?: DOMRect;
+    items: ContextMenuItem[];
+  }>({ open: false, items: [] });
+
+  function handleStepContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      {
+        type: "item",
+        id: "copy-title",
+        label: "复制标题",
+        action: () => navigator.clipboard.writeText(step.title).catch(() => {}),
+      },
+      ...(step.toolName
+        ? [
+            {
+              type: "item" as const,
+              id: "copy-tool-name",
+              label: "复制工具名",
+              action: () => navigator.clipboard.writeText(step.toolName!).catch(() => {}),
+            },
+          ]
+        : []),
+      ...(step.args && Object.keys(step.args).length > 0
+        ? [
+            {
+              type: "item" as const,
+              id: "copy-args",
+              label: "复制参数",
+              action: () =>
+                navigator.clipboard
+                  .writeText(JSON.stringify(step.args, null, 2))
+                  .catch(() => {}),
+            },
+          ]
+        : []),
+      ...(step.output
+        ? [
+            {
+              type: "item" as const,
+              id: "copy-output",
+              label: "复制输出",
+              action: () => navigator.clipboard.writeText(step.output!).catch(() => {}),
+            },
+          ]
+        : []),
+      ...(step.error
+        ? [
+            {
+              type: "item" as const,
+              id: "copy-error",
+              label: "复制错误信息",
+              action: () => navigator.clipboard.writeText(step.error!).catch(() => {}),
+            },
+          ]
+        : []),
+    ];
+    setCtxMenu({
+      open: true,
+      rect: e.currentTarget.getBoundingClientRect(),
+      items,
+    });
+  }
+
   // 自动展开/折叠逻辑
   useEffect(() => {
     const prev = prevStatusRef.current;
@@ -498,7 +567,11 @@ function TimelineStepNode({
   const hasDetails = step.logs != null || step.error != null || (step.status === "running");
 
   return (
-    <div className="timeline-step" data-status={step.status}>
+    <div
+      className="timeline-step"
+      data-status={step.status}
+      onContextMenu={handleStepContextMenu}
+    >
       <div className="timeline-step-header">
         <div className="timeline-step-left">
           <StepBadge kind={step.kind} />
@@ -557,6 +630,13 @@ function TimelineStepNode({
           )}
         </div>
       )}
+
+      <ContextMenu
+        items={ctxMenu.items}
+        open={ctxMenu.open}
+        anchorRect={ctxMenu.rect}
+        onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
+      />
     </div>
   );
 }
@@ -633,6 +713,54 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
     setTimeout(() => setFeedback(null), 2000);
   };
 
+  // Context menu for file_reference blocks
+  const [ctxMenu, setCtxMenu] = useState<{
+    open: boolean;
+    rect?: DOMRect;
+    items: ContextMenuItem[];
+  }>({ open: false, items: [] });
+
+  function handleFileContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    const filename = block.name || block.content.split("/").pop() || block.content;
+    const items: ContextMenuItem[] = [
+      {
+        type: "item",
+        id: "copy-path",
+        label: "复制路径",
+        action: () => navigator.clipboard.writeText(block.content).catch(() => {}),
+      },
+      {
+        type: "item",
+        id: "copy-filename",
+        label: "复制文件名",
+        action: () => navigator.clipboard.writeText(filename).catch(() => {}),
+      },
+      ...(platform.openFile
+        ? [
+            {
+              type: "item" as const,
+              id: "open-file",
+              label: "在系统中打开",
+              action: async () => {
+                try {
+                  await platform.openFile!(block.content);
+                  showFeedback("已打开");
+                } catch {
+                  showFeedback("无法打开文件");
+                }
+              },
+            },
+          ]
+        : []),
+    ];
+    setCtxMenu({
+      open: true,
+      rect: e.currentTarget.getBoundingClientRect(),
+      items,
+    });
+  }
+
   switch (block.type) {
     case "file_reference": {
       const handleFileClick = async () => {
@@ -651,22 +779,31 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
         }
       };
       return (
-        <div
-          className={`content-block is-file ${feedback ? "is-active" : ""}`}
-          onClick={handleFileClick}
-          title={block.content}
-        >
-          <svg className="content-block-icon" viewBox="0 0 16 16" width="16" height="16" fill="none">
-            <path d="M2 1h7.5L13 4.5V14a1 1 0 01-1 1H2a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.2"/>
-            <path d="M9 1v3.5H12.5" stroke="currentColor" strokeWidth="1.2"/>
-          </svg>
-          <span className="content-block-name">
-            {block.name || block.content.split("/").pop() || block.content}
-          </span>
-          <span className="content-block-path">
-            {feedback || block.content}
-          </span>
-        </div>
+        <>
+          <div
+            className={`content-block is-file ${feedback ? "is-active" : ""}`}
+            onClick={handleFileClick}
+            onContextMenu={handleFileContextMenu}
+            title={block.content}
+          >
+            <svg className="content-block-icon" viewBox="0 0 16 16" width="16" height="16" fill="none">
+              <path d="M2 1h7.5L13 4.5V14a1 1 0 01-1 1H2a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.2"/>
+              <path d="M9 1v3.5H12.5" stroke="currentColor" strokeWidth="1.2"/>
+            </svg>
+            <span className="content-block-name">
+              {block.name || block.content.split("/").pop() || block.content}
+            </span>
+            <span className="content-block-path">
+              {feedback || block.content}
+            </span>
+          </div>
+          <ContextMenu
+            items={ctxMenu.items}
+            open={ctxMenu.open}
+            anchorRect={ctxMenu.rect}
+            onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
+          />
+        </>
       );
     }
     case "image": {
@@ -769,7 +906,7 @@ export function AgentRound({
         )}
       </div>
 
-      {/* 流式输出文本（实时模式下的最终 markdown 输出） */}
+      {/* 流式输出文本 — 流式阶段仅显示加载占位（禁打字机效果），本轮结束时渲染完整 markdown */}
       {data.markdownOutput && (
         <article className={`timeline-output ${hasLiveRunning ? "is-streaming" : ""}`}>
           <div className="doc-meta">
@@ -782,8 +919,11 @@ export function AgentRound({
             <span>Aurevoy</span>
           </div>
           <div className="doc-body" style={{ paddingLeft: 0 }}>
-            <MarkdownRenderer content={data.markdownOutput} />
-            {hasLiveRunning && <span className="stream-caret" aria-hidden="true" />}
+            {hasLiveRunning ? (
+              <span className="stream-placeholder">生成中…</span>
+            ) : (
+              <MarkdownRenderer content={data.markdownOutput} />
+            )}
           </div>
         </article>
       )}

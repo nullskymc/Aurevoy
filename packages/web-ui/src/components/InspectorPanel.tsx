@@ -1,7 +1,9 @@
 import { useState } from "react";
-import type { HealthResponse, Message, Task, TaskPhase } from "@aurevoy/shared";
+import type { HealthResponse, Message, Task, TaskArtifact, TaskPhase } from "@aurevoy/shared";
 import { getPhaseLabel } from "./status";
 import { t } from "../i18n";
+import { ContextMenu } from "./ContextMenu";
+import type { ContextMenuItem } from "./ContextMenu";
 
 interface InspectorPanelProps {
   open: boolean;
@@ -22,6 +24,50 @@ export function InspectorPanel({
 }: InspectorPanelProps) {
   const [expanded, setExpanded] = useState<Set<string>>(EXPANDED_SECTIONS);
   const userMessages = task?.messages.filter((m): m is Message & { role: "user" } => m.role === "user") ?? [];
+
+  // Context menu
+  const [ctxMenu, setCtxMenu] = useState<{
+    open: boolean;
+    rect?: DOMRect;
+    items: ContextMenuItem[];
+  }>({ open: false, items: [] });
+
+  function handleArtifactMiniContextMenu(e: React.MouseEvent, artifact: TaskArtifact) {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      {
+        type: "item",
+        id: "copy-name",
+        label: "复制名称",
+        action: () => navigator.clipboard.writeText(artifact.name).catch(() => {}),
+      },
+      ...(artifact.appliedPath
+        ? [
+            {
+              type: "item" as const,
+              id: "copy-path",
+              label: "复制路径",
+              action: () =>
+                navigator.clipboard.writeText(artifact.appliedPath!).catch(() => {}),
+            },
+          ]
+        : []),
+    ];
+    setCtxMenu({ open: true, rect: e.currentTarget.getBoundingClientRect(), items });
+  }
+
+  function handleQueryContextMenu(e: React.MouseEvent, msg: Message) {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      {
+        type: "item",
+        id: "copy-query",
+        label: "复制查询",
+        action: () => navigator.clipboard.writeText(msg.content).catch(() => {}),
+      },
+    ];
+    setCtxMenu({ open: true, rect: e.currentTarget.getBoundingClientRect(), items });
+  }
 
   function toggleSection(id: string): void {
     setExpanded((prev) => {
@@ -95,7 +141,12 @@ export function InspectorPanel({
             ) : (
               <div className="artifact-mini-list">
                 {task.artifacts.map((artifact) => (
-                  <article key={artifact.id} className="artifact-mini" data-status={artifact.status}>
+                  <article
+                    key={artifact.id}
+                    className="artifact-mini"
+                    data-status={artifact.status}
+                    onContextMenu={(e) => handleArtifactMiniContextMenu(e, artifact)}
+                  >
                     <strong>{artifact.name}</strong>
                     <span>{artifact.type} · {artifact.status}</span>
                     {artifact.appliedPath && <small>{artifact.appliedPath}</small>}
@@ -117,7 +168,11 @@ export function InspectorPanel({
             ) : (
               <div className="artifact-mini-list">
                 {userMessages.map((msg, i) => (
-                  <article key={msg.id} className="artifact-mini">
+                  <article
+                    key={msg.id}
+                    className="artifact-mini"
+                    onContextMenu={(e) => handleQueryContextMenu(e, msg)}
+                  >
                     <strong>#{i + 1} {msg.content.slice(0, 80)}{msg.content.length > 80 ? "…" : ""}</strong>
                     <span>{new Date(msg.createdAt).toLocaleTimeString()}</span>
                   </article>
@@ -127,6 +182,13 @@ export function InspectorPanel({
           </InspectorCollapsible>
         </div>
       </aside>
+
+      <ContextMenu
+        items={ctxMenu.items}
+        open={ctxMenu.open}
+        anchorRect={ctxMenu.rect}
+        onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
+      />
     </>
   );
 }

@@ -1,0 +1,155 @@
+/* ------------------------------------------------------------------ */
+/*  Context Menu                                                      */
+/*  z-index: 50 — between model popover (30) and toast (80)           */
+/* ------------------------------------------------------------------ */
+
+.ctx-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 180px;
+  max-width: 280px;
+  padding: var(--ui-space-1);
+  border: var(--ui-border-width) solid var(--border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--card-bg);
+  box-shadow: var(--ui-shadow-popover);
+  opacity: 0;
+  transform: scale(0.96);
+  transform-origin: top left;
+  transition: opacity 120ms ease, transform 120ms ease;
+  visibility: hidden;
+  /* Prevent the menu itself from receiving the contextmenu event */
+  overscroll-behavior: contain;
+}
+
+.ctx-menu[data-open="true"] {
+  opacity: 1;
+  transform: scale(1);
+  visibility: visible;
+}
+
+/* ---- Separator ---- */
+
+.ctx-separator {
+  height: 1px;
+  margin: var(--ui-space-1) var(--ui-space-2);
+  background: var(--border);
+  pointer-events: none;
+}
+
+/* ---- Menu item ---- */
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  width: 100%;
+  min-height: var(--ui-control-sm);
+  padding: 0 var(--ui-space-2);
+  border: none;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--ui-font-sm);
+  font-weight: 500;
+  line-height: 1;
+  text-align: left;
+  cursor: default;
+  white-space: nowrap;
+  user-select: none;
+  outline: none;
+  transition: background 80ms ease;
+}
+
+.ctx-item:focus-visible {
+  background: var(--hover);
+}
+
+.ctx-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.ctx-item:active:not(:disabled) {
+  background: var(--active);
+}
+
+.ctx-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---- Danger variant ---- */
+
+.ctx-item[data-ctx-danger="true"] {
+  color: var(--danger-soft-fg);
+}
+
+.ctx-item[data-ctx-danger="true"]:hover:not(:disabled),
+.ctx-item[data-ctx-danger="true"]:focus-visible {
+  background: var(--danger-soft-bg);
+}
+
+/* ---- Item icon slot ---- */
+
+.ctx-item-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.ctx-item-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ---- Item label ---- */
+
+.ctx-item-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Shortcut key hint ---- */
+
+.ctx-shortcut {
+  flex-shrink: 0;
+  margin-left: var(--ui-space-3);
+  color: var(--text-tertiary);
+  font-size: var(--ui-font-xs);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+/* ---- Submenu arrow ---- */
+
+.ctx-submenu-arrow {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: 9px;
+  line-height: 1;
+}
+
+/* ---- Dark mode ---- */
+
+:root[data-theme="dark"] .ctx-menu {
+  /* All colors come from CSS custom properties which already switch in dark mode.
+     Shadow needs slight darkening for dark backgrounds. */
+  box-shadow:
+    0 18px 42px rgba(0, 0, 0, 0.28),
+    0 0 0 1px var(--border);
+}
+
+/* ---- Reduced motion ---- */
+
+@media (prefers-reduced-motion: reduce) {
+  .ctx-menu {
+    transition: none;
+  }
+}
