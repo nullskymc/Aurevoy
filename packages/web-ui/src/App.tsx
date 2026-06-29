@@ -680,6 +680,12 @@ function App() {
         });
         break;
       case "artifact_created":
+        mergeArtifact(event.artifact);
+        // 新产物草稿自动切换到 Artifacts 面板，方便用户立即预览和确认
+        if (event.artifact.status === 'draft') {
+          setContentMode('artifacts');
+        }
+        break;
       case "artifact_updated":
         mergeArtifact(event.artifact);
         break;

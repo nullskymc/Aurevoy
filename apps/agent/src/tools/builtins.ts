@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import type { MemoryCategory, MemoryEntry, TaskArtifact } from '@aurevoy/shared';
+import type { MemoryCategory, MemoryEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
 import { toolRegistry } from './registry.js';
 import { memoryStore } from '../store/db.js';
@@ -481,11 +481,11 @@ toolRegistry.register({
   },
 });
 
-// ---- create_artifact（safe）----
+// ---- create_artifact（safe）：由 loop 接管，支持用户确认/拒绝 ----
 toolRegistry.register({
   descriptor: {
     name: 'create_artifact',
-    description: '创建一个可预览、可确认的任务产物草稿。不会写入真实文件；需要用户确认后再 apply_artifact。',
+    description: '创建一个可预览、可确认的任务产物草稿。不会写入真实文件；默认需要用户确认后才会返回结果。若产物仅用于进度跟踪且无需用户交互，可传 requireConfirmation=false。确认后的产物可通过 apply_artifact 写入工作区。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -493,17 +493,15 @@ toolRegistry.register({
         content: { type: 'string', description: '产物正文内容' },
         type: { type: 'string', enum: ['text', 'file', 'diff', 'url'], description: '产物类型，默认 text' },
         mimeType: { type: 'string', description: 'MIME 类型，例如 text/markdown' },
+        requireConfirmation: { type: 'boolean', description: '是否需要用户确认（默认 true）。设为 false 时仅创建草稿不等待确认。' },
       },
       required: ['name', 'content'],
       additionalProperties: false,
     },
     riskLevel: 'safe',
   },
-  async execute(args) {
-    const name = readNonEmptyString(args.name, 'name');
-    const content = readNonEmptyString(args.content, 'content');
-    const type = readArtifactType(args.type);
-    return { artifactDraft: { name, content, type, mimeType: typeof args.mimeType === 'string' ? args.mimeType : guessMimeType(name) } };
+  async execute() {
+    throw new Error('create_artifact 由 Agent 循环接管，不能直接执行');
   },
 });
 
@@ -765,17 +763,6 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/g, "'")
     .replace(/&#x([0-9a-f]+);/gi, (_m, h: string) => String.fromCodePoint(Number.parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_m, d: string) => String.fromCodePoint(Number.parseInt(d, 10)));
-}
-
-function readArtifactType(value: unknown): TaskArtifact['type'] {
-  return value === 'file' || value === 'diff' || value === 'url' || value === 'text' ? value : 'text';
-}
-
-function guessMimeType(name: string): string {
-  if (/\.md$/i.test(name)) return 'text/markdown';
-  if (/\.json$/i.test(name)) return 'application/json';
-  if (/\.html?$/i.test(name)) return 'text/html';
-  return 'text/plain';
 }
 
 // ---- delegate_task（safe）：P7 子代理委托 ----

@@ -124,8 +124,8 @@ class SkillRegistry {
           location: s.location,
           installUrl: s.installUrl,
           installedAt: s.installedAt,
-          // 未显式设置的：.aurevoy 路径默认启用，其他默认禁用
-          enabled: stored !== null ? stored : sourcePath === '.aurevoy',
+          // 未显式设置的：builtin 预装 + .aurevoy 默认启用，其他默认禁用
+          enabled: stored !== null ? stored : sourcePath === '.aurevoy' || s.sourceDir === 'builtin',
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -138,7 +138,7 @@ class SkillRegistry {
     const entry = this.catalog.get(name);
     if (!entry) return false;
     const sourcePath = deriveSourcePath(entry.location || entry.skillDir);
-    return sourcePath === '.aurevoy';
+    return sourcePath === '.aurevoy' || entry.sourceDir === 'builtin';
   }
 
 }
