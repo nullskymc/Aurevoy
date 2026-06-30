@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 const AGENT_HOST: &str = "127.0.0.1";
 const AGENT_PORT: u16 = 8787;
 const AGENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -81,6 +84,9 @@ pub fn ensure_agent_process(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
     let mut child = command
         .spawn()
@@ -435,7 +441,11 @@ fn which_node_via_shell(shell_cmd: &str) -> Option<PathBuf> {
     } else {
         ("/bin/sh", &["-c", shell_cmd])
     };
-    if let Ok(output) = std::process::Command::new(program).args(args).output() {
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    if let Ok(output) = cmd.output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout)
                 .trim()
