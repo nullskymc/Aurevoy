@@ -121,8 +121,9 @@ function parseProviderModel(provider?: string | null): string {
  * 实时工具活动状态（替代 deriveToolActivityFromEvents 的 events[] 全量扫描）。
  *
  * 用 useRef<Map> 做增量更新：每个 tool_call / tool_progress / tool_result SSE 事件
- * 直接 mutate map，再通过 syncLiveActivity() 推入 state。React 18 自动批处理将
- * 同一事件循环中的多次 sync 合并为单次 re-render，消除工具卡片的"打字机效果"。
+ * 直接 mutate map，再通过 scheduleLiveActivitySync() 安排 requestAnimationFrame 批量
+ * 同步到 React state。这样跨事件循环的连续事件会被合并到同一帧渲染，消除工具
+ * 卡片逐个出现的"打字机效果"。
  */
 function createLiveActivityStore() {
   const map = new Map<string, ToolActivity>();
@@ -264,15 +265,42 @@ function App() {
   const [reasoning, setReasoning] = useState("");
   const previousPhaseRef = useRef<TaskPhase | null>(null);
   const { closeStream, openStream } = useSSEStream();
+  const liveActivitySyncRafRef = useRef<number | null>(null);
+
+  const flushLiveActivity = useCallback((): void => {
+    liveActivitySyncRafRef.current = null;
+    setLiveToolActivity(liveActivityRef.current.snapshot());
+  }, []);
+
+  /** 将多个 SSE 事件触发的 live activity 更新合并到同一帧，避免工具卡片逐个渲染的“打字机效果”。 */
+  const scheduleLiveActivitySync = useCallback((): void => {
+    if (liveActivitySyncRafRef.current !== null) return;
+    liveActivitySyncRafRef.current = requestAnimationFrame(flushLiveActivity);
+  }, [flushLiveActivity]);
 
   /** 统一清空所有实时/流式状态，避免切换任务时旧状态残留。 */
   const clearLiveState = useCallback((): void => {
+    if (liveActivitySyncRafRef.current !== null) {
+      cancelAnimationFrame(liveActivitySyncRafRef.current);
+      liveActivitySyncRafRef.current = null;
+    }
     liveActivityRef.current.clear();
     setLiveToolActivity([]);
     setOutput("");
     setReasoning("");
     setLiveContentBlocks([]);
   }, []);
+
+  // 组件卸载时取消待处理的 live activity 同步，防止 setState 已卸载组件。
+  useEffect(
+    () => () => {
+      if (liveActivitySyncRafRef.current !== null) {
+        cancelAnimationFrame(liveActivitySyncRafRef.current);
+        liveActivitySyncRafRef.current = null;
+      }
+    },
+    [],
+  );
   const {
     runtimeSettings,
     mcpServers,
@@ -620,8 +648,8 @@ function App() {
           updateTaskList(nextTask);
           return nextTask;
         });
-        // 清理后同步 live 状态
-        setLiveToolActivity(liveActivityRef.current.snapshot());
+        // 清理后同步 live 状态（RAF 批处理合并同一帧内的多次更新）
+        scheduleLiveActivitySync();
         break;
       }
       case "tool_call":
@@ -630,13 +658,13 @@ function App() {
           args: event.call.args,
           status: 'running',
         });
-        setLiveToolActivity(liveActivityRef.current.snapshot());
+        scheduleLiveActivitySync();
         break;
       case "tool_progress":
         liveActivityRef.current.upsert(event.callId, {
           progress: { message: event.message, chunk: event.chunk, percent: event.percent },
         });
-        setLiveToolActivity(liveActivityRef.current.snapshot());
+        scheduleLiveActivitySync();
         break;
       case "approval_request":
         liveActivityRef.current.upsert(event.call.id, {
@@ -645,7 +673,7 @@ function App() {
           status: 'awaiting',
           riskLevel: event.riskLevel,
         });
-        setLiveToolActivity(liveActivityRef.current.snapshot());
+        scheduleLiveActivitySync();
         setStatus("paused");
         setPhase("waiting_approval");
         setCurrentTask((previous) => {
@@ -670,7 +698,7 @@ function App() {
           output: event.result.output,
           error: event.result.error,
         });
-        setLiveToolActivity(liveActivityRef.current.snapshot());
+        scheduleLiveActivitySync();
         setCurrentTask((previous) => {
           if (!previous) return previous;
           const nextApprovals = (previous.pendingApprovals ?? []).filter(
