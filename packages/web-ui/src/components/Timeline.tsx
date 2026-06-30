@@ -564,7 +564,7 @@ function TimelineStepNode({
     }
   }, [step.status]);
 
-  const hasDetails = step.logs != null || step.error != null || (step.status === "running");
+  const hasDetails = step.logs != null || step.error != null || (step.status === "running" && step.progress != null);
 
   return (
     <div
@@ -610,22 +610,18 @@ function TimelineStepNode({
               <span>{step.error}</span>
             </div>
           )}
-          {step.status === "running" && (
+          {step.status === "running" && step.progress && (
             <div className="timeline-step-log is-running">
-              {step.progress ? (
-                <div className="timeline-step-progress">
-                  {step.progress.percent != null ? (
-                    <div className="progress-bar">
-                      <div className="progress-bar-fill" style={{ width: `${step.progress.percent}%` }} />
-                    </div>
-                  ) : (
-                    <span className="stream-caret" />
-                  )}
-                  <span className="progress-text">{step.progress.message}</span>
-                </div>
-              ) : (
-                <span className="stream-caret" />
-              )}
+              <div className="timeline-step-progress">
+                {step.progress.percent != null ? (
+                  <div className="progress-bar">
+                    <div className="progress-bar-fill" style={{ width: `${step.progress.percent}%` }} />
+                  </div>
+                ) : (
+                  <span className="stream-caret" />
+                )}
+                <span className="progress-text">{step.progress.message}</span>
+              </div>
             </div>
           )}
         </div>

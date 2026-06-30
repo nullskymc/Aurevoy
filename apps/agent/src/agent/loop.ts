@@ -14,7 +14,6 @@ import type {
   PlanStep,
   RevertMode,
   Task,
-  TaskArtifact,
   TaskErrorCategory,
   TaskPhase,
   TaskStatus,
@@ -39,7 +38,6 @@ import {
   addTokenUsage,
   assertBudgetWithinLimits,
   BudgetExceededError,
-  createArtifact,
   createCheckpoint,
   createClarification,
   effectiveBudget,
@@ -57,7 +55,7 @@ const MAX_TOOL_CALLS_PER_TURN = 10;
 /** 流式生成期间单个 tool_call 参数的最大字符数（已提高至极大值——新写入原语由工具层做内容校验，不需要流式截断）。 */
 const MAX_TOOL_ARG_STREAM_CHARS = 1_000_000_000;
 /** P6: 写入类工具（需要执行前文件快照） */
-const WRITE_TOOLS = new Set(['apply_artifact', 'copy_file', 'move_file', 'rename_file', 'create_file', 'write_file', 'edit_lines', 'append_file', 'session_open', 'session_write', 'session_close']);
+const WRITE_TOOLS = new Set(['apply_artifact', 'create_artifact', 'copy_file', 'move_file', 'rename_file', 'create_file', 'write_file', 'edit_lines', 'append_file', 'session_open', 'session_write', 'session_close']);
 /** 基础只读工具免审批；其余工具仅允许当前任务会话内临时批准。 */
 const APPROVAL_FREE_TOOLS = new Set(['list_directory', 'load_skill', 'open_file', 'scroll', 'search_grep']);
 
@@ -213,12 +211,6 @@ const pendingApprovals = new Map<
 >();
 /** 等待中的用户追问：taskId → (clarificationId → 回复回调) */
 const pendingClarifications = new Map<string, Map<string, (answer: string | null) => void>>();
-
-/** 等待中的产物确认：taskId → (artifactId → 决策回调（status + 可选备注）) */
-const pendingArtifactDecisions = new Map<
-  string,
-  Map<string, (status: 'confirmed' | 'rejected' | 'cancelled', note?: string) => void>
->();
 
 /** 等待中的计划审批：taskId → 决策回调（approved + 可选拒绝原因） */
 const pendingPlanApprovals = new Map<string, (approved: boolean, reason?: string) => void>();
@@ -685,19 +677,6 @@ export function resumeAutoMode(taskId: string): boolean {
   return true;
 }
 
-/** 投递一次产物确认决策（由 server 的 artifact 端点调用）。返回是否命中等待中的请求。 */
-export function resolveArtifactDecision(
-  taskId: string,
-  artifactId: string,
-  status: 'confirmed' | 'rejected' | 'cancelled',
-  note?: string,
-): boolean {
-  const resolve = pendingArtifactDecisions.get(taskId)?.get(artifactId);
-  if (!resolve) return false;
-  resolve(status, note);
-  return true;
-}
-
 /** 投递一次工具审批决策（由 server 的审批端点调用）。返回是否命中等待中的请求。 */
 export function resolveApproval(
   taskId: string,
@@ -822,41 +801,6 @@ function rememberSessionApproval(task: Task, key: string): void {
   task.approvedApprovalKeys = next;
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
-}
-
-/** 等待用户对产物的确认/拒绝；超时或任务取消返回 cancelled。 */
-function waitForArtifactDecision(
-  taskId: string,
-  artifactId: string,
-  signal: AbortSignal,
-): Promise<{ status: 'confirmed' | 'rejected' | 'cancelled'; note?: string }> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const cleanup = () => {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', onAbort);
-      const map = pendingArtifactDecisions.get(taskId);
-      map?.delete(artifactId);
-      if (map && map.size === 0) pendingArtifactDecisions.delete(taskId);
-    };
-    const finish = (status: 'confirmed' | 'rejected' | 'cancelled', note?: string) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve({ status, note });
-    };
-    const onAbort = () => finish('cancelled', '任务已取消');
-    const timer = setTimeout(() => finish('cancelled', '等待用户确认超时'), config.agent.approvalTimeoutMs);
-
-    if (signal.aborted) return finish('cancelled', '任务已取消');
-    signal.addEventListener('abort', onAbort, { once: true });
-    let map = pendingArtifactDecisions.get(taskId);
-    if (!map) {
-      map = new Map();
-      pendingArtifactDecisions.set(taskId, map);
-    }
-    map.set(artifactId, finish);
-  });
 }
 
 /** 等待用户回复追问；超时或任务取消返回 null，不伪造用户输入。 */
@@ -1355,125 +1299,6 @@ export async function runTask(task: Task): Promise<void> {
     );
   };
 
-  /** 处理 create_artifact：创建产物草稿，发布事件，按需等待用户确认。 */
-  const handleCreateArtifactTool = async (call: ToolCall, iteration: number): Promise<Message> => {
-    const name = typeof call.args.name === 'string' && call.args.name.trim()
-      ? call.args.name.trim() : '未命名产物';
-    const content = typeof call.args.content === 'string' ? call.args.content : '';
-    const type =
-      call.args.type === 'file' || call.args.type === 'diff' || call.args.type === 'url' || call.args.type === 'text'
-        ? call.args.type as TaskArtifact['type'] : 'text' as const;
-    const mimeType = typeof call.args.mimeType === 'string' ? call.args.mimeType : undefined;
-    const requireConfirmation = call.args.requireConfirmation !== false; // 默认 true
-
-    // 创建产物草稿（必须 saveFull，确保 artifact 立即可被 PATCH API 查询到）
-    const artifact = createArtifact({ name, content, type, mimeType, sourceCallId: call.id });
-    task.artifacts = [...(task.artifacts ?? []), artifact];
-    saveFull();
-    taskEvents.publish({ type: 'artifact_created', taskId: task.id, artifact });
-
-    writeTrace(task.id, 'tool_call', 'calling_tool', {
-      iteration,
-      callId: call.id,
-      toolName: 'create_artifact',
-      riskLevel: 'safe',
-      ok: true,
-      summary: `创建产物草稿：${name}（${type}），需确认=${requireConfirmation}`,
-      data: { artifactId: artifact.id, name, type, contentLength: content.length, requireConfirmation },
-    });
-
-    // 不需要确认 → 直接返回产物信息
-    if (!requireConfirmation) {
-      const output = {
-        artifactId: artifact.id,
-        name: artifact.name,
-        type: artifact.type,
-        status: artifact.status,
-        message: '产物草稿已创建（无需确认，可通过 apply_artifact 写入文件）',
-      };
-      const result: ToolResult = { callId: call.id, ok: true, output };
-      taskEvents.publish({ type: 'tool_result', taskId: task.id, result });
-      return makeToolResult(call.id, output);
-    }
-
-    // 需要用户确认 → 等待
-    updateStep(`等待确认产物：${name}`, 'paused');
-    setRuntimePhase('waiting_approval', `请确认产物草稿：${name}`, 'paused');
-
-    const decision = await waitForArtifactDecision(task.id, artifact.id, abortController.signal);
-    if (abortController.signal.aborted) {
-      updateArtifactStatusLocal(task, artifact.id, 'draft');
-      saveFull();
-      return makeToolResult(call.id, {
-        artifactId: artifact.id,
-        status: 'draft',
-        message: '任务已取消，产物草稿保留为 draft 状态',
-      });
-    }
-
-    // 根据用户决策更新产物状态
-    if (decision.status === 'confirmed') {
-      updateArtifactStatusLocal(task, artifact.id, 'confirmed');
-      taskEvents.publish({ type: 'artifact_updated', taskId: task.id, artifact: { ...artifact, status: 'confirmed' } });
-    } else if (decision.status === 'rejected') {
-      updateArtifactStatusLocal(task, artifact.id, 'rejected');
-      taskEvents.publish({ type: 'artifact_updated', taskId: task.id, artifact: { ...artifact, status: 'rejected' } });
-    }
-    saveFull();
-
-    const output = {
-      artifactId: artifact.id,
-      name: artifact.name,
-      type: artifact.type,
-      status: decision.status === 'confirmed' ? 'confirmed' : decision.status === 'rejected' ? 'rejected' : 'draft',
-      message:
-        decision.status === 'confirmed'
-          ? '用户已确认产物草稿。如需写入文件，使用 apply_artifact。'
-          : decision.status === 'rejected'
-            ? `用户已拒绝产物草稿${decision.note ? `（原因：${decision.note}）` : ''}。请根据反馈修改后重新创建，或与用户沟通调整。`
-            : '等待用户确认超时，产物草稿保留为 draft 状态。可稍后要求用户确认或放弃。',
-    };
-
-    const toolResult: ToolResult = {
-      callId: call.id,
-      ok: decision.status !== 'cancelled',
-      output,
-      error: decision.status === 'cancelled' ? '等待用户确认超时' : undefined,
-    };
-
-    taskEvents.publish({ type: 'tool_result', taskId: task.id, result: toolResult });
-    writeTrace(task.id, 'tool_result', 'calling_tool', {
-      iteration,
-      callId: call.id,
-      toolName: 'create_artifact',
-      riskLevel: 'safe',
-      ok: toolResult.ok,
-      errorCategory: toolResult.ok ? undefined : 'timeout',
-      errorMessage: toolResult.error,
-      summary: decision.status === 'confirmed'
-        ? '用户已确认产物草稿'
-        : decision.status === 'rejected'
-          ? '用户已拒绝产物草稿'
-          : '产物确认超时',
-      data: { artifactId: artifact.id, decision: decision.status, note: decision.note },
-    });
-
-    return makeToolResult(call.id, output);
-  };
-
-  /** 本地更新产物状态（不通过 server API）。 */
-  function updateArtifactStatusLocal(
-    t: Task,
-    artifactId: string,
-    status: TaskArtifact['status'],
-  ): void {
-    const artifacts = t.artifacts ?? [];
-    const index = artifacts.findIndex((item) => item.id === artifactId);
-    if (index < 0) return;
-    artifacts[index] = { ...artifacts[index], status };
-    t.artifacts = artifacts;
-  }
-
   const messages = task.messages;
   const callFingerprints = new Map<string, number>();
 
@@ -1833,24 +1658,12 @@ export async function runTask(task: Task): Promise<void> {
         setRuntimePhase('thinking', '已收到追问回复，继续推理', 'running');
       }
 
-      // Step 3b: create_artifact 特殊处理（创建产物草稿，按需等待用户确认）
-      const createArtifactItems = validatedCalls.filter(
-        (v) => v.call.toolName === 'create_artifact' && !v.skipReason,
-      );
-      for (const item of createArtifactItems) {
-        setRuntimePhase('calling_tool', `创建产物草稿：${item.call.args.name ?? '未命名'}`, 'running');
-        const toolMessage = await handleCreateArtifactTool(item.call, iteration + 1);
-        messages.push(toolMessage);
-        if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
-        setRuntimePhase('thinking', '产物草稿已处理，继续推理', 'running');
-      }
-
-      // Step 5: 收集所有执行结果（按 callId 索引）
+      // Step 4: 收集所有执行结果（按 callId 索引）
       const resultByCallId = new Map<string, { callId: string; output: unknown }>();
 
-      // Step 4: 分区 —— 免批+可并行 / 免批+串行 / 需审批
+      // Step 5: 分区 —— 免批+可并行 / 免批+串行 / 需审批
       const toExecute = validatedCalls.filter(
-        (v) => !v.skipReason && v.call.toolName !== 'ask_user' && v.call.toolName !== 'create_artifact',
+        (v) => !v.skipReason && v.call.toolName !== 'ask_user',
       );
       // 审批规则：read_file/list_directory/load_skill 免审批；autoMode 下按等级自动批准
       const sessionApprovedApprovalKeys = new Set(task.approvedApprovalKeys ?? []);
@@ -2251,8 +2064,7 @@ function finishCancelled(
 
 function handleToolSideEffects(task: Task, call: ToolCall, result: ToolResult): ToolResult {
   if (!result.ok) return result;
-  // create_artifact 已由 handleCreateArtifactTool 接管，不再在此处理
-  if (call.toolName === 'apply_artifact') {
+  if (call.toolName === 'create_artifact' || call.toolName === 'apply_artifact') {
     const output = result.output as { artifactId?: unknown; path?: unknown } | undefined;
     const artifactId = typeof output?.artifactId === 'string' ? output.artifactId : undefined;
     const path = typeof output?.path === 'string' ? output.path : undefined;

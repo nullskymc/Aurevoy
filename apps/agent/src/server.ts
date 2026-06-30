@@ -61,7 +61,6 @@ import {
   markInterruptedTasksAfterRestart,
   prepareTaskForResume,
   resolveApproval,
-  resolveArtifactDecision,
   resolveClarificationAnswer,
   resolvePlanApproval,
   resumeAutoMode,
@@ -577,8 +576,6 @@ export async function buildServer(externalLogger?: Logger) {
       task.updatedAt = new Date().toISOString();
       taskStore.save(task);
       taskEvents.publish({ type: 'artifact_updated', taskId: task.id, artifact });
-      // 通知 Agent 循环：用户已做出产物确认/拒绝决策
-      resolveArtifactDecision(task.id, req.params.artifactId, status);
       return reply.send(artifact);
     },
   );
