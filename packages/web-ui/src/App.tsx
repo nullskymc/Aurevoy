@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import type {
   AgentEvent,
@@ -264,6 +264,15 @@ function App() {
   const [reasoning, setReasoning] = useState("");
   const previousPhaseRef = useRef<TaskPhase | null>(null);
   const { closeStream, openStream } = useSSEStream();
+
+  /** 统一清空所有实时/流式状态，避免切换任务时旧状态残留。 */
+  const clearLiveState = useCallback((): void => {
+    liveActivityRef.current.clear();
+    setLiveToolActivity([]);
+    setOutput("");
+    setReasoning("");
+    setLiveContentBlocks([]);
+  }, []);
   const {
     runtimeSettings,
     mcpServers,
@@ -511,10 +520,8 @@ function App() {
     setStatus(task.status);
     setPhase(task.phase);
     setPlan(task.plan);
-    setOutput("");
     setGoal("");
-    liveActivityRef.current.clear();
-    setLiveToolActivity([]);
+    clearLiveState();
     void refreshTaskTraces(task.id);
     resetMainScroll();
   }
@@ -589,10 +596,18 @@ function App() {
         break;
       case "message": {
         // 工具已转为历史消息 → 从 live map 移除（避免与历史区重复渲染）
-        if (event.message.role === "assistant") {
+        const isAssistant = event.message.role === "assistant";
+        const hasToolCalls = (event.message.toolCalls?.length ?? 0) > 0;
+        if (isAssistant) {
           for (const tc of event.message.toolCalls ?? []) {
             liveActivityRef.current.remove(tc.id);
           }
+        }
+        // 最终回复（不带 toolCalls 的 assistant message）已进历史区，
+        // 清空流式累积，避免 live tail 与历史区双写同一段内容。
+        if (isAssistant && !hasToolCalls) {
+          setOutput("");
+          setReasoning("");
         }
         setCurrentTask((previous) => {
           const previousMessages = previous?.messages ?? [];
@@ -692,16 +707,22 @@ function App() {
       case "content_blocks_added":
         setCurrentTask((previous) => {
           if (!previous) return previous;
-          const messages = (previous.messages ?? []).map((msg) =>
-            msg.id === event.messageId
-              ? { ...msg, contentBlocks: [...(msg.contentBlocks ?? []), ...event.blocks] }
-              : msg,
-          );
+          const messages = (previous.messages ?? []).map((msg) => {
+            if (msg.id !== event.messageId) return msg;
+            const existingIds = new Set((msg.contentBlocks ?? []).map((b) => b.id));
+            const newBlocks = event.blocks.filter((b) => !existingIds.has(b.id));
+            if (newBlocks.length === 0) return msg;
+            return { ...msg, contentBlocks: [...(msg.contentBlocks ?? []), ...newBlocks] };
+          });
           const nextTask = { ...previous, messages };
           updateTaskList(nextTask);
           return nextTask;
         });
-        setLiveContentBlocks((prev) => [...prev, ...event.blocks]);
+        setLiveContentBlocks((prev) => {
+          const existingIds = new Set(prev.map((b) => b.id));
+          const newBlocks = event.blocks.filter((b) => !existingIds.has(b.id));
+          return newBlocks.length > 0 ? [...prev, ...newBlocks] : prev;
+        });
         break;
       case "checkpoint_created":
         setCurrentTask((previous) => {
@@ -772,22 +793,19 @@ function App() {
       case "task_deleted":
         // 任务被删除（可能来自其他客户端或本端），关流并清理
         closeStream();
-        liveActivityRef.current.clear();
-        setLiveToolActivity([]);
         setTasks((prev) => prev.filter((t) => t.id !== event.taskId));
         if (currentTask?.id === event.taskId) {
           setCurrentTask(null);
-          setOutput("");
           setStatus(null);
           setPhase(null);
           setPlan([]);
           setBusy(false);
+          clearLiveState();
         }
         break;
       case "done":
         // 同步清除 output/reasoning，配合 setBusy(false) 在同一帧使 hasLiveTail 变为 false
-        setOutput("");
-        setReasoning("");
+        clearLiveState();
         setStatus(event.status);
         setPhase(
           event.status === "cancelled"
@@ -808,9 +826,6 @@ function App() {
                 : "finalizing",
         });
         closeStream();
-        liveActivityRef.current.clear();
-        setLiveToolActivity([]);
-        setLiveContentBlocks([]);
         void refreshRuntime();
         void refreshTaskTraces(event.taskId);
         // 拉取完整快照补全本轮线程（带重试，3 次指数退避）
@@ -840,10 +855,8 @@ function App() {
     if (!trimmed || busy) return;
 
     setBusy(true);
-  liveActivityRef.current.clear();
-    setLiveToolActivity([]);
+    clearLiveState();
     setTraces([]);
-    setOutput("");
     setPlan([]);
     setStatus("pending");
     setPhase("initializing");
@@ -883,10 +896,8 @@ function App() {
     if (!trimmed || busy || !currentTask) return;
 
     setBusy(true);
-  liveActivityRef.current.clear();
-    setLiveToolActivity([]);
+    clearLiveState();
     setTraces([]);
-    setOutput("");
     setPlan([]);
     setStatus("running");
     setPhase("initializing");
@@ -938,9 +949,7 @@ function App() {
     setStatus(null);
     setPhase(null);
     setPlan([]);
-    setOutput("");
-  liveActivityRef.current.clear();
-    setLiveToolActivity([]);
+    clearLiveState();
     setTraces([]);
     setGoal("");
     setDraftProjectId(projectId);
@@ -954,10 +963,8 @@ function App() {
 
     closeStream();
     setBusy(false);
-  liveActivityRef.current.clear();
-    setLiveToolActivity([]);
+    clearLiveState();
     setTraces([]);
-    setOutput("");
 
     try {
       const response = await revertTask(currentTask.id, messageId, mode);
@@ -979,10 +986,8 @@ function App() {
     if (!currentTask || busy) return;
 
     setBusy(true);
-  liveActivityRef.current.clear();
-    setLiveToolActivity([]);
+    clearLiveState();
     setTraces([]);
-    setOutput("");
     setPlan([]);
     setStatus("running");
     setPhase("initializing");
@@ -1346,11 +1351,11 @@ function App() {
       if (currentTask?.id === taskId) {
         closeStream();
         setCurrentTask(null);
-        setOutput("");
         setStatus(null);
         setPhase(null);
         setPlan([]);
         setBusy(false);
+        clearLiveState();
       }
     } catch (err) {
       setNotice(`${t("notice.deleteTaskFailed")}${err instanceof Error ? err.message : String(err)}`);
@@ -1613,6 +1618,7 @@ function App() {
                 busy={busy}
                 liveToolActivity={displayedLiveActivity}
                 liveContentBlocks={liveContentBlocks}
+                hasLiveTail={hasLiveTail}
                 defaultToolDetailsOpen={defaultToolDetailsOpen}
                 online={online}
                 onToolDecision={handleToolDecision}

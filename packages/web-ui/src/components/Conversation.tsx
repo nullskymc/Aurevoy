@@ -48,6 +48,8 @@ interface ConversationProps {
   busy: boolean;
   /** 当前运行轮次的实时工具活动（来自事件流） */
   liveToolActivity: ToolActivity[];
+  /** 是否显示 live tail（由父组件统一计算，避免与 hiddenAssistantId 逻辑不同步） */
+  hasLiveTail: boolean;
   /** 是否默认展开工具参数/结果详情。等待审批的工具始终展开。 */
   defaultToolDetailsOpen?: boolean;
   online?: boolean | null;
@@ -132,8 +134,8 @@ export function Conversation({
   plan,
   output,
   reasoning,
-  busy,
   liveToolActivity,
+  hasLiveTail,
   defaultToolDetailsOpen = false,
   onToolDecision,
   onClarificationAnswer,
@@ -178,9 +180,6 @@ export function Conversation({
       items,
     });
   }
-
-  const hasStreamingContent = output.trim().length > 0 || reasoning.trim().length > 0;
-  const hasLiveTail = busy || liveToolActivity.length > 0 || phase === "waiting_approval" || hasStreamingContent;
 
   // 只在实时运行/等待审批时跟随最新输出；历史回看保持自然阅读位置。
   useEffect(() => {

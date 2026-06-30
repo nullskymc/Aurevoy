@@ -411,7 +411,7 @@ export function buildLiveAgentRoundData(params: {
   const isFailed = phase === "failed" || phase === "cancelled";
 
   return {
-    id: `live-${Date.now()}`,
+    id: "live-tail",
     planStepGroups,
     summary,
     reasoning,
