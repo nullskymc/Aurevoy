@@ -223,12 +223,15 @@ struct AgentCommandSpec {
 /// Linux:   <exe_dir>/resources/
 fn resources_dir() -> Option<PathBuf> {
     let exe = env::current_exe().ok()?;
-    if cfg!(target_os = "macos") {
+    #[cfg(target_os = "macos")]
+    {
         // Aurevoy.app/Contents/MacOS/desktop → Aurevoy.app/Contents/Resources
         exe.parent()?.parent().map(|p| p.join("Resources"))
-    } else {
-        // Windows / Linux: resources/ 与可执行文件平级
-        exe.parent().map(|p| p.join("resources"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Windows / Linux: resources 与可执行文件平级（NSIS/AppImage/Deb 打包行为）
+        exe.parent().map(PathBuf::from)
     }
 }
 
