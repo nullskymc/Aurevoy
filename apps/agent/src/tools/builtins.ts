@@ -481,27 +481,66 @@ toolRegistry.register({
   },
 });
 
-// ---- create_artifact（safe）：由 loop 接管，支持用户确认/拒绝 ----
+// ---- create_artifact（dangerous）：直接写入工作区文件，同时记录产物 ----
 toolRegistry.register({
   descriptor: {
     name: 'create_artifact',
-    description: '创建一个可预览、可确认的任务产物草稿。不会写入真实文件；默认需要用户确认后才会返回结果。若产物仅用于进度跟踪且无需用户交互，可传 requireConfirmation=false。确认后的产物可通过 apply_artifact 写入工作区。',
+    description: '创建文件并写入工作区，同时生成产物记录（可在产物面板预览）。一次性完成创建+写入，无需额外确认或二次调用 apply_artifact。',
     inputSchema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: '产物名称，例如 SUMMARY.md 或 调研报告' },
-        content: { type: 'string', description: '产物正文内容' },
-        type: { type: 'string', enum: ['text', 'file', 'diff', 'url'], description: '产物类型，默认 text' },
+        name: { type: 'string', description: '产物名称，例如 SUMMARY.md' },
+        content: { type: 'string', description: '文件正文内容' },
+        path: { type: 'string', description: '相对工作区的写入路径，例如 output/report.md' },
+        type: { type: 'string', enum: ['text', 'file', 'diff', 'url'], description: '产物类型，默认 file' },
         mimeType: { type: 'string', description: 'MIME 类型，例如 text/markdown' },
-        requireConfirmation: { type: 'boolean', description: '是否需要用户确认（默认 true）。设为 false 时仅创建草稿不等待确认。' },
       },
-      required: ['name', 'content'],
+      required: ['name', 'content', 'path'],
       additionalProperties: false,
     },
-    riskLevel: 'safe',
+    riskLevel: 'dangerous',
   },
-  async execute() {
-    throw new Error('create_artifact 由 Agent 循环接管，不能直接执行');
+  async execute(args, context) {
+    const { root, externalPaths: extPaths } = rootAndExternals(context);
+    const name = readNonEmptyString(args.name, 'name');
+    const content = typeof args.content === 'string' ? args.content : '';
+    const path = readNonEmptyString(args.path, 'path');
+    const type =
+      args.type === 'file' || args.type === 'diff' || args.type === 'url'
+        ? args.type as 'file' | 'diff' | 'url'
+        : 'file' as const;
+    const mimeType = typeof args.mimeType === 'string' ? args.mimeType : undefined;
+
+    const file = resolveInWorkspace(path, root, extPaths);
+    if (type === 'url') throw new Error('URL 类型产物不需要写入文件，请直接告知用户链接');
+    await fs.mkdir(join(file, '..'), { recursive: true });
+    await assertRealPathInside(file, root, extPaths);
+    await fs.writeFile(file, content, 'utf8');
+
+    const artifact = {
+      id: randomUUID(),
+      type,
+      name,
+      content: type === 'diff' ? content.slice(0, 100000) : content,
+      mimeType,
+      sourceCallId: context?.callId,
+      status: 'applied' as const,
+      appliedAt: new Date().toISOString(),
+      appliedPath: relative(root, file),
+      createdAt: new Date().toISOString(),
+    };
+
+    if (context?.task) {
+      context.task.artifacts = [...(context.task.artifacts ?? []), artifact];
+      context.publishEvent?.({ type: 'artifact_created', taskId: context.taskId, artifact });
+    }
+
+    return {
+      artifactId: artifact.id,
+      name,
+      path: relative(root, file),
+      bytesWritten: Buffer.byteLength(content),
+    };
   },
 });
 
@@ -527,11 +566,11 @@ toolRegistry.register({
   },
 });
 
-// ---- apply_artifact（dangerous）----
+// ---- apply_artifact（dangerous）：将已有 artifact 写入工作区文件 ----
 toolRegistry.register({
   descriptor: {
     name: 'apply_artifact',
-    description: '将已有 artifact 写入工作区内的目标文件。该工具会覆盖目标文件，必须先获得用户审批。',
+    description: '将已有 artifact 写入工作区内的目标文件（覆盖）。通常 create_artifact 已直接写入文件；仅在需要将已有产物写入不同路径时使用此工具。',
     inputSchema: {
       type: 'object',
       properties: {

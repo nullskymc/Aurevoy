@@ -75,8 +75,9 @@ async function caseAskUserTimeout() {
 async function caseCreateArtifact() {
   const result = await runTask('M6_ARTIFACT create draft artifact');
   const artifact = result.task.artifacts?.[0];
-  assert(artifact?.status === 'draft', 'artifact 草稿未创建');
+  assert(artifact?.status === 'applied', 'artifact 未直接应用');
   assert(artifact.content.includes('M6 report'), 'artifact 内容不正确');
+  assert(artifact.appliedPath === 'output/SUMMARY.md', 'artifact 写入路径不正确');
 }
 
 async function caseConfirmArtifact() {
@@ -248,7 +249,7 @@ function chooseFirstTool(userText) {
     return {
       id: 'call_artifact',
       name: 'create_artifact',
-      args: { name: 'SUMMARY.md', content: '# M6 report\n\nGenerated artifact.', type: 'file', mimeType: 'text/markdown' },
+      args: { name: 'SUMMARY.md', content: '# M6 report\n\nGenerated artifact.', path: 'output/SUMMARY.md', type: 'file', mimeType: 'text/markdown' },
     };
   }
   if (userText.includes('M6_BUDGET')) {
