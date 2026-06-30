@@ -20,11 +20,24 @@ export function useTaskState() {
     });
   }
 
+  /** 会影响 sidebar 排序/展示的关键字段 */
+  const REORDER_TASK_KEYS: (keyof Task)[] = [
+    'status',
+    'phase',
+    'plan',
+    'messages',
+    'updatedAt',
+    'goal',
+  ];
+
   function patchCurrentTask(patch: Partial<Task>): void {
     setCurrentTask((previous) => {
       if (!previous) return previous;
       const nextTask = { ...previous, ...patch };
-      updateTaskList(nextTask);
+      const shouldReorder = REORDER_TASK_KEYS.some((key) => key in patch);
+      if (shouldReorder) {
+        updateTaskList(nextTask);
+      }
       return nextTask;
     });
   }
