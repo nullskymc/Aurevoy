@@ -3,6 +3,7 @@ import { config, parseMcpServers, parseNumber } from '../config.js';
 import { resetProviderCache } from '../llm/provider.js';
 import { resetEmbeddingCache } from '../embedding/provider.js';
 import { settingsStore } from '../store/db.js';
+import { resetPythonCache } from './python-runtime.js';
 
 const SETTING_KEYS = {
   llmProvider: 'llm.provider',
@@ -27,6 +28,7 @@ const SETTING_KEYS = {
   embeddingModel: 'embedding.model',
   embeddingBaseUrl: 'embedding.baseUrl',
   embeddingApiKey: 'embedding.apiKey',
+  pythonPath: 'python.path',
 } as const;
 
 const DEFAULT_CLEANUP_POLICY_DAYS = 30;
@@ -57,6 +59,12 @@ export function loadPersistedSettings(): void {
   const embKey = entries[SETTING_KEYS.embeddingApiKey];
   if (embKey) {
     config.embedding.apiKey = embKey;
+  }
+
+  // Python 运行时路径（用户手动指定）
+  const pythonPathSetting = entries[SETTING_KEYS.pythonPath];
+  if (pythonPathSetting) {
+    config.python.userPath = pythonPathSetting;
   }
 
   const envKey = process.env.AUREVOY_LLM_API_KEY?.trim();
@@ -116,6 +124,7 @@ export function readRuntimeSettings(): RuntimeSettings {
       baseUrl: config.embedding.baseUrl,
       apiKeyConfigured: config.embedding.apiKey.trim().length > 0,
     },
+    pythonPath: config.python.userPath,
   };
 }
 
@@ -236,6 +245,17 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
       }
     }
     resetEmbeddingCache();
+  }
+
+  if (body.pythonPath !== undefined) {
+    config.python.userPath = body.pythonPath.trim();
+    if (config.python.userPath) {
+      settingsStore.set(SETTING_KEYS.pythonPath, config.python.userPath);
+    } else {
+      settingsStore.delete(SETTING_KEYS.pythonPath);
+    }
+    // 用户修改了 Python 路径，清除系统检测缓存以便下次重新判定
+    resetPythonCache();
   }
 
   if (providerChanged) resetProviderCache();

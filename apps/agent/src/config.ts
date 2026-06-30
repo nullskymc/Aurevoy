@@ -169,14 +169,12 @@ export const config = {
       .filter(Boolean),
   },
 
-  /** Python 运行时配置（python-build-standalone，解压即用，不依赖系统 Python）。 */
+  /** Python 运行时配置（不再从网络下载，仅使用本地 Python 创建 venv）。 */
   python: {
-    /** Python 运行时安装目录。默认 ~/.aurevoy/python，可通过环境变量覆盖。 */
-    home: process.env.AUREVOY_PYTHON_HOME ?? resolve(homedir(), '.aurevoy', 'python'),
-    /** 是否在启动时自动检查并按需下载 Python（默认 true，首次启动需网络 ~40MB）。 */
-    autoSetup: process.env.AUREVOY_PYTHON_AUTO_SETUP !== 'false',
-    /** 目标 Python 主版本（用于下载与校验）。 */
-    version: process.env.AUREVOY_PYTHON_VERSION ?? '3.13',
+    /** venv 目录。默认 ~/.aurevoy/venv，可通过环境变量覆盖。 */
+    venvDir: process.env.AUREVOY_PYTHON_VENV_DIR ?? resolve(homedir(), '.aurevoy', 'venv'),
+    /** 用户指定的 Python 解释器路径（前端设置 Python bin 路径时写入）；留空则自动检测系统 Python。 */
+    userPath: process.env.AUREVOY_PYTHON_PATH ?? '',
   },
 
   /**

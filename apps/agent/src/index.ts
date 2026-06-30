@@ -8,7 +8,7 @@ import { registerLoadSkillTool } from './tools/load-skill.js';
 import { registerInstallSkillTool } from './tools/install-skill.js';
 import { closeMcpTools, initializeMcpTools } from './tools/mcp.js';
 import { loadPersistedSettings } from './runtime/settings.js';
-import { ensurePythonReady, getPythonPath, getPythonVersion, isPythonInstalled } from './runtime/python-runtime.js';
+import { ensurePythonReady, getPythonPath, getPythonVersion, isPythonInstalled, findSystemPython } from './runtime/python-runtime.js';
 import { createLogger, getLogger } from './logging/logger.js';
 import { skillRegistry } from './skills/registry.js';
 import { startSkillWatcher } from './skills/reload.js';
@@ -26,21 +26,6 @@ async function main() {
   log.info({ provider: config.llm.provider, model: config.llm.model, host: config.host, port: config.port, db: config.dbPath }, '加载配置完成');
 
   loadPersistedSettings();
-
-  if (config.python.autoSetup) {
-    if (!isPythonInstalled()) {
-      log.info('Python 运行时未安装，正在自动下载...');
-      try {
-        await ensurePythonReady();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.warn({ err: message }, 'Python 运行时自动安装失败，MCP Python 服务器和 execute_command 中的 python3 将不可用');
-      }
-    }
-    if (isPythonInstalled()) {
-      log.info({ python: getPythonPath(), version: getPythonVersion() }, 'Python 运行时就绪');
-    }
-  }
 
   skillRegistry.load();
   registerLoadSkillTool();
@@ -80,6 +65,30 @@ async function main() {
   try {
     await app.listen({ host: config.host, port: config.port });
     log.info(`Aurevoy Agent 引擎已启动: http://${config.host}:${config.port}`);
+
+    // 后台异步准备 Python 环境（检测系统 Python、创建 venv）
+    if (isPythonInstalled()) {
+      log.info({ python: getPythonPath(), version: getPythonVersion() }, 'Python 运行时就绪');
+    } else {
+      log.info('Python venv 未就绪，正在后台准备...');
+      ensurePythonReady()
+        .then((pyPath) => {
+          if (pyPath) {
+            log.info({ python: pyPath, version: getPythonVersion() }, 'Python 运行时就绪');
+          } else {
+            const sysPy = findSystemPython();
+            if (sysPy) {
+              log.warn({ systemPython: sysPy }, '检测到系统 Python 但 venv 创建失败');
+            } else {
+              log.info('未检测到系统 Python，请在设置中配置 Python 解释器路径');
+            }
+          }
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          log.warn({ err: message }, 'Python 环境准备失败');
+        });
+    }
 
     // M8: 启动后延迟执行一轮 Dreams 维护（不阻塞启动）
     setTimeout(async () => {
