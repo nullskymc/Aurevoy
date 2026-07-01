@@ -939,6 +939,12 @@ export interface RuntimeSettings {
   };
   /** 用户指定的 Python 解释器路径（空则表示使用系统自动检测） */
   pythonPath: string;
+  /** Web 搜索配置 */
+  search: {
+    provider: 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom';
+    baseUrl: string;
+    apiKeyConfigured: boolean;
+  };
 }
 
 export interface UpdateRuntimeSettingsRequest {
@@ -972,6 +978,13 @@ export interface UpdateRuntimeSettingsRequest {
   }>;
   /** 用户指定的 Python 解释器路径 */
   pythonPath?: string;
+  /** Web 搜索配置 */
+  search?: Partial<{
+    provider: 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom';
+    baseUrl: string;
+    /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
+    apiKey: string;
+  }>;
 }
 
 export interface ModelListResponse {

@@ -1234,6 +1234,11 @@ function App() {
         baseUrl: draft.embeddingBaseUrl,
         ...(draft.embeddingApiKey ? { apiKey: draft.embeddingApiKey } : {}),
       },
+      search: {
+        provider: draft.searchProvider as 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom',
+        baseUrl: draft.searchBaseUrl,
+        ...(draft.searchApiKey ? { apiKey: draft.searchApiKey } : {}),
+      },
     };
     setSettingsSaving(true);
     void updateSettings(body)

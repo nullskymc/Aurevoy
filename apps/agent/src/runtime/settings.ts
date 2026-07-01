@@ -29,6 +29,9 @@ const SETTING_KEYS = {
   embeddingBaseUrl: 'embedding.baseUrl',
   embeddingApiKey: 'embedding.apiKey',
   pythonPath: 'python.path',
+  searchProvider: 'search.provider',
+  searchBaseUrl: 'search.baseUrl',
+  searchApiKey: 'search.apiKey',
 } as const;
 
 const DEFAULT_CLEANUP_POLICY_DAYS = 30;
@@ -65,6 +68,19 @@ export function loadPersistedSettings(): void {
   const pythonPathSetting = entries[SETTING_KEYS.pythonPath];
   if (pythonPathSetting) {
     config.python.userPath = pythonPathSetting;
+  }
+
+  // Web 搜索配置
+  const searchProvider = entries[SETTING_KEYS.searchProvider];
+  if (searchProvider === 'duckduckgo_lite' || searchProvider === 'tavily' || searchProvider === 'searxng' || searchProvider === 'custom') {
+    config.search.provider = searchProvider;
+  }
+  if (entries[SETTING_KEYS.searchBaseUrl]) {
+    config.search.baseUrl = entries[SETTING_KEYS.searchBaseUrl];
+  }
+  const searchKey = entries[SETTING_KEYS.searchApiKey];
+  if (searchKey) {
+    config.search.apiKey = searchKey;
   }
 
   const envKey = process.env.AUREVOY_LLM_API_KEY?.trim();
@@ -125,6 +141,11 @@ export function readRuntimeSettings(): RuntimeSettings {
       apiKeyConfigured: config.embedding.apiKey.trim().length > 0,
     },
     pythonPath: config.python.userPath,
+    search: {
+      provider: config.search.provider,
+      baseUrl: config.search.baseUrl,
+      apiKeyConfigured: config.search.apiKey.trim().length > 0,
+    },
   };
 }
 
@@ -256,6 +277,26 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     }
     // 用户修改了 Python 路径，清除系统检测缓存以便下次重新判定
     resetPythonCache();
+  }
+
+  // Web 搜索配置
+  if (body.search) {
+    if (body.search.provider === 'duckduckgo_lite' || body.search.provider === 'tavily' || body.search.provider === 'searxng' || body.search.provider === 'custom') {
+      config.search.provider = body.search.provider;
+      settingsStore.set(SETTING_KEYS.searchProvider, config.search.provider);
+    }
+    if (body.search.baseUrl !== undefined) {
+      config.search.baseUrl = body.search.baseUrl;
+      settingsStore.set(SETTING_KEYS.searchBaseUrl, config.search.baseUrl);
+    }
+    if (body.search.apiKey !== undefined) {
+      config.search.apiKey = body.search.apiKey;
+      if (body.search.apiKey.trim().length > 0) {
+        settingsStore.set(SETTING_KEYS.searchApiKey, body.search.apiKey, true);
+      } else {
+        settingsStore.delete(SETTING_KEYS.searchApiKey);
+      }
+    }
   }
 
   if (providerChanged) resetProviderCache();

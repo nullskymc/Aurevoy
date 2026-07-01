@@ -41,6 +41,9 @@ interface SettingsDraft {
   embeddingModel: string;
   embeddingBaseUrl: string;
   embeddingApiKey: string;
+  searchProvider: string;
+  searchBaseUrl: string;
+  searchApiKey: string;
 }
 
 interface SettingsPanelProps {
@@ -72,10 +75,10 @@ interface SettingsPanelProps {
   onConnectionChange?: () => void;
 }
 
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb" | "search";
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
-const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb"];
+const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search"];
 
 /** 每次调用都会重新计算 t()，确保语言切换后侧边栏标签即时更新 */
 function getSettingsGroups(): Array<{
@@ -95,6 +98,7 @@ function getSettingsGroups(): Array<{
     label: t("settings.group.integration"),
     items: [
       { id: "mcp", label: t("settings.nav.mcp"), icon: "server" },
+      { id: "search", label: t("settings.nav.search"), icon: "search" },
     ],
   },
   {
@@ -108,7 +112,7 @@ function getSettingsGroups(): Array<{
 ];
 }
 
-type SettingsIconName = "appearance" | "database" | "kb" | "memory" | "server" | "sliders" | "spark";
+type SettingsIconName = "appearance" | "database" | "kb" | "memory" | "search" | "server" | "sliders" | "spark";
 
 export function SettingsPanel({
   settings,
@@ -288,6 +292,15 @@ export function SettingsPanel({
               settings={settings}
             />
           )}
+
+          {activeSection === "search" && (
+            <SearchSettings
+              draft={draft}
+              saving={saving}
+              onDraftChange={setDraft}
+              onSave={onSave}
+            />
+          )}
         </div>
       </main>
     </section>
@@ -360,6 +373,15 @@ function SettingsNavIcon({ name }: { name: SettingsIconName }) {
       <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
         <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.35" fill="none" />
         <path d="M10 6.5V10l2.5 1.5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  if (name === "search") {
+    return (
+      <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+        <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.35" fill="none" />
+        <path d="M13 13l3.5 3.5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
       </svg>
     );
   }
@@ -1241,6 +1263,84 @@ return (
   );
 }
 
+function SearchSettings({
+  draft,
+  saving,
+  onDraftChange,
+  onSave,
+}: {
+  draft: SettingsDraft;
+  saving: boolean;
+  onDraftChange: (draft: SettingsDraft) => void;
+  onSave: (draft: SettingsDraft) => void;
+}) {
+  return (
+    <>
+      <SettingsGroup title={t("settings.searchTitle")}>
+        <SettingsActionRow
+          title={t("settings.searchProviderTitle")}
+          description={t("settings.searchProviderDesc")}
+          control={
+            <select
+              className="settings-inline-select"
+              value={draft.searchProvider}
+              onChange={(event) => onDraftChange({ ...draft, searchProvider: event.currentTarget.value })}
+            >
+              <option value="duckduckgo_lite">{t("settings.searchProviderDdg")}</option>
+              <option value="tavily">Tavily</option>
+              <option value="searxng">SearXNG</option>
+              <option value="custom">{t("settings.searchProviderCustom")}</option>
+            </select>
+          }
+        />
+        {draft.searchProvider !== "duckduckgo_lite" && (
+          <>
+            <SettingsActionRow
+              title={t("settings.searchBaseUrlTitle")}
+              description={t("settings.searchBaseUrlDesc")}
+              control={
+                <input
+                  className="settings-inline-input"
+                  value={draft.searchBaseUrl}
+                  placeholder={t("settings.searchBaseUrlPlaceholder")}
+                  onChange={(event) => onDraftChange({ ...draft, searchBaseUrl: event.currentTarget.value })}
+                />
+              }
+            />
+            <SettingsActionRow
+              title={t("settings.searchApiKeyTitle")}
+              description={t("settings.searchApiKeyDesc")}
+              control={
+                <input
+                  className="settings-inline-input"
+                  type="password"
+                  value={draft.searchApiKey}
+                  placeholder={t("settings.apiKeyKeepPlaceholder")}
+                  onChange={(event) => onDraftChange({ ...draft, searchApiKey: event.currentTarget.value })}
+                />
+              }
+            />
+          </>
+        )}
+        <SettingsActionRow
+          title={t("settings.saveProviderTitle")}
+          description={t("settings.saveProviderDesc")}
+          control={
+            <button
+              type="button"
+              className="settings-primary-btn"
+              disabled={saving}
+              onClick={() => onSave(draft)}
+            >
+              {saving ? t("settings.saving") : t("action.save")}
+            </button>
+          }
+        />
+      </SettingsGroup>
+    </>
+  );
+}
+
 function SettingsGroup({ children, title }: { children: React.ReactNode; title: string }) {
   return (
     <section className="settings-content-group">
@@ -1375,6 +1475,9 @@ function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
     embeddingModel: settings?.embedding?.model ?? "nomic-embed-text",
     embeddingBaseUrl: settings?.embedding?.baseUrl || settings?.llm.baseUrl || "",
     embeddingApiKey: "",
+    searchProvider: settings?.search?.provider ?? "duckduckgo_lite",
+    searchBaseUrl: settings?.search?.baseUrl ?? "",
+    searchApiKey: "",
   };
 }
 

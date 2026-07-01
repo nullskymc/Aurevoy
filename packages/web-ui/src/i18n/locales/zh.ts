@@ -112,6 +112,18 @@ export const zh = {
   "settings.embeddingApiKeyTitle": "API Key",
   "settings.embeddingApiKeyDesc": "如使用 Ollama 本地模型可不填",
 
+  // 搜索配置
+  "settings.searchTitle": "Web 搜索",
+  "settings.searchProviderTitle": "搜索后端",
+  "settings.searchProviderDesc": "web_search 工具使用的搜索引擎。DuckDuckGo Lite 免费无需配置，但可能被限流；Tavily / SearXNG 更稳定，需 API Key 或自部署。",
+  "settings.searchProviderDdg": "DuckDuckGo Lite（免费）",
+  "settings.searchProviderCustom": "自定义 JSON API",
+  "settings.searchBaseUrlTitle": "API 地址",
+  "settings.searchBaseUrlDesc": "SearXNG 或自定义搜索 API 的 Base URL。可用 {{query}} 占位。",
+  "settings.searchBaseUrlPlaceholder": "http://localhost:8080/search?format=json&q={{query}}",
+  "settings.searchApiKeyTitle": "API Key",
+  "settings.searchApiKeyDesc": "Tavily 或自定义 API 的密钥。DuckDuckGo Lite 无需填写。",
+
   // 产物视图
   "artifact.empty.title": "暂无产物",
   "artifact.empty.hint": "Agent 创建的文件和生成的内容会出现在这里",
@@ -346,6 +358,7 @@ export const zh = {
   "settings.nav.mcp": "MCP 服务器",
   "settings.nav.data": "本地数据",
   "settings.nav.memory": "长期记忆",
+  "settings.nav.search": "搜索配置",
   "settings.unitDays": "天",
   "settings.notConnected": "未连接",
   "settings.saving": "保存中",

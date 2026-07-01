@@ -192,6 +192,13 @@ export const config = {
     apiKey: process.env.AUREVOY_EMBEDDING_API_KEY ?? '',
     timeoutMs: parseNumber(process.env.AUREVOY_EMBEDDING_TIMEOUT_MS, 10000),
   },
+
+  /** Web 搜索配置 */
+  search: {
+    provider: (process.env.AUREVOY_SEARCH_PROVIDER ?? 'duckduckgo_lite') as 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom',
+    baseUrl: process.env.AUREVOY_SEARCH_BASE_URL ?? '',
+    apiKey: process.env.AUREVOY_SEARCH_API_KEY ?? '',
+  },
 };
 
 /** 解析数字环境变量，非法或缺失时回退默认值（避免 NaN 污染配置）。 */
