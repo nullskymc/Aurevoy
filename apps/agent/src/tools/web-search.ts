@@ -2,17 +2,16 @@
  * web_search 工具。
  *
  * 执行网页搜索并返回结构化结果（标题、摘要、URL）。
- * 默认使用 DuckDuckGo HTML 搜索（免费，无需 API key），
- * 可通过环境变量配置其他搜索后端。
+ * 支持多种搜索后端，可在设置中切换，默认使用 DuckDuckGo Lite（免费、无需配置）。
  */
-
 import { toolRegistry } from './registry.js';
+import { config } from '../config.js';
 
 const SEARCH_TIMEOUT_MS = 15000;
 const MAX_RESULTS = 10;
 
-/** DuckDuckGo HTML 搜索结果的正则 */
-const DDG_RESULT_RE = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+/** DuckDuckGo Lite 搜索结果的正则 */
+const DDG_LITE_RESULT_RE = /<a[^>]*class="result-link"[^>]*href="[^"]*uddg=([^"&]+)[^"]*"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<td class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
 
 toolRegistry.register({
   descriptor: {
@@ -47,104 +46,182 @@ toolRegistry.register({
       20,
     );
 
-    const searchUrl = buildSearchUrl(query);
+    const provider = config.search.provider;
 
-    let res: Response;
     try {
-      res = await fetch(searchUrl, {
-        method: 'GET',
-        headers: {
-          'User-Agent': 'Aurevoy/1.0 (web-search)',
-          'Accept': 'text/html,application/xhtml+xml',
-        },
-        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-      });
+      switch (provider) {
+        case 'duckduckgo_lite':
+          return await searchDuckDuckGoLite(query, maxResults);
+        case 'tavily':
+          return await searchTavily(query, maxResults);
+        case 'searxng':
+          return await searchJson(query, maxResults, 'SearXNG');
+        case 'custom':
+          return await searchJson(query, maxResults, '自定义');
+        default:
+          return await searchDuckDuckGoLite(query, maxResults);
+      }
     } catch (err) {
       return {
         error: `搜索请求失败: ${err instanceof Error ? err.message : String(err)}`,
         query,
       };
     }
-
-    if (!res.ok) {
-      return {
-        error: `搜索服务返回 ${res.status}`,
-        query,
-        results: [],
-      };
-    }
-
-    const html = await res.text();
-    const results = parseSearchResults(html, query).slice(0, maxResults);
-
-    return {
-      query,
-      resultCount: results.length,
-      searchedAt: new Date().toISOString(),
-      results,
-    };
   },
 });
 
-/** 构建搜索 URL。默认使用 DuckDuckGo HTML 搜索。 */
-function buildSearchUrl(query: string): string {
-  const base =
-    process.env.AUREVOY_SEARCH_BASE_URL ??
-    'https://html.duckduckgo.com/html/';
-  return `${base}?q=${encodeURIComponent(query)}`;
-}
+// ===== DuckDuckGo Lite =====
 
-/** 从 HTML 中解析搜索结果。 */
-function parseSearchResults(
-  html: string,
-  _query: string,
-): Array<{ title: string; snippet: string; url: string }> {
-  const results: Array<{ title: string; snippet: string; url: string }> = [];
+async function searchDuckDuckGoLite(
+  query: string,
+  maxResults: number,
+): Promise<Record<string, unknown>> {
+  const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Accept': 'text/html',
+    },
+    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+  });
 
-  // DuckDuckGo HTML 结果格式
-  const matches = html.matchAll(DDG_RESULT_RE);
-  for (const match of matches) {
-    const rawUrl = match[1];
-    const title = stripHtml(match[2]).trim();
-    const snippet = stripHtml(match[3]).trim();
-
-    if (!title || !rawUrl) continue;
-
-    // 跳过 DuckDuckGo 内部链接
-    const url = decodeURIEntity(rawUrl);
-    if (url.includes('duckduckgo.com') && !url.includes('/html/')) continue;
-
-    results.push({ title, snippet, url });
+  if (!res.ok) {
+    return { error: `DuckDuckGo 返回 ${res.status}`, query, results: [] };
   }
 
-  // 如果未匹配到标准结果，尝试更宽松的匹配
-  if (results.length === 0) {
-    const fallback = parseFallbackResults(html);
-    results.push(...fallback);
+  const html = await res.text();
+
+  // 检测反爬/CAPTCHA
+  if (html.includes('anomaly-modal') || html.includes('challenge-form')) {
+    return { error: 'DuckDuckGo 要求人机验证，请切换搜索后端', query, results: [] };
+  }
+
+  const results = parseDdgLiteResults(html).slice(0, maxResults);
+
+  return {
+    query,
+    resultCount: results.length,
+    searchedAt: new Date().toISOString(),
+    results,
+  };
+}
+
+function parseDdgLiteResults(html: string): Array<{ title: string; snippet: string; url: string }> {
+  const results: Array<{ title: string; snippet: string; url: string }> = [];
+  const matches = html.matchAll(DDG_LITE_RESULT_RE);
+
+  for (const match of matches) {
+    const encodedUrl = match[1];
+    const title = stripHtml(decodeURIEntity(match[2])).trim();
+    const snippet = stripHtml(match[3]).trim();
+
+    if (!title) continue;
+
+    let url = encodedUrl;
+    try {
+      url = decodeURIComponent(encodedUrl);
+    } catch { /* keep encoded */ }
+
+    if (url.includes('duckduckgo.com')) continue;
+
+    results.push({ title, snippet, url });
   }
 
   return results;
 }
 
-/** 宽松回退解析：匹配任意 <a> 标签 + 相邻文本。 */
-function parseFallbackResults(
-  html: string,
-): Array<{ title: string; snippet: string; url: string }> {
-  const results: Array<{ title: string; snippet: string; url: string }> = [];
-  // 匹配常见的搜索结果模式: <a href="...">title</a>...snippet...
-  const re = /<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>([^<]+)<\/a>\s*([^<]{20,300}?)(?:<br|<a|<div|$)/gi;
-  const matches = html.matchAll(re);
-  for (const match of matches) {
-    const url = decodeURIEntity(match[1]);
-    if (url.includes('duckduckgo.com')) continue;
-    results.push({
-      title: stripHtml(match[2]).trim(),
-      snippet: stripHtml(match[3]).trim().slice(0, 300),
-      url,
-    });
+// ===== Tavily =====
+
+async function searchTavily(
+  query: string,
+  maxResults: number,
+): Promise<Record<string, unknown>> {
+  const apiKey = config.search.apiKey.trim();
+  if (!apiKey) return { error: 'Tavily API Key 未配置，请在设置中填入', query, results: [] };
+
+  const res = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      query,
+      max_results: maxResults,
+      search_depth: 'basic',
+      include_answer: false,
+    }),
+    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+  });
+
+  if (!res.ok) {
+    return { error: `Tavily 返回 ${res.status}`, query, results: [] };
   }
-  return results.slice(0, MAX_RESULTS);
+
+  const data = await res.json() as { results?: Array<{ title: string; content: string; url: string }> };
+  const results = (data.results ?? []).map(r => ({
+    title: r.title,
+    snippet: r.content,
+    url: r.url,
+  }));
+
+  return {
+    query,
+    resultCount: results.length,
+    searchedAt: new Date().toISOString(),
+    results,
+  };
 }
+
+// ===== SearXNG / Custom JSON API =====
+
+async function searchJson(
+  query: string,
+  maxResults: number,
+  label: string,
+): Promise<Record<string, unknown>> {
+  const baseUrl = config.search.baseUrl.trim();
+  if (!baseUrl) return { error: `${label}搜索 URL 未配置，请在设置中填入 API 地址`, query, results: [] };
+
+  const url = baseUrl.includes('{{query}}')
+    ? baseUrl.replace('{{query}}', encodeURIComponent(query))
+    : `${baseUrl}?q=${encodeURIComponent(query)}&format=json`;
+
+  const headers: Record<string, string> = {
+    'User-Agent': 'Aurevoy/1.0 (web-search)',
+    'Accept': 'application/json',
+  };
+  const apiKey = config.search.apiKey.trim();
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers,
+    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+  });
+
+  if (!res.ok) {
+    return { error: `${label}返回 ${res.status}`, query, results: [] };
+  }
+
+  const data = await res.json() as Record<string, unknown>;
+  const rawResults = (Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : []) as Array<Record<string, unknown>>;
+  const results = rawResults.map(r => ({
+    title: String(r.title ?? r.name ?? ''),
+    snippet: String(r.content ?? r.snippet ?? r.description ?? ''),
+    url: String(r.url ?? r.link ?? ''),
+  })).filter(r => r.title || r.url);
+
+  return {
+    query,
+    resultCount: results.length,
+    searchedAt: new Date().toISOString(),
+    results: results.slice(0, maxResults),
+  };
+}
+
+// ===== 工具函数 =====
 
 function stripHtml(raw: string): string {
   return raw
@@ -155,19 +232,18 @@ function stripHtml(raw: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#x27;/g, "'")
     .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&rsquo;/g, "'")
+    .replace(/&lsquo;/g, "'")
+    .replace(/&rdquo;/g, '"')
+    .replace(/&ldquo;/g, '"')
+    .replace(/&hellip;/g, '…')
+    .replace(/&#x2F;/g, '/')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 function decodeURIEntity(raw: string): string {
-  // DuckDuckGo 使用 //duckduckgo.com/l/?uddg=... 格式的重定向 URL
-  const uddgMatch = raw.match(/uddg=([^&]+)/);
-  if (uddgMatch) {
-    try {
-      return decodeURIComponent(uddgMatch[1]);
-    } catch {
-      return raw;
-    }
-  }
-  return raw;
+  return raw
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
 }

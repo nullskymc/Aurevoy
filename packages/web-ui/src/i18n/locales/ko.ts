@@ -346,7 +346,28 @@ export const ko = {
   "settings.nav.mcp": "MCP 서버",
   "settings.nav.data": "로컬 데이터",
   "settings.nav.memory": "장기 기억",
-  "settings.unitDays": "일",
+  "settings.nav.search": "검색",
+
+  // search settings
+  "settings.searchTitle": "웹 검색",
+
+  "settings.searchProviderTitle": "검색 백엔드",
+
+  "settings.searchProviderDesc": "web_search 도구가 사용하는 검색 엔진입니다. DuckDuckGo Lite는 무료이며 설정이 필요 없습니다. Tavily/SearXNG는 더 안정적이지만 API 키 또는 자체 호스팅이 필요합니다.",
+
+  "settings.searchProviderDdg": "DuckDuckGo Lite (무료)",
+
+  "settings.searchProviderCustom": "사용자 정의 JSON API",
+
+  "settings.searchBaseUrlTitle": "API URL",
+
+  "settings.searchBaseUrlDesc": "SearXNG 또는 사용자 정의 검색 API의 기본 URL입니다. {{query}} 플레이스홀더를 지원합니다.",
+
+  "settings.searchBaseUrlPlaceholder": "http://localhost:8080/search?format=json&q={{query}}",
+
+  "settings.searchApiKeyTitle": "API 키",
+
+  "settings.searchApiKeyDesc": "Tavily 또는 사용자 정의 API의 키입니다. DuckDuckGo Lite는 필요하지 않습니다.",  "settings.unitDays": "일",
   "settings.notConnected": "연결되지 않음",
   "settings.saving": "저장 중",
   // General

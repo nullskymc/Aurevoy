@@ -346,7 +346,28 @@ export const ja = {
   "settings.nav.mcp": "MCPサーバー",
   "settings.nav.data": "ローカルデータ",
   "settings.nav.memory": "長期記憶",
-  "settings.unitDays": "日",
+  "settings.nav.search": "検索",
+
+  // search settings
+  "settings.searchTitle": "Web検索",
+
+  "settings.searchProviderTitle": "検索バックエンド",
+
+  "settings.searchProviderDesc": "web_searchツールが使用する検索エンジンです。DuckDuckGo Liteは無料で設定不要です。Tavily / SearXNGはより安定していますが、APIキーまたは自己ホスティングが必要です。",
+
+  "settings.searchProviderDdg": "DuckDuckGo Lite（無料）",
+
+  "settings.searchProviderCustom": "カスタムJSON API",
+
+  "settings.searchBaseUrlTitle": "API URL",
+
+  "settings.searchBaseUrlDesc": "SearXNGまたはカスタム検索APIのベースURLです。{{query}}プレースホルダーをサポートします。",
+
+  "settings.searchBaseUrlPlaceholder": "http://localhost:8080/search?format=json&q={{query}}",
+
+  "settings.searchApiKeyTitle": "APIキー",
+
+  "settings.searchApiKeyDesc": "TavilyまたはカスタムAPIのキーです。DuckDuckGo Liteには不要です。",  "settings.unitDays": "日",
   "settings.notConnected": "未接続",
   "settings.saving": "保存中",
   // General
