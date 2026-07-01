@@ -1984,7 +1984,7 @@ export async function runTask(task: Task): Promise<void> {
     task.status = 'failed';
     task.phase = 'failed';
     updateStep('任务失败', 'failed');
-    touch();
+    saveFull();
     const message = err instanceof Error ? err.message : String(err);
     writeTrace(task.id, 'error', 'failed', {
       ok: false,
@@ -2022,7 +2022,7 @@ function resumePlanFromCheckpoint(plan: PlanStep[], checkpointStepId?: string): 
 function finishCompleted(
   task: Task,
   updateStep: (d: string, s: PlanStep['status']) => void,
-  touch: () => void,
+  saveFull: () => void,
 ): void {
   task.status = 'completed';
   task.phase = 'finalizing';
@@ -2030,7 +2030,7 @@ function finishCompleted(
     step.status === 'completed' ? step : { ...step, status: 'completed' },
   );
   updateStep('任务完成', 'completed');
-  touch();
+  saveFull();
   writeTrace(task.id, 'done', 'finalizing', { ok: true, summary: '任务完成' });
   taskEvents.publish({ type: 'status', taskId: task.id, status: 'completed' });
   taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'finalizing', detail: '任务完成' });
@@ -2043,7 +2043,7 @@ function finishCompleted(
 function finishCancelled(
   task: Task,
   updateStep: (d: string, s: PlanStep['status']) => void,
-  touch: () => void,
+  saveFull: () => void,
 ): void {
   task.status = 'cancelled';
   task.phase = 'cancelled';
@@ -2051,7 +2051,7 @@ function finishCancelled(
     step.status === 'completed' ? step : { ...step, status: 'cancelled' },
   );
   updateStep('任务已取消', 'cancelled');
-  touch();
+  saveFull();
   writeTrace(task.id, 'done', 'cancelled', {
     ok: false,
     errorCategory: 'cancelled',

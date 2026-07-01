@@ -346,7 +346,7 @@ export function buildAgentRoundFromMessage(
 /** 从 SSE 实时数据 AgentRunningTimeline（即 ToolActivity[]）构建 AgentRoundData */
 export function buildLiveAgentRoundData(params: {
   plan: PlanStep[];
-  liveToolActivity: { id: string; name: string; args: unknown; status: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
+  liveToolActivity: { id: string; name: string; args: unknown; status: string; planStepId?: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
   output?: string;
   reasoning?: string;
   phase?: string | null;
@@ -369,6 +369,7 @@ export function buildLiveAgentRoundData(params: {
       kind,
       title: buildStepTitle(act.name, args),
       status,
+      planStepId: act.planStepId,
       logs: extractLogContent(act.name, act.status !== "running" ? { ok: act.status === "ok", output: act.output, error: act.error } : undefined),
       error: act.error,
       output: act.output != null ? formatOutput(act.output) : undefined,
@@ -380,13 +381,45 @@ export function buildLiveAgentRoundData(params: {
 
   const summary = computeSummaryFromSteps(steps);
 
-  // 按 plan 分组（实时执行时未传递 planStepId，按 plan index 分组）
-  const planStepGroups: PlanStepGroupData[] = [];
-  const activeIndex = plan.findIndex((s) => s.status === "running");
-  const activeStepId = activeIndex >= 0 ? plan[activeIndex]?.id : undefined;
+  // 优先按 per-tool planStepId 分组，无 planStepId 时回退到按活跃 step 分组
+  const stepsByPlanStepId = new Map<string, TimelineStepData[]>();
+  const unnamedSteps: TimelineStepData[] = [];
+  for (const step of steps) {
+    if (step.planStepId) {
+      const list = stepsByPlanStepId.get(step.planStepId) ?? [];
+      list.push(step);
+      stepsByPlanStepId.set(step.planStepId, list);
+    } else {
+      unnamedSteps.push(step);
+    }
+  }
 
-  if (steps.length === 0) {
-    // 无步骤时：仅展示计划状态
+  const planStepGroups: PlanStepGroupData[] = [];
+  const isFailed = phase === "failed" || phase === "cancelled";
+
+  if (stepsByPlanStepId.size > 0) {
+    for (const ps of plan) {
+      const stepsInGroup = stepsByPlanStepId.get(ps.id) ?? [];
+      if (stepsInGroup.length === 0 && !unnamedSteps.length) continue;
+      planStepGroups.push({
+        planStepId: ps.id,
+        description: ps.description,
+        status: ps.status === "completed" ? "completed"
+          : ps.status === "failed" ? "failed"
+          : isFailed ? "failed"
+          : "running",
+        steps: stepsInGroup,
+      });
+    }
+    if (unnamedSteps.length > 0) {
+      planStepGroups.push({
+        planStepId: "_live",
+        description: "执行工具",
+        status: isFailed ? "failed" : "running",
+        steps: unnamedSteps,
+      });
+    }
+  } else if (steps.length === 0) {
     for (const ps of plan) {
       planStepGroups.push({
         planStepId: ps.id,
@@ -396,19 +429,18 @@ export function buildLiveAgentRoundData(params: {
       });
     }
   } else {
-    // 有步骤时：将所有步骤归入当前活跃 plan step（或默认组）
+    const activeIndex = plan.findIndex((s) => s.status === "running");
+    const activeStepId = activeIndex >= 0 ? plan[activeIndex]?.id : undefined;
     const currentPlanDesc = activeStepId
       ? plan.find((s) => s.id === activeStepId)?.description ?? "执行工具"
       : "执行工具";
     planStepGroups.push({
       planStepId: activeStepId ?? "_live",
       description: currentPlanDesc,
-      status: phase === "failed" ? "failed" : phase === "cancelled" ? "failed" : "running",
+      status: isFailed ? "failed" : "running",
       steps,
     });
   }
-
-  const isFailed = phase === "failed" || phase === "cancelled";
 
   return {
     id: "live-tail",
