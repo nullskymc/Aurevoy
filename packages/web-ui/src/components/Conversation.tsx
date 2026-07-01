@@ -27,6 +27,7 @@ export interface ToolActivity {
   args: unknown;
   status: "awaiting" | "running" | "ok" | "error";
   riskLevel?: ToolRiskLevel;
+  planStepId?: string;
   output?: unknown;
   error?: string;
   progress?: {

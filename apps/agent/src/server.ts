@@ -751,9 +751,8 @@ export async function buildServer(externalLogger?: Logger) {
       }
     };
 
-    const unsubscribe = taskEvents.subscribe(id, send);
-
-    // 新订阅者可能错过创建后的快速事件；先补发数据库快照，保证 UI 可恢复。
+    // 先补发数据库快照，保证 UI 可恢复。
+    // 注意：快照必须在订阅实时事件之前完整发送，避免快照事件与实时事件在 SSE 缓冲区中交叠。
     send({ type: 'task_created', taskId: task.id, task });
     send({ type: 'status', taskId: task.id, status: task.status });
     if (task.phase) {
@@ -788,6 +787,10 @@ export async function buildServer(externalLogger?: Logger) {
       send({ type: 'done', taskId: task.id, status: task.status });
       return;
     }
+
+    // 快照发送完毕，排空缓冲区后再订阅实时事件，避免快照与实时事件交叠
+    if (sseBuf.length > 0) sseFlush();
+    const unsubscribe = taskEvents.subscribe(id, send);
 
     // 心跳，避免连接被中间层断开
     heartbeat = setInterval(() => {

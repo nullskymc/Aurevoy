@@ -657,6 +657,7 @@ function App() {
           name: event.call.toolName,
           args: event.call.args,
           status: 'running',
+          planStepId: event.call.planStepId,
         });
         scheduleLiveActivitySync();
         break;
