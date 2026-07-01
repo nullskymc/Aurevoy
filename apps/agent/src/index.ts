@@ -1,9 +1,10 @@
 import './load-env.js';
 import { buildServer } from './server.js';
 import { config } from './config.js';
- import './tools/builtins.js'; // 副作用导入：注册内置工具（文件/网络）
-import './tools/file-basics.js'; // 副作用导入：注册行级视口文件工具（open_file/scroll/search_grep + 新三件套写入原语）
- import './tools/web-search.js'; // 副作用导入：注册 web_search 工具
+import './tools/builtins.js'; // 副作用导入：注册内置工具（文件/网络）
+import './tools/file-basics.js'; // 副作用导入：注册行级视口文件工具
+import './tools/web-search.js'; // 副作用导入：注册 web_search 工具
+import './tools/new-tools.js'; // 副作用导入：注册新架构工具 (read/write/edit/grep/glob/bash/web_search/web_fetch)
 import { registerLoadSkillTool } from './tools/load-skill.js';
 import { registerInstallSkillTool } from './tools/install-skill.js';
 import { closeMcpTools, initializeMcpTools } from './tools/mcp.js';
