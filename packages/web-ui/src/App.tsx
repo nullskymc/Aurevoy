@@ -589,10 +589,15 @@ function App() {
         setPhase(event.phase);
         patchCurrentTask({ phase: event.phase });
         if (event.phase !== previousPhaseRef.current) {
+          const prevPhase = previousPhaseRef.current;
           previousPhaseRef.current = event.phase;
           if (event.phase === "thinking") {
-            // 进入新一轮思考时只清理内容块；保留 reasoning/output 流式累积，
-            // 避免第一条思考在工具调用后被清空、直到第二轮思考才恢复。
+            // 从工具调用阶段回到思考 = 新的 LLM 调用，清空旧 reasoning/output，
+            // 避免第一条思考内容被追加到最新思考末尾。
+            if (prevPhase === "calling_tool") {
+              setOutput("");
+              setReasoning("");
+            }
             setLiveContentBlocks([]);
           }
         }
