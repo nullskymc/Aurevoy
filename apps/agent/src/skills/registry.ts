@@ -5,7 +5,7 @@
  * 激活时懒加载 SKILL.md body + 附属资源（Tier 2）。
  *
  * 工作区 skill 优先级高于全局 skill（同名时工作区覆盖）。
- * 支持 .aurevoy/skills/、.agents/skills/、.claude/skills/ 和 .codex/skills/ 四个发现路径。
+ * 支持 .aurevoy/skills/（用户）、.agents/skills/、.claude/skills/ 和 .codex/skills/（系统）四个发现路径。
  */
 
 import type { SkillCatalogEntry, SkillContent } from './types.js';
@@ -21,7 +21,7 @@ class SkillRegistry {
 
   /**
    * 从配置的目录发现所有 skill（Tier 1：仅加载 name + description）。
-   * 加载顺序：预装 → 用户(.aurevoy + .agents) → 工作区(.aurevoy + .agents)（后加载的覆盖同名）。
+   * 加载顺序：预装 → 用户(.aurevoy) → 系统(.agents + .claude + .codex) → 工作区(.aurevoy) → 工作区系统(.agents + .claude + .codex)（后加载的覆盖同名）。
    */
   load(): void {
     const log = getLogger('skills/registry');
@@ -29,21 +29,31 @@ class SkillRegistry {
 
     const builtinDir = resolve(config.skills.builtinDir);
 
+    // .aurevoy — 用户个人 skill
     const userDirs = [
       resolve(config.skills.userDir),
+    ];
+
+    // .agents / .claude / .codex — 来自其他客户端的系统级 skill
+    const systemDirs = [
       resolve(config.skills.agentsUserDir),
       resolve(config.skills.claudeUserDir),
       resolve(config.skills.codexUserDir),
     ];
 
+    // 工作区 .aurevoy — 项目级用户 skill
     const workspaceDirs = [
       resolve(config.workspaceDir, config.skills.workspaceSubDir),
+    ];
+
+    // 工作区 .agents / .claude / .codex — 项目级系统 skill
+    const workspaceSystemDirs = [
       resolve(config.workspaceDir, config.skills.agentsWorkspaceSubDir),
       resolve(config.workspaceDir, config.skills.claudeWorkspaceSubDir),
       resolve(config.workspaceDir, config.skills.codexWorkspaceSubDir),
     ];
 
-    log.info({ builtinDir, userDirs, workspaceDirs }, '发现 skill 文件...');
+    log.info({ builtinDir, userDirs, systemDirs, workspaceDirs, workspaceSystemDirs }, '发现 skill 文件...');
 
     // 1) 预装 skill（最低优先级）
     const builtinSkills = discoverSkills(builtinDir, 'builtin');
@@ -51,7 +61,7 @@ class SkillRegistry {
       this.catalog.set(skill.frontmatter.name, skill);
     }
 
-    // 2) 用户全局 skill（覆盖预装同名）
+    // 2) 用户全局 skill（.aurevoy，覆盖预装同名）
     for (const dir of userDirs) {
       const skills = discoverSkills(dir, 'user');
       for (const skill of skills) {
@@ -66,7 +76,22 @@ class SkillRegistry {
       }
     }
 
-    // 3) 工作区 skill（最高优先级）
+    // 3) 系统级全局 skill（.agents / .claude / .codex，覆盖用户同名）
+    for (const dir of systemDirs) {
+      const skills = discoverSkills(dir, 'system');
+      for (const skill of skills) {
+        const existing = this.catalog.get(skill.frontmatter.name);
+        if (existing) {
+          log.info(
+            { name: skill.frontmatter.name, source: skill.location, overridden: existing.location },
+            '系统 skill 覆盖已有 skill',
+          );
+        }
+        this.catalog.set(skill.frontmatter.name, skill);
+      }
+    }
+
+    // 4) 工作区 skill（.aurevoy，覆盖系统全局同名）
     for (const dir of workspaceDirs) {
       const skills = discoverSkills(dir, 'workspace');
       for (const skill of skills) {
@@ -75,6 +100,21 @@ class SkillRegistry {
           log.info(
             { name: skill.frontmatter.name, source: skill.location, overridden: existing.location },
             '工作区 skill 覆盖已有 skill',
+          );
+        }
+        this.catalog.set(skill.frontmatter.name, skill);
+      }
+    }
+
+    // 5) 工作区系统 skill（最高优先级）
+    for (const dir of workspaceSystemDirs) {
+      const skills = discoverSkills(dir, 'system');
+      for (const skill of skills) {
+        const existing = this.catalog.get(skill.frontmatter.name);
+        if (existing) {
+          log.info(
+            { name: skill.frontmatter.name, source: skill.location, overridden: existing.location },
+            '工作区系统 skill 覆盖已有 skill',
           );
         }
         this.catalog.set(skill.frontmatter.name, skill);
@@ -124,8 +164,8 @@ class SkillRegistry {
           location: s.location,
           installUrl: s.installUrl,
           installedAt: s.installedAt,
-          // 未显式设置的：builtin 预装 + .aurevoy 默认启用，其他默认禁用
-          enabled: stored !== null ? stored : sourcePath === '.aurevoy' || s.sourceDir === 'builtin',
+          // 未显式设置的：builtin 预装 + .aurevoy + system 默认启用，其他默认禁用
+          enabled: stored !== null ? stored : sourcePath === '.aurevoy' || s.sourceDir === 'builtin' || s.sourceDir === 'system',
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -138,7 +178,7 @@ class SkillRegistry {
     const entry = this.catalog.get(name);
     if (!entry) return false;
     const sourcePath = deriveSourcePath(entry.location || entry.skillDir);
-    return sourcePath === '.aurevoy' || entry.sourceDir === 'builtin';
+    return sourcePath === '.aurevoy' || entry.sourceDir === 'builtin' || entry.sourceDir === 'system';
   }
 
 }

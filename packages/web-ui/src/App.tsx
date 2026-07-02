@@ -1450,8 +1450,10 @@ function App() {
     }
   }
   const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0 || reasoning.trim().length > 0;
-  // 过滤已在历史消息中渲染的工具（避免双重复）
-  const hiddenAssistantId = hasLiveTail
+  // 只有当有实际 live 内容（流式文本/推理/工具活动/审批）时才隐藏历史中最后一条 assistant，
+  // 避免在轮次切换间隙（output/reasoning 已清空但新 streaming 尚未开始）时历史和 live 双空。
+  const hasLiveContent = derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0 || reasoning.trim().length > 0;
+  const hiddenAssistantId = hasLiveContent
     ? [...(currentTask?.messages ?? [])].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
     : undefined;
   const renderedCallIds = new Set<string>();

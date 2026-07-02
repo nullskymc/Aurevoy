@@ -155,13 +155,14 @@ export async function buildServer(externalLogger?: Logger) {
     if (!entry) {
       return reply.code(404).send({ error: 'skill 不存在' });
     }
-    if (entry.sourceDir !== 'user') {
-      return reply.code(403).send({ error: '仅用户安装的 skill 可以卸载' });
+    if (entry.sourceDir !== 'user' && entry.sourceDir !== 'system') {
+      return reply.code(403).send({ error: '仅用户或系统级 skill 可以卸载' });
     }
 
     try {
-      const targetDir = resolve(config.skills.userDir);
-      await uninstallSkill(name, targetDir);
+      // 使用 skill 的 actual skillDir 所在父目录作为卸载目标
+      const parentDir = resolve(entry.skillDir, '..');
+      await uninstallSkill(name, parentDir);
       reloadSkillsAndTools();
 
       const response: SkillUninstallResponse = { name, deleted: true };

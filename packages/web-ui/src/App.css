@@ -6574,6 +6574,11 @@ textarea:focus-visible,
   color: #1565c0;
 }
 
+.skills-card-badge.source-system {
+  background: #fff3e0;
+  color: #e65100;
+}
+
 .skills-card-badge.source-builtin {
   background: #f3e5f5;
   color: #7b1fa2;

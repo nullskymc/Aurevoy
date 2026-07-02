@@ -23,7 +23,7 @@ const BODY_CHAR_CAP = 8000;
  */
 export function discoverSkills(
   dir: string,
-  sourceDir: 'builtin' | 'user' | 'workspace',
+  sourceDir: 'builtin' | 'user' | 'workspace' | 'system',
 ): SkillCatalogEntry[] {
   const log = getLogger('skills/loader');
 
