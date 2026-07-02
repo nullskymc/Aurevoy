@@ -76,10 +76,10 @@ interface SettingsPanelProps {
   onConnectionChange?: () => void;
 }
 
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb" | "search";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb" | "search" | "usage";
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
-const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search"];
+const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search", "usage"];
 
 /** 每次调用都会重新计算 t()，确保语言切换后侧边栏标签即时更新 */
 function getSettingsGroups(): Array<{
@@ -106,6 +106,7 @@ function getSettingsGroups(): Array<{
     label: t("settings.group.data"),
     items: [
       { id: "data", label: t("settings.nav.data"), icon: "database" },
+      { id: "usage", label: t("settings.nav.usage"), icon: "usage" },
       { id: "kb", label: t("settings.nav.knowledgeBase"), icon: "kb" },
       { id: "memory", label: t("settings.nav.memory"), icon: "memory" },
     ],
@@ -113,7 +114,7 @@ function getSettingsGroups(): Array<{
 ];
 }
 
-type SettingsIconName = "appearance" | "database" | "kb" | "memory" | "search" | "server" | "sliders" | "spark";
+type SettingsIconName = "appearance" | "database" | "kb" | "memory" | "search" | "server" | "sliders" | "spark" | "usage";
 
 export function SettingsPanel({
   settings,
@@ -302,6 +303,10 @@ export function SettingsPanel({
               onSave={onSave}
             />
           )}
+
+          {activeSection === "usage" && (
+            <UsageSettings />
+          )}
         </div>
       </main>
     </section>
@@ -392,6 +397,17 @@ function SettingsNavIcon({ name }: { name: SettingsIconName }) {
       <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
         <path d="M4 3.5h12v13H4z" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" />
         <path d="M7 7.5h6M7 10.5h4" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  if (name === "usage") {
+    return (
+      <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+        <rect x="2.5" y="7" width="3.5" height="9" rx="0.5" fill="currentColor" opacity="0.4" />
+        <rect x="7" y="3" width="3.5" height="13" rx="0.5" fill="currentColor" opacity="0.55" />
+        <rect x="11.5" y="5" width="3.5" height="11" rx="0.5" fill="currentColor" opacity="0.8" />
+        <rect x="16" y="2" width="3.5" height="14" rx="0.5" fill="currentColor" />
       </svg>
     );
   }
@@ -978,25 +994,6 @@ function DataSettings({
   onCleanup: (olderThanDays: number) => void;
   onCleanupDaysChange: (days: number) => void;
 }) {
-  const [tokenReport, setTokenReport] = useState<TokenUsageReport | null>(null);
-  const [tokenLoading, setTokenLoading] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setTokenLoading(true);
-    getTokenUsageReport()
-      .then((report) => {
-        if (!cancelled) setTokenReport(report);
-      })
-      .catch(() => {
-        if (!cancelled) setTokenReport(null);
-      })
-      .finally(() => {
-        if (!cancelled) setTokenLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [dataStatus?.counts.tasks]);
-
   return (
     <>
       <SettingsGroup title={t("settings.localStorage")}>
@@ -1009,69 +1006,6 @@ function DataSettings({
               : t("settings.notConnected")
           }
         />
-      </SettingsGroup>
-
-      <SettingsGroup title={t("settings.tokenUsageTitle")}>
-        <p style={{ margin: "0 0 12px 14px", color: "var(--text-secondary)", fontSize: 13 }}>
-          {t("settings.tokenUsageDesc")}
-        </p>
-        {tokenLoading || !tokenReport ? (
-          <SettingsInfoRow
-            title={t("settings.tokenUsageTotal")}
-            description={tokenLoading ? t("settings.fetching") : t("settings.tokenUsageUnavailable")}
-            value="—"
-          />
-        ) : !tokenReport.available ? (
-          <SettingsInfoRow
-            title={t("settings.tokenUsageTotal")}
-            description={t("settings.tokenUsageUnavailable")}
-            value="—"
-          />
-        ) : (
-          <>
-            <SettingsInfoRow
-              title={t("settings.tokenUsageTasks")}
-              description={t("settings.tokenUsageTasks")}
-              value={String(tokenReport.tasks)}
-            />
-            <SettingsInfoRow
-              title={t("settings.tokenUsagePrompt")}
-              description={t("settings.tokenUsagePrompt")}
-              value={formatTokenCount(tokenReport.promptTokens)}
-            />
-            <SettingsInfoRow
-              title={t("settings.tokenUsageCompletion")}
-              description={t("settings.tokenUsageCompletion")}
-              value={formatTokenCount(tokenReport.completionTokens)}
-            />
-            <SettingsInfoRow
-              title={t("settings.tokenUsageTotal")}
-              description={t("settings.tokenUsageTotal")}
-              value={formatTokenCount(tokenReport.totalTokens)}
-            />
-            {tokenReport.cacheReadTokens > 0 && (
-              <SettingsInfoRow
-                title={t("settings.tokenUsageCacheRead")}
-                description={t("settings.tokenUsageCacheRead")}
-                value={formatTokenCount(tokenReport.cacheReadTokens)}
-              />
-            )}
-            {tokenReport.cacheWriteTokens > 0 && (
-              <SettingsInfoRow
-                title={t("settings.tokenUsageCacheWrite")}
-                description={t("settings.tokenUsageCacheWrite")}
-                value={formatTokenCount(tokenReport.cacheWriteTokens)}
-              />
-            )}
-            {tokenReport.estimatedCostUsd > 0 && (
-              <SettingsInfoRow
-                title={t("settings.tokenUsageEstimatedCost")}
-                description={t("settings.tokenUsageEstimatedCost")}
-                value={`$${tokenReport.estimatedCostUsd.toFixed(4)}`}
-              />
-            )}
-          </>
-        )}
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.dataCleanup")}>
@@ -1095,6 +1029,184 @@ function DataSettings({
           }
         />
       </SettingsGroup>
+    </>
+  );
+}
+
+function UsageSettings() {
+  const [report, setReport] = useState<TokenUsageReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  const fetch = () => {
+    setLoading(true);
+    setError(false);
+    getTokenUsageReport()
+      .then(setReport)
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { fetch(); }, []);
+
+  const empty = loading || error || !report || !report.available;
+
+  return (
+    <>
+      <SettingsGroup title={t("settings.usageOverview")}>
+        {empty ? (
+          <div className="usage-empty">
+            <div className="usage-empty-icon">
+              <svg viewBox="0 0 48 48" width="40" height="40" fill="none">
+                <rect x="4" y="12" width="8" height="24" rx="1" stroke="currentColor" strokeWidth="1.5" opacity="0.35" />
+                <rect x="15" y="6" width="8" height="30" rx="1" stroke="currentColor" strokeWidth="1.5" opacity="0.5" />
+                <rect x="26" y="10" width="8" height="26" rx="1" stroke="currentColor" strokeWidth="1.5" opacity="0.7" />
+                <rect x="37" y="4" width="8" height="32" rx="1" stroke="currentColor" strokeWidth="1.5" />
+              </svg>
+            </div>
+            <p>{loading ? t("settings.fetching") : error ? t("settings.usageFetchFailed") : t("settings.tokenUsageUnavailable")}</p>
+            {!loading && (
+              <button type="button" className="settings-secondary-btn" onClick={fetch}>
+                {t("settings.refresh")}
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="usage-cards">
+              <UsageStatCard
+                title={t("settings.tokenUsageTotal")}
+                value={formatTokenCount(report.totalTokens)}
+                subtitle={`${report.tasks} ${t("settings.tokenUsageTasks").toLowerCase()}`}
+                color="var(--accent)"
+              />
+              {report.estimatedCostUsd > 0 && (
+                <UsageStatCard
+                  title={t("settings.tokenUsageEstimatedCost")}
+                  value={`$${report.estimatedCostUsd.toFixed(4)}`}
+                  subtitle="USD"
+                  color="var(--green)"
+                />
+              )}
+            </div>
+          </>
+        )}
+      </SettingsGroup>
+
+      {!empty && (
+        <SettingsGroup title={t("settings.usageBreakdown")}>
+          <div className="usage-breakdown">
+            <UsageBarItem
+              label={t("settings.usageInputTokens")}
+              value={report.promptTokens}
+              max={report.promptTokens + report.completionTokens}
+              color="var(--primary)"
+              detail={t("settings.usageInputDetail")}
+            />
+            {report.cacheReadTokens > 0 && (
+              <UsageBarItem
+                label={t("settings.usageInputCache")}
+                value={report.cacheReadTokens}
+                max={report.promptTokens}
+                color="var(--blue)"
+                detail={`${t("settings.usageCacheHitRate")} ${((report.cacheReadTokens / report.promptTokens) * 100).toFixed(0)}%`}
+                indent
+              />
+            )}
+            <UsageBarItem
+              label={t("settings.usageOutputTokens")}
+              value={report.completionTokens}
+              max={report.promptTokens + report.completionTokens}
+              color="var(--green)"
+              detail={t("settings.usageOutputDetail")}
+            />
+            {report.cacheWriteTokens > 0 && (
+              <UsageBarItem
+                label={t("settings.usageOutputCache")}
+                value={report.cacheWriteTokens}
+                max={report.completionTokens || 1}
+                color="var(--purple)"
+                detail=""
+                indent
+              />
+            )}
+          </div>
+          <div className="usage-bar-stack">
+            <UsageStackedBar
+              sections={[
+                report.cacheReadTokens > 0 ? { value: report.cacheReadTokens, label: t("settings.usageInputCache"), color: "var(--blue)" } : null,
+                { value: report.promptTokens - (report.cacheReadTokens > 0 ? report.cacheReadTokens : 0), label: t("settings.usageInputTokens"), color: "var(--primary)" },
+                { value: report.completionTokens, label: t("settings.usageOutputTokens"), color: "var(--green)" },
+              ].filter(Boolean) as Array<{ value: number; label: string; color: string }>}
+              total={report.totalTokens}
+            />
+          </div>
+        </SettingsGroup>
+      )}
+    </>
+  );
+}
+
+function UsageStatCard({ title, value, subtitle, color }: { title: string; value: string; subtitle: string; color: string }) {
+  return (
+    <div className="usage-stat-card" style={{ borderColor: color }}>
+      <div className="usage-stat-card-dot" style={{ background: color }} />
+      <span className="usage-stat-card-label">{title}</span>
+      <strong className="usage-stat-card-value" style={{ color }}>{value}</strong>
+      <small className="usage-stat-card-sub">{subtitle}</small>
+    </div>
+  );
+}
+
+function UsageBarItem({ label, value, max, color, detail, indent }: {
+  label: string;
+  value: number;
+  max: number;
+  color: string;
+  detail: string;
+  indent?: boolean;
+}) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return (
+    <div className="usage-bar-item" data-indent={indent || undefined}>
+      <div className="usage-bar-item-head">
+        <span className="usage-bar-item-label" style={{ color }}>{label}</span>
+        <span className="usage-bar-item-value">{formatTokenCount(value)}</span>
+        {detail && <span className="usage-bar-item-detail">{detail}</span>}
+      </div>
+      <div className="usage-bar-track">
+        <div className="usage-bar-fill" style={{ width: `${pct}%`, background: color }} />
+      </div>
+    </div>
+  );
+}
+
+function UsageStackedBar({ sections, total }: { sections: Array<{ value: number; label: string; color: string }>; total: number }) {
+  if (total <= 0) return null;
+  const totalWidth = sections.reduce((s, sec) => s + sec.value, 0) || 1;
+  return (
+    <>
+      <div className="usage-stacked-bar">
+        {sections.map((sec, i) => {
+          const w = (sec.value / totalWidth) * 100;
+          return (
+            <div
+              key={i}
+              className="usage-stacked-segment"
+              style={{ width: `${w}%`, background: sec.color }}
+              title={`${sec.label}: ${formatTokenCount(sec.value)}`}
+            />
+          );
+        })}
+      </div>
+      <div className="usage-stacked-legend">
+        {sections.map((sec, i) => (
+          <span key={i} className="usage-legend-chip">
+            <span className="usage-legend-dot" style={{ background: sec.color }} />
+            {sec.label} {formatTokenCount(sec.value)}
+          </span>
+        ))}
+      </div>
     </>
   );
 }

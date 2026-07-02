@@ -348,6 +348,7 @@ export const en = {
   "settings.nav.data": "Local Data",
   "settings.nav.memory": "Long-term Memory",
   "settings.nav.search": "Search",
+  "settings.nav.usage": "Tokens",
 
   // search settings
   "settings.searchTitle": "Web Search",
@@ -465,6 +466,18 @@ export const en = {
   "settings.tokenUsageCacheRead": "Cache read tokens",
   "settings.tokenUsageCacheWrite": "Cache write tokens",
   "settings.tokenUsageEstimatedCost": "Estimated cost",
+
+  // Usage page
+  "settings.usageOverview": "Overview",
+  "settings.usageBreakdown": "Token Breakdown",
+  "settings.usageFetchFailed": "Failed to fetch data. Check engine connection and try again.",
+  "settings.usageInputTokens": "Input tokens",
+  "settings.usageInputDetail": "User messages, system prompts, and context content",
+  "settings.usageInputCache": "Cache read tokens",
+  "settings.usageCacheHitRate": "Hit rate",
+  "settings.usageOutputTokens": "Output tokens",
+  "settings.usageOutputDetail": "Model-generated response content",
+  "settings.usageOutputCache": "Cache write tokens",
 
   // Notifications (errors / success)
   "notice.startEngineFailed": "Failed to start Agent engine: ",

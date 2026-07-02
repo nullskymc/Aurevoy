@@ -359,6 +359,7 @@ export const zh = {
   "settings.nav.data": "本地数据",
   "settings.nav.memory": "长期记忆",
   "settings.nav.search": "搜索配置",
+  "settings.nav.usage": "Token 统计",
   "settings.unitDays": "天",
   "settings.notConnected": "未连接",
   "settings.saving": "保存中",
@@ -464,6 +465,18 @@ export const zh = {
   "settings.tokenUsageCacheRead": "Cache 读取 tokens",
   "settings.tokenUsageCacheWrite": "Cache 写入 tokens",
   "settings.tokenUsageEstimatedCost": "估算成本",
+
+  // Usage 专页
+  "settings.usageOverview": "总览",
+  "settings.usageBreakdown": "Token 明细",
+  "settings.usageFetchFailed": "获取数据失败，请检查引擎连接后刷新",
+  "settings.usageInputTokens": "输入 tokens",
+  "settings.usageInputDetail": "用户消息、系统提示词、上下文内容",
+  "settings.usageInputCache": "缓存命中 tokens",
+  "settings.usageCacheHitRate": "命中率",
+  "settings.usageOutputTokens": "输出 tokens",
+  "settings.usageOutputDetail": "模型生成的回复内容",
+  "settings.usageOutputCache": "缓存写入 tokens",
 
   // 通知（错误/成功）
   "notice.startEngineFailed": "启动 Agent 引擎失败：",

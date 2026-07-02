@@ -3305,6 +3305,162 @@ button:disabled {
   border-top: 1px solid var(--border);
 }
 
+/* ============ Usage 统计页 ============ */
+
+.usage-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.usage-empty-icon {
+  color: var(--text-tertiary);
+}
+
+.usage-empty p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.usage-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.usage-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  border-left-width: 3px;
+}
+
+.usage-stat-card-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-bottom: 4px;
+}
+
+.usage-stat-card-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.usage-stat-card-value {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.usage-stat-card-sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.usage-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.usage-bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.usage-bar-item[data-indent] {
+  padding-left: 20px;
+  border-left: 2px solid var(--border);
+  margin-left: 8px;
+}
+
+.usage-bar-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.usage-bar-item-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.usage-bar-item-value {
+  font-size: 13px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.usage-bar-item-detail {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-left: auto;
+}
+
+.usage-bar-track {
+  height: 6px;
+  background: var(--hover);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.usage-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.usage-bar-stack {
+  margin-top: 20px;
+}
+
+.usage-stacked-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  gap: 1px;
+}
+
+.usage-stacked-segment {
+  height: 100%;
+  min-width: 2px;
+}
+
+.usage-stacked-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.usage-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.usage-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
 /* ============ 深色模式 ============ */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {

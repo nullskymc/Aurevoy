@@ -68,7 +68,7 @@ import "./App.css";
 
 type MainView = "chat" | "search" | "skills" | "settings";
 type ContentMode = "conversation" | "artifacts";
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb" | "search" | "usage";
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
 
@@ -82,7 +82,7 @@ const TOOL_DETAILS_OPEN_KEY = "aurevoy.defaultToolDetailsOpen";
 const THEME_MODE_KEY = "aurevoy.themeMode";
 const LOCALE_KEY = "aurevoy.locale";
 const WORK_MODE_KEY = "aurevoy.workMode";
-const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory"];
+const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search", "usage"];
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));

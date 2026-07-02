@@ -347,6 +347,7 @@ export const ko = {
   "settings.nav.data": "로컬 데이터",
   "settings.nav.memory": "장기 기억",
   "settings.nav.search": "검색",
+  "settings.nav.usage": "Token 통계",
 
   // search settings
   "settings.searchTitle": "웹 검색",
@@ -472,6 +473,18 @@ export const ko = {
   "settings.tokenUsageCacheRead": "Cache 읽기 tokens",
   "settings.tokenUsageCacheWrite": "Cache 쓰기 tokens",
   "settings.tokenUsageEstimatedCost": "예상 비용",
+
+  // Usage page
+  "settings.usageOverview": "개요",
+  "settings.usageBreakdown": "Token 상세",
+  "settings.usageFetchFailed": "데이터를 가져오지 못했습니다. 엔진 연결을 확인하고 다시 시도하세요.",
+  "settings.usageInputTokens": "입력 tokens",
+  "settings.usageInputDetail": "사용자 메시지, 시스템 프롬프트, 컨텍스트 내용",
+  "settings.usageInputCache": "캐시 읽기 tokens",
+  "settings.usageCacheHitRate": "적중률",
+  "settings.usageOutputTokens": "출력 tokens",
+  "settings.usageOutputDetail": "모델이 생성한 응답 내용",
+  "settings.usageOutputCache": "캐시 쓰기 tokens",
 
   // Notifications (errors / success)
   "notice.startEngineFailed": "Agent 엔진 시작 실패: ",

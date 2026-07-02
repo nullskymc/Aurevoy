@@ -347,6 +347,7 @@ export const ja = {
   "settings.nav.data": "ローカルデータ",
   "settings.nav.memory": "長期記憶",
   "settings.nav.search": "検索",
+  "settings.nav.usage": "Token 統計",
 
   // search settings
   "settings.searchTitle": "Web検索",
@@ -472,6 +473,18 @@ export const ja = {
   "settings.tokenUsageCacheRead": "Cache 読み取り tokens",
   "settings.tokenUsageCacheWrite": "Cache 書き込み tokens",
   "settings.tokenUsageEstimatedCost": "推定コスト",
+
+  // Usage page
+  "settings.usageOverview": "概要",
+  "settings.usageBreakdown": "Token 内訳",
+  "settings.usageFetchFailed": "データの取得に失敗しました。エンジン接続を確認して再試行してください。",
+  "settings.usageInputTokens": "入力 tokens",
+  "settings.usageInputDetail": "ユーザーメッセージ、システムプロンプト、コンテキスト",
+  "settings.usageInputCache": "キャッシュ読み取り tokens",
+  "settings.usageCacheHitRate": "ヒット率",
+  "settings.usageOutputTokens": "出力 tokens",
+  "settings.usageOutputDetail": "モデルが生成した応答内容",
+  "settings.usageOutputCache": "キャッシュ書き込み tokens",
 
   // Notifications (errors / success)
   "notice.startEngineFailed": "Agentエンジンの起動に失敗: ",
