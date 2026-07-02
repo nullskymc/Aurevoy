@@ -759,7 +759,7 @@ export async function buildServer(externalLogger?: Logger) {
       'plan_approval_request', 'plan_approval_resolved',
       'clarification_request', 'clarification_resolved',
       'approval_request',
-      'tool_result', 'message',
+      'tool_call', 'tool_result', 'message',
     ]);
 
     const send = (event: AgentEvent) => {

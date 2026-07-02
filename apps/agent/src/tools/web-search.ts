@@ -7,7 +7,7 @@
 import { toolRegistry } from './registry.js';
 import { config } from '../config.js';
 
-const SEARCH_TIMEOUT_MS = 15000;
+const SEARCH_TIMEOUT_MS = 30000;
 const MAX_RESULTS = 10;
 
 /** DuckDuckGo Lite 搜索结果的正则 */
@@ -208,8 +208,8 @@ async function searchJson(
   const data = await res.json() as Record<string, unknown>;
   const rawResults = (Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : []) as Array<Record<string, unknown>>;
   const results = rawResults.map(r => ({
-    title: String(r.title ?? r.name ?? ''),
-    snippet: String(r.content ?? r.snippet ?? r.description ?? ''),
+    title: stripHtml(String(r.title ?? r.name ?? '')),
+    snippet: stripHtml(String(r.content ?? r.snippet ?? r.description ?? '')),
     url: String(r.url ?? r.link ?? ''),
   })).filter(r => r.title || r.url);
 

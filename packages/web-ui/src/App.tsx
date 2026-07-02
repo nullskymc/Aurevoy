@@ -264,6 +264,8 @@ function App() {
   } = useTaskState();
   const [reasoning, setReasoning] = useState("");
   const previousPhaseRef = useRef<TaskPhase | null>(null);
+  const nextReasoningFreshRef = useRef(false);
+  const nextOutputFreshRef = useRef(false);
   const { closeStream, openStream } = useSSEStream();
   const liveActivitySyncRafRef = useRef<number | null>(null);
 
@@ -289,6 +291,8 @@ function App() {
     setOutput("");
     setReasoning("");
     setLiveContentBlocks([]);
+    nextReasoningFreshRef.current = false;
+    nextOutputFreshRef.current = false;
   }, []);
 
   // 组件卸载时取消待处理的 live activity 同步，防止 setState 已卸载组件。
@@ -573,8 +577,6 @@ function App() {
     switch (event.type) {
       case "task_created":
         setCurrentTask(event.task);
-        setStatus(event.task.status);
-        setPhase(event.task.phase);
         setPlan(event.task.plan);
         setOutput("");
         setReasoning("");
@@ -592,11 +594,11 @@ function App() {
           const prevPhase = previousPhaseRef.current;
           previousPhaseRef.current = event.phase;
           if (event.phase === "thinking") {
-            // 从工具调用阶段回到思考 = 新的 LLM 调用，清空旧 reasoning/output，
-            // 避免第一条思考内容被追加到最新思考末尾。
+            // 工具调用后 LLM 开始新一轮推理：标记下一段 reasoning/output 应替换而非追加，
+            // 同时保留上一轮思考内容直到新内容到达，避免思考在工具调用后消失。
             if (prevPhase === "calling_tool") {
-              setOutput("");
-              setReasoning("");
+              nextReasoningFreshRef.current = true;
+              nextOutputFreshRef.current = true;
             }
             setLiveContentBlocks([]);
           }
@@ -620,11 +622,20 @@ function App() {
         });
         break;
       case "token":
-        // 保留字符累积以防 history 回看需要完整文本
-        setOutput((previous) => previous + event.delta);
+        if (nextOutputFreshRef.current) {
+          setOutput(event.delta);
+          nextOutputFreshRef.current = false;
+        } else {
+          setOutput((previous) => previous + event.delta);
+        }
         break;
       case "reasoning":
-        setReasoning((previous) => previous + event.delta);
+        if (nextReasoningFreshRef.current) {
+          setReasoning(event.delta);
+          nextReasoningFreshRef.current = false;
+        } else {
+          setReasoning((previous) => previous + event.delta);
+        }
         break;
       case "message": {
         // 工具已转为历史消息 → 从 live map 移除（避免与历史区重复渲染）
