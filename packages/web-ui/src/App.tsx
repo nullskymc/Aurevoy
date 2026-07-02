@@ -588,13 +588,12 @@ function App() {
       case "phase":
         setPhase(event.phase);
         patchCurrentTask({ phase: event.phase });
-        // 进入新一轮思考时清空 live 状态
         if (event.phase !== previousPhaseRef.current) {
           previousPhaseRef.current = event.phase;
           if (event.phase === "thinking") {
+            // 进入新一轮思考时只清理内容块；保留 reasoning/output 流式累积，
+            // 避免第一条思考在工具调用后被清空、直到第二轮思考才恢复。
             setLiveContentBlocks([]);
-            setOutput("");
-            setReasoning("");
           }
         }
         break;
@@ -1844,7 +1843,7 @@ function SearchPage({
             <button key={task.id} type="button" className="page-list-row" onClick={() => onSelectTask(task)}>
               <span className="page-list-title">{task.goal}</span>
               <span className="page-list-meta">
-                {task.status} · {new Date(task.updatedAt).toLocaleString("zh-CN")}
+                {getStatusLabel(task.status)} · {new Date(task.updatedAt).toLocaleString("zh-CN")}
               </span>
             </button>
           ))

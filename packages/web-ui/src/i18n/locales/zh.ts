@@ -454,6 +454,16 @@ export const zh = {
   "settings.cleanupTitle": "清理终态任务",
   "settings.cleanupDesc": "只清理早于指定天数的终态任务和轨迹。",
   "settings.cleanup": "清理",
+  "settings.tokenUsageTitle": "Token 使用统计",
+  "settings.tokenUsageDesc": "汇总所有任务的输入、输出与 cache token，方便成本管理。",
+  "settings.tokenUsageUnavailable": "暂无可用统计（Provider 未返回 usage）",
+  "settings.tokenUsageTasks": "任务数",
+  "settings.tokenUsagePrompt": "输入 tokens",
+  "settings.tokenUsageCompletion": "输出 tokens",
+  "settings.tokenUsageTotal": "总 tokens",
+  "settings.tokenUsageCacheRead": "Cache 读取 tokens",
+  "settings.tokenUsageCacheWrite": "Cache 写入 tokens",
+  "settings.tokenUsageEstimatedCost": "估算成本",
 
   // 通知（错误/成功）
   "notice.startEngineFailed": "启动 Agent 引擎失败：",

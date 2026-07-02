@@ -68,11 +68,11 @@ export interface AgentRoundData {
 
 /** 从工具名推断步骤类型 */
 export function detectStepKind(toolName: string): StepKind {
-  if (toolName === "execute_command") return "command";
-  if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll") return "file_read";
-  if (toolName === "write_file" || toolName === "create_file" || toolName === "append_file" || toolName === "session_open" || toolName === "session_write" || toolName === "session_close" || toolName === "session_abort") return "file_write";
-  if (toolName === "edit_file" || toolName === "apply_diff" || toolName === "replace_lines" || toolName === "edit_lines") return "edit";
-  if (toolName === "web_search" || toolName === "search_grep" || toolName === "search_files") return "search";
+  if (toolName === "execute_command" || toolName === "bash") return "command";
+  if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll" || toolName === "read") return "file_read";
+  if (toolName === "write_file" || toolName === "create_file" || toolName === "append_file" || toolName === "session_open" || toolName === "session_write" || toolName === "session_close" || toolName === "session_abort" || toolName === "write") return "file_write";
+  if (toolName === "edit_file" || toolName === "apply_diff" || toolName === "replace_lines" || toolName === "edit_lines" || toolName === "edit") return "edit";
+  if (toolName === "web_search" || toolName === "search_grep" || toolName === "search_files" || toolName === "grep" || toolName === "glob") return "search";
   if (toolName === "create_artifact" || toolName === "apply_artifact") return "artifact";
   if (toolName.startsWith("browser_")) return "browse";
   if (toolName.startsWith("mcp_")) return "api";
@@ -149,12 +149,12 @@ function buildStepsFromToolCalls(
 
 /** 从步骤构建标题 */
 function buildStepTitle(toolName: string, args: Record<string, unknown>): string {
-  if (toolName === "execute_command") {
+  if (toolName === "execute_command" || toolName === "bash") {
     const cmd = typeof args.command === "string" ? args.command : "";
     const commandArgs = Array.isArray(args.args)
       ? (args.args as unknown[]).map(String).join(" ")
       : "";
-    return truncateTitle([cmd, commandArgs].filter(Boolean).join(" ")) || "执行命令";
+    return truncateTitle([cmd, commandArgs].filter(Boolean).join(" ")) || (toolName === "bash" ? "bash" : "执行命令");
   }
   if (toolName === "replace_lines" || toolName === "edit_lines") {
     const path = typeof args.path === "string" ? args.path : "";

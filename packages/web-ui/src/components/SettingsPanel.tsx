@@ -5,9 +5,10 @@ import type {
   MemoryCategory,
   MemoryEntry,
   RuntimeSettings,
+  TokenUsageReport,
 } from "@aurevoy/shared";
 import { t, type Locale } from "../i18n";
-import { setBaseUrl } from "../api";
+import { getTokenUsageReport, setBaseUrl } from "../api";
 
 interface KbDir {
   id: string;
@@ -977,6 +978,25 @@ function DataSettings({
   onCleanup: (olderThanDays: number) => void;
   onCleanupDaysChange: (days: number) => void;
 }) {
+  const [tokenReport, setTokenReport] = useState<TokenUsageReport | null>(null);
+  const [tokenLoading, setTokenLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTokenLoading(true);
+    getTokenUsageReport()
+      .then((report) => {
+        if (!cancelled) setTokenReport(report);
+      })
+      .catch(() => {
+        if (!cancelled) setTokenReport(null);
+      })
+      .finally(() => {
+        if (!cancelled) setTokenLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [dataStatus?.counts.tasks]);
+
   return (
     <>
       <SettingsGroup title={t("settings.localStorage")}>
@@ -989,6 +1009,69 @@ function DataSettings({
               : t("settings.notConnected")
           }
         />
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.tokenUsageTitle")}>
+        <p style={{ margin: "0 0 12px 14px", color: "var(--text-secondary)", fontSize: 13 }}>
+          {t("settings.tokenUsageDesc")}
+        </p>
+        {tokenLoading || !tokenReport ? (
+          <SettingsInfoRow
+            title={t("settings.tokenUsageTotal")}
+            description={tokenLoading ? t("settings.fetching") : t("settings.tokenUsageUnavailable")}
+            value="—"
+          />
+        ) : !tokenReport.available ? (
+          <SettingsInfoRow
+            title={t("settings.tokenUsageTotal")}
+            description={t("settings.tokenUsageUnavailable")}
+            value="—"
+          />
+        ) : (
+          <>
+            <SettingsInfoRow
+              title={t("settings.tokenUsageTasks")}
+              description={t("settings.tokenUsageTasks")}
+              value={String(tokenReport.tasks)}
+            />
+            <SettingsInfoRow
+              title={t("settings.tokenUsagePrompt")}
+              description={t("settings.tokenUsagePrompt")}
+              value={formatTokenCount(tokenReport.promptTokens)}
+            />
+            <SettingsInfoRow
+              title={t("settings.tokenUsageCompletion")}
+              description={t("settings.tokenUsageCompletion")}
+              value={formatTokenCount(tokenReport.completionTokens)}
+            />
+            <SettingsInfoRow
+              title={t("settings.tokenUsageTotal")}
+              description={t("settings.tokenUsageTotal")}
+              value={formatTokenCount(tokenReport.totalTokens)}
+            />
+            {tokenReport.cacheReadTokens > 0 && (
+              <SettingsInfoRow
+                title={t("settings.tokenUsageCacheRead")}
+                description={t("settings.tokenUsageCacheRead")}
+                value={formatTokenCount(tokenReport.cacheReadTokens)}
+              />
+            )}
+            {tokenReport.cacheWriteTokens > 0 && (
+              <SettingsInfoRow
+                title={t("settings.tokenUsageCacheWrite")}
+                description={t("settings.tokenUsageCacheWrite")}
+                value={formatTokenCount(tokenReport.cacheWriteTokens)}
+              />
+            )}
+            {tokenReport.estimatedCostUsd > 0 && (
+              <SettingsInfoRow
+                title={t("settings.tokenUsageEstimatedCost")}
+                description={t("settings.tokenUsageEstimatedCost")}
+                value={`$${tokenReport.estimatedCostUsd.toFixed(4)}`}
+              />
+            )}
+          </>
+        )}
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.dataCleanup")}>
@@ -1014,6 +1097,12 @@ function DataSettings({
       </SettingsGroup>
     </>
   );
+}
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
 }
 
 const MEMORY_CATEGORIES: MemoryCategory[] = ["preference", "directory", "model", "habit", "fact", "other"];

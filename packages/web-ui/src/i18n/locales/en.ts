@@ -455,6 +455,16 @@ export const en = {
   "settings.cleanupTitle": "Clean Up Terminal State Tasks",
   "settings.cleanupDesc": "Only removes terminal-state tasks and traces older than the specified days.",
   "settings.cleanup": "Clean Up",
+  "settings.tokenUsageTitle": "Token Usage Statistics",
+  "settings.tokenUsageDesc": "Aggregated input, output, and cache tokens across all tasks for cost management.",
+  "settings.tokenUsageUnavailable": "No usage data available (Provider did not return usage)",
+  "settings.tokenUsageTasks": "Tasks",
+  "settings.tokenUsagePrompt": "Input tokens",
+  "settings.tokenUsageCompletion": "Output tokens",
+  "settings.tokenUsageTotal": "Total tokens",
+  "settings.tokenUsageCacheRead": "Cache read tokens",
+  "settings.tokenUsageCacheWrite": "Cache write tokens",
+  "settings.tokenUsageEstimatedCost": "Estimated cost",
 
   // Notifications (errors / success)
   "notice.startEngineFailed": "Failed to start Agent engine: ",

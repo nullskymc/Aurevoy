@@ -202,6 +202,14 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 - `delivered=false`：无对应的待审批项（已超时/已决策/不存在）。
 - 字段缺失或类型错误 → `400`；任务不存在 → `404`。
 
+### POST `/api/tasks/:id/auto-mode-resume`
+恢复因安全暂停（连续自动批准数达上限）而暂停的 auto mode。重置连续计数，恢复原有自动等级。
+```json
+// 200 → { taskId, resumed: true, level: "auto-edit" }
+```
+- 任务未处于暂停状态 → `409 {"error":"task is not in auto-mode paused state"}`
+- 任务不存在 → `404`。
+
 ### POST `/api/tasks/:id/plan-approval`
 审批 Plan Agent 生成的执行计划（响应 `plan_approval_request` 事件）。
 ```json
@@ -345,6 +353,8 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `unreverted` | `restoredCount` | 撤销编辑：归档消息已恢复 |
 | `branched` | `parentTaskId`, `messageId`, `messageCount` | 会话分支：新任务已从父任务克隆 |
 | `compacted` | `originalCount`, `summaryLength` | 上下文压缩：旧消息已替换为摘要 |
+| `content_blocks_added` | `messageId`, `blocks: ContentBlock[]` | Agent 主动推送文件对象到对话（如图片、附件） |
+| `auto_mode_state` | `state: AutoModeState` | Auto mode 运行时状态更新（等级切换、暂停、恢复） |
 | `done` | `status: TaskStatus` | 任务结束（completed/failed/cancelled） |
 | `error` | `message: string` | 执行出错 |
 
@@ -515,20 +525,50 @@ interface TaskTraceEntry {
 ## 5. LLM Provider 配置
 
 引擎通过环境变量选择 LLM Provider（开发期写在**项目根目录** `.env`，已 gitignore；
-模板见根目录 `.env.example`）。Provider 抽象在 `apps/agent/src/llm/provider.ts`。
+模板见根目录 `.env.example`）。Provider 抽象在 `apps/agent/src/llm/`。
+
+支持三种协议：
+
+| Provider | 端点 | 说明 |
+|---|---|---|
+| `openai` / `openai-compatible` | `/chat/completions` | OpenAI Chat Completions 兼容协议（OpenAI / DeepSeek / Ollama / vLLM / LM Studio 等） |
+| `anthropic` | `/v1/messages` | Anthropic Claude Messages API（`x-api-key` 认证，system prompt 独立参数） |
+| `openai-response` | `/v1/responses` | OpenAI Responses API v2（input/instructions 模式） |
+
+通用环境变量：
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `AUREVOY_LLM_PROVIDER` | `openai` | OpenAI 兼容协议（后续可扩展其它厂商） |
+| `AUREVOY_LLM_PROVIDER` | `openai` | Provider 类型：`openai`、`anthropic` 或 `openai-response` |
 | `AUREVOY_LLM_API_KEY` | 空 | API Key，**必填**；缺失时执行任务会明确报错 |
-| `AUREVOY_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容端点基础地址（不含 `/chat/completions`） |
-| `AUREVOY_LLM_MODEL` | `gpt-4o-mini` | 模型名 |
+| `AUREVOY_LLM_MODEL` | `gpt-4o-mini` | 模型名（Anthropic 默认 `claude-sonnet-4-20250514`） |
 | `AUREVOY_LLM_TEMPERATURE` | `0.7` | 采样温度 |
 | `AUREVOY_LLM_TIMEOUT_MS` | `120000` | 单轮 LLM 调用超时 |
 | `AUREVOY_APPROVAL_TIMEOUT_MS` | `300000` | 工具审批等待超时；超时按拒绝处理 |
 
+OpenAI 兼容专用：
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `AUREVOY_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容端点基础地址（不含 `/chat/completions`） |
+
+Anthropic 专用：
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `AUREVOY_ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Anthropic API 基础地址 |
+| `AUREVOY_ANTHROPIC_MAX_TOKENS` | `8192` | 单次响应最大 token 数 |
+
+OpenAI Responses API 专用：
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `AUREVOY_LLM_BASE_URL` | `https://api.openai.com/v1` | Responses API 基础地址（共用同一 Base URL） |
+
 - `openai` 走标准 Chat Completions 流式协议（`stream: true`，SSE），
   兼容 OpenAI / DeepSeek / Moonshot / 本地 Ollama(`/v1`) / vLLM / LM Studio 等。
+- `anthropic` 走 `/v1/messages` 端点，原生 fetch + SSE 解析，`x-api-key` 认证。
+- `openai-response` 走 `/v1/responses` 端点，input/instructions 替代 messages/system 角色。
 - 未配置 API Key 或 provider 不支持时，执行任务会通过 `error` 事件明确报错，
   **不再有占位/Mock 回退**，避免污染真实结果。
 - 当前生效的 Provider 名通过 `GET /api/health` 的 `provider` 字段暴露给前端。

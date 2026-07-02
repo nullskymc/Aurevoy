@@ -25,6 +25,7 @@ import {
   type RuntimeSettings,
   type Task,
   type TaskArtifact,
+  type TokenUsageReport,
   type TaskTraceEntry,
   type TaskTraceListResponse,
   type ToolListResponse,
@@ -350,6 +351,12 @@ export async function getMcpStatus(): Promise<McpStatusResponse> {
 export async function getDataStatus(): Promise<DataStatusResponse> {
   const res = await fetch(`${BASE_URL}/api/data`);
   if (!res.ok) throw new Error(`get data status failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getTokenUsageReport(): Promise<TokenUsageReport> {
+  const res = await fetch(`${BASE_URL}/api/data/token-usage`);
+  if (!res.ok) throw new Error(`get token usage report failed: ${res.status}`);
   return res.json();
 }
 

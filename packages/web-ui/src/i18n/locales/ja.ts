@@ -462,6 +462,16 @@ export const ja = {
   "settings.cleanupTitle": "終了状態タスクをクリーンアップ",
   "settings.cleanupDesc": "指定日数より古い終了状態のタスクとトレースのみを削除します。",
   "settings.cleanup": "クリーンアップ",
+  "settings.tokenUsageTitle": "Token 使用統計",
+  "settings.tokenUsageDesc": "すべてのタスクの入力、出力、cache token を集計し、コスト管理に役立てます。",
+  "settings.tokenUsageUnavailable": "利用可能な統計がありません（Provider が usage を返していません）",
+  "settings.tokenUsageTasks": "タスク数",
+  "settings.tokenUsagePrompt": "入力 tokens",
+  "settings.tokenUsageCompletion": "出力 tokens",
+  "settings.tokenUsageTotal": "総 tokens",
+  "settings.tokenUsageCacheRead": "Cache 読み取り tokens",
+  "settings.tokenUsageCacheWrite": "Cache 書き込み tokens",
+  "settings.tokenUsageEstimatedCost": "推定コスト",
 
   // Notifications (errors / success)
   "notice.startEngineFailed": "Agentエンジンの起動に失敗: ",

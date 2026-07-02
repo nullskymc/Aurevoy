@@ -462,6 +462,16 @@ export const ko = {
   "settings.cleanupTitle": "종료 상태 작업 정리",
   "settings.cleanupDesc": "지정된 일수보다 오래된 종료 상태 작업 및 추적만 정리합니다.",
   "settings.cleanup": "정리",
+  "settings.tokenUsageTitle": "Token 사용 통계",
+  "settings.tokenUsageDesc": "모든 작업의 입력, 출력 및 cache token을 합산하여 비용 관리에 활용합니다.",
+  "settings.tokenUsageUnavailable": "사용 가능한 통계 없음 (Provider가 usage를 반환하지 않음)",
+  "settings.tokenUsageTasks": "작업 수",
+  "settings.tokenUsagePrompt": "입력 tokens",
+  "settings.tokenUsageCompletion": "출력 tokens",
+  "settings.tokenUsageTotal": "총 tokens",
+  "settings.tokenUsageCacheRead": "Cache 읽기 tokens",
+  "settings.tokenUsageCacheWrite": "Cache 쓰기 tokens",
+  "settings.tokenUsageEstimatedCost": "예상 비용",
 
   // Notifications (errors / success)
   "notice.startEngineFailed": "Agent 엔진 시작 실패: ",

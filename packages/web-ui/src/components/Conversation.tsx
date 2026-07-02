@@ -776,7 +776,7 @@ function toolStatusIcon(status: ToolActivity["status"]): string {
 }
 
 function getToolKindLabel(name: string): string {
-  return /cmd|command|exec|shell|terminal/i.test(name) ? t("tool.kind.command") : t("tool.kind.tool");
+  return /cmd|command|exec|shell|terminal|bash/i.test(name) ? t("tool.kind.command") : t("tool.kind.tool");
 }
 
 function ToolActivityCard({
@@ -1257,7 +1257,7 @@ function ApprovalInline({
 }
 
 function toolApprovalLabel(item: ToolActivity): string {
-  if (item.name !== "execute_command") return item.name;
+  if (item.name !== "execute_command" && item.name !== "bash") return item.name;
   const argsObj = item.args as Record<string, unknown> | null;
   if (!argsObj || typeof argsObj !== "object") return item.name;
   const command = typeof argsObj.command === "string" ? argsObj.command : "";
@@ -1303,8 +1303,8 @@ function formatToolResult(item: ToolActivity): string {
 function toolTargetLabel(item: ToolActivity): string {
   const argsObj = item.args as Record<string, unknown> | null;
   if (!argsObj || typeof argsObj !== "object") return "";
-  if (item.name === "execute_command") return toolApprovalLabel(item);
-  if (item.name === "search_grep") {
+  if (item.name === "execute_command" || item.name === "bash") return toolApprovalLabel(item);
+  if (item.name === "search_grep" || item.name === "grep") {
     const pattern = argsObj.pattern;
     return typeof pattern === "string" ? truncateCommandLine(pattern) : "";
   }
@@ -1315,7 +1315,8 @@ function toolTargetLabel(item: ToolActivity): string {
     argsObj.file ??
     argsObj.filePath ??
     argsObj.CommandLine ??
-    argsObj.Query;
+    argsObj.Query ??
+    argsObj.command;
   return typeof target === "string" ? truncateCommandLine(getFilename(target) || target) : "";
 }
 

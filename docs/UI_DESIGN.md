@@ -123,7 +123,7 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 - 大圆角输入框，占位文案引导用户随心输入。
 - Enter 提交，Shift+Enter 换行。
 - 底部工具条：附加、Provider，以及右侧的本地引擎在线状态与圆形发送按钮。
-- 输入框页脚：项目（Aurevoy）、运行模式（本地模式）等轻量上下文。
+- 输入框页脚：项目（Aurevoy）、运行模式（本地模式）、**自动模式等级切换**等轻量上下文。
 - 引擎离线或内容为空时禁用发送。
 - Provider 未配置或后端返回 `unconfigured` 时，输入区必须明确提示需要配置模型，不能允许提交后再给假回复。
 - Provider/模型入口是轻量 popover，不跳转设置页、不打开右侧运行详情抽屉；仅在用户点击
@@ -232,6 +232,12 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
   必须调用后端接口，不能只改前端状态。
 - **模型管理**：设置页手动获取 Provider `/models` 后写入 `availableModels`，用户勾选后写入
   `enabledModels`；主界面模型菜单只读取 `enabledModels`，不会每次打开都请求后端。
+- **自动模式**：顶栏"自动模式"下拉切换按钮，4 级（off/plan/auto-edit/full），实时生效；
+  plan 等级切换时通过 `PATCH /api/settings` 持久化。
+- **安全暂停恢复**：auto mode 连续自动批准达到阈值后自动暂停，UI 显示暂停横幅 +
+  "恢复自动模式"按钮，调用 `POST /api/tasks/:id/auto-mode-resume`。
+- **知识库管理**：设置 → 知识库子页面；添加/删除索引目录、查看索引状态、配置 Embedding Provider。
+  目录添加调用 `POST /api/knowledge-base/dirs`，Embedding 可继承 LLM Base URL/API Key。
 
 后续控制能力应按契约优先原则新增；没有后端真实行为前，不能在 UI 上提供可点击假入口：
 
@@ -310,15 +316,20 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 推荐组件拆分：
 
 | 组件 | 职责 |
-|---|---|
+|---|---|---|
 | `App` | 应用状态编排、健康检查、SSE 生命周期、对话历史、空状态/对话切换、抽屉开关 |
 | `TaskHistorySidebar` | 左侧动作组、对话历史列表、新对话与抽屉入口 |
 | `Composer` | 大输入框，hero 与 docked 两种形态，Enter 提交、Provider/引擎状态/发送 |
 | `ModelSelectorDrawer` | Composer 模型 popover：只展示 `enabledModels`、支持空白/Escape 关闭和滚动 |
 | `Conversation` | 居中对话流：用户目标气泡、内联计划卡片、流式输出、状态 |
+| `Timeline` / `ThinkingTimeline` | 思考时间线卡片：planStepId 关联分组、流式更新、工具活动（tool_call/tool_result）、思考消息 |
 | `InspectorPanel` | 默认隐藏的右侧抽屉：任务上下文、工具目录、工具调用、事件流 |
 | `AgentEventFeed` | 抽屉内的事件流展示 |
 | `StatusPill` | 任务状态标签 |
+| `ContextMenu` | 自定义右键菜单：对话消息上支持编辑重跑、分支、复制等操作（统一替代浏览器默认菜单） |
+| `ArtifactView` | 任务产物查看器：draft/confirmed/applied/rejected 状态渲染 |
+| `ImageViewer` | 图片全屏 lightbox：ESC/✕/点击背景关闭 |
+| `SettingsPanel` / `MemoryPanel` | 设置页与记忆管理面板 |
 
 `App` 可以持有 UI 编排状态，但业务真相仍来自后端 `Task` 和 `AgentEvent`。
 
@@ -369,7 +380,14 @@ Aurevoy 使用**主模型 + 视觉子模型**架构：
 
 全局永久自动批准：Settings → 工具管理 → 勾选工具的"自动批准：跳过审批直接执行"。
 
-### 7.5 技术架构
+### 7.5 Agent 主动文件输出
+
+Agent 可以将生成的文件（如图表、报告、数据文件）作为消息附件主动推送到对话中。
+前端通过 `content_blocks_added` SSE 事件接收文件对象，在对话流中以文件卡片（缩略图 +
+文件名 + 打开/下载按钮）内联展示。文本内容（如 HTML、Markdown、代码）直接渲染为
+artifact 预览。
+
+### 7.6 技术架构
 
 ```
 [Composer 图片/文件] → [App attachment state]

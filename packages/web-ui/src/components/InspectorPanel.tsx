@@ -238,7 +238,14 @@ function formatTokenUsage(task: Task | null): string {
   const usage = task?.tokenUsage;
   if (!usage) return t("inspector.notRecorded");
   if (!usage.available) return t("inspector.unavailable");
-  return `${usage.totalTokens ?? 0} total / ${usage.promptTokens ?? 0} in / ${usage.completionTokens ?? 0} out`;
+  const parts: string[] = [
+    `${usage.totalTokens ?? 0} total`,
+    `${usage.promptTokens ?? 0} in`,
+    `${usage.completionTokens ?? 0} out`,
+  ];
+  if (usage.cacheReadTokens) parts.push(`${usage.cacheReadTokens} cache read`);
+  if (usage.cacheWriteTokens) parts.push(`${usage.cacheWriteTokens} cache write`);
+  return parts.join(" / ");
 }
 
 function formatBudgetUsage(task: Task | null): string {

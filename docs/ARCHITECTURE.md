@@ -10,7 +10,9 @@
 2. **契约集中**：所有跨进程数据结构定义在 `packages/shared`，前后端共用，杜绝类型漂移。
 3. **能力可插拔**：LLM Provider、工具（Tool/MCP）、存储都在抽象接口之后，
    Agent 主循环不感知具体实现。
-4. **可插拔 Provider**：LLM 走 OpenAI 兼容协议（OpenAI/DeepSeek/Ollama 等），通过 `.env` 配置；未配置即明确报错。
+4. **可插拔 Provider**：LLM 支持三种协议——OpenAI 兼容（OpenAI/DeepSeek/Ollama 等）、
+   Anthropic（Claude Messages API）、OpenAI Responses API v2。通过 `.env` 或设置界面配置；
+   未配置即明确报错。
 5. **本地优先**：数据默认存本地 SQLite；引擎只监听 `127.0.0.1`，不对外暴露。
 6. **交付真实能力**：不允许用 Mock、占位事件或前端假状态替代真实运行链路。
    能力不可用时必须明确失败、降级或要求配置。
@@ -37,7 +39,7 @@ Aurevoy/  (npm workspaces monorepo)
 │                                  │                                │
 │                                  │  fetch / EventSource           │
 └──────────────────────────────────┼───────────────────────────────┘
-                                    │  HTTP + SSE  (127.0.0.1:8787)
+                                     │  HTTP + SSE  (127.0.0.1:8787)
 ┌──────────────────────────────────┼───────────────────────────────┐
 │  Agent 引擎进程 (Node + Fastify)   ▼                               │
 │   server.ts (路由/SSE)                                            │
@@ -48,11 +50,15 @@ Aurevoy/  (npm workspaces monorepo)
 │        │                          └──▶ SSE 推送回前端              │
 │        ├──▶ agent/plan-agent.ts         (Plan Agent：按需侦查+规划)  │
 │        ├──▶ agent/subagent.ts           (子代理：受限委托执行)       │
-│        ├──▶ llm/provider.ts            (LLMProvider：OpenAI 兼容)   │
+│        ├──▶ agent/approval.ts           (Auto Mode 审批策略)        │
+│        ├──▶ llm/providers/              (多 Provider: OpenAI 兼容 / │
+│        │       Anthropic / OpenAI Response v2)                     │
 │        ├──▶ agent/tool-call-accumulator (流式 tool_calls 累积)     │
-│        ├──▶ tools/registry.ts          (ToolRegistry：内置 / MCP)  │
-│        ├──▶ approval/risk gate          (工具审批与风险控制)         │
+│        ├──▶ tool/tools/  (新一代 Effect-TS 工具系统, P0-P4)         │
+│        ├──▶ tools/registry.ts          (旧工具注册表，兼容过渡)     │
 │        ├──▶ sandbox/command-executor.ts (命令执行边界，默认关闭)     │
+│        ├──▶ memory/                     (向量检索 + Dreams 管道)    │
+│        ├──▶ knowledge-base/             (RAG: 索引 + KNN 召回)      │
 │        └──▶ store/db.ts                (SQLite 任务 + 轨迹持久化)   │
 └───────────────────────────────────────────────────────────────────┘
 ```
@@ -81,23 +87,37 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/index.ts` | 进程入口，启动 Fastify |
 | `src/config.ts` | 运行时配置（host/port/dbPath/cors/provider/sandbox/network/MCP），全部可被环境变量覆盖 |
 | `src/server.ts` | HTTP 路由 + SSE 端点（见 `docs/API.md`） |
-| `src/agent/loop.ts` | **Default Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**。 按需调用 Plan Agent（`assessComplexity`→复杂任务推 `plan_approval_request` 等待审批→批准后分步执行）。 简单对话单步直接执行。 P2: 并行工具执行（safe 工具 `Promise.all`，risky 工具并发审批→并行执行，`invokeWithTimeout` 独立超时）。 含显式 runtime phase、多步计划、checkpoint、防死循环、重试、取消、恢复、每轮持久化。 P6: 写入前文件快照 + Rewind 文件回滚 + 失败结果 fallback 附加 |
+| `src/agent/loop.ts` | **Default Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**。 按需调用 Plan Agent（`assessComplexity`→复杂任务推 `plan_approval_request` 等待审批→批准后分步执行）。 简单对话单步直接执行。 P2: 并行工具执行（safe 工具 `Promise.all`，risky 工具并发审批→并行执行，`invokeWithTimeout` 独立超时）。 含显式 runtime phase、多步计划、checkpoint、防死循环、重试、取消、恢复、每轮持久化。 P6: 写入前文件快照 + Rewind 文件回滚 + 失败结果 fallback 附加。 **Auto Mode**: 4 级自动模式（off/plan/auto-edit/full），运行时切换，安全暂停，自动规划降级 |
+| `src/agent/approval.ts` | **审批策略引擎**：4 级自动模式审批决策；工具白名单（APPROVAL_FREE / PLANMODE / AUTO_EDIT）；`computeAutoApproval()` 判断自动批准；`approvalKeyForCall()` 命令前缀匹配审批；安全暂停阈值（连续 50 次自动批准后要求确认） |
 | `src/agent/plan-agent.ts` | **Plan Agent**：Default Agent 按需调用的规划引擎。 Scout 阶段快速侦查工作区（仅 safe 只读工具）；LLM 生成 2-8 步 JSON 结构化计划；失败回退正则启发式。 返回结构化计划供用户审批 |
 | `src/agent/subagent.ts` | **P7: 子代理执行引擎**。受限 ReAct 循环：仅 safe 只读工具、max 5 轮、60s 超时、不写 memory、结果 20KB 截断 |
 | `src/agent/context.ts` | **上下文窗口 + 记忆注入**。 P4: `estimateTokens()` 轻量 token 估算；`autoCompactIfNeeded()` token 预算超 85% 时 LLM 语义摘要。 P5: `scoreMemories()` 相关性评分（关键词+分类+置信度+时间衰减）；`parseMemoryLinks()`/`expandLinkedMemories()` 解析 `[[link]]` 引用；`buildMemorySystemMessage()` 按目标评分排序注入 top-20 |
 | `src/agent/m6-state.ts` | Agent 交付状态辅助：预算、token usage、追问、artifact、checkpoint 的创建与状态更新 |
 | `src/agent/events.ts` | `TaskEventBus`：按 `taskId` 发布/订阅 `AgentEvent`，桥接执行与 SSE |
 | `src/agent/tool-call-accumulator.ts` | 流式 `tool_calls` 累积器：按 `index` 跨 chunk 拼接 `id`/`name`/`arguments`，处理并行调用与截断 |
-| `src/llm/provider.ts` | `LLMProvider` 抽象（`stream(messages, options)` 支持 tools/signal）+ `OpenAICompatibleProvider`；`getProvider()` 按配置返回，未配置即报错 |
-| `src/tools/registry.ts` | `ToolRegistry`：注册/列举/调用工具；JSON Schema 子集校验。 P2: `invokeWithTimeout()` 独立超时；`executionPolicyOf()` 并行策略。 P3: `truncateToolOutput()` 50K 字符截断。 P6: `fallbackFor()` 替代方案查询 |
+| `src/llm/types.ts` | **LLMProvider 接口**：`stream(messages, options)` 返回 `AsyncIterable<LLMChunk>`。 所有 Provider 实现统一的 `LLMChunk` 结构（`textDelta` / `reasoningContentDelta` / `toolCallsSnapshot` / `tokenUsage`），Agent 循环不感知具体厂商 |
+| `src/llm/provider.ts` | **Provider 工厂**：`getProvider()` 按配置路由到 4 种 provider——`openai`/`openai-compatible`（Chat Completions）、`anthropic`（Claude Messages API）、`openai-response`（Responses API v2）。带进程内缓存，`resetProviderCache()` 清空 |
+| `src/llm/openai-compatible.ts` | **OpenAI 兼容 Provider**：`/chat/completions` 端点，支持 OpenAI / DeepSeek（`reasoning_content`）/ Ollama / vLLM 等。多模态 base64 图片支持 |
+| `src/llm/anthropic.ts` | **Anthropic Provider**：`/v1/messages` 端点（原生 fetch），system prompt 独立参数，tool_use/tool_result 以 content block 表达，认证走 `x-api-key` |
+| `src/llm/openai-response.ts` | **OpenAI Responses API v2 Provider**：`/v1/responses` 端点，input 替代 messages，instructions 替代 system 角色，function_call 以 output item 表达 |
+| `src/tools/registry.ts` | **旧工具注册表**（兼容过渡期）：`ToolRegistry` 类，注册/列举/调用工具；JSON Schema 子集校验。 P2: `invokeWithTimeout()` 独立超时；`executionPolicyOf()` 并行策略。 P3: `truncateToolOutput()` 50K 字符截断。 P6: `fallbackFor()` 替代方案查询 |
 | `src/tools/builtins.ts` | 内置基础工具。 文件：目录/读写/搜索/复制/移动/删除。 **P6**: `edit_file` 精确替换（唯一匹配校验）。 网络：HTTP 抓取。 记忆：`remember`（**P5**: Jaccard 去重+`[[link]]` 引用）。 交互：`ask_user`、`create_artifact`/`apply_artifact`。 沙箱：`execute_command`（默认禁用）。 **P7**: `delegate_task` 子代理委托 |
+| `src/tool/` | **新一代 Effect-TS 工具系统**（P0-P4）：Schema 驱动输入输出、作用域注册、审批引擎、文件快照、并行执行管线。见下方独立模块 |
+| `src/tool/framework/definition.ts` | **工具定义**：`ToolConfig<I,O>` 接口 + `make()` 工厂。输入/输出用 Effect `Schema` 定义，自动生成 JSON Schema。支持 `toModelOutput` 多部分输出（文本/文件） |
+| `src/tool/framework/registry.ts` | **作用域注册表**：Effect Tag + Layer，`register()` 作用域内自动清理。同名单栈（最新覆盖），`materialize()` 快照当前注册集合 |
+| `src/tool/framework/executor.ts` | **执行管线**：`ToolExecutionPipeline` 包装 `Materialization`，支持 `executeOne`/`executeParallel`/`executeSequential`，`Promise.race` 独立超时 |
+| `src/tool/framework/permission.ts` | **权限服务**：`PermissionService` 允许/拒绝规则引擎，last-match-wins，支持 `*` 通配符 |
+| `src/tool/tools/` | **14 个领域工具**：`read`/`write`/`edit`/`glob`/`grep`/`bash`/`web-search`/`web-fetch`/`ask-user`/`artifact`/`delegate`/`memory` 等，每个工具独立目录 |
+| `src/tool/filesystem/` | **Effect 文件系统服务**：`read-filesystem` 只读操作 + `file-mutation` 文件写入/快照/回滚抽象 |
+| `src/tool/builtins.ts` | **工具注册入口**：P4 将新工具集成到 Agent 循环，通过 Effect Layer 提供 `ToolRegistry` |
+| `src/agent/register-new-tools.ts` | **新旧桥接**：将新框架的 8 个工具映射到旧 `ToolRegistry`，确保两套框架共存 |
 | `src/tools/activate-skill.ts` | **Skill**: `activate_skill` 工具（Agent Skills 标准）——LLM 可调用激活/停用 skill，返回 `<skill_content>` 结构化标签 + 资源列表，发布 `skill_activated`/`skill_deactivated` SSE 事件 |
 | `src/tools/web-search.ts` | **Web 搜索**: `web_search` 工具——DuckDuckGo HTML 搜索（免费），可配置搜索后端，返回结构化结果（标题/摘要/URL） |
 | `src/tools/mcp.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到 `ToolRegistry`；MCP 描述会截断/净化，本地风险覆盖优先于 annotations |
 | `src/skills/types.ts` | **Skill 类型**（Agent Skills 标准）：`SkillFrontmatter`（含 license/compatibility/metadata）、`SkillCatalogEntry`（Tier 1 catalog）、`SkillContent`（Tier 2 body+resources）、`SkillResource` |
 | `src/skills/loader.ts` | **Skill 加载器**（Agent Skills 标准）：`discoverSkills()` 扫描目录发现 SKILL.md（标准格式）+ flat .md（向后兼容）；`loadSkillContent()` 激活时懒加载 body + 资源枚举 |
 | `src/skills/registry.ts` | **Skill 注册表**（渐进披露）：Tier 1 `load()` 仅加载 name+description；Tier 2 `getContent()` 激活时加载 body+resources。发现路径含 `.aurevoy/skills/` 和 `.agents/skills/` |
-| `skills/builtin/` | **预装 skill 目录**：`web-search/SKILL.md`、`browser/SKILL.md`（Agent Skills 标准格式，含 scripts/references/assets 支持） |
+| `skills/builtin/` | **预装 skill 目录**：`web-search/SKILL.md`、`browser/SKILL.md`、`report-design/SKILL.md`（Agent Skills 标准格式，含 scripts/references/assets 支持） |
 | `src/runtime/settings.ts` | 运行设置服务：从 SQLite 加载/保存 Provider、工作区、工具边界、MCP 和清理策略；更新后影响真实 runtime |
 | `src/sandbox/command-executor.ts` | 命令/代码执行前置边界：策略、超时、输出上限、env allowlist；默认禁用，不暴露 shell |
 | `src/store/db.ts` | SQLite 持久化。 `taskStore`：save/get/list/listByProject。 `traceStore`：append/list。 `projectStore`：CRUD/getByPath。 `memoryStore`(**P5**: +`nameSlug`/`why`/`howToApply` 列，`findByNameSlug` 查询)。 `settingsStore`；`toolSettingsStore` |
@@ -141,8 +161,9 @@ API 请求响应、运行时常量（默认地址端口）。
 
 | 想做的事 | 改哪里 | 不要碰 |
 |---|---|---|
-| 接真实大模型 | 在 `llm/provider.ts` 新增 `LLMProvider` 实现，改 `getProvider()` | Agent 循环、前端 |
-| 加一个工具 | 在 `tools/` 新建并 `toolRegistry.register()` | Agent 循环内联逻辑 |
+| 接真实大模型 | 在 `llm/` 新增 `LLMProvider` 实现，改 `getProvider()` | Agent 循环、前端 |
+| 加一个工具 | 新工具放 `tool/tools/`（新框架，推荐）或 `tools/`（旧框架，兼容）；注册到对应注册表 | Agent 循环内联逻辑 |
+| 加自动模式规则 | `agent/approval.ts` 扩展 `computeAutoApproval()` + 工具白名单 | Agent 循环直接放行工具 |
 | 接 MCP server | 配置 `AUREVOY_MCP_SERVERS_JSON`，或扩展 `tools/mcp.ts` 的 transport 支持 | 工具调用协议 / Agent 循环 |
 | 改网络抓取边界 | `tools/builtins.ts` 的 `http_fetch` 策略 + `config.network` + `docs/API.md` | 绕过 SSRF/重定向校验直接 fetch |
 | 加轨迹日志/审计 | `store/` 新增结构化记录，`agent/` 在状态边界写入 | 前端临时数组、console-only 日志 |
@@ -154,6 +175,8 @@ API 请求响应、运行时常量（默认地址端口）。
 | 加子代理能力 | `agent/subagent.ts` 修改约束/轮次/超时；`tools/builtins.ts` 的 `delegate_task` 描述 | 在子代理中开放写入工具 |
 | 加记忆引用/评分 | `agent/context.ts` 的 `scoreMemories`/`parseMemoryLinks`；`store/db.ts` 的 `findByNameSlug` | 直接改评分公式不跑回归 |
 | 加 Diff 编辑 | `tools/builtins.ts` 的 `edit_file` 工具 | 绕过唯一性校验直接写文件 |
+| 加记忆向量/RAG | `memory/` 或 `knowledge-base/` + `store/db.ts` 加表 + `embedding/` Provider | 混合评分参数不跑回归 |
+| 加新 LLM Provider | `llm/` 实现 `LLMProvider` 接口 + `provider.ts` 路由 | Agent 循环感知具体厂商 |
 | 调上下文压缩策略 | `config.ts` 的 `contextTokenBudget`/`compactThreshold`/`compactKeepRecentTurns` | 把阈值设到 1.0 永不压缩 |
 | 加界面 | `apps/desktop/src` | 后端业务逻辑 |
 | 换存储/加表 | `store/db.ts` | 其它模块直接访问 DB |

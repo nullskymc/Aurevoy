@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import type { Task, Project } from "@aurevoy/shared";
-import { getRelativeTime } from "./status";
+import { getRelativeTime, getStatusLabel } from "./status";
 import { t } from "../i18n";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -406,7 +406,7 @@ function TaskList({
                 ) : null}
                 {!isChild && (
                   <span className="conv-meta">
-                    <span>{task.status}</span>
+                    <span>{getStatusLabel(task.status)}</span>
                     <span>{getRelativeTime(task.updatedAt)}</span>
                   </span>
                 )}

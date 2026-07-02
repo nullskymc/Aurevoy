@@ -400,5 +400,10 @@ function normalizeUsage(usage: OpenAIPayload['usage']): TokenUsage | null {
   if (typeof usage.prompt_tokens === 'number') out.promptTokens = usage.prompt_tokens;
   if (typeof usage.completion_tokens === 'number') out.completionTokens = usage.completion_tokens;
   if (typeof usage.total_tokens === 'number') out.totalTokens = usage.total_tokens;
+  const cached = (usage as Record<string, unknown>).prompt_tokens_details;
+  if (cached && typeof cached === 'object') {
+    const cacheRead = (cached as Record<string, unknown>).cached_tokens;
+    if (typeof cacheRead === 'number') out.cacheReadTokens = cacheRead;
+  }
   return Object.keys(out).length > 0 ? out : null;
 }
