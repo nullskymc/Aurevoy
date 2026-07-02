@@ -1,9 +1,9 @@
 ---
 name: report-design
 description: 按照 Aurevoy 设计系统生成专业 HTML 报告。支持技术报告、设计文档、项目计划、调研报告、会议纪要等。每份报告基于 Web Component 组件库构建——Agent 通过自定义元素填充内容，组件自行处理布局/配色/深色模式/动画，确保输出完全符合设计规范。提供从需求分析、调研、结构规划、HTML 草稿到终稿交付的完整工作流。当用户需要生成可视化报告、设计评审、方案展示或任何需要浏览的文档时使用此技能。
-allowed-tools: web_search http_fetch list_directory open_file scroll search_grep get_current_time create_artifact apply_artifact attach_content
+allowed-tools: web_search http_fetch list_directory open_file scroll search_grep get_current_time create_artifact apply_artifact attach_content bundle_report
 metadata:
-  version: "3.0"
+  version: "3.1"
 ---
 
 # Report Design HTML 报告设计技能
@@ -16,9 +16,15 @@ metadata:
 
 ---
 
-## 1. 组件库加载
+## 1. 组件库加载与打包
 
-每份报告 HTML 通过 `<script>` 引用组件库。组件库文件需与报告 HTML 放在同一目录：
+报告基于 **Web Component 组件库**（`components.js`）构建。你无需编写 CSS 或复杂 HTML 结构——只需使用自定义元素 + 属性/文本填充内容。
+
+最终交付物为**单一自包含 HTML 文件**：在 HTML 草稿中按常规方式引用 `./components.js`（以及本地图片），然后用 **`bundle_report`** 工具自动将脚本、样式、图片内联成单个文件。这样：
+
+- 避免浏览器通过 `file://` 打开时拦截本地脚本/图片
+- 报告可单独复制、邮件发送、上传分享
+- 你无需把 `components.js` 的代码粘贴进 HTML，大幅节省 token
 
 ```html
 <!DOCTYPE html>
@@ -27,13 +33,15 @@ metadata:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>报告标题</title>
-<!-- 组件库：与报告 HTML 同目录 -->
+<!-- 常规引用即可，bundle_report 会自动内联 -->
 <script src="./components.js"></script>
 </head>
 <body style="background:var(--surface, #f8f8f8); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; padding:32px 24px; margin:0">
 ```
 
-组件库通过 CSS 自定义属性适配深色模式。所有组件自动响应 `prefers-color-scheme`。
+组件库通过 CSS 自定义属性适配深色模式。所有组件自动响应 `prefers-color-scheme`，并包含淡入、上浮、进度条填充等微动画（尊重 `prefers-reduced-motion`）。
+
+**图片**：如需插入本地图片，使用相对路径 `<img src="./diagram.png">`，`bundle_report` 会自动 base64 编码内联。外部 URL 图片保持原样。
 
 ---
 
@@ -508,6 +516,8 @@ metadata:
 </html>
 ```
 
+> **草稿阶段不要内联 `components.js`**——保持 `<script src="./components.js"></script>` 引用即可。终稿由 `bundle_report` 自动处理，可节省大量 token。
+
 ### 7.2 关键规则
 
 1. **只用组件，不写 CSS**：所有样式由组件 Shadow DOM 处理。不要写 `<style>` 标签或 `style=""` 属性。
@@ -527,25 +537,39 @@ metadata:
 
 ## 8. 阶段五：终稿交付
 
-### 8.1 写入文件
+### 8.1 写入草稿与依赖
 
-用户确认后，**写入两个文件**：
+用户确认后：
 
-1. **组件库**：用 `apply_artifact` 将 `components.js` 写入 `<workspace>/report/components.js`
-   - components.js 的内容见本 skill 目录下的 `components.js` 文件
-2. **报告 HTML**：用 `apply_artifact` 将 HTML 草稿写入 `<workspace>/report/<kebab-title>.html`
+1. 用 `apply_artifact` 将 HTML 草稿写入 `<workspace>/report/<kebab-title>.html`。
+2. 如有本地图片，一并写入 `<workspace>/report/` 目录，HTML 中保持相对引用（如 `<img src="./diagram.png">`）。
 
-如果 `components.js` 已存在于 `<workspace>/report/` 目录，可跳过第一步。
+> 不需要把 `components.js` 复制到工作区。`bundle_report` 会自动从 skill 目录读取并内联。
 
-### 8.2 最终交付
+### 8.2 打包为单一文件
 
-写入成功后用 `attach_content` 展示文件引用：
+调用 `bundle_report`：
+
+```
+htmlPath: "report/<kebab-title>.html"
+```
+
+`bundle_report` 会：
+
+- 自动将 `<script src="./components.js"></script>` 替换为内联脚本
+- 将 `<link rel="stylesheet" href="...">` 替换为内联样式
+- 将本地 `<img src="...">` 图片 base64 编码为 data URI
+- 直接覆盖原 HTML 文件，输出单一自包含报告
+
+### 8.3 最终交付
+
+打包成功后用 `attach_content` 展示文件引用：
 
 ```
 ## HTML 报告生成完成
 
 - **文件路径**：<绝对路径>
-- **浏览器中打开即可查看**：file://<绝对路径>
+- **说明**：报告已打包为单一自包含 HTML 文件，内联了组件脚本、样式与图片。直接双击或用浏览器打开即可查看，无需额外依赖。
 ```
 
 ---
@@ -714,7 +738,7 @@ metadata:
 ## 10. 最终检查清单
 
 - [ ] `<!DOCTYPE html>` + `<meta charset>` + `<meta viewport>`
-- [ ] `<script src="./components.js">` 已引入
+- [ ] HTML 草稿使用 `<script src="./components.js"></script>` 引用组件库
 - [ ] 所有内容包裹在 `<report-container>` 内
 - [ ] 报告头部 `<report-header>` 完整（badge, date, title, summary）
 - [ ] **无 `<style>` 标签和 `style=""` 属性**——组件处理所有样式
@@ -726,5 +750,4 @@ metadata:
 - [ ] 无虚构引用或编造数据
 - [ ] HTML 语法正确、标签闭合
 - [ ] 用户已通过 `create_artifact` 确认草稿（`status: "confirmed"`）
-- [ ] `components.js` 已写入 `<workspace>/report/` 目录
-- [ ] 文件路径为 `<workspace>/report/<name>.html`
+- [ ] 已调用 `bundle_report` 打包为单一自包含 HTML：`<workspace>/report/<name>.html`
