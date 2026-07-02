@@ -818,7 +818,7 @@ export interface SkillDescriptor {
   license?: string;
   compatibility?: string;
   metadata?: Record<string, string>;
-  sourceDir: 'builtin' | 'user' | 'workspace';
+  sourceDir: 'builtin' | 'user' | 'workspace' | 'system';
   /** 来源目录名，如 .aurevoy、.claude、.agents、.codex。优先级最高的工作区会附加 "(workspace)"。 */
   sourcePath: string;
   /** SKILL.md 文件的绝对路径（供模型 file-read 激活用）。 */

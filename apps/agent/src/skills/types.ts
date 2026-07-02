@@ -36,8 +36,8 @@ export interface SkillCatalogEntry {
   location: string;
   /** skill 目录根的绝对路径（用于解析 scripts/references/assets 的相对路径）。 */
   skillDir: string;
-  /** 来源目录类型（builtin 预装 / user 全局 / workspace 项目级）。 */
-  sourceDir: 'builtin' | 'user' | 'workspace';
+  /** 来源目录类型（builtin 预装 / user 全局 / workspace 项目级 / system 系统级）。 */
+  sourceDir: 'builtin' | 'user' | 'workspace' | 'system';
   /** 安装来源 Git 仓库 URL（仅通过 install 安装的 skill）。 */
   installUrl?: string;
   /** 安装时间 ISO 时间戳。 */
@@ -64,5 +64,5 @@ export interface ParsedSkill {
   frontmatter: SkillFrontmatter;
   body: string;
   sourcePath: string;
-  sourceDir: 'builtin' | 'user' | 'workspace';
+  sourceDir: 'builtin' | 'user' | 'workspace' | 'system';
 }
