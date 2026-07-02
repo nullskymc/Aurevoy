@@ -474,6 +474,7 @@ export const zh = {
   "settings.usageInputDetail": "用户消息、系统提示词、上下文内容",
   "settings.usageInputCache": "缓存命中 tokens",
   "settings.usageCacheHitRate": "命中率",
+  "settings.usageNoCache": "暂无缓存命中",
   "settings.usageOutputTokens": "输出 tokens",
   "settings.usageOutputDetail": "模型生成的回复内容",
   "settings.usageOutputCache": "缓存写入 tokens",

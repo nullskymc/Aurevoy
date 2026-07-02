@@ -1038,7 +1038,7 @@ function UsageSettings() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
-  const fetch = () => {
+  const reload = () => {
     setLoading(true);
     setError(false);
     getTokenUsageReport()
@@ -1047,166 +1047,98 @@ function UsageSettings() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetch(); }, []);
+  useEffect(() => { reload(); }, []);
 
-  const empty = loading || error || !report || !report.available;
+  const ready = !loading && !error && report && report.available;
+
+  if (loading) {
+    return (
+      <SettingsGroup title={t("settings.usageOverview")}>
+        <div className="usage-loading">
+          <div className="usage-loading-spinner" />
+          <span>{t("settings.fetching")}</span>
+        </div>
+      </SettingsGroup>
+    );
+  }
+
+  if (error || !ready) {
+    return (
+      <SettingsGroup title={t("settings.usageOverview")}>
+        <div className="usage-error">
+          <span>{error ? t("settings.usageFetchFailed") : t("settings.tokenUsageUnavailable")}</span>
+          <button type="button" className="settings-secondary-btn" onClick={reload}>
+            {t("settings.refresh")}
+          </button>
+        </div>
+      </SettingsGroup>
+    );
+  }
+
+  const inputPct = report.totalTokens > 0 ? (report.promptTokens / report.totalTokens) * 100 : 0;
+  const outputPct = report.totalTokens > 0 ? (report.completionTokens / report.totalTokens) * 100 : 0;
+  const cachePct = report.promptTokens > 0 ? (report.cacheReadTokens / report.promptTokens) * 100 : 0;
 
   return (
     <>
       <SettingsGroup title={t("settings.usageOverview")}>
-        {empty ? (
-          <div className="usage-empty">
-            <div className="usage-empty-icon">
-              <svg viewBox="0 0 48 48" width="40" height="40" fill="none">
-                <rect x="4" y="12" width="8" height="24" rx="1" stroke="currentColor" strokeWidth="1.5" opacity="0.35" />
-                <rect x="15" y="6" width="8" height="30" rx="1" stroke="currentColor" strokeWidth="1.5" opacity="0.5" />
-                <rect x="26" y="10" width="8" height="26" rx="1" stroke="currentColor" strokeWidth="1.5" opacity="0.7" />
-                <rect x="37" y="4" width="8" height="32" rx="1" stroke="currentColor" strokeWidth="1.5" />
-              </svg>
-            </div>
-            <p>{loading ? t("settings.fetching") : error ? t("settings.usageFetchFailed") : t("settings.tokenUsageUnavailable")}</p>
-            {!loading && (
-              <button type="button" className="settings-secondary-btn" onClick={fetch}>
-                {t("settings.refresh")}
-              </button>
-            )}
+        <div className="usage-stats-grid">
+          <div className="usage-stat-card">
+            <div className="usage-stat-label">{t("settings.tokenUsageTotal")}</div>
+            <div className="usage-stat-value">{formatTokenCount(report.totalTokens)}</div>
+            <div className="usage-stat-sub">{report.tasks} {t("settings.tokenUsageTasks")}</div>
           </div>
-        ) : (
-          <>
-            <div className="usage-cards">
-              <UsageStatCard
-                title={t("settings.tokenUsageTotal")}
-                value={formatTokenCount(report.totalTokens)}
-                subtitle={`${report.tasks} ${t("settings.tokenUsageTasks").toLowerCase()}`}
-                color="var(--accent)"
-              />
-              {report.estimatedCostUsd > 0 && (
-                <UsageStatCard
-                  title={t("settings.tokenUsageEstimatedCost")}
-                  value={`$${report.estimatedCostUsd.toFixed(4)}`}
-                  subtitle="USD"
-                  color="var(--green)"
-                />
-              )}
+          <div className="usage-stat-card">
+            <div className="usage-stat-label">{t("settings.tokenUsagePrompt")}</div>
+            <div className="usage-stat-value usage-stat-input">{formatTokenCount(report.promptTokens)}</div>
+            <div className="usage-stat-sub">{inputPct.toFixed(1)}%</div>
+          </div>
+          <div className="usage-stat-card">
+            <div className="usage-stat-label">{t("settings.tokenUsageCompletion")}</div>
+            <div className="usage-stat-value usage-stat-output">{formatTokenCount(report.completionTokens)}</div>
+            <div className="usage-stat-sub">{outputPct.toFixed(1)}%</div>
+          </div>
+          {report.estimatedCostUsd > 0 && (
+            <div className="usage-stat-card">
+              <div className="usage-stat-label">{t("settings.tokenUsageEstimatedCost")}</div>
+              <div className="usage-stat-value usage-stat-cost">${report.estimatedCostUsd.toFixed(4)}</div>
+              <div className="usage-stat-sub">USD</div>
             </div>
-          </>
-        )}
+          )}
+        </div>
       </SettingsGroup>
 
-      {!empty && (
-        <SettingsGroup title={t("settings.usageBreakdown")}>
-          <div className="usage-breakdown">
-            <UsageBarItem
-              label={t("settings.usageInputTokens")}
-              value={report.promptTokens}
-              max={report.promptTokens + report.completionTokens}
-              color="var(--primary)"
-              detail={t("settings.usageInputDetail")}
-            />
-            {report.cacheReadTokens > 0 && (
-              <UsageBarItem
-                label={t("settings.usageInputCache")}
-                value={report.cacheReadTokens}
-                max={report.promptTokens}
-                color="var(--blue)"
-                detail={`${t("settings.usageCacheHitRate")} ${((report.cacheReadTokens / report.promptTokens) * 100).toFixed(0)}%`}
-                indent
-              />
-            )}
-            <UsageBarItem
-              label={t("settings.usageOutputTokens")}
-              value={report.completionTokens}
-              max={report.promptTokens + report.completionTokens}
-              color="var(--green)"
-              detail={t("settings.usageOutputDetail")}
-            />
-            {report.cacheWriteTokens > 0 && (
-              <UsageBarItem
-                label={t("settings.usageOutputCache")}
-                value={report.cacheWriteTokens}
-                max={report.completionTokens || 1}
-                color="var(--purple)"
-                detail=""
-                indent
-              />
-            )}
+      <SettingsGroup title={t("settings.usageBreakdown")}>
+        <div className="usage-breakdown-card">
+          <div className="usage-breakdown-header">
+            <span className="usage-breakdown-title">{t("settings.usageInputTokens")}</span>
+            <span className="usage-breakdown-value">{formatTokenCount(report.promptTokens)}</span>
           </div>
-          <div className="usage-bar-stack">
-            <UsageStackedBar
-              sections={[
-                report.cacheReadTokens > 0 ? { value: report.cacheReadTokens, label: t("settings.usageInputCache"), color: "var(--blue)" } : null,
-                { value: report.promptTokens - (report.cacheReadTokens > 0 ? report.cacheReadTokens : 0), label: t("settings.usageInputTokens"), color: "var(--primary)" },
-                { value: report.completionTokens, label: t("settings.usageOutputTokens"), color: "var(--green)" },
-              ].filter(Boolean) as Array<{ value: number; label: string; color: string }>}
-              total={report.totalTokens}
-            />
+          <div className="usage-breakdown-desc">{t("settings.usageInputDetail")}</div>
+          
+          {report.cacheReadTokens > 0 && (
+            <>
+              <div className="usage-breakdown-sub">
+                <div className="usage-breakdown-header">
+                  <span className="usage-breakdown-title">{t("settings.usageInputCache")}</span>
+                  <span className="usage-breakdown-value">{formatTokenCount(report.cacheReadTokens)}</span>
+                </div>
+                <div className="usage-breakdown-desc">
+                  {t("settings.usageCacheHitRate")} {cachePct.toFixed(1)}%
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="usage-breakdown-divider" />
+
+          <div className="usage-breakdown-header">
+            <span className="usage-breakdown-title">{t("settings.usageOutputTokens")}</span>
+            <span className="usage-breakdown-value">{formatTokenCount(report.completionTokens)}</span>
           </div>
-        </SettingsGroup>
-      )}
-    </>
-  );
-}
-
-function UsageStatCard({ title, value, subtitle, color }: { title: string; value: string; subtitle: string; color: string }) {
-  return (
-    <div className="usage-stat-card" style={{ borderColor: color }}>
-      <div className="usage-stat-card-dot" style={{ background: color }} />
-      <span className="usage-stat-card-label">{title}</span>
-      <strong className="usage-stat-card-value" style={{ color }}>{value}</strong>
-      <small className="usage-stat-card-sub">{subtitle}</small>
-    </div>
-  );
-}
-
-function UsageBarItem({ label, value, max, color, detail, indent }: {
-  label: string;
-  value: number;
-  max: number;
-  color: string;
-  detail: string;
-  indent?: boolean;
-}) {
-  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
-  return (
-    <div className="usage-bar-item" data-indent={indent || undefined}>
-      <div className="usage-bar-item-head">
-        <span className="usage-bar-item-label" style={{ color }}>{label}</span>
-        <span className="usage-bar-item-value">{formatTokenCount(value)}</span>
-        {detail && <span className="usage-bar-item-detail">{detail}</span>}
-      </div>
-      <div className="usage-bar-track">
-        <div className="usage-bar-fill" style={{ width: `${pct}%`, background: color }} />
-      </div>
-    </div>
-  );
-}
-
-function UsageStackedBar({ sections, total }: { sections: Array<{ value: number; label: string; color: string }>; total: number }) {
-  if (total <= 0) return null;
-  const totalWidth = sections.reduce((s, sec) => s + sec.value, 0) || 1;
-  return (
-    <>
-      <div className="usage-stacked-bar">
-        {sections.map((sec, i) => {
-          const w = (sec.value / totalWidth) * 100;
-          return (
-            <div
-              key={i}
-              className="usage-stacked-segment"
-              style={{ width: `${w}%`, background: sec.color }}
-              title={`${sec.label}: ${formatTokenCount(sec.value)}`}
-            />
-          );
-        })}
-      </div>
-      <div className="usage-stacked-legend">
-        {sections.map((sec, i) => (
-          <span key={i} className="usage-legend-chip">
-            <span className="usage-legend-dot" style={{ background: sec.color }} />
-            {sec.label} {formatTokenCount(sec.value)}
-          </span>
-        ))}
-      </div>
+          <div className="usage-breakdown-desc">{t("settings.usageOutputDetail")}</div>
+        </div>
+      </SettingsGroup>
     </>
   );
 }

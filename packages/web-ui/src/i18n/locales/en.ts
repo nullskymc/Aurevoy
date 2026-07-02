@@ -475,6 +475,7 @@ export const en = {
   "settings.usageInputDetail": "User messages, system prompts, and context content",
   "settings.usageInputCache": "Cache read tokens",
   "settings.usageCacheHitRate": "Hit rate",
+  "settings.usageNoCache": "No cache hits",
   "settings.usageOutputTokens": "Output tokens",
   "settings.usageOutputDetail": "Model-generated response content",
   "settings.usageOutputCache": "Cache write tokens",

@@ -3307,158 +3307,121 @@ button:disabled {
 
 /* ============ Usage 统计页 ============ */
 
-.usage-empty {
+.usage-loading,
+.usage-error {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 12px;
-  padding: 32px 16px;
-  text-align: center;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-5);
   color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
 }
 
-.usage-empty-icon {
-  color: var(--text-tertiary);
+.usage-loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: usage-spin 0.8s linear infinite;
 }
 
-.usage-empty p {
-  margin: 0;
-  font-size: 14px;
+@keyframes usage-spin {
+  to { transform: rotate(360deg); }
 }
 
-.usage-cards {
+.usage-stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--ui-space-4);
+  padding: var(--ui-space-4);
 }
 
 .usage-stat-card {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
   background: var(--surface);
-  border-left-width: 3px;
+  border-radius: var(--ui-radius-lg);
+  padding: var(--ui-space-5);
+  border: 1px solid var(--border);
 }
 
-.usage-stat-card-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-bottom: 4px;
-}
-
-.usage-stat-card-label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.usage-stat-card-value {
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
-.usage-stat-card-sub {
-  font-size: 12px;
+.usage-stat-label {
+  font-size: var(--ui-font-xs);
   color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--ui-space-2);
 }
 
-.usage-breakdown {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.usage-bar-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.usage-bar-item[data-indent] {
-  padding-left: 20px;
-  border-left: 2px solid var(--border);
-  margin-left: 8px;
-}
-
-.usage-bar-item-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.usage-bar-item-label {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.usage-bar-item-value {
-  font-size: 13px;
+.usage-stat-value {
+  font-size: var(--ui-font-lg);
+  font-weight: 700;
   color: var(--text);
   font-variant-numeric: tabular-nums;
-  font-weight: 600;
+  line-height: 1.2;
 }
 
-.usage-bar-item-detail {
-  font-size: 11px;
+.usage-stat-input {
+  color: var(--accent-soft-fg);
+}
+
+.usage-stat-output {
+  color: var(--success-soft-fg);
+}
+
+.usage-stat-cost {
+  color: var(--warn-soft-fg);
+}
+
+.usage-stat-sub {
+  font-size: var(--ui-font-xs);
   color: var(--text-tertiary);
-  margin-left: auto;
+  margin-top: var(--ui-space-1);
 }
 
-.usage-bar-track {
-  height: 6px;
-  background: var(--hover);
-  border-radius: 3px;
-  overflow: hidden;
+.usage-breakdown-card {
+  background: var(--surface);
+  border-radius: var(--ui-radius-lg);
+  padding: var(--ui-space-5);
+  border: 1px solid var(--border);
 }
 
-.usage-bar-fill {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.4s ease;
-}
-
-.usage-bar-stack {
-  margin-top: 20px;
-}
-
-.usage-stacked-bar {
+.usage-breakdown-header {
   display: flex;
-  height: 10px;
-  border-radius: 5px;
-  overflow: hidden;
-  gap: 1px;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: var(--ui-space-1);
 }
 
-.usage-stacked-segment {
-  height: 100%;
-  min-width: 2px;
+.usage-breakdown-title {
+  font-size: var(--ui-font-base);
+  font-weight: 600;
+  color: var(--text);
 }
 
-.usage-stacked-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 10px;
+.usage-breakdown-value {
+  font-size: var(--ui-font-sm);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
-.usage-legend-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary);
+.usage-breakdown-desc {
+  font-size: var(--ui-font-xs);
+  color: var(--text-tertiary);
+  margin-bottom: var(--ui-space-4);
 }
 
-.usage-legend-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
+.usage-breakdown-sub {
+  margin-left: var(--ui-space-4);
+  padding-left: var(--ui-space-3);
+  border-left: 2px solid var(--border);
+  margin-bottom: var(--ui-space-4);
+}
+
+.usage-breakdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: var(--ui-space-4) 0;
 }
 
 /* ============ 深色模式 ============ */

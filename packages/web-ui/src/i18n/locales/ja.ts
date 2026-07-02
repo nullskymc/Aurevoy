@@ -482,6 +482,7 @@ export const ja = {
   "settings.usageInputDetail": "ユーザーメッセージ、システムプロンプト、コンテキスト",
   "settings.usageInputCache": "キャッシュ読み取り tokens",
   "settings.usageCacheHitRate": "ヒット率",
+  "settings.usageNoCache": "キャッシュヒットなし",
   "settings.usageOutputTokens": "出力 tokens",
   "settings.usageOutputDetail": "モデルが生成した応答内容",
   "settings.usageOutputCache": "キャッシュ書き込み tokens",

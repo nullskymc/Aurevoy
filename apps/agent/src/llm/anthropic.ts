@@ -425,7 +425,13 @@ export class AnthropicProvider implements LLMProvider {
           case 'message_delta': {
             finishReason = event.delta.stop_reason;
             if (event.usage) {
-              tokenUsage = toTokenUsage(undefined, event.usage.output_tokens, event.usage as Record<string, unknown>);
+              // 合并而非覆盖：保留 message_start 已设置的 input/cache 字段
+              const prev: TokenUsage = tokenUsage ?? {};
+              tokenUsage = {
+                ...prev,
+                completionTokens: event.usage.output_tokens,
+                totalTokens: (prev.promptTokens ?? 0) + event.usage.output_tokens,
+              };
             }
             break;
           }

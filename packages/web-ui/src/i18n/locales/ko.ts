@@ -482,6 +482,7 @@ export const ko = {
   "settings.usageInputDetail": "사용자 메시지, 시스템 프롬프트, 컨텍스트 내용",
   "settings.usageInputCache": "캐시 읽기 tokens",
   "settings.usageCacheHitRate": "적중률",
+  "settings.usageNoCache": "캐시 적중 없음",
   "settings.usageOutputTokens": "출력 tokens",
   "settings.usageOutputDetail": "모델이 생성한 응답 내용",
   "settings.usageOutputCache": "캐시 쓰기 tokens",

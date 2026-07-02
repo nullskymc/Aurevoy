@@ -219,7 +219,7 @@ export class OpenAIResponseProvider implements LLMProvider {
             if (event.response) {
               finishReason = this.mapFinishReason(event.response.status);
               if (event.response.usage) {
-                const details = event.response.usage.input_tokens_details;
+                const details = event.response.usage.input_tokens_details as Record<string, unknown> | undefined;
                 tokenUsage = {
                   promptTokens: event.response.usage.input_tokens,
                   completionTokens: event.response.usage.output_tokens,
