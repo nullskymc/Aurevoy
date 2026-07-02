@@ -1873,7 +1873,7 @@ function SkillsPage({
   const [query, setQuery] = useState("");
   const [lastResult, setLastResult] = useState<SkillInstallResponse | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set(["workspace", "user"]));
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set(["workspace", "user", "system"]));
 
   const filtered = query.trim()
     ? skills.filter((s) => {
@@ -1912,8 +1912,8 @@ function SkillsPage({
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(skill);
     }
-    // Sort groups by priority: workspace first, then user, then builtin
-    const order = ["workspace", "user", "builtin"];
+    // Sort groups by priority: workspace first, then user, then system, then builtin
+    const order = ["workspace", "user", "system", "builtin"];
     const result: Array<{ key: string; labelKey: string; skills: SkillDescriptor[] }> = [];
     for (const key of order) {
       const items = map.get(key);
