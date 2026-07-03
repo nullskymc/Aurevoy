@@ -15,7 +15,6 @@ import type {
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { usePlatform } from "../platform/context";
-import { ThinkingCard } from "./ThinkingTimeline";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
 
@@ -58,7 +57,6 @@ export interface AgentRoundData {
   id: string;
   planStepGroups: PlanStepGroupData[];
   summary: string;
-  reasoning?: string;
   markdownOutput?: string;
   contentBlocks?: ContentBlock[];
   status: "pending" | "running" | "completed" | "failed";
@@ -78,20 +76,6 @@ export function detectStepKind(toolName: string): StepKind {
   if (toolName.startsWith("mcp_")) return "api";
   return "other";
 }
-
-/** Badge 标签文本映射 */
-const BADGE_LABELS: Record<StepKind, string> = {
-  command: "Cmd",
-  file_read: "File",
-  file_write: "Write",
-  search: "Search",
-  browse: "Web",
-  think: "Think",
-  api: "API",
-  edit: "Edit",
-  artifact: "Art",
-  other: "Tool",
-};
 
 /** 生成聚合摘要文本 */
 export function computeSummaryFromSteps(steps: TimelineStepData[]): string {
@@ -154,7 +138,7 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
     const commandArgs = Array.isArray(args.args)
       ? (args.args as unknown[]).map(String).join(" ")
       : "";
-    return truncateTitle([cmd, commandArgs].filter(Boolean).join(" ")) || (toolName === "bash" ? "bash" : "执行命令");
+    return truncateTitle([cmd, commandArgs].filter(Boolean).join(" ")) || "";
   }
   if (toolName === "replace_lines" || toolName === "edit_lines") {
     const path = typeof args.path === "string" ? args.path : "";
@@ -163,38 +147,38 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
     if (path && startLine != null && endLine != null) {
       return truncateTitle(`${path} L${startLine}-${endLine}`);
     }
-    return truncateTitle(path) || "edit_lines";
+    return truncateTitle(path) || "";
   }
   if (toolName === "write_file") {
     const path = typeof args.path === "string" ? args.path : "";
-    return `write: ${truncateTitle(path)}` || "write_file";
+    return truncateTitle(path) || "";
   }
   if (toolName === "append_file") {
     const path = typeof args.path === "string" ? args.path : "";
-    return `append: ${truncateTitle(path)}` || "append_file";
+    return truncateTitle(path) || "";
   }
   if (toolName === "session_open") {
     const path = typeof args.path === "string" ? args.path : "";
-    return `session: ${truncateTitle(path)}` || "session_open";
+    return truncateTitle(path) || "";
   }
   if (toolName === "session_write" || toolName === "session_close" || toolName === "session_abort") {
     const sid = typeof args.session_id === "string" ? args.session_id.slice(0, 8) : "";
-    return `${toolName} ${sid}`;
+    return sid || "";
   }
   if (toolName === "open_file") {
     const path = typeof args.path === "string" ? args.path : "";
     const line = typeof args.line_number === "number" ? args.line_number : null;
     if (path && line != null) return truncateTitle(`${path} :${line}`);
-    return truncateTitle(path) || "open_file";
+    return truncateTitle(path) || "";
   }
   if (toolName === "scroll") {
     const file = typeof args.file === "string" ? args.file : "";
     const dir = typeof args.direction === "string" ? args.direction : "";
-    return file ? truncateTitle(`${file} ${dir}`) : "scroll";
+    return file ? truncateTitle(`${file} ${dir}`) : "";
   }
   if (toolName === "search_grep") {
     const pattern = typeof args.pattern === "string" ? args.pattern : "";
-    return pattern ? `grep: ${truncateTitle(pattern)}` : "search_grep";
+    return pattern ? truncateTitle(pattern) : "";
   }
   const target =
     (typeof args.TargetFile === "string" ? args.TargetFile :
@@ -206,9 +190,9 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
   if (target) return truncateTitle(target);
   if (toolName === "web_search") {
     const query = typeof args.query === "string" ? args.query : typeof args.Query === "string" ? args.Query : "";
-    return query ? `搜索：${truncateTitle(query)}` : "搜索";
+    return query ? truncateTitle(query) : "";
   }
-  return toolName;
+  return "";
 }
 
 function truncateTitle(s: string, max = 55): string {
@@ -336,7 +320,6 @@ export function buildAgentRoundFromMessage(
     id: `${message.id}-timeline`,
     planStepGroups,
     summary,
-    reasoning: message.reasoningContent,
     markdownOutput: message.content,
     contentBlocks: message.contentBlocks,
     status: "completed",
@@ -348,11 +331,10 @@ export function buildLiveAgentRoundData(params: {
   plan: PlanStep[];
   liveToolActivity: { id: string; name: string; args: unknown; status: string; planStepId?: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
   output?: string;
-  reasoning?: string;
   phase?: string | null;
   contentBlocks?: ContentBlock[];
 }): AgentRoundData {
-  const { plan, liveToolActivity, output, reasoning, phase, contentBlocks } = params;
+  const { plan, liveToolActivity, output, phase, contentBlocks } = params;
   const steps: TimelineStepData[] = liveToolActivity.map((act) => {
     const kind = detectStepKind(act.name);
     const args = typeof act.args === "object" && act.args !== null
@@ -396,6 +378,7 @@ export function buildLiveAgentRoundData(params: {
 
   const planStepGroups: PlanStepGroupData[] = [];
   const isFailed = phase === "failed" || phase === "cancelled";
+  const isActivePhase = phase === "thinking" || phase === "planning" || phase === "initializing";
 
   if (stepsByPlanStepId.size > 0) {
     for (const ps of plan) {
@@ -421,6 +404,7 @@ export function buildLiveAgentRoundData(params: {
     }
   } else if (steps.length === 0) {
     for (const ps of plan) {
+      if (isActivePhase && (ps.status === "completed" || ps.status === "failed")) continue;
       planStepGroups.push({
         planStepId: ps.id,
         description: ps.description,
@@ -446,10 +430,9 @@ export function buildLiveAgentRoundData(params: {
     id: "live-tail",
     planStepGroups,
     summary,
-    reasoning,
     markdownOutput: output,
     contentBlocks,
-    status: isFailed ? "failed" : steps.some((s) => s.status === "running") ? "running" : "completed",
+    status: isFailed ? "failed" : (steps.some((s) => s.status === "running") || isActivePhase) ? "running" : "completed",
   };
 }
 
@@ -460,13 +443,6 @@ function StepStatus({ status }: { status: TimelineStepData["status"] }) {
   if (status === "running") return <span className="timeline-step-status is-running">运行中</span>;
   if (status === "failed") return <span className="timeline-step-status is-failed">失败</span>;
   return null;
-}
-
-/** Badge 标签 */
-function StepBadge({ kind }: { kind: StepKind }) {
-  return <span className={`timeline-step-badge is-${kind}`}>
-    {BADGE_LABELS[kind] ?? "Tool"}
-  </span>;
 }
 
 /** 聚合摘要行 */
@@ -605,16 +581,14 @@ function TimelineStepNode({
       onContextMenu={handleStepContextMenu}
     >
       <div className="timeline-step-header">
-        <div className="timeline-step-left">
-          <StepBadge kind={step.kind} />
-        </div>
         <button
           type="button"
           className="timeline-step-title-btn"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
         >
-          <span className="timeline-step-title">{step.title}</span>
+          <span className="timeline-step-tool">{step.toolName}</span>
+          {step.title && <span className="timeline-step-title">{step.title}</span>}
             <StepStatus status={step.status} />
           {hasDetails && (
             <span className="timeline-step-caret" data-open={open}>
@@ -887,7 +861,6 @@ export function AgentRound({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
-  const hasLiveRunning = busy && data.status === "running";
 
   return (
     <div
@@ -901,17 +874,6 @@ export function AgentRound({
         status={data.status}
         stepCount={stepCount}
       />
-
-      {/* 推理过程 */}
-      {data.reasoning && (
-        <ThinkingCard data={{
-          id: `reasoning-${data.id}`,
-          phase: 1,
-          summary: data.reasoning.split('\n')[0]?.trim()?.slice(0, 80) || '',
-          fullText: data.reasoning,
-          defaultOpen: false,
-        }} />
-      )}
 
       {/* 时间线区域 */}
       <div className="timeline-body">
@@ -929,14 +891,14 @@ export function AgentRound({
           /* 无分组时显示空占位 */
           <div className="timeline-empty">
             <span className="timeline-step-icon is-pending" />
-            <span>{busy ? "处理中…" : "无执行步骤"}</span>
+            <span>{busy ? "思考中…" : "无执行步骤"}</span>
           </div>
         )}
       </div>
 
       {/* 流式输出文本 — 流式阶段仅显示加载占位（禁打字机效果），本轮结束时渲染完整 markdown */}
       {data.markdownOutput && (
-        <article className={`timeline-output ${hasLiveRunning ? "is-streaming" : ""}`}>
+        <article className="timeline-output">
           <div className="doc-meta">
             <span className="doc-meta-icon">
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
@@ -947,11 +909,7 @@ export function AgentRound({
             <span>Aurevoy</span>
           </div>
           <div className="doc-body" style={{ paddingLeft: 0 }}>
-            {hasLiveRunning ? (
-              <span className="stream-placeholder">生成中…</span>
-            ) : (
-              <MarkdownRenderer content={data.markdownOutput} />
-            )}
+            <MarkdownRenderer content={data.markdownOutput} />
           </div>
         </article>
       )}

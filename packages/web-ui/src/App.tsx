@@ -262,9 +262,7 @@ function App() {
     patchCurrentTask,
     updateTaskList,
   } = useTaskState();
-  const [reasoning, setReasoning] = useState("");
   const previousPhaseRef = useRef<TaskPhase | null>(null);
-  const nextReasoningFreshRef = useRef(false);
   const nextOutputFreshRef = useRef(false);
   const { closeStream, openStream } = useSSEStream();
   const liveActivitySyncRafRef = useRef<number | null>(null);
@@ -289,9 +287,7 @@ function App() {
     liveActivityRef.current.clear();
     setLiveToolActivity([]);
     setOutput("");
-    setReasoning("");
     setLiveContentBlocks([]);
-    nextReasoningFreshRef.current = false;
     nextOutputFreshRef.current = false;
   }, []);
 
@@ -579,7 +575,6 @@ function App() {
         setCurrentTask(event.task);
         setPlan(event.task.plan);
         setOutput("");
-        setReasoning("");
         setTraces([]);
         updateTaskList(event.task);
         break;
@@ -594,10 +589,7 @@ function App() {
           const prevPhase = previousPhaseRef.current;
           previousPhaseRef.current = event.phase;
           if (event.phase === "thinking") {
-            // 工具调用后 LLM 开始新一轮推理：标记下一段 reasoning/output 应替换而非追加，
-            // 同时保留上一轮思考内容直到新内容到达，避免思考在工具调用后消失。
             if (prevPhase === "calling_tool") {
-              nextReasoningFreshRef.current = true;
               nextOutputFreshRef.current = true;
             }
             setLiveContentBlocks([]);
@@ -629,14 +621,6 @@ function App() {
           setOutput((previous) => previous + event.delta);
         }
         break;
-      case "reasoning":
-        if (nextReasoningFreshRef.current) {
-          setReasoning(event.delta);
-          nextReasoningFreshRef.current = false;
-        } else {
-          setReasoning((previous) => previous + event.delta);
-        }
-        break;
       case "message": {
         // 工具已转为历史消息 → 从 live map 移除（避免与历史区重复渲染）
         const isAssistant = event.message.role === "assistant";
@@ -650,7 +634,6 @@ function App() {
         // 清空流式累积，避免 live tail 与历史区双写同一段内容。
         if (isAssistant && !hasToolCalls) {
           setOutput("");
-          setReasoning("");
         }
         setCurrentTask((previous) => {
           const previousMessages = previous?.messages ?? [];
@@ -848,7 +831,6 @@ function App() {
         }
         break;
       case "done":
-        // 同步清除 output/reasoning，配合 setBusy(false) 在同一帧使 hasLiveTail 变为 false
         clearLiveState();
         setStatus(event.status);
         setPhase(
@@ -1464,10 +1446,8 @@ function App() {
       });
     }
   }
-  const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0 || reasoning.trim().length > 0;
-  // 只有当有实际 live 内容（流式文本/推理/工具活动/审批）时才隐藏历史中最后一条 assistant，
-  // 避免在轮次切换间隙（output/reasoning 已清空但新 streaming 尚未开始）时历史和 live 双空。
-  const hasLiveContent = derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0 || reasoning.trim().length > 0;
+  const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0;
+  const hasLiveContent = derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0;
   const hiddenAssistantId = hasLiveContent
     ? [...(currentTask?.messages ?? [])].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
     : undefined;
@@ -1665,7 +1645,6 @@ function App() {
                 phase={phase}
                 plan={plan}
                 output={output}
-                reasoning={reasoning}
                 busy={busy}
                 liveToolActivity={displayedLiveActivity}
                 liveContentBlocks={liveContentBlocks}

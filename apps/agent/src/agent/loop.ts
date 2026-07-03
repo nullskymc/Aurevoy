@@ -1436,7 +1436,6 @@ export async function runTask(task: Task): Promise<void> {
               }
               if (chunk.reasoningContentDelta) {
                 reasoningContent += chunk.reasoningContentDelta;
-                taskEvents.publish({ type: 'reasoning', taskId: task.id, delta: chunk.reasoningContentDelta });
               }
               if (chunk.toolCallsSnapshot) {
                 for (const tc of chunk.toolCallsSnapshot) {

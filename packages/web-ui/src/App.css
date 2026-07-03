@@ -522,7 +522,6 @@ button:disabled {
   font-size: 12px;
 }
 
-
 .sidebar-section-label {
   margin: 10px 0 6px;
   padding: 0 9px;
@@ -936,11 +935,6 @@ button:disabled {
   animation: blink 1s steps(2) infinite;
 }
 
-.stream-placeholder {
-  color: var(--text-tertiary, #888);
-  font-style: italic;
-}
-
 .markdown-body {
   display: grid;
   gap: 10px;
@@ -1014,129 +1008,8 @@ button:disabled {
   50.01%, 100% { opacity: 0; }
 }
 
-.agent-thinking {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.agent-thinking .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-.agent-thinking .dot:nth-child(2) { animation-delay: 0.2s; }
-.agent-thinking .dot:nth-child(3) { animation-delay: 0.4s; }
-
-.thinking-label {
-  margin-left: 4px;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
-}
-
 .msg-status {
   margin-top: 2px;
-}
-
-/* ============ 计划内联卡片 ============ */
-.plan-card {
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  overflow: hidden;
-}
-
-.plan-card-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  padding: 10px 0;
-  text-align: left;
-}
-
-.plan-card-title {
-  flex: 1;
-  font-size: calc(13.5px * var(--font-scale));
-  font-weight: 600;
-}
-
-.plan-card-progress {
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-}
-
-.plan-card-caret {
-  color: var(--text-tertiary);
-  font-size: 14px;
-  transition: transform 150ms ease;
-}
-
-.plan-card-caret[data-open="false"] {
-  transform: rotate(-90deg);
-}
-
-.plan-steps {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 0 0 8px;
-  list-style: none;
-}
-
-.plan-step {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  border-radius: 8px;
-  padding: 7px 0;
-}
-
-.plan-step-marker {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  background: var(--surface-strong);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.plan-step[data-status="running"] .plan-step-marker {
-  background: var(--accent-soft-bg);
-  color: var(--accent-soft-fg);
-}
-
-.plan-step[data-status="completed"] .plan-step-marker {
-  background: var(--success-soft-bg);
-  color: var(--success-soft-fg);
-}
-
-.plan-step[data-status="failed"] .plan-step-marker {
-  background: var(--danger-soft-bg);
-  color: var(--danger-soft-fg);
-}
-
-.plan-step-text {
-  color: var(--text-secondary);
-  font-size: calc(13.5px * var(--font-scale));
-  line-height: 1.5;
 }
 
 /* ============ Composer ============ */
@@ -2106,60 +1979,6 @@ button:disabled {
   color: var(--danger-soft-fg);
 }
 
-.plan-approval-card {
-  display: grid;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  padding: 12px;
-}
-
-.plan-approval-head,
-.plan-approval-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.plan-approval-head strong {
-  color: var(--text);
-  font-size: 14px;
-}
-
-.plan-approval-head span {
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.plan-approval-actions {
-  justify-content: flex-end;
-}
-
-.plan-approval-actions button {
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--text);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 6px 16px;
-}
-
-.plan-approval-actions button:first-child {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg);
-}
-
-.plan-approval-actions button:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
 .tool-approval {
   display: flex;
   align-items: center;
@@ -2309,10 +2128,6 @@ button:disabled {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.agent-thinking-inline {
-  font-size: 13px;
 }
 
 .artifact-list {
@@ -4761,66 +4576,6 @@ textarea:focus-visible,
   width: 100%;
 }
 
-.aurevoy-agent-runner-box {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 2px 0;
-  margin-bottom: var(--ui-space-3);
-}
-
-.aurevoy-agent-runner-box::before {
-  content: none;
-}
-
-.runner-node {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 30px;
-}
-
-.runner-node.is-group {
-  align-items: stretch;
-  gap: 8px;
-}
-
-.runner-node .node-dot {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: var(--bg);
-  color: var(--text-secondary);
-  font-size: 14px;
-  box-shadow: inset 0 0 0 1px var(--border);
-}
-
-.runner-node .node-dot svg {
-  flex-shrink: 0;
-}
-
-.runner-node .node-content {
-  flex: 1;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: var(--ui-space-2);
-  min-width: 0;
-}
-
-.runner-node.is-group .node-content {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  width: 100%;
-}
-
 .tool-run-summary {
   display: grid;
   gap: 8px;
@@ -5049,77 +4804,8 @@ textarea:focus-visible,
 }
 
 /* 动作类型标签 */
-.badge-thought,
-.badge-bash,
-.badge-file,
-.badge-tool,
-.badge-network {
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: var(--ui-radius-sm);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  flex-shrink: 0;
-}
-
-.badge-thought {
-  background: var(--accent-soft-bg);
-  color: var(--accent-soft-fg);
-}
-
-.badge-network {
-  background: var(--warn-soft-bg);
-  color: var(--warn-soft-fg);
-}
-
-.badge-file {
-  background: var(--success-soft-bg);
-  color: var(--success-soft-fg);
-}
-
-.badge-bash {
-  background: var(--hover);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-}
-
-.badge-tool {
-  background: var(--pill-bg);
-  color: var(--pill-fg);
-}
 
 /* Dots color mapping */
-.runner-node .node-dot.is-thought {
-  background: var(--accent-soft-bg);
-  color: var(--accent-soft-fg);
-}
-
-.runner-node .node-dot.is-network {
-  background: var(--warn-soft-bg);
-  color: var(--warn-soft-fg);
-}
-
-.runner-node .node-dot.is-file {
-  background: var(--success-soft-bg);
-  color: var(--success-soft-fg);
-}
-
-.runner-node .node-dot.is-bash {
-  background: var(--hover);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-strong);
-}
-
-.runner-node .node-dot.is-tool {
-  background: var(--pill-bg);
-  color: var(--pill-fg);
-}
-
-.runner-node .node-dot.is-loading {
-  background: var(--accent-soft-bg);
-  color: var(--accent-soft-fg);
-}
 
 /* Meta text details */
 .meta-text {
@@ -5329,384 +5015,6 @@ textarea:focus-visible,
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
 }
 
-/* Spinner animation */
-.spin-icon {
-  animation: spin 1.5s linear infinite;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* ============ ThinkingTimeline 组件 ============ */
-
-/* Root container: user bubble is above the rail, outside the timeline flow */
-.thinking-timeline {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-}
-
-/* User bubble (rendered above the timeline rail) */
-.thinking-timeline-user {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  margin-bottom: 16px;
-}
-
-.thinking-timeline-user-bubble {
-  padding: 9px 14px;
-  border-radius: 18px 18px 4px 18px;
-  background: var(--surface);
-  border: 0.5px solid var(--border);
-  font-size: 14px;
-  line-height: 1.5;
-  max-width: 78%;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* Timeline item row: dot column + content column */
-.thinking-timeline-item {
-  display: flex;
-  gap: 12px;
-  position: relative;
-}
-
-/* Left dot column */
-.thinking-timeline-dot-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 20px;
-  flex-shrink: 0;
-}
-
-/* Dot circle */
-.thinking-timeline-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  margin-top: 6px;
-  z-index: 1;
-}
-.thinking-timeline-dot[data-type="thinking"] { background: #7F77DD; }
-.thinking-timeline-dot[data-type="command"] { background: #1D9E75; }
-.thinking-timeline-dot[data-type="done"] { background: #1D9E75; }
-
-/* Vertical rail line connecting dots */
-.thinking-timeline-line {
-  width: 1px;
-  flex: 1;
-  min-height: 8px;
-  background: var(--border);
-}
-.thinking-timeline-line[data-hidden="true"] {
-  visibility: hidden;
-}
-
-/* Right content column */
-.thinking-timeline-content {
-  flex: 1;
-  min-width: 0;
-  padding-bottom: 16px;
-}
-
-/* Phase label above thinking card */
-.thinking-timeline-phase {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  margin-bottom: 6px;
-  margin-top: 2px;
-}
-
-/* --- Thinking Card --- */
-.thinking-timeline-card {
-  background: var(--card-bg);
-  border: 0.5px solid var(--border);
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-/* Card header row */
-.thinking-timeline-card-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  cursor: pointer;
-  user-select: none;
-  width: 100%;
-  background: none;
-  border: none;
-  font: inherit;
-  color: inherit;
-}
-.thinking-timeline-card-header:hover {
-  background: var(--hover);
-}
-
-.thinking-timeline-card-icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  color: var(--text-secondary);
-}
-
-.thinking-timeline-card-label {
-  flex: 1;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-align: left;
-}
-
-.thinking-timeline-card-toggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  flex-shrink: 0;
-}
-
-/* Chevron icon with rotation transition */
-.thinking-timeline-chevron {
-  display: inline-block;
-  transition: transform 300ms ease;
-  font-size: 10px;
-  line-height: 1;
-}
-.thinking-timeline-chevron[data-expanded="true"] {
-  transform: rotate(180deg);
-}
-
-/* Summary row wrap (hidden when expanded) */
-.thinking-timeline-summary-wrap {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition: max-height 300ms ease, opacity 300ms ease;
-}
-.thinking-timeline-summary-wrap[data-visible="true"] {
-  max-height: 36px;
-  opacity: 1;
-}
-
-.thinking-timeline-summary-inner {
-  padding: 7px 13px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  border-top: 1px solid var(--border);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.thinking-timeline-summary-icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  color: var(--text-tertiary);
-}
-
-.thinking-timeline-summary-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-/* Summary skeleton/shimmer */
-@keyframes thinking-shimmer {
-  0% { background-position: -200px 0; }
-  100% { background-position: 200px 0; }
-}
-.thinking-timeline-skeleton {
-  height: 14px;
-  width: 60%;
-  border-radius: 2px;
-  background: linear-gradient(90deg, var(--surface) 25%, var(--border) 50%, var(--surface) 75%);
-  background-size: 400px 100%;
-  animation: thinking-shimmer 1.5s ease-in-out infinite;
-}
-
-/* Full body wrap (hidden when collapsed) */
-.thinking-timeline-body-wrap {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition: max-height 300ms ease, opacity 300ms ease;
-}
-.thinking-timeline-body-wrap[data-visible="true"] {
-  max-height: 2000px;
-  opacity: 1;
-}
-
-.thinking-timeline-body-inner {
-  padding: 10px 13px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-secondary);
-  border-top: 1px solid var(--border);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* --- Command Card --- */
-.thinking-timeline-cmd-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--surface);
-  border: 0.5px solid var(--border);
-  border-radius: 8px;
-}
-
-.thinking-timeline-cmd-label {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-.thinking-timeline-cmd-text {
-  flex: 1;
-  font-family: Menlo, Monaco, "Courier New", monospace;
-  font-size: 13px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.thinking-timeline-cmd-chevron {
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-  font-size: 16px;
-  line-height: 1;
-}
-
-/* --- Done Card --- */
-.thinking-timeline-done-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 13px;
-  background: var(--card-bg);
-  border: 0.5px solid var(--border);
-  border-radius: 12px;
-}
-
-.thinking-timeline-done-check {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  color: #1D9E75;
-}
-
-.thinking-timeline-done-text {
-  flex: 1;
-  font-size: 13px;
-  color: var(--text);
-  min-width: 0;
-}
-
-.thinking-timeline-done-badge {
-  flex-shrink: 0;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--success-soft-bg);
-  color: var(--success-soft-fg);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-/* Global Stop Control */
-.runner-global-controls {
-  display: flex;
-  justify-content: center;
-  margin-top: var(--ui-space-3);
-  padding-left: 0;
-  width: 100%;
-}
-
-.btn-stop-global {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--ui-space-2);
-  padding: 8px 20px;
-  border-radius: 99px;
-  background: var(--bg);
-  color: var(--danger-soft-fg);
-  border: 1px solid var(--border-strong);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 150ms ease;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
-}
-
-.btn-stop-global:hover {
-  background: var(--danger-soft-bg);
-  border-color: var(--danger-soft-fg);
-  box-shadow: 0 4px 12px rgba(230, 85, 85, 0.08);
-}
-
-.btn-stop-global:active {
-  transform: scale(0.97);
-}
-
-/* Streaming preview text */
-.stream-preview {
-  position: relative;
-}
-
-.stream-preview .stream-caret {
-  display: inline-block;
-  width: 2px;
-  height: 14px;
-  background: var(--text);
-  margin-left: 4px;
-  vertical-align: middle;
-  animation: stream-blink 1s step-end infinite;
-}
-
-@keyframes stream-blink {
-  from, to { background-color: transparent }
-  50% { background-color: var(--text) }
-}
-
-/* Animations */
-.fade-in-up {
-  animation: fadeInUp 0.2s ease-out forwards;
-}
-
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 /* ============ Timeline 组件 ============ */
 
 .timeline-agent-round {
@@ -5862,14 +5170,6 @@ textarea:focus-visible,
   min-height: 28px;
 }
 
-.timeline-step-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-}
-
-
 .timeline-step-icon.is-pending {
   border: 2px dashed var(--border-strong);
   background: transparent;
@@ -5890,21 +5190,6 @@ textarea:focus-visible,
   border: none;
   background: transparent;
 }
-
-/* 步骤类型文字标签 */
-.timeline-step-badge {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  line-height: 1;
-}
-
-
-
-
-
-
 
 /* 步骤标题按钮 */
 .timeline-step-title-btn {
@@ -5931,6 +5216,18 @@ textarea:focus-visible,
 [data-status="failed"] .timeline-step-title-btn,
 [data-status="failed"] .timeline-step-title {
   color: var(--danger-soft-fg);
+}
+
+.timeline-step-tool {
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 500;
+  color: var(--accent-soft-fg);
+  background: var(--accent-soft-bg);
+  padding: 0 5px;
+  border-radius: 3px;
+  line-height: 1.5;
 }
 
 .timeline-step-title {
@@ -6149,23 +5446,6 @@ textarea:focus-visible,
   padding-left: 0;
 }
 
-/* 淡入动画 */
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.fade-in-up {
-  animation: fadeInUp 0.2s ease both;
-}
-
-
 /* 步骤状态文本 */
 .timeline-step-status {
   display: inline-flex;
@@ -6189,7 +5469,6 @@ textarea:focus-visible,
   color: var(--success-soft-fg);
 }
 
-
 /* 步骤汇总执行中旋转 */
 .step-spinner-sm {
   animation: timeline-spin 1s linear infinite;
@@ -6199,298 +5478,6 @@ textarea:focus-visible,
   to {
     transform: rotate(360deg);
   }
-}
-
-/* ============ ThinkingTimeline 组件 ============ */
-
-/* Root container: user bubble is above the rail, outside the timeline flow */
-.thinking-timeline {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-}
-
-/* User bubble (rendered above the timeline rail) */
-.thinking-timeline-user {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  margin-bottom: 16px;
-}
-
-.thinking-timeline-user-bubble {
-  padding: 9px 14px;
-  border-radius: 18px 18px 4px 18px;
-  background: var(--surface);
-  border: 0.5px solid var(--border);
-  font-size: 14px;
-  line-height: 1.5;
-  max-width: 78%;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* Timeline item row: dot column + content column */
-.thinking-timeline-item {
-  display: flex;
-  gap: 12px;
-  position: relative;
-}
-
-/* Left dot column */
-.thinking-timeline-dot-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 20px;
-  flex-shrink: 0;
-}
-
-/* Dot circle */
-.thinking-timeline-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  margin-top: 6px;
-  z-index: 1;
-}
-.thinking-timeline-dot[data-type="thinking"] { background: #7F77DD; }
-.thinking-timeline-dot[data-type="command"] { background: #1D9E75; }
-.thinking-timeline-dot[data-type="done"] { background: #1D9E75; }
-
-/* Vertical rail line connecting dots */
-.thinking-timeline-line {
-  width: 1px;
-  flex: 1;
-  min-height: 8px;
-  background: var(--border);
-}
-.thinking-timeline-line[data-hidden="true"] {
-  visibility: hidden;
-}
-
-/* Right content column */
-.thinking-timeline-content {
-  flex: 1;
-  min-width: 0;
-  padding-bottom: 16px;
-}
-
-/* Phase label above thinking card */
-.thinking-timeline-phase {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  margin-bottom: 6px;
-  margin-top: 2px;
-}
-
-/* --- Thinking Card --- */
-.thinking-timeline-card {
-  background: var(--card-bg);
-  border: 0.5px solid var(--border);
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-/* Card header row */
-.thinking-timeline-card-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  cursor: pointer;
-  user-select: none;
-  width: 100%;
-  background: none;
-  border: none;
-  font: inherit;
-  color: inherit;
-}
-.thinking-timeline-card-header:hover {
-  background: var(--hover);
-}
-
-.thinking-timeline-card-icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  color: var(--text-secondary);
-}
-
-.thinking-timeline-card-label {
-  flex: 1;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-align: left;
-}
-
-.thinking-timeline-card-toggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  flex-shrink: 0;
-}
-
-/* Chevron icon with rotation transition */
-.thinking-timeline-chevron {
-  display: inline-block;
-  transition: transform 300ms ease;
-  font-size: 10px;
-  line-height: 1;
-}
-.thinking-timeline-chevron[data-expanded="true"] {
-  transform: rotate(180deg);
-}
-
-/* Summary row wrap (hidden when expanded) */
-.thinking-timeline-summary-wrap {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition: max-height 300ms ease, opacity 300ms ease;
-}
-.thinking-timeline-summary-wrap[data-visible="true"] {
-  max-height: 36px;
-  opacity: 1;
-}
-
-.thinking-timeline-summary-inner {
-  padding: 7px 13px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  border-top: 1px solid var(--border);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.thinking-timeline-summary-icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  color: var(--text-tertiary);
-}
-
-.thinking-timeline-summary-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-/* Summary skeleton/shimmer */
-@keyframes thinking-shimmer {
-  0% { background-position: -200px 0; }
-  100% { background-position: 200px 0; }
-}
-.thinking-timeline-skeleton {
-  height: 14px;
-  width: 60%;
-  border-radius: 2px;
-  background: linear-gradient(90deg, var(--surface) 25%, var(--border) 50%, var(--surface) 75%);
-  background-size: 400px 100%;
-  animation: thinking-shimmer 1.5s ease-in-out infinite;
-}
-
-/* Full body wrap (hidden when collapsed) */
-.thinking-timeline-body-wrap {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition: max-height 300ms ease, opacity 300ms ease;
-}
-.thinking-timeline-body-wrap[data-visible="true"] {
-  max-height: 2000px;
-  opacity: 1;
-}
-
-.thinking-timeline-body-inner {
-  padding: 10px 13px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-secondary);
-  border-top: 1px solid var(--border);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* --- Command Card --- */
-.thinking-timeline-cmd-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--surface);
-  border: 0.5px solid var(--border);
-  border-radius: 8px;
-}
-
-.thinking-timeline-cmd-label {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-.thinking-timeline-cmd-text {
-  flex: 1;
-  font-family: Menlo, Monaco, "Courier New", monospace;
-  font-size: 13px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.thinking-timeline-cmd-chevron {
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-  font-size: 16px;
-  line-height: 1;
-}
-
-/* --- Done Card --- */
-.thinking-timeline-done-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 13px;
-  background: var(--card-bg);
-  border: 0.5px solid var(--border);
-  border-radius: 12px;
-}
-
-.thinking-timeline-done-check {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  color: #1D9E75;
-}
-
-.thinking-timeline-done-text {
-  flex: 1;
-  font-size: 13px;
-  color: var(--text);
-  min-width: 0;
-}
-
-.thinking-timeline-done-badge {
-  flex-shrink: 0;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--success-soft-bg);
-  color: var(--success-soft-fg);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.4;
 }
 
 /* ==============================
