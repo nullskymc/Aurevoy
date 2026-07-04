@@ -369,10 +369,19 @@ function ConversationTurnView({
   onBranch?: (messageId: string) => void;
 }) {
   const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
+  const attachContentToolCallIds = collectAttachContentToolCallIds(turn.agentMessages);
   const finalMessage = isLiveTurn ? null : findFinalAssistantMessage(turn.agentMessages);
   const finalMessages = finalMessage ? [finalMessage] : [];
-  const workflowMessages = assistantMessages.filter((message) => message.id !== finalMessage?.id);
-  const standaloneToolMessages = turn.agentMessages.filter((message) => message.role === "tool");
+  const presentationMessages = assistantMessages.filter(
+    (message) => message.id !== finalMessage?.id && isPresentationAssistantMessage(message),
+  );
+  const presentationMessageIds = new Set(presentationMessages.map((message) => message.id));
+  const workflowMessages = assistantMessages.filter(
+    (message) => message.id !== finalMessage?.id && !isPresentationOnlyAssistantMessage(message),
+  );
+  const standaloneToolMessages = turn.agentMessages.filter(
+    (message) => message.role === "tool" && (!message.toolCallId || !attachContentToolCallIds.has(message.toolCallId)),
+  );
 
   return (
     <div className="conversation-turn">
@@ -386,11 +395,12 @@ function ConversationTurnView({
         />
       )}
 
-      {(finalMessages.length > 0 || workflowMessages.length > 0 || standaloneToolMessages.length > 0) && (
+      {(finalMessages.length > 0 || presentationMessages.length > 0 || workflowMessages.length > 0 || standaloneToolMessages.length > 0) && (
         <div className="agent-turn">
           {(workflowMessages.length > 0 || standaloneToolMessages.length > 0) && (
             <AgentWorkflowDrawer
               assistantMessages={workflowMessages}
+              presentationMessageIds={presentationMessageIds}
               standaloneToolMessages={standaloneToolMessages}
               resultMap={resultMap}
               plan={plan}
@@ -399,6 +409,21 @@ function ConversationTurnView({
               defaultOpen={isLiveTurn}
             />
           )}
+
+          {presentationMessages.map((message) => (
+            <div
+              key={`presentation-${message.id}`}
+              className="agent-final-response"
+              onContextMenu={(event) => onAgentContextMenu(event, message)}
+            >
+              <AgentRound
+                data={buildAgentRoundFromMessage(message, resultMap, plan)}
+                busy={false}
+                defaultToolDetailsOpen={defaultToolDetailsOpen}
+                showWorkflow={false}
+              />
+            </div>
+          ))}
 
           {finalMessages.map((message) => (
             <div
@@ -421,10 +446,18 @@ function ConversationTurnView({
 }
 
 function findFinalAssistantMessage(messages: Message[]): Message | null {
-  const last = messages[messages.length - 1];
-  if (!last || last.role !== "assistant") return null;
-  if ((last.toolCalls?.length ?? 0) === 0) return last;
-  return isPresentationOnlyAssistantMessage(last) ? last : null;
+  const attachContentToolCallIds = collectAttachContentToolCallIds(messages);
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role === "tool") {
+      if (message.toolCallId && attachContentToolCallIds.has(message.toolCallId)) continue;
+      return null;
+    }
+    if (message.role !== "assistant") continue;
+    if ((message.toolCalls?.length ?? 0) === 0) return message;
+    return isPresentationOnlyAssistantMessage(message) ? message : null;
+  }
+  return null;
 }
 
 function isPresentationOnlyAssistantMessage(message: Message): boolean {
@@ -432,8 +465,24 @@ function isPresentationOnlyAssistantMessage(message: Message): boolean {
   return toolCalls.length > 0 && toolCalls.every((toolCall) => toolCall.function.name === "attach_content");
 }
 
+function isPresentationAssistantMessage(message: Message): boolean {
+  return isPresentationOnlyAssistantMessage(message) || (message.contentBlocks?.length ?? 0) > 0;
+}
+
+function collectAttachContentToolCallIds(messages: Message[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const toolCall of message.toolCalls ?? []) {
+      if (toolCall.function.name === "attach_content") ids.add(toolCall.id);
+    }
+  }
+  return ids;
+}
+
 function AgentWorkflowDrawer({
   assistantMessages,
+  presentationMessageIds,
   standaloneToolMessages,
   resultMap,
   plan,
@@ -442,6 +491,7 @@ function AgentWorkflowDrawer({
   defaultOpen = false,
 }: {
   assistantMessages: Message[];
+  presentationMessageIds: Set<string>;
   standaloneToolMessages: Message[];
   resultMap: Map<string, ToolResultInfo>;
   plan: PlanStep[];
@@ -450,7 +500,9 @@ function AgentWorkflowDrawer({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const rounds = assistantMessages.map((message) => buildAgentRoundFromMessage(message, resultMap, plan));
+  const rounds = assistantMessages.map((message) =>
+    buildAgentRoundFromMessage(stripPresentationBlocksForWorkflow(message, presentationMessageIds), resultMap, plan),
+  );
   const failed = rounds.some((round) => round.status === "failed") ||
     standaloneToolMessages.some((message) => !parseToolResultContent(message.content).ok);
   const summary = "Thought process";
@@ -500,6 +552,11 @@ function AgentWorkflowDrawer({
       )}
     </section>
   );
+}
+
+function stripPresentationBlocksForWorkflow(message: Message, presentationMessageIds: Set<string>): Message {
+  if (!presentationMessageIds.has(message.id) && !(message.contentBlocks?.length)) return message;
+  return { ...message, contentBlocks: undefined };
 }
 
 function ClarificationCard({

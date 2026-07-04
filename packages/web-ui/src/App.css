@@ -27,13 +27,16 @@
   --btn-surface: #ffffff;
   /* 主区顶部柔光：浅色下做一层极淡的高光，深色下关闭以避免灰白色带 */
   --main-glow: rgba(247, 247, 248, 0.66);
-  --font-scale: 1.0;
-  --ui-font-xs: calc(12px * var(--font-scale));
-  --ui-font-sm: calc(13px * var(--font-scale));
-  --ui-font-base: calc(15px * var(--font-scale));
-  --ui-font-md: calc(15px * var(--font-scale));
-  --ui-font-lg: calc(18px * var(--font-scale));
-  --ui-font-chat: calc(15.5px * var(--font-scale));
+  --ui-font-size: 12.5px;
+  --chat-font-size: 14px;
+  --code-font-size: 12px;
+  --ui-font-xs: calc(var(--ui-font-size) - 2px);
+  --ui-font-sm: calc(var(--ui-font-size) - 1px);
+  --ui-font-base: var(--ui-font-size);
+  --ui-font-md: var(--ui-font-size);
+  --ui-font-lg: calc(var(--ui-font-size) + 2px);
+  --ui-font-chat: var(--chat-font-size);
+  --ui-font-code: var(--code-font-size);
   --ui-control-sm: 30px;
   --ui-control-md: 36px;
   --ui-control-lg: 40px;
@@ -140,12 +143,13 @@ button:disabled {
 
 /* ============ 整体布局 ============ */
 .app-shell {
-  --ui-font-xs: calc(12px * var(--font-scale));
-  --ui-font-sm: calc(13px * var(--font-scale));
-  --ui-font-base: calc(15px * var(--font-scale));
-  --ui-font-md: calc(15px * var(--font-scale));
-  --ui-font-lg: calc(18px * var(--font-scale));
-  --ui-font-chat: calc(15.5px * var(--font-scale));
+  --ui-font-xs: calc(var(--ui-font-size) - 2px);
+  --ui-font-sm: calc(var(--ui-font-size) - 1px);
+  --ui-font-base: var(--ui-font-size);
+  --ui-font-md: var(--ui-font-size);
+  --ui-font-lg: calc(var(--ui-font-size) + 2px);
+  --ui-font-chat: var(--chat-font-size);
+  --ui-font-code: var(--code-font-size);
   display: grid;
   grid-template-columns:
     var(--sidebar-width, 280px)
@@ -770,7 +774,7 @@ button:disabled {
 .hero-title {
   margin: 0;
   color: var(--text);
-  font-size: calc(24px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) + 10px);
   font-weight: 650;
   letter-spacing: 0;
   text-align: center;
@@ -830,7 +834,7 @@ button:disabled {
   align-items: center;
   gap: 9px;
   color: var(--text-tertiary);
-  font-size: calc(12.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1.5px);
   font-weight: 650;
 }
 
@@ -897,7 +901,7 @@ button:disabled {
   min-width: 0;
   overflow: hidden;
   color: inherit;
-  font-size: calc(14px * var(--font-scale));
+  font-size: var(--ui-font-size);
   font-weight: 500;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -979,7 +983,7 @@ button:disabled {
 
 .agent-text {
   color: var(--text);
-  font-size: calc(15px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) + 1px);
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1007,14 +1011,14 @@ button:disabled {
 .run-summary-eyebrow {
   margin: 0 0 3px;
   color: var(--text-tertiary);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
   font-weight: 700;
   letter-spacing: 0;
 }
 
 .run-summary h2 {
   margin: 0;
-  font-size: calc(15px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) + 1px);
   font-weight: 650;
 }
 
@@ -1046,7 +1050,7 @@ button:disabled {
   display: grid;
   gap: 10px;
   color: var(--text);
-  font-size: var(--ui-font-base);
+  font-size: var(--ui-font-chat);
   line-height: 1.62;
 }
 
@@ -1060,15 +1064,15 @@ button:disabled {
 }
 
 .markdown-body h1 {
-  font-size: calc(20px * var(--font-scale));
+  font-size: calc(var(--ui-font-chat) + 5px);
 }
 
 .markdown-body h2 {
-  font-size: calc(17px * var(--font-scale));
+  font-size: calc(var(--ui-font-chat) + 2px);
 }
 
 .markdown-body h3 {
-  font-size: var(--ui-font-base);
+  font-size: var(--ui-font-chat);
 }
 
 .markdown-body ul {
@@ -1080,7 +1084,7 @@ button:disabled {
   background: var(--surface-strong);
   padding: 1px 5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.94em;
+  font-size: var(--ui-font-code);
 }
 
 .markdown-body pre {
@@ -1827,7 +1831,7 @@ button:disabled {
   border-radius: 999px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: calc(12.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1.5px);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
@@ -1918,7 +1922,7 @@ button:disabled {
 
 .tool-card-kind {
   color: var(--text-tertiary);
-  font-size: calc(12.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1.5px);
   font-weight: 650;
 }
 
@@ -1926,7 +1930,7 @@ button:disabled {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  font-size: calc(13.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 0.5px);
   font-weight: 600;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   text-overflow: ellipsis;
@@ -1935,7 +1939,7 @@ button:disabled {
 
 .tool-card-status {
   flex: 0 0 auto;
-  font-size: calc(12.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1.5px);
   color: var(--text-secondary);
 }
 
@@ -2267,7 +2271,7 @@ button:disabled {
   background: var(--code-bg);
   padding: 8px 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--ui-font-code);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2304,7 +2308,7 @@ button:disabled {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  font-size: calc(13.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 0.5px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2408,7 +2412,7 @@ button:disabled {
 .clarification-card p {
   margin: 0;
   color: var(--text);
-  font-size: calc(15px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) + 1px);
   line-height: 1.55;
 }
 
@@ -2498,14 +2502,14 @@ button:disabled {
 
 .page-panel-head h1 {
   margin: 0;
-  font-size: calc(22px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) + 8px);
   font-weight: 650;
 }
 
 .page-panel-head p {
   margin: 6px 0 0;
   color: var(--text-secondary);
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   line-height: 1.55;
 }
 
@@ -2530,7 +2534,7 @@ button:disabled {
   border-radius: 10px;
   background: var(--input-bg-focus);
   color: var(--text);
-  font-size: calc(14px * var(--font-scale));
+  font-size: var(--ui-font-size);
   padding: 0 14px;
   outline: none;
 }
@@ -2563,7 +2567,7 @@ button:disabled {
 
 .page-list-title {
   overflow: hidden;
-  font-size: calc(14px * var(--font-scale));
+  font-size: var(--ui-font-size);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2572,7 +2576,7 @@ button:disabled {
 .page-list-meta,
 .page-empty {
   color: var(--text-tertiary);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
 }
 
 .page-empty {
@@ -2605,7 +2609,7 @@ button:disabled {
 .skill-page-card strong {
   min-width: 0;
   overflow: hidden;
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2619,7 +2623,7 @@ button:disabled {
 .skill-page-card p {
   margin: 8px 0 12px;
   color: var(--text-secondary);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
   line-height: 1.55;
 }
 
@@ -2635,7 +2639,7 @@ button:disabled {
   border-radius: 999px;
   background: var(--pill-bg);
   color: var(--pill-fg);
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 3px);
   padding: 3px 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2655,7 +2659,7 @@ button:disabled {
   border-radius: 10px;
   background: var(--input-bg-focus);
   color: var(--text);
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   padding: 0 14px;
   outline: none;
 }
@@ -2676,7 +2680,7 @@ button:disabled {
   border-radius: 10px;
   background: var(--accent);
   color: #fff;
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -2695,14 +2699,14 @@ button:disabled {
   width: min(100%, 980px);
   margin: 0 auto 10px;
   color: var(--danger, #e53935);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
 }
 
 .skill-install-success {
   width: min(100%, 980px);
   margin: 0 auto 10px;
   color: var(--success, #43a047);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
 }
 
 .skill-delete-btn {
@@ -2738,7 +2742,7 @@ button:disabled {
   margin-top: 8px;
   overflow: hidden;
   color: var(--text-tertiary);
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 3px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2769,7 +2773,7 @@ button:disabled {
   align-items: center;
   gap: 12px;
   color: var(--text-secondary);
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
 }
 
 .font-scale-control input {
@@ -2803,23 +2807,6 @@ button:disabled {
 
 .settings-back {
   margin: 0 0 10px;
-}
-
-.settings-search {
-  width: 100%;
-  height: var(--ui-control-md);
-  border: var(--ui-border-width) solid var(--border);
-  border-radius: var(--ui-radius-md);
-  background: var(--card-bg);
-  color: var(--text);
-  font-size: var(--ui-font-sm);
-  outline: none;
-  padding: 0 var(--ui-space-3);
-}
-
-.settings-search:focus {
-  border-color: var(--border-strong);
-  background: var(--input-bg-focus);
 }
 
 .settings-nav-scroll {
@@ -3252,41 +3239,28 @@ button:disabled {
 
 .settings-font-size-control {
   display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
   gap: 10px;
   justify-items: end;
-  min-width: min(100%, 360px);
+  min-width: min(100%, 230px);
 }
 
-.settings-font-size-presets {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(52px, 1fr));
-  gap: 4px;
-  width: 100%;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--input-bg);
+.settings-font-size-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.settings-font-size-preset {
-  min-height: 30px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
+.settings-font-size-input {
+  width: 86px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-font-size-unit {
   color: var(--text-secondary);
   font-size: var(--ui-font-sm);
-  font-weight: 600;
-}
-
-.settings-font-size-preset:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
-.settings-font-size-preset[data-active="true"] {
-  background: var(--btn-surface);
-  box-shadow: 0 1px 4px rgba(31, 35, 40, 0.1);
-  color: var(--text);
 }
 
 .settings-font-size-reset {
@@ -3857,7 +3831,7 @@ button:disabled {
 
 .artifact-doc-head h1 {
   margin: 0;
-  font-size: calc(20px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) + 6px);
   font-weight: 700;
 }
 
@@ -3962,7 +3936,7 @@ button:disabled {
   align-items: center;
   gap: 3px;
   color: var(--text-tertiary);
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 3px);
   font-weight: 500;
   line-height: 1;
 }
@@ -4106,7 +4080,7 @@ textarea:focus-visible,
   border-radius: 16px 16px 4px 16px;
   background: var(--accent-soft-bg);
   color: var(--accent-soft-fg);
-  font-size: calc(15.5px * var(--font-scale));
+  font-size: var(--ui-font-chat);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
@@ -4420,7 +4394,7 @@ button.user-bubble-attachment {
   background: var(--card-bg);
   color: var(--text);
   font: inherit;
-  font-size: calc(14.5px * var(--font-scale));
+  font-size: var(--ui-font-chat);
   line-height: 1.55;
   resize: none;
   transition: border-color 0.15s, box-shadow 0.15s;
@@ -4824,7 +4798,7 @@ button.user-bubble-attachment {
   gap: 14px;
   border-radius: 10px;
   color: var(--text);
-  font-size: calc(15px * var(--font-scale));
+  font-size: var(--ui-font-base);
   font-weight: 600;
   padding: 0 10px;
 }
@@ -4868,7 +4842,7 @@ button.user-bubble-attachment {
   gap: 0;
   margin: 22px 0 12px;
   color: var(--text-tertiary);
-  font-size: calc(14px * var(--font-scale));
+  font-size: var(--ui-font-base);
   font-weight: 700;
   letter-spacing: 0;
   text-transform: none;
@@ -4925,7 +4899,7 @@ button.user-bubble-attachment {
   gap: 12px !important;
   padding: 0 10px !important;
   color: var(--text);
-  font-size: calc(15px * var(--font-scale));
+  font-size: var(--ui-font-base);
   font-weight: 600;
 }
 
@@ -4946,7 +4920,7 @@ button.user-bubble-attachment {
   border-radius: 999px;
   background: color-mix(in srgb, var(--hover) 82%, transparent);
   color: var(--text-tertiary);
-  font-size: calc(13px * var(--font-scale));
+  font-size: var(--ui-font-sm);
   font-weight: 600;
   line-height: 22px;
   opacity: 1;
@@ -4986,7 +4960,7 @@ button.user-bubble-attachment {
   gap: 10px;
   border-radius: 9px !important;
   color: var(--text-secondary);
-  font-size: calc(14px * var(--font-scale));
+  font-size: var(--ui-font-base);
   padding: 0 8px !important;
 }
 
@@ -4997,7 +4971,7 @@ button.user-bubble-attachment {
 
 .child-chat-item .conv-title {
   color: inherit;
-  font-size: calc(14px * var(--font-scale));
+  font-size: var(--ui-font-base);
   font-weight: 500;
 }
 
@@ -5037,7 +5011,7 @@ button.user-bubble-attachment {
 
 .conv-title {
   color: var(--text);
-  font-size: calc(15px * var(--font-scale));
+  font-size: var(--ui-font-base);
   font-weight: 650;
   line-height: 1.25;
 }
@@ -5048,7 +5022,7 @@ button.user-bubble-attachment {
 
 .conv-meta {
   color: var(--text-tertiary);
-  font-size: calc(13px * var(--font-scale));
+  font-size: var(--ui-font-sm);
   line-height: 1.2;
 }
 
@@ -5058,7 +5032,7 @@ button.user-bubble-attachment {
 
 .conv-summary-chip {
   color: var(--text-tertiary);
-  font-size: calc(12px * var(--font-scale));
+  font-size: var(--ui-font-xs);
 }
 
 .conv-delete-btn {
@@ -5120,7 +5094,7 @@ button.user-bubble-attachment {
 .tool-run-title {
   flex: 0 0 auto;
   color: var(--text-secondary);
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   font-weight: 650;
 }
 
@@ -5130,7 +5104,7 @@ button.user-bubble-attachment {
   overflow: hidden;
   color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: calc(13px * var(--font-scale));
+  font-size: var(--ui-font-code);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5140,7 +5114,7 @@ button.user-bubble-attachment {
   border-radius: 999px;
   background: var(--success-soft-bg);
   color: var(--success-soft-fg);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
   font-weight: 650;
   padding: 2px 8px;
 }
@@ -5166,7 +5140,7 @@ button.user-bubble-attachment {
   border-radius: var(--ui-radius-sm);
   background: transparent;
   color: var(--text-tertiary);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
   padding: 3px 6px;
 }
 
@@ -5188,7 +5162,7 @@ button.user-bubble-attachment {
   align-items: center;
   gap: 10px;
   color: var(--text-secondary);
-  font-size: calc(12.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1.5px);
 }
 
 .tool-run-detail-row span,
@@ -5214,7 +5188,7 @@ button.user-bubble-attachment {
   padding: 4px 8px;
   background: var(--bg);
   border-radius: var(--ui-radius-sm);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
   max-height: 80px;
   overflow: hidden auto;
 }
@@ -5244,7 +5218,7 @@ button.user-bubble-attachment {
 .tool-run-approval span {
   min-width: 0;
   color: var(--text-secondary);
-  font-size: calc(12.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1.5px);
 }
 
 .tool-run-approval-actions {
@@ -5258,7 +5232,7 @@ button.user-bubble-attachment {
   border-radius: var(--ui-radius-sm);
   background: var(--bg);
   color: var(--text);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
   font-weight: 650;
   padding: 5px 9px;
 }
@@ -5275,7 +5249,7 @@ button.user-bubble-attachment {
 
 .tool-run-approval-result {
   color: var(--text-secondary);
-  font-size: calc(12.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1.5px);
   font-weight: 600;
 }
 
@@ -5296,7 +5270,7 @@ button.user-bubble-attachment {
 
 .tool-approval-result {
   color: var(--text-secondary);
-  font-size: calc(12.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1.5px);
   font-weight: 600;
 }
 
@@ -5396,7 +5370,7 @@ button.user-bubble-attachment {
   border: 1px solid var(--border);
   border-radius: var(--ui-radius-md);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--ui-font-code);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -5542,7 +5516,7 @@ button.user-bubble-attachment {
   gap: 10px;
   padding: 0 0 2px;
   color: var(--text-tertiary);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
   line-height: 1.4;
 }
 
@@ -5555,7 +5529,7 @@ button.user-bubble-attachment {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--ui-font-xs);
   font-weight: 600;
   padding: 1px 7px;
   border-radius: 999px;
@@ -5617,7 +5591,7 @@ button.user-bubble-attachment {
   align-items: baseline;
   gap: 8px;
   min-width: 0;
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
   font-weight: 600;
   color: var(--text-tertiary);
   line-height: 1.3;
@@ -5630,7 +5604,7 @@ button.user-bubble-attachment {
 }
 
 .timeline-plan-status-text {
-  font-size: 11px;
+  font-size: var(--ui-font-xs);
   font-weight: 500;
   color: var(--text-tertiary);
 }
@@ -5711,7 +5685,7 @@ button.user-bubble-attachment {
 .timeline-step-glyph.is-failed {
   background: var(--danger-soft-bg);
   color: var(--danger-soft-fg);
-  font-size: 12px;
+  font-size: var(--ui-font-sm);
   font-weight: 700;
 }
 
@@ -5746,7 +5720,7 @@ button.user-bubble-attachment {
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: calc(14px * var(--font-scale));
+  font-size: var(--ui-font-size);
   font-weight: 500;
   text-align: left;
   padding: 0;
@@ -5768,7 +5742,7 @@ button.user-bubble-attachment {
   overflow: hidden;
   color: var(--text-secondary);
   font-family: inherit;
-  font-size: calc(14px * var(--font-scale));
+  font-size: var(--ui-font-size);
   font-weight: 600;
   line-height: 1.55;
   text-overflow: ellipsis;
@@ -5783,7 +5757,7 @@ button.user-bubble-attachment {
   min-width: 0;
   color: var(--text-tertiary);
   font-family: inherit;
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   font-weight: 500;
 }
 
@@ -5810,7 +5784,7 @@ button.user-bubble-attachment {
 
 .timeline-step-log {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: calc(11.5px * var(--font-scale));
+  font-size: var(--ui-font-code);
   line-height: 1.5;
   color: var(--text-secondary);
   white-space: pre-wrap;
@@ -5840,7 +5814,7 @@ button.user-bubble-attachment {
   gap: 12px;
   min-width: 0;
   color: var(--text-tertiary);
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   line-height: 1.35;
 }
 
@@ -5893,7 +5867,7 @@ button.user-bubble-attachment {
   border-radius: 50%;
   background: var(--accent-soft-bg);
   color: var(--accent-soft-fg);
-  font-size: 10px;
+  font-size: calc(var(--ui-font-size) - 2.5px);
   font-weight: 700;
 }
 
@@ -5906,7 +5880,7 @@ button.user-bubble-attachment {
 .timeline-search-result-title {
   overflow: hidden;
   color: var(--text);
-  font-size: calc(13.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 0.5px);
   font-weight: 500;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -5916,7 +5890,7 @@ button.user-bubble-attachment {
 .timeline-search-snippet {
   overflow: hidden;
   color: var(--text-tertiary);
-  font-size: calc(11.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2.5px);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5925,7 +5899,7 @@ button.user-bubble-attachment {
 .timeline-search-host {
   overflow: hidden;
   color: var(--text-tertiary);
-  font-size: calc(12.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1.5px);
   line-height: 1.35;
   text-align: right;
   text-overflow: ellipsis;
@@ -5936,7 +5910,7 @@ button.user-bubble-attachment {
   border: 1px solid var(--border);
   border-radius: var(--ui-radius-md);
   color: var(--text-tertiary);
-  font-size: calc(12.5px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1.5px);
   padding: 10px 12px;
 }
 
@@ -5954,7 +5928,7 @@ button.user-bubble-attachment {
   gap: 6px;
   padding: 4px 0;
   color: var(--danger-soft-fg);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
   line-height: 1.45;
 }
 
@@ -6037,7 +6011,7 @@ button.user-bubble-attachment {
 }
 
 .timeline-artifact-type {
-  font-size: 10px;
+  font-size: calc(var(--ui-font-size) - 2.5px);
   font-weight: 700;
   text-transform: uppercase;
   padding: 1px 6px;
@@ -6048,7 +6022,7 @@ button.user-bubble-attachment {
 }
 
 .timeline-artifact-name {
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6058,7 +6032,7 @@ button.user-bubble-attachment {
 }
 
 .timeline-artifact-status {
-  font-size: 11px;
+  font-size: var(--ui-font-xs);
   color: var(--text-tertiary);
   padding: 1px 6px;
   border-radius: 4px;
@@ -6066,7 +6040,7 @@ button.user-bubble-attachment {
 }
 
 .timeline-artifact-path {
-  font-size: 11px;
+  font-size: var(--ui-font-xs);
   color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6078,7 +6052,7 @@ button.user-bubble-attachment {
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--ui-font-sm);
   cursor: pointer;
   padding: 2px 8px;
   border-radius: var(--ui-radius-sm);
@@ -6095,7 +6069,7 @@ button.user-bubble-attachment {
   gap: 8px;
   padding: 6px 0;
   color: var(--text-tertiary);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
 }
 
 /* Timeline 输出文本（最终回复） */
@@ -6115,7 +6089,7 @@ button.user-bubble-attachment {
 .timeline-step-status {
   display: inline-flex;
   align-items: center;
-  font-size: 10px;
+  font-size: calc(var(--ui-font-size) - 2.5px);
   font-weight: 600;
   line-height: 1;
   margin-left: 6px;
@@ -6160,14 +6134,14 @@ button.user-bubble-attachment {
 
 .skills-page-header h1 {
   margin: 0;
-  font-size: calc(20px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) + 6px);
   font-weight: 700;
 }
 
 .skills-page-summary {
   margin: 2px 0 0;
   color: var(--text-tertiary);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
 }
 
 .skills-page-actions {
@@ -6191,7 +6165,7 @@ button.user-bubble-attachment {
   border-radius: 10px;
   background: var(--input-bg-focus);
   color: var(--text);
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   padding: 0 14px;
   outline: none;
 }
@@ -6217,7 +6191,7 @@ button.user-bubble-attachment {
   border-radius: 10px;
   background: var(--input-bg-focus);
   color: var(--text);
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   padding: 0 14px;
   outline: none;
 }
@@ -6238,7 +6212,7 @@ button.user-bubble-attachment {
   border-radius: 10px;
   background: var(--accent);
   color: #fff;
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -6268,7 +6242,7 @@ button.user-bubble-attachment {
   border-radius: 10px;
   background: var(--card-bg);
   color: var(--text);
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   font-weight: 600;
   cursor: pointer;
   text-align: left;
@@ -6289,7 +6263,7 @@ button.user-bubble-attachment {
 .skills-group-count {
   margin-left: auto;
   color: var(--text-tertiary);
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 3px);
 }
 
 .skills-group-body {
@@ -6320,7 +6294,7 @@ button.user-bubble-attachment {
 .skills-card-head strong {
   min-width: 0;
   overflow: hidden;
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 1px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6358,7 +6332,7 @@ button.user-bubble-attachment {
 .skills-card-desc {
   margin: 6px 0 8px;
   color: var(--text-secondary);
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 2px);
   line-height: 1.5;
 }
 
@@ -6374,7 +6348,7 @@ button.user-bubble-attachment {
   border-radius: 999px;
   background: var(--pill-bg);
   color: var(--pill-fg);
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 3px);
   padding: 2px 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6384,7 +6358,7 @@ button.user-bubble-attachment {
   margin: 6px 0 0;
   overflow: hidden;
   color: var(--text-tertiary);
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(var(--ui-font-size) - 3px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

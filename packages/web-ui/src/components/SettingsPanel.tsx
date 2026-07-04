@@ -54,7 +54,9 @@ interface SettingsPanelProps {
   memories: MemoryEntry[];
   saving: boolean;
   fetchingModels: boolean;
-  fontScale: number;
+  chatFontSize: number;
+  uiFontSize: number;
+  codeFontSize: number;
   workMode: WorkMode;
   themeMode: ThemeMode;
   locale: Locale;
@@ -65,7 +67,9 @@ interface SettingsPanelProps {
   onRefresh: () => void;
   onFetchModels: () => void;
   onSaveEnabledModels: (models: string[]) => void;
-  onFontScaleChange: (scale: number) => void;
+  onChatFontSizeChange: (size: number) => void;
+  onUiFontSizeChange: (size: number) => void;
+  onCodeFontSizeChange: (size: number) => void;
   onWorkModeChange: (mode: WorkMode) => void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onLocaleChange: (locale: Locale) => void;
@@ -80,12 +84,6 @@ type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" 
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
 const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search", "usage"];
-const FONT_SCALE_PRESETS = [
-  { value: 0.9, labelKey: "settings.fontSizeSmall" },
-  { value: 1.0, labelKey: "settings.fontSizeStandard" },
-  { value: 1.1, labelKey: "settings.fontSizeLarge" },
-  { value: 1.2, labelKey: "settings.fontSizeExtraLarge" },
-] as const;
 
 /** 每次调用都会重新计算 t()，确保语言切换后侧边栏标签即时更新 */
 function getSettingsGroups(): Array<{
@@ -129,7 +127,9 @@ export function SettingsPanel({
   memories,
   saving,
   fetchingModels,
-  fontScale,
+  chatFontSize,
+  uiFontSize,
+  codeFontSize,
   workMode,
   themeMode,
   locale,
@@ -140,7 +140,9 @@ export function SettingsPanel({
   onRefresh,
   onFetchModels,
   onSaveEnabledModels,
-  onFontScaleChange,
+  onChatFontSizeChange,
+  onUiFontSizeChange,
+  onCodeFontSizeChange,
   onWorkModeChange,
   onThemeModeChange,
   onLocaleChange,
@@ -152,7 +154,6 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const safeInitialSection = normalizeSettingsSection(initialSection);
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(safeInitialSection);
-  const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<SettingsDraft>(() => makeDraft(settings));
   const [cleanupDays, setCleanupDays] = useState(settings?.cleanupPolicyDays ?? 30);
   useEffect(() => {
@@ -165,17 +166,7 @@ export function SettingsPanel({
   }, [initialSection]);
 
   const groups = getSettingsGroups();
-  const normalized = query.trim().toLowerCase();
-  const visibleGroups = !normalized
-    ? groups
-    : groups
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => item.label.toLowerCase().includes(normalized)),
-      }))
-      .filter((group) => group.items.length > 0);
-
-  const activeTitle = getSettingsGroups().flatMap((group) => group.items).find(
+  const activeTitle = groups.flatMap((group) => group.items).find(
     (item) => item.id === activeSection,
   )?.label;
 
@@ -191,15 +182,8 @@ export function SettingsPanel({
           {t("settings.backToApp")}
         </button>
 
-        <input
-          className="settings-search"
-          value={query}
-          placeholder={t("settings.searchPlaceholder")}
-          onChange={(event) => setQuery(event.currentTarget.value)}
-        />
-
         <div className="sidebar-scroll settings-nav-scroll">
-          {visibleGroups.map((group) => (
+          {groups.map((group) => (
             <section key={group.label} className="settings-nav-group">
               <p className="sidebar-section-label">{group.label}</p>
               {group.items.map((item) => (
@@ -244,10 +228,14 @@ export function SettingsPanel({
 
           {activeSection === "appearance" && (
             <AppearanceSettings
-              fontScale={fontScale}
+              chatFontSize={chatFontSize}
+              uiFontSize={uiFontSize}
+              codeFontSize={codeFontSize}
               themeMode={themeMode}
               locale={locale}
-              onFontScaleChange={onFontScaleChange}
+              onChatFontSizeChange={onChatFontSizeChange}
+              onUiFontSizeChange={onUiFontSizeChange}
+              onCodeFontSizeChange={onCodeFontSizeChange}
               onThemeModeChange={onThemeModeChange}
               onLocaleChange={onLocaleChange}
             />
@@ -589,21 +577,31 @@ function GeneralSettings({
 }
 
 function AppearanceSettings({
-  fontScale,
+  chatFontSize,
+  uiFontSize,
+  codeFontSize,
   themeMode,
   locale,
-  onFontScaleChange,
+  onChatFontSizeChange,
+  onUiFontSizeChange,
+  onCodeFontSizeChange,
   onThemeModeChange,
   onLocaleChange,
 }: {
-  fontScale: number;
+  chatFontSize: number;
+  uiFontSize: number;
+  codeFontSize: number;
   themeMode: ThemeMode;
   locale: Locale;
-  onFontScaleChange: (scale: number) => void;
+  onChatFontSizeChange: (size: number) => void;
+  onUiFontSizeChange: (size: number) => void;
+  onCodeFontSizeChange: (size: number) => void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onLocaleChange: (locale: Locale) => void;
 }) {
-  const isDefaultFontScale = Math.abs(fontScale - 1) < 0.001;
+  const isDefaultChatFontSize = Math.abs(chatFontSize - 14) < 0.001;
+  const isDefaultUiFontSize = Math.abs(uiFontSize - 12.5) < 0.001;
+  const isDefaultCodeFontSize = Math.abs(codeFontSize - 12) < 0.001;
 
   return (
     <SettingsGroup title={t("settings.appearance")}>
@@ -631,36 +629,130 @@ function AppearanceSettings({
         onChange={(value) => onLocaleChange(value as Locale)}
       />
       <SettingsActionRow
-        title={t("settings.fontScaleTitle")}
-        description={t("settings.fontScaleDesc")}
+        title={t("settings.uiFontSizeTitle")}
+        description={t("settings.uiFontSizeDesc")}
         control={
-          <div className="settings-font-size-control">
-            <div className="settings-font-size-presets" role="group" aria-label={t("settings.fontScaleTitle")}>
-              {FONT_SCALE_PRESETS.map((preset) => (
-                <button
-                  key={preset.value}
-                  type="button"
-                  className="settings-font-size-preset"
-                  data-active={Math.abs(fontScale - preset.value) < 0.005}
-                  onClick={() => onFontScaleChange(preset.value)}
-                >
-                  {t(preset.labelKey)}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              className="settings-inline-btn settings-font-size-reset"
-              disabled={isDefaultFontScale}
-              onClick={() => onFontScaleChange(1)}
-            >
-              {t("settings.fontSizeReset")}
-            </button>
-          </div>
+          <FontSizeControl
+            value={uiFontSize}
+            defaultValue={12.5}
+            min={10}
+            max={20}
+            step={0.5}
+            ariaLabel={t("settings.uiFontSizeTitle")}
+            resetDisabled={isDefaultUiFontSize}
+            onChange={onUiFontSizeChange}
+          />
+        }
+      />
+      <SettingsActionRow
+        title={t("settings.chatFontSizeTitle")}
+        description={t("settings.chatFontSizeDesc")}
+        control={
+          <FontSizeControl
+            value={chatFontSize}
+            defaultValue={14}
+            min={11}
+            max={24}
+            step={0.5}
+            ariaLabel={t("settings.chatFontSizeTitle")}
+            resetDisabled={isDefaultChatFontSize}
+            onChange={onChatFontSizeChange}
+          />
+        }
+      />
+      <SettingsActionRow
+        title={t("settings.codeFontSizeTitle")}
+        description={t("settings.codeFontSizeDesc")}
+        control={
+          <FontSizeControl
+            value={codeFontSize}
+            defaultValue={12}
+            min={10}
+            max={18}
+            ariaLabel={t("settings.codeFontSizeTitle")}
+            resetDisabled={isDefaultCodeFontSize}
+            onChange={onCodeFontSizeChange}
+          />
         }
       />
     </SettingsGroup>
   );
+}
+
+function FontSizeControl({
+  value,
+  defaultValue,
+  min,
+  max,
+  step = 1,
+  ariaLabel,
+  resetDisabled,
+  onChange,
+}: {
+  value: number;
+  defaultValue: number;
+  min: number;
+  max: number;
+  step?: number;
+  ariaLabel: string;
+  resetDisabled: boolean;
+  onChange: (size: number) => void;
+}) {
+  const [draft, setDraft] = useState(() => formatFontSizeInput(value));
+
+  useEffect(() => {
+    setDraft(formatFontSizeInput(value));
+  }, [value]);
+
+  function commitValue(rawValue: string): void {
+    setDraft(rawValue);
+    if (rawValue.trim() === "") return;
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) return;
+    onChange(parsed);
+  }
+
+  function restoreValidValue(): void {
+    if (draft.trim() === "") {
+      setDraft(formatFontSizeInput(value));
+      return;
+    }
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(formatFontSizeInput(value));
+    }
+  }
+
+  return (
+    <div className="settings-font-size-control">
+      <div className="settings-font-size-input-wrap">
+        <input
+          className="settings-number-input settings-font-size-input"
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={draft}
+          aria-label={ariaLabel}
+          onChange={(event) => commitValue(event.target.value)}
+          onBlur={restoreValidValue}
+        />
+        <span className="settings-font-size-unit">px</span>
+      </div>
+      <button
+        type="button"
+        className="settings-inline-btn settings-font-size-reset"
+        disabled={resetDisabled}
+        onClick={() => onChange(defaultValue)}
+      >
+        {t("settings.fontSizeReset")}
+      </button>
+    </div>
+  );
+}
+
+function formatFontSizeInput(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
 function ProviderSettings({

@@ -77,11 +77,12 @@ const MIN_SIDEBAR_WIDTH = 260;
 const MAX_SIDEBAR_WIDTH = 420;
 const MIN_INSPECTOR_WIDTH = 300;
 const MAX_INSPECTOR_WIDTH = 520;
-const DEFAULT_FONT_SCALE = 1.0;
-const LEGACY_DEFAULT_FONT_SCALE = 0.94;
-const FONT_SCALE_PRESET_VALUES = [0.9, 1.0, 1.1, 1.2] as const;
-const FONT_SCALE_KEY = "aurevoy.fontScale";
-const FONT_SCALE_MIGRATION_KEY = "aurevoy.fontScale.base15Migrated";
+const DEFAULT_CHAT_FONT_SIZE = 14;
+const DEFAULT_UI_FONT_SIZE = 12.5;
+const DEFAULT_CODE_FONT_SIZE = 12;
+const CHAT_FONT_SIZE_KEY = "aurevoy.chatFontSizePx.v2";
+const UI_FONT_SIZE_KEY = "aurevoy.uiFontSizePx.v2";
+const CODE_FONT_SIZE_KEY = "aurevoy.codeFontSizePx.v2";
 const TOOL_DETAILS_OPEN_KEY = "aurevoy.defaultToolDetailsOpen";
 const THEME_MODE_KEY = "aurevoy.themeMode";
 const LOCALE_KEY = "aurevoy.locale";
@@ -101,29 +102,6 @@ function readStoredNumber(key: string, fallback: number, min: number, max: numbe
   const stored = window.localStorage.getItem(key);
   const parsed = stored ? Number(stored) : Number.NaN;
   return Number.isFinite(parsed) ? clamp(parsed, min, max) : fallback;
-}
-
-function normalizeFontScale(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_FONT_SCALE;
-  return FONT_SCALE_PRESET_VALUES.reduce((closest, preset) =>
-    Math.abs(preset - value) < Math.abs(closest - value) ? preset : closest,
-  );
-}
-
-function readStoredFontScale(): number {
-  const stored = window.localStorage.getItem(FONT_SCALE_KEY);
-  const parsed = stored ? Number(stored) : Number.NaN;
-  const value = Number.isFinite(parsed) ? parsed : DEFAULT_FONT_SCALE;
-
-  const migrated = window.localStorage.getItem(FONT_SCALE_MIGRATION_KEY) === "true";
-  if (!migrated) {
-    window.localStorage.setItem(FONT_SCALE_MIGRATION_KEY, "true");
-    if (Math.abs(value - LEGACY_DEFAULT_FONT_SCALE) < 0.001) {
-      return DEFAULT_FONT_SCALE;
-    }
-  }
-
-  return normalizeFontScale(value);
 }
 
 function readStoredBoolean(key: string, fallback: boolean): boolean {
@@ -238,8 +216,14 @@ function App() {
   const [inspectorWidth, setInspectorWidth] = useState(() =>
     readStoredNumber("aurevoy.inspectorWidth", 340, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH),
   );
-  const [fontScale, setFontScale] = useState(() =>
-    readStoredFontScale(),
+  const [chatFontSize, setChatFontSize] = useState(() =>
+    readStoredNumber(CHAT_FONT_SIZE_KEY, DEFAULT_CHAT_FONT_SIZE, 11, 24),
+  );
+  const [uiFontSize, setUiFontSize] = useState(() =>
+    readStoredNumber(UI_FONT_SIZE_KEY, DEFAULT_UI_FONT_SIZE, 10, 20),
+  );
+  const [codeFontSize, setCodeFontSize] = useState(() =>
+    readStoredNumber(CODE_FONT_SIZE_KEY, DEFAULT_CODE_FONT_SIZE, 10, 18),
   );
   const [defaultToolDetailsOpen, setDefaultToolDetailsOpen] = useState(() =>
     readStoredBoolean(TOOL_DETAILS_OPEN_KEY, false),
@@ -370,8 +354,16 @@ function App() {
   }, [inspectorWidth]);
 
   useEffect(() => {
-    window.localStorage.setItem(FONT_SCALE_KEY, String(fontScale));
-  }, [fontScale]);
+    window.localStorage.setItem(CHAT_FONT_SIZE_KEY, String(chatFontSize));
+  }, [chatFontSize]);
+
+  useEffect(() => {
+    window.localStorage.setItem(UI_FONT_SIZE_KEY, String(uiFontSize));
+  }, [uiFontSize]);
+
+  useEffect(() => {
+    window.localStorage.setItem(CODE_FONT_SIZE_KEY, String(codeFontSize));
+  }, [codeFontSize]);
 
   useEffect(() => {
     window.localStorage.setItem(TOOL_DETAILS_OPEN_KEY, String(defaultToolDetailsOpen));
@@ -1371,8 +1363,16 @@ function App() {
       .catch((err) => setNotice(`${t("notice.deleteMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
 
-  function handleFontScaleChange(nextScale: number): void {
-    setFontScale(normalizeFontScale(nextScale));
+  function handleChatFontSizeChange(nextSize: number): void {
+    setChatFontSize(clamp(nextSize, 11, 24));
+  }
+
+  function handleUiFontSizeChange(nextSize: number): void {
+    setUiFontSize(clamp(nextSize, 10, 20));
+  }
+
+  function handleCodeFontSizeChange(nextSize: number): void {
+    setCodeFontSize(clamp(nextSize, 10, 18));
   }
 
   async function handleImportProject(): Promise<void> {
@@ -1482,7 +1482,9 @@ function App() {
   const shellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
     "--inspector-width": `${inspectorWidth}px`,
-    "--font-scale": fontScale,
+    "--ui-font-size": `${uiFontSize}px`,
+    "--chat-font-size": `${chatFontSize}px`,
+    "--code-font-size": `${codeFontSize}px`,
   } as CSSProperties;
   const isChatView = activeView === "chat";
 
@@ -1628,7 +1630,9 @@ function App() {
             memories={memories}
             saving={settingsSaving}
             fetchingModels={fetchingModels}
-            fontScale={fontScale}
+            chatFontSize={chatFontSize}
+            uiFontSize={uiFontSize}
+            codeFontSize={codeFontSize}
             workMode={workMode}
             themeMode={themeMode}
             locale={locale}
@@ -1639,7 +1643,9 @@ function App() {
             onRefresh={refreshSettings}
             onFetchModels={handleFetchModels}
             onSaveEnabledModels={handleSaveEnabledModels}
-            onFontScaleChange={handleFontScaleChange}
+            onChatFontSizeChange={handleChatFontSizeChange}
+            onUiFontSizeChange={handleUiFontSizeChange}
+            onCodeFontSizeChange={handleCodeFontSizeChange}
             onWorkModeChange={handleWorkModeChange}
             onThemeModeChange={setThemeMode}
             onLocaleChange={setLocaleState}
