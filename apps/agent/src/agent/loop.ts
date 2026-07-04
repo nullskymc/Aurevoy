@@ -1126,6 +1126,10 @@ export async function runTask(task: Task): Promise<void> {
     taskEvents.publish({ type: 'phase', taskId: task.id, phase, detail });
   };
 
+  // 用户上传/拖拽的附件路径是用户显式授权的外部只读路径；
+  // 规划阶段和执行阶段都需要同一份白名单，避免 scout 先报工作区越界。
+  const externalPaths = collectExternalPaths(task);
+
   // ---- 计划阶段：按需调用 Plan Agent ----
   const hasApprovedPlan = task.plan.length > 1 && task.plan.some((s) => s.status === 'running');
   if (!hasApprovedPlan) {
@@ -1150,6 +1154,7 @@ export async function runTask(task: Task): Promise<void> {
         taskId: task.id,
         goal: task.goal,
         workspaceDir: taskWorkspace,
+        externalPaths,
         signal: abortController.signal,
       });
 
@@ -1305,9 +1310,6 @@ export async function runTask(task: Task): Promise<void> {
   // prompt cache 前缀边界：上次成功发送的消息数。Snip/Microcompact 不修改缓存前缀，
   // Context Collapse 修改时设置 collapsed=true → 此值重置为 0。
   let lastCachedIndex = 0;
-
-  // 收集用户提供的文件/目录路径作为受信任外部路径（跳过沙箱）
-  const externalPaths = collectExternalPaths(task);
 
   // 构建附件上下文（仅在任务首次运行时构建一次）
   const attachmentContext = await buildAttachmentSystemMessage(task);

@@ -101,7 +101,7 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/llm/anthropic.ts` | **Anthropic Provider**：`/v1/messages` 端点（原生 fetch），system prompt 独立参数，tool_use/tool_result 以 content block 表达，认证走 `x-api-key` |
 | `src/llm/openai-response.ts` | **OpenAI Responses API v2 Provider**：`/v1/responses` 端点，input 替代 messages，instructions 替代 system 角色，function_call 以 output item 表达 |
 | `src/tools/registry.ts` | **旧工具注册表**（兼容过渡期）：`ToolRegistry` 类，注册/列举/调用工具；JSON Schema 子集校验。 P2: `invokeWithTimeout()` 独立超时；`executionPolicyOf()` 并行策略。 P3: `truncateToolOutput()` 50K 字符截断。 P6: `fallbackFor()` 替代方案查询 |
-| `src/tools/builtins.ts` | 内置基础工具。 文件：目录/读写/搜索/复制/移动/删除。 **P6**: `edit_file` 精确替换（唯一匹配校验）。 网络：HTTP 抓取。 记忆：`remember`（**P5**: Jaccard 去重+`[[link]]` 引用）。 交互：`ask_user`、`create_artifact`/`apply_artifact`。 沙箱：`execute_command`（默认禁用）。 **P7**: `delegate_task` 子代理委托 |
+| `src/tools/builtins.ts` | 内置基础工具。 文件：目录/读写/搜索/复制/移动/删除。 **P6**: `edit_file` 精确替换（唯一匹配校验）。 记忆：`remember`（**P5**: Jaccard 去重+`[[link]]` 引用）。 交互：`ask_user`、`create_artifact`/`apply_artifact`。 沙箱：`execute_command`（默认禁用）。 **P7**: `delegate_task` 子代理委托 |
 | `src/tool/` | **新一代 Effect-TS 工具系统**（P0-P4）：Schema 驱动输入输出、作用域注册、审批引擎、文件快照、并行执行管线。见下方独立模块 |
 | `src/tool/framework/definition.ts` | **工具定义**：`ToolConfig<I,O>` 接口 + `make()` 工厂。输入/输出用 Effect `Schema` 定义，自动生成 JSON Schema。支持 `toModelOutput` 多部分输出（文本/文件） |
 | `src/tool/framework/registry.ts` | **作用域注册表**：Effect Tag + Layer，`register()` 作用域内自动清理。同名单栈（最新覆盖），`materialize()` 快照当前注册集合 |
@@ -112,7 +112,7 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/tool/builtins.ts` | **工具注册入口**：P4 将新工具集成到 Agent 循环，通过 Effect Layer 提供 `ToolRegistry` |
 | `src/agent/register-new-tools.ts` | **新旧桥接**：将新框架的 8 个工具映射到旧 `ToolRegistry`，确保两套框架共存 |
 | `src/tools/activate-skill.ts` | **Skill**: `activate_skill` 工具（Agent Skills 标准）——LLM 可调用激活/停用 skill，返回 `<skill_content>` 结构化标签 + 资源列表，发布 `skill_activated`/`skill_deactivated` SSE 事件 |
-| `src/tools/web-search.ts` | **Web 搜索**: `web_search` 工具——DuckDuckGo HTML 搜索（免费），可配置搜索后端，返回结构化结果（标题/摘要/URL） |
+| `src/tools/web-content.ts` | **网页抓取共享模块**：`web_fetch` 的 SSRF/重定向边界、文本读取、HTML 正文提取与链接抽取；同时为搜索结果清洗复用 HTML 解码工具 |
 | `src/tools/mcp.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到 `ToolRegistry`；MCP 描述会截断/净化，本地风险覆盖优先于 annotations |
 | `src/skills/types.ts` | **Skill 类型**（Agent Skills 标准）：`SkillFrontmatter`（含 license/compatibility/metadata）、`SkillCatalogEntry`（Tier 1 catalog）、`SkillContent`（Tier 2 body+resources）、`SkillResource` |
 | `src/skills/loader.ts` | **Skill 加载器**（Agent Skills 标准）：`discoverSkills()` 扫描目录发现 SKILL.md（标准格式）+ flat .md（向后兼容）；`loadSkillContent()` 激活时懒加载 body + 资源枚举 |
@@ -165,7 +165,7 @@ API 请求响应、运行时常量（默认地址端口）。
 | 加一个工具 | 新工具放 `tool/tools/`（新框架，推荐）或 `tools/`（旧框架，兼容）；注册到对应注册表 | Agent 循环内联逻辑 |
 | 加自动模式规则 | `agent/approval.ts` 扩展 `computeAutoApproval()` + 工具白名单 | Agent 循环直接放行工具 |
 | 接 MCP server | 配置 `AUREVOY_MCP_SERVERS_JSON`，或扩展 `tools/mcp.ts` 的 transport 支持 | 工具调用协议 / Agent 循环 |
-| 改网络抓取边界 | `tools/builtins.ts` 的 `http_fetch` 策略 + `config.network` + `docs/API.md` | 绕过 SSRF/重定向校验直接 fetch |
+| 改网络抓取边界 | `tools/web-content.ts` 的 `web_fetch` 策略 + `config.network` + `docs/API.md` | 绕过 SSRF/重定向校验直接 fetch |
 | 加轨迹日志/审计 | `store/` 新增结构化记录，`agent/` 在状态边界写入 | 前端临时数组、console-only 日志 |
 | 加沙箱/命令执行 | 新增执行器模块和权限策略，默认关闭高风险能力 | 直接在工具里调用本机 shell |
 | 加评测 | 新增可复现用例和脚本，覆盖工具/状态/安全路径 | 只靠手工试一次 |

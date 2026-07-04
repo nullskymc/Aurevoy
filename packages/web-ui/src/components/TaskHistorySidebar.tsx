@@ -2,8 +2,15 @@ import { useCallback, useMemo, useState } from "react";
 import type { Task, Project } from "@aurevoy/shared";
 import { getRelativeTime, getStatusLabel } from "./status";
 import { t } from "../i18n";
+import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
+import {
+  buildFileMenuItems,
+  contextMenuPoint,
+  copyTextItem,
+  type ContextMenuState,
+} from "./contextMenuActions";
 
 type MainView = "chat" | "search" | "skills" | "settings";
 
@@ -40,6 +47,7 @@ export function TaskHistorySidebar({
   onDeleteProject,
   onDeleteTask,
 }: TaskHistorySidebarProps) {
+  const platform = usePlatform();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     for (const project of projects) initial.add(project.id);
@@ -48,11 +56,7 @@ export function TaskHistorySidebar({
   });
 
   // Context menu state
-  const [ctxMenu, setCtxMenu] = useState<{
-    open: boolean;
-    rect?: DOMRect;
-    items: ContextMenuItem[];
-  }>({ open: false, items: [] });
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   const closeCtxMenu = useCallback(() => {
     setCtxMenu((prev) => ({ ...prev, open: false }));
@@ -117,6 +121,7 @@ export function TaskHistorySidebar({
     project: Project,
   ) {
     e.preventDefault();
+    e.stopPropagation();
     const items: ContextMenuItem[] = [
       {
         type: "item",
@@ -125,6 +130,14 @@ export function TaskHistorySidebar({
         icon: <PlusIcon />,
         action: () => onNewTask(project.id),
       },
+      { type: "separator" },
+      ...buildFileMenuItems({
+        path: project.path,
+        name: project.name,
+        platform,
+        openLabel: "用默认 App 打开项目",
+        revealLabel: "在 Finder 中显示项目",
+      }),
       { type: "separator" },
       {
         type: "item",
@@ -137,7 +150,7 @@ export function TaskHistorySidebar({
     ];
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
+      point: contextMenuPoint(e),
       items,
     });
   }
@@ -147,6 +160,7 @@ export function TaskHistorySidebar({
     task: Task,
   ) {
     e.preventDefault();
+    e.stopPropagation();
     const items: ContextMenuItem[] = [
       {
         type: "item",
@@ -155,6 +169,8 @@ export function TaskHistorySidebar({
         icon: <ChatIcon />,
         action: () => onSelectTask(task),
       },
+      copyTextItem("copy-task-title", "复制标题", task.goal),
+      copyTextItem("copy-task-id", "复制对话 ID", task.id),
       { type: "separator" },
       {
         type: "item",
@@ -167,13 +183,14 @@ export function TaskHistorySidebar({
     ];
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
+      point: contextMenuPoint(e),
       items,
     });
   }
 
   return (
     <aside className="sidebar app-sidebar" aria-label={t("sidebar.label")}>
+      <div className="window-drag-strip window-drag-region" data-tauri-drag-region aria-hidden="true" />
       <div className="sidebar-brand" >
         <img className="sidebar-brand-logo" src="/aurevoy-wordmark.svg" alt="Aurevoy" />
       </div>
@@ -230,12 +247,8 @@ export function TaskHistorySidebar({
             const projectTasks = tasksByProject.map.get(project.id) ?? [];
             const expanded = expandedIds.has(project.id);
             return (
-              <div
-                key={project.id}
-                className="drawer-group"
-                onContextMenu={(e) => handleProjectContextMenu(e, project)}
-              >
-                <div className="drawer-header-row">
+              <div key={project.id} className="drawer-group">
+                <div className="drawer-header-row" onContextMenu={(e) => handleProjectContextMenu(e, project)}>
                   <button
                     type="button"
                     className="sidebar-action drawer-header"
@@ -328,7 +341,7 @@ export function TaskHistorySidebar({
       <ContextMenu
         items={ctxMenu.items}
         open={ctxMenu.open}
-        anchorRect={ctxMenu.rect}
+        anchorPoint={ctxMenu.point}
         onClose={closeCtxMenu}
       />
     </aside>

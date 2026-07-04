@@ -184,7 +184,7 @@ npm run regression:m7         # 文件工具、网络安全、schema、计划、
 - **m4**：多轮上下文、上下文压缩、长期记忆 CRUD、Agent 写入记忆、记忆注入/禁用、启动期中断任务恢复扫描。
 - **m5**：运行设置生效、Provider 缓存失效、工作区切换、工具启停影响模型可见工具、MCP 配置校验/状态、数据清理。
 - **m6**：`ask_user` 追问与恢复、追问超时、artifact 草稿/确认/拒绝、预算超限、token usage、`execute_command` 审批后执行、cwd 越界拒绝。
-- **m7**：文件搜索/复制/移动/删除、删除默认禁用与审批、`http_fetch` SSRF/重定向、工具 schema validation、MCP 描述净化、本地风险覆盖、多步计划、checkpoint 恢复。
+- **m7**：文件搜索/复制/移动/删除、删除默认禁用与审批、`web_fetch` SSRF/重定向/HTML 正文提取、工具 schema validation、MCP 描述净化、本地风险覆盖、多步计划、checkpoint 恢复。
 
 ## 8. 提交前检查清单
 

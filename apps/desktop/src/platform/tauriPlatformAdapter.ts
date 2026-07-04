@@ -2,6 +2,8 @@ import type { PlatformAdapter } from '@aurevoy/web-ui';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
+const registeredWindowDragHandlers = new Set<string>();
+
 /**
  * Tauri 桌面壳的 PlatformAdapter 实现。
  *
@@ -13,21 +15,36 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
  * - 外部链接：@tauri-apps/plugin-opener（动态 import）
  */
 export const tauriPlatformAdapter: PlatformAdapter = {
-  setupWindowDrag(dragSelector: string, noDragSelector = 'button, input, select, textarea'): void {
+  setupWindowDrag(
+    dragSelector: string,
+    noDragSelector = 'button, input, select, textarea, a, [role="button"], [data-no-window-drag]',
+  ): void {
+    const key = `${dragSelector}\n${noDragSelector}`;
+    if (registeredWindowDragHandlers.has(key)) return;
+    registeredWindowDragHandlers.add(key);
+
     const win = getCurrentWindow();
-    const el = document.querySelector<HTMLElement>(dragSelector);
-    if (!el) return;
+
+    const isWindowDragTarget = (target: EventTarget | null): target is Element => {
+      if (!(target instanceof Element)) return false;
+      if (!target.closest(dragSelector)) return false;
+      if (target.closest(noDragSelector)) return false; // 交互元素不触发拖动
+      return true;
+    };
 
     const onMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return; // 仅左键拖动
-      const target = e.target as HTMLElement;
-      if (target.closest(noDragSelector)) return; // 交互元素不触发拖动
+      if (!isWindowDragTarget(e.target)) return;
+      if (e.detail >= 2) {
+        void win.toggleMaximize().catch(() => undefined);
+        return;
+      }
       // macOS 要求 startDragging() 在 mousedown 同步调用，
       // 且不能阻止默认事件，否则 native drag 无法获取位置
-      win.startDragging();
+      void win.startDragging().catch(() => undefined);
     };
 
-    el.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousedown', onMouseDown);
     // 平台适配器不负责清理（App 生命周期内常驻）
   },
   filePathToUrl(filePath: string): string | null {
@@ -44,8 +61,13 @@ export const tauriPlatformAdapter: PlatformAdapter = {
   },
 
   async openFile(path: string): Promise<void> {
-    const { openUrl } = await import('@tauri-apps/plugin-opener');
-    await openUrl(`file://${encodeURI(path)}`);
+    const { openPath } = await import('@tauri-apps/plugin-opener');
+    await openPath(path);
+  },
+
+  async revealFile(path: string): Promise<void> {
+    const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
+    await revealItemInDir(path);
   },
 
   onFileDrop(callback: (paths: string[]) => void): (() => void) {

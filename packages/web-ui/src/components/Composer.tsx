@@ -51,6 +51,8 @@ interface ComposerProps {
   onResumeAutoMode?: () => void;
 }
 
+const IME_ENTER_GUARD_MS = 120;
+
 export function Composer({
   value,
   busy,
@@ -78,6 +80,7 @@ export function Composer({
   const platform = usePlatform();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
+  const lastCompositionEndAtRef = useRef(0);
   const [cmdIndex, setCmdIndex] = useState(0);
   const [isDragOver, setIsDragOver] = useState(false);
   const [viewingImage, setViewingImage] = useState<string | null>(null);
@@ -121,6 +124,21 @@ export function Composer({
   const displayCmdIndex = Math.min(cmdIndex, Math.max(0, filteredCommands.length - 1));
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    const isEnterAfterCompositionEnd =
+      event.key === "Enter" && Date.now() - lastCompositionEndAtRef.current < IME_ENTER_GUARD_MS;
+    const isImeComposing =
+      composingRef.current ||
+      event.nativeEvent.isComposing ||
+      event.nativeEvent.keyCode === 229 ||
+      isEnterAfterCompositionEnd;
+
+    if (isImeComposing) {
+      if (isEnterAfterCompositionEnd && !event.shiftKey) {
+        event.preventDefault();
+      }
+      return;
+    }
+
     if (showCmdPopup) {
       if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
         event.preventDefault();
@@ -318,7 +336,10 @@ export function Composer({
           onChange={(event) => onChange(event.currentTarget.value)}
           onKeyDown={handleKeyDown}
           onCompositionStart={() => { composingRef.current = true; }}
-          onCompositionEnd={() => { composingRef.current = false; }}
+          onCompositionEnd={() => {
+            composingRef.current = false;
+            lastCompositionEndAtRef.current = Date.now();
+          }}
         />
 
         <div className="composer-toolbar">

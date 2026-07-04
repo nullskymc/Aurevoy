@@ -80,6 +80,12 @@ type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" 
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
 const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search", "usage"];
+const FONT_SCALE_PRESETS = [
+  { value: 0.9, labelKey: "settings.fontSizeSmall" },
+  { value: 1.0, labelKey: "settings.fontSizeStandard" },
+  { value: 1.1, labelKey: "settings.fontSizeLarge" },
+  { value: 1.2, labelKey: "settings.fontSizeExtraLarge" },
+] as const;
 
 /** 每次调用都会重新计算 t()，确保语言切换后侧边栏标签即时更新 */
 function getSettingsGroups(): Array<{
@@ -176,6 +182,7 @@ export function SettingsPanel({
   return (
     <section className="settings-workspace" aria-label={t("settings.pageLabel")}>
       <aside className="sidebar settings-nav" aria-label={t("settings.navLabel")}>
+        <div className="window-drag-strip window-drag-region" data-tauri-drag-region aria-hidden="true" />
         <div className="sidebar-brand settings-nav-brand">
           <img className="sidebar-brand-logo" src="/aurevoy-wordmark.svg" alt="Aurevoy" />
         </div>
@@ -596,6 +603,8 @@ function AppearanceSettings({
   onThemeModeChange: (mode: ThemeMode) => void;
   onLocaleChange: (locale: Locale) => void;
 }) {
+  const isDefaultFontScale = Math.abs(fontScale - 1) < 0.001;
+
   return (
     <SettingsGroup title={t("settings.appearance")}>
       <SettingsSelectRow
@@ -625,17 +634,29 @@ function AppearanceSettings({
         title={t("settings.fontScaleTitle")}
         description={t("settings.fontScaleDesc")}
         control={
-          <label className="settings-range-control">
-            <input
-              type="range"
-              min={0.86}
-              max={1.2}
-              step={0.01}
-              value={fontScale}
-              onChange={(event) => onFontScaleChange(Number(event.currentTarget.value))}
-            />
-            <strong>{Math.round(fontScale * 100)}%</strong>
-          </label>
+          <div className="settings-font-size-control">
+            <div className="settings-font-size-presets" role="group" aria-label={t("settings.fontScaleTitle")}>
+              {FONT_SCALE_PRESETS.map((preset) => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  className="settings-font-size-preset"
+                  data-active={Math.abs(fontScale - preset.value) < 0.005}
+                  onClick={() => onFontScaleChange(preset.value)}
+                >
+                  {t(preset.labelKey)}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="settings-inline-btn settings-font-size-reset"
+              disabled={isDefaultFontScale}
+              onClick={() => onFontScaleChange(1)}
+            >
+              {t("settings.fontSizeReset")}
+            </button>
+          </div>
         }
       />
     </SettingsGroup>
@@ -1360,7 +1381,7 @@ return (
           <ul className="memory-list">
             {dirs.map((dir) => (
               <li key={dir.id} className="memory-item">
-                <code className="memory-content" style={{ fontSize: 13 }}>{dir.dirPath}</code>
+                <code className="memory-content">{dir.dirPath}</code>
                 <div className="memory-item-foot">
                   <span className="memory-source">{dir.recursive ? "recursive" : "non-recursive"}</span>
                   <button type="button" className="memory-link danger" onClick={() => removeDir(dir.id)}>

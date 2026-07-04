@@ -17,6 +17,14 @@ import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData } from 
 import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
+import {
+  buildFileMenuItems,
+  buildLinkMenuItems,
+  buildTextMenuItems,
+  contextMenuPoint,
+  linkFromEventTarget,
+  type ContextMenuState,
+} from "./contextMenuActions";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
 export interface ToolActivity {
@@ -76,27 +84,52 @@ interface ToolResultInfo {
   error?: string;
 }
 
+function parseToolResultContent(content: string): ToolResultInfo {
+  let parsed: unknown = content;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    /* 保留原文 */
+  }
+  if (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)) {
+    return {
+      ok: false,
+      error: String((parsed as Record<string, unknown>).error),
+    };
+  }
+  return { ok: true, output: parsed };
+}
+
 /** 扫描消息，建立 toolCallId → 工具结果 的映射 */
 function buildToolResultMap(messages: Message[]): Map<string, ToolResultInfo> {
   const map = new Map<string, ToolResultInfo>();
   for (const message of messages) {
     if (message.role !== "tool" || !message.toolCallId) continue;
-    let parsed: unknown = message.content;
-    try {
-      parsed = JSON.parse(message.content);
-    } catch {
-      /* 保留原文 */
-    }
-    if (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)) {
-      map.set(message.toolCallId, {
-        ok: false,
-        error: String((parsed as Record<string, unknown>).error),
-      });
-    } else {
-      map.set(message.toolCallId, { ok: true, output: parsed });
-    }
+    map.set(message.toolCallId, parseToolResultContent(message.content));
   }
   return map;
+}
+
+function collectAssistantToolCallIds(messages: Message[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const toolCall of message.toolCalls ?? []) ids.add(toolCall.id);
+  }
+  return ids;
+}
+
+function standaloneToolActivityFromMessage(message: Message): ToolActivity {
+  const result = parseToolResultContent(message.content);
+  const shortId = (message.toolCallId ?? message.id).slice(0, 8);
+  return {
+    id: message.toolCallId ?? message.id,
+    name: `tool_result:${shortId}`,
+    args: {},
+    status: result.ok ? "ok" : "error",
+    output: result.output,
+    error: result.error,
+  };
 }
 
 /** 把一条 assistant 消息携带的 toolCalls 派生为工具活动卡片数据 */
@@ -143,17 +176,14 @@ export function Conversation({
   onResume,
   liveContentBlocks = [],
 }: ConversationProps) {
+  const platform = usePlatform();
   const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const previousTaskIdRef = useRef<string | null>(null);
   const hasScrolledToTail = useRef(false);
 
   // Context menu state
-  const [ctxMenu, setCtxMenu] = useState<{
-    open: boolean;
-    rect?: DOMRect;
-    items: ContextMenuItem[];
-  }>({ open: false, items: [] });
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   const closeCtxMenu = useCallback(() => {
     setCtxMenu((prev) => ({ ...prev, open: false }));
@@ -161,18 +191,14 @@ export function Conversation({
 
   function handleAgentContextMenu(e: React.MouseEvent, message: Message) {
     e.preventDefault();
-    const items: ContextMenuItem[] = [
-      {
-        type: "item",
-        id: "copy-output",
-        label: t("action.copy"),
-        icon: <CopyIcon />,
-        action: () => navigator.clipboard.writeText(message.content).catch(() => {}),
-      },
-    ];
+    e.stopPropagation();
+    const link = linkFromEventTarget(e.target);
+    const items = link
+      ? buildLinkMenuItems({ url: link.url, label: link.label, platform })
+      : buildTextMenuItems({ text: message.content, copyLabel: t("action.copy") });
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
+      point: contextMenuPoint(e),
       items,
     });
   }
@@ -216,6 +242,7 @@ export function Conversation({
 
   const messages = task.messages;
   const resultMap = buildToolResultMap(messages);
+  const assistantToolCallIds = collectAssistantToolCallIds(messages);
 
   // 运行时避开最后一条带 toolCalls 的 assistant 消息与 live 尾巴重复
   const lastAssistantToolCallId = hasLiveTail
@@ -257,7 +284,17 @@ export function Conversation({
               </div>
             );
           }
-          if (message.role === "tool") return null;
+          if (message.role === "tool") {
+            if (message.toolCallId && assistantToolCallIds.has(message.toolCallId)) return null;
+            return (
+              <ToolActivityList
+                key={message.id}
+                items={[standaloneToolActivityFromMessage(message)]}
+                defaultDetailsOpen={defaultToolDetailsOpen}
+                onDecision={onToolDecision}
+              />
+            );
+          }
           return null;
         })}
 
@@ -330,7 +367,7 @@ export function Conversation({
       <ContextMenu
         items={ctxMenu.items}
         open={ctxMenu.open}
-        anchorRect={ctxMenu.rect}
+        anchorPoint={ctxMenu.point}
         onClose={closeCtxMenu}
       />
     </div>
@@ -393,6 +430,13 @@ function ClarificationCard({
 
 
 /** 用户消息气泡：可复制；可编辑，编辑后选择恢复模式再提交。 */
+function formatFileSize(size: number): string {
+  if (!Number.isFinite(size) || size <= 0) return "";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function UserBubble({
   content,
   messageId,
@@ -412,22 +456,13 @@ function UserBubble({
   const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   // User bubble context menu
-  const [ctxMenu, setCtxMenu] = useState<{
-    open: boolean;
-    rect?: DOMRect;
-    items: ContextMenuItem[];
-  }>({ open: false, items: [] });
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   function handleUserBubbleContextMenu(e: React.MouseEvent) {
     e.preventDefault();
+    e.stopPropagation();
     const items: ContextMenuItem[] = [
-      {
-        type: "item",
-        id: "copy",
-        label: t("action.copy"),
-        icon: <CopyIcon />,
-        action: () => navigator.clipboard.writeText(content).catch(() => {}),
-      },
+      ...buildTextMenuItems({ text: content, copyLabel: t("action.copy") }),
       ...(onEdit
         ? [
             {
@@ -456,8 +491,23 @@ function UserBubble({
     ];
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
+      point: contextMenuPoint(e),
       items,
+    });
+  }
+
+  function handleAttachmentContextMenu(e: React.MouseEvent, attachment: MessageAttachment) {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({
+      open: true,
+      point: contextMenuPoint(e),
+      items: buildFileMenuItems({
+        path: attachment.path,
+        name: attachment.name,
+        platform,
+        openLabel: attachment.type === "image" ? "打开图片" : "用默认 App 打开",
+      }),
     });
   }
 
@@ -505,30 +555,63 @@ function UserBubble({
     );
   }
 
-  const imageAttachments = attachments?.filter((a) => a.type === 'image') ?? [];
+  const visibleAttachments = attachments ?? [];
 
   return (
     <div className="user-bubble-row" onContextMenu={handleUserBubbleContextMenu}>
       <div className="user-bubble-col">
         <div className="user-bubble">{content}</div>
-        {imageAttachments.length > 0 && (
-          <div className="user-bubble-images">
-            {imageAttachments.map((att) => {
+        {visibleAttachments.length > 0 && (
+          <div className="user-bubble-attachments">
+            {visibleAttachments.map((att) => {
               const src = (() => {
                 try { return platform.filePathToUrl(att.path); } catch { return null; }
               })();
-              return src ? (
-                <img
+              if (att.type === 'image') {
+                return src ? (
+                  <button
+                    key={att.id}
+                    type="button"
+                    className="user-bubble-attachment is-image"
+                    onClick={() => setViewingImage(att.path)}
+                    onContextMenu={(event) => handleAttachmentContextMenu(event, att)}
+                    title={att.path}
+                  >
+                    <img
+                      className="user-bubble-image"
+                      src={src}
+                      alt={att.name}
+                      loading="lazy"
+                    />
+                    <span className="user-bubble-attachment-name">{att.name}</span>
+                  </button>
+                ) : (
+                  <span
+                    key={att.id}
+                    className="user-bubble-attachment"
+                    title={att.path}
+                    onContextMenu={(event) => handleAttachmentContextMenu(event, att)}
+                  >
+                    <AttachmentFileIcon />
+                    <span className="user-bubble-attachment-copy">
+                      <span className="user-bubble-attachment-name">{att.name}</span>
+                      <span className="user-bubble-attachment-meta">{formatFileSize(att.size)}</span>
+                    </span>
+                  </span>
+                );
+              }
+              return (
+                <span
                   key={att.id}
-                  className="user-bubble-image"
-                  src={src}
-                  alt={att.name}
-                  loading="lazy"
-                  onClick={() => setViewingImage(att.path)}
-                />
-              ) : (
-                <span key={att.id} className="user-bubble-image-placeholder">
-                  📷 {att.name}
+                  className="user-bubble-attachment"
+                  title={att.path}
+                  onContextMenu={(event) => handleAttachmentContextMenu(event, att)}
+                >
+                  <AttachmentFileIcon />
+                  <span className="user-bubble-attachment-copy">
+                    <span className="user-bubble-attachment-name">{att.name}</span>
+                    <span className="user-bubble-attachment-meta">{formatFileSize(att.size)}</span>
+                  </span>
                 </span>
               );
             })}
@@ -558,7 +641,7 @@ function UserBubble({
       <ContextMenu
         items={ctxMenu.items}
         open={ctxMenu.open}
-        anchorRect={ctxMenu.rect}
+        anchorPoint={ctxMenu.point}
         onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
       />
     </div>
@@ -726,6 +809,16 @@ function ToolChip({
         </span>
       )}
     </button>
+  );
+}
+
+function AttachmentFileIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <path d="M6 2.75h5.1L15 6.65v10.6H6a2 2 0 01-2-2V4.75a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" />
+      <path d="M11 3v4h4" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" />
+      <path d="M7.25 11h5.5M7.25 14h4" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+    </svg>
   );
 }
 

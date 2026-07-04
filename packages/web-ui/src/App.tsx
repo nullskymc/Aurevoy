@@ -76,8 +76,11 @@ const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 380;
 const MIN_INSPECTOR_WIDTH = 300;
 const MAX_INSPECTOR_WIDTH = 520;
-const MIN_FONT_SCALE = 0.86;
-const MAX_FONT_SCALE = 1.2;
+const DEFAULT_FONT_SCALE = 1.0;
+const LEGACY_DEFAULT_FONT_SCALE = 0.94;
+const FONT_SCALE_PRESET_VALUES = [0.9, 1.0, 1.1, 1.2] as const;
+const FONT_SCALE_KEY = "aurevoy.fontScale";
+const FONT_SCALE_MIGRATION_KEY = "aurevoy.fontScale.base15Migrated";
 const TOOL_DETAILS_OPEN_KEY = "aurevoy.defaultToolDetailsOpen";
 const THEME_MODE_KEY = "aurevoy.themeMode";
 const LOCALE_KEY = "aurevoy.locale";
@@ -97,6 +100,29 @@ function readStoredNumber(key: string, fallback: number, min: number, max: numbe
   const stored = window.localStorage.getItem(key);
   const parsed = stored ? Number(stored) : Number.NaN;
   return Number.isFinite(parsed) ? clamp(parsed, min, max) : fallback;
+}
+
+function normalizeFontScale(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_FONT_SCALE;
+  return FONT_SCALE_PRESET_VALUES.reduce((closest, preset) =>
+    Math.abs(preset - value) < Math.abs(closest - value) ? preset : closest,
+  );
+}
+
+function readStoredFontScale(): number {
+  const stored = window.localStorage.getItem(FONT_SCALE_KEY);
+  const parsed = stored ? Number(stored) : Number.NaN;
+  const value = Number.isFinite(parsed) ? parsed : DEFAULT_FONT_SCALE;
+
+  const migrated = window.localStorage.getItem(FONT_SCALE_MIGRATION_KEY) === "true";
+  if (!migrated) {
+    window.localStorage.setItem(FONT_SCALE_MIGRATION_KEY, "true");
+    if (Math.abs(value - LEGACY_DEFAULT_FONT_SCALE) < 0.001) {
+      return DEFAULT_FONT_SCALE;
+    }
+  }
+
+  return normalizeFontScale(value);
 }
 
 function readStoredBoolean(key: string, fallback: boolean): boolean {
@@ -194,7 +220,7 @@ function mergeById<T extends { id: string }>(items: T[], next: T): T[] {
 function App() {
   const platform = usePlatform();
   useEffect(() => {
-    platform.setupWindowDrag?.(".topbar");
+    platform.setupWindowDrag?.(".window-drag-region");
   }, [platform]);
   const [activeView, setActiveView] = useState<MainView>("chat");
   const [contentMode, setContentMode] = useState<ContentMode>("conversation");
@@ -212,7 +238,7 @@ function App() {
     readStoredNumber("aurevoy.inspectorWidth", 340, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH),
   );
   const [fontScale, setFontScale] = useState(() =>
-    readStoredNumber("aurevoy.fontScale", 0.94, MIN_FONT_SCALE, MAX_FONT_SCALE),
+    readStoredFontScale(),
   );
   const [defaultToolDetailsOpen, setDefaultToolDetailsOpen] = useState(() =>
     readStoredBoolean(TOOL_DETAILS_OPEN_KEY, false),
@@ -343,7 +369,7 @@ function App() {
   }, [inspectorWidth]);
 
   useEffect(() => {
-    window.localStorage.setItem("aurevoy.fontScale", String(fontScale));
+    window.localStorage.setItem(FONT_SCALE_KEY, String(fontScale));
   }, [fontScale]);
 
   useEffect(() => {
@@ -631,11 +657,13 @@ function App() {
         }
         setCurrentTask((previous) => {
           const previousMessages = previous?.messages ?? [];
-          const hasMessage = previousMessages.some((message) => message.id === event.message.id);
-          const messages = hasMessage
-            ? previousMessages
-            : [...previousMessages, event.message];
           if (!previous) return previous;
+          const messageIndex = previousMessages.findIndex((message) => message.id === event.message.id);
+          const messages = messageIndex >= 0
+            ? previousMessages.map((message) =>
+                message.id === event.message.id ? { ...message, ...event.message } : message,
+              )
+            : [...previousMessages, event.message];
           const nextTask = { ...previous, messages };
           updateTaskList(nextTask);
           return nextTask;
@@ -1343,7 +1371,7 @@ function App() {
   }
 
   function handleFontScaleChange(nextScale: number): void {
-    setFontScale(clamp(nextScale, MIN_FONT_SCALE, MAX_FONT_SCALE));
+    setFontScale(normalizeFontScale(nextScale));
   }
 
   async function handleImportProject(): Promise<void> {
@@ -1493,7 +1521,7 @@ function App() {
       />
 
       <main className="main">
-        <header className="topbar" data-tauri-drag-region>
+        <header className="topbar window-drag-region" data-tauri-drag-region>
           <div className="topbar-left-tools">
             <button
               type="button"

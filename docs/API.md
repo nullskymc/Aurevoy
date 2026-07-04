@@ -45,8 +45,8 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 ```json
 // 200 → SkillListResponse
 { "skills": [
-  { "name": "web-search", "description": "搜索网页获取最新信息、文档、技术方案。支持多轮搜索和结果整合。", "allowedTools": ["web_search","http_fetch","read_file","list_directory","search_files"], "license": null, "compatibility": null, "metadata": { "version": "1.0" }, "sourceDir": "builtin", "location": "/path/to/skills/builtin/web-search/SKILL.md" },
-  { "name": "browser", "description": "浏览器自动化——打开网页、截图、获取DOM摘要、抓取控制台错误。", "allowedTools": ["http_fetch","web_search","read_file"], "license": null, "compatibility": "Requires Playwright MCP Server", "metadata": { "version": "1.0" }, "sourceDir": "builtin", "location": "/path/to/skills/builtin/browser/SKILL.md" }
+  { "name": "web-search", "description": "搜索网页获取最新信息、文档、技术方案。支持多轮搜索和结果整合。", "allowedTools": ["web_search","web_fetch","read","open_file","list_directory","grep","search_grep"], "license": null, "compatibility": null, "metadata": { "version": "1.0" }, "sourceDir": "builtin", "location": "/path/to/skills/builtin/web-search/SKILL.md" },
+  { "name": "browser", "description": "浏览器自动化——打开网页、截图、获取DOM摘要、抓取控制台错误。", "allowedTools": ["web_fetch","web_search","read","open_file"], "license": null, "compatibility": "Requires Playwright MCP Server", "metadata": { "version": "1.0" }, "sourceDir": "builtin", "location": "/path/to/skills/builtin/browser/SKILL.md" }
 ]}
 ```
 - Agent Skills 标准格式：每个 skill 是一个目录含 `SKILL.md`（+可选 scripts/references/assets）
@@ -396,7 +396,7 @@ status(running)
 - 取消时以 `status(cancelled)` + `done(cancelled)` 收尾。
 - `phase` 是诊断和 UI 解释用的细粒度阶段，必须来自后端真实状态转换，不能由前端猜测。
 
-非 safe 工具（`caution`/`dangerous`，如 `http_fetch`/`write_file`）需审批：
+非 safe 工具（`caution`/`dangerous`，如 `web_fetch`/`write_file`）需审批：
 ```
 … → tool_call → approval_request          (等待用户)
   → phase(waiting_approval)
@@ -586,7 +586,10 @@ OpenAI Responses API 专用：
 | `AUREVOY_COMMAND_TIMEOUT_MS` | `30000` | 命令执行超时 |
 | `AUREVOY_COMMAND_OUTPUT_LIMIT_BYTES` | `65536` | stdout/stderr 输出上限 |
 | `AUREVOY_COMMAND_ENV_ALLOWLIST` | `PATH,HOME,TMPDIR` | 允许传入执行环境的变量名 |
-| `AUREVOY_HTTP_FETCH_PRIVATE_HOST_ALLOWLIST` | 空 | `http_fetch` 私网/本机主机精确放行列表，逗号分隔；默认拒绝，主要用于受控内网或回归 fixture |
+| `AUREVOY_HTTP_FETCH_PRIVATE_HOST_ALLOWLIST` | 空 | `web_fetch` 私网/本机主机精确放行列表，逗号分隔；保留旧环境变量名以兼容已有配置，默认拒绝，主要用于受控内网或回归 fixture |
+| `AUREVOY_SEARCH_PROVIDER` | `duckduckgo_lite` | `web_search` 使用的搜索后端：`duckduckgo_lite` / `searxng` / `tavily` / `custom` |
+| `AUREVOY_SEARCH_BASE_URL` | 空 | `searxng` / `custom` / `tavily` 的搜索端点 Base URL；SearXNG 默认拼接 `/search?q=...&format=json`，也支持 `{{query}}` 占位 |
+| `AUREVOY_SEARCH_API_KEY` | 空 | Tavily 或自定义搜索 API 的密钥；运行时不会回显 |
 
 M7 文件与网络工具边界：
 
@@ -594,8 +597,8 @@ M7 文件与网络工具边界：
 - `copy_file` / `move_file` / `rename_file`：`caution`，工作区内路径校验，目标存在默认拒绝覆盖。
 - `delete_file`：`dangerous`，默认禁用；启用后仍需审批，当前移入工作区 `.aurevoy-trash`。
 - `read_file`：`safe`，大文件返回截断预览和建议；UTF-8 解码异常会返回诊断，不伪装为可靠文本。
-- `http_fetch`：`caution`，拒绝本机/私网/metadata 地址，最多 3 次重定向且每跳重新校验；
-  二进制响应只返回元信息，HTML 会清洗 `script/style/iframe/object/embed` 后输出 `cleanedText` 和链接。
+- `web_fetch`：`caution`，拒绝本机/私网/metadata 地址，最多 3 次重定向且每跳重新校验；
+  二进制响应只返回元信息，HTML 会清洗 `script/style/noscript/iframe/object/embed` 后输出可读 `content` 和链接。
 
 ## 7. MCP server 配置
 

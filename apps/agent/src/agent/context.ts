@@ -52,7 +52,7 @@ export function buildSkillCatalogMessage(): Message | null {
 
 /** 输出较大的工具（内容会被 Microcompact 结构化压缩） */
 const TOOLS_WITH_LARGE_OUTPUT = new Set([
-  'open_file', 'scroll', 'search_grep', 'http_fetch', 'web_search',
+  'open_file', 'scroll', 'search_grep', 'web_fetch', 'web_search',
   'execute_command', 'edit_lines', 'replace_lines',
 ]);
 
@@ -200,10 +200,10 @@ function compactToolResult(toolName: string, rawContent: string): string | null 
       });
     }
 
-    case 'http_fetch': {
+    case 'web_fetch': {
       const url = parsed.url as string | undefined;
       const status = parsed.status as number | undefined;
-      const text = (parsed.cleanedText as string | undefined) ?? (parsed.text as string | undefined) ?? '';
+      const text = (parsed.content as string | undefined) ?? '';
       const links = Array.isArray(parsed.links) ? parsed.links as Record<string, unknown>[] : [];
       return JSON.stringify({
         url,

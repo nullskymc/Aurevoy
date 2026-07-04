@@ -165,7 +165,13 @@ export async function indexKbDirs(dirPaths?: string[], force = false): Promise<I
 
         const fileHash = hashContent(content);
         if (!force && indexed && indexed.file_hash === fileHash) {
-          result.skipped++;
+          const backfilled = embedder ? await backfillKbFileEmbeddings(indexed.id, embedder) : 0;
+          if (backfilled > 0) {
+            result.indexed++;
+            result.totalChunks += backfilled;
+          } else {
+            result.skipped++;
+          }
           continue;
         }
 
@@ -199,13 +205,15 @@ export async function indexKbDirs(dirPaths?: string[], force = false): Promise<I
           db.prepare(
             `INSERT INTO kb_chunks (id, file_id, chunk_index, content, char_count, embedding_updated_at)
              VALUES (?, ?, ?, ?, ?, ?)`,
-          ).run(chunk.id, fileId, chunk.chunkIndex, chunk.content, chunk.charCount, now);
+          ).run(chunk.id, fileId, chunk.chunkIndex, chunk.content, chunk.charCount, null);
 
           // 异步生成 embedding（不阻塞）
           if (embedder) {
             try {
               const vec = await embedder.embed(chunk.content.slice(0, 2000));
-              upsertKbChunkVec(chunk.id, vec);
+              if (upsertKbChunkVec(chunk.id, vec)) {
+                db.prepare('UPDATE kb_chunks SET embedding_updated_at = ? WHERE id = ?').run(now, chunk.id);
+              }
             } catch {
               // 单个 chunk embedding 失败不影响其余
             }
@@ -256,6 +264,31 @@ function removeFileIndex(fileId: string): void {
   deleteKbChunkVec(chunkIds.map(c => c.id));
   db.prepare('DELETE FROM kb_chunks WHERE file_id = ?').run(fileId);
   db.prepare('DELETE FROM kb_files WHERE id = ?').run(fileId);
+}
+
+async function backfillKbFileEmbeddings(
+  fileId: string,
+  embedder: NonNullable<ReturnType<typeof getEmbeddingProvider>>,
+): Promise<number> {
+  const chunks = db.prepare(
+    `SELECT id, content FROM kb_chunks
+     WHERE file_id = ? AND embedding_updated_at IS NULL
+     ORDER BY chunk_index ASC`,
+  ).all(fileId) as Array<{ id: string; content: string }>;
+  if (chunks.length === 0) return 0;
+
+  let count = 0;
+  for (const chunk of chunks) {
+    try {
+      const vec = await embedder.embed(chunk.content.slice(0, 2000));
+      if (!upsertKbChunkVec(chunk.id, vec)) continue;
+      db.prepare('UPDATE kb_chunks SET embedding_updated_at = ? WHERE id = ?').run(new Date().toISOString(), chunk.id);
+      count++;
+    } catch {
+      // 单个 chunk embedding 失败不影响其余补索引。
+    }
+  }
+  return count;
 }
 
 // ============================================================

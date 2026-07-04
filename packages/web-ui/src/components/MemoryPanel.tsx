@@ -3,6 +3,7 @@ import type { MemoryCategory, MemoryEntry } from "@aurevoy/shared";
 import { t } from "../i18n";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
+import { buildTextMenuItems, contextMenuPoint, type ContextMenuState } from "./contextMenuActions";
 
 interface MemoryPanelProps {
   open: boolean;
@@ -141,14 +142,11 @@ function MemoryItem({
   const [draftCat, setDraftCat] = useState<MemoryCategory>(memory.category);
 
   // Context menu
-  const [ctxMenu, setCtxMenu] = useState<{
-    open: boolean;
-    rect?: DOMRect;
-    items: ContextMenuItem[];
-  }>({ open: false, items: [] });
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   function handleMemoryContextMenu(e: React.MouseEvent) {
     e.preventDefault();
+    e.stopPropagation();
     const items: ContextMenuItem[] = [
       {
         type: "item",
@@ -156,13 +154,7 @@ function MemoryItem({
         label: t("action.edit"),
         action: () => setEditing(true),
       },
-      {
-        type: "item",
-        id: "copy-content",
-        label: "复制内容",
-        action: () =>
-          navigator.clipboard.writeText(memory.content).catch(() => {}),
-      },
+      ...buildTextMenuItems({ text: memory.content, copyLabel: "复制内容" }),
       {
         type: "item",
         id: "toggle",
@@ -178,7 +170,7 @@ function MemoryItem({
         action: () => onDelete(memory.id),
       },
     ];
-    setCtxMenu({ open: true, rect: e.currentTarget.getBoundingClientRect(), items });
+    setCtxMenu({ open: true, point: contextMenuPoint(e), items });
   }
 
   function save() {
@@ -269,7 +261,7 @@ function MemoryItem({
       <ContextMenu
         items={ctxMenu.items}
         open={ctxMenu.open}
-        anchorRect={ctxMenu.rect}
+        anchorPoint={ctxMenu.point}
         onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
       />
     </li>

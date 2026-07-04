@@ -108,7 +108,8 @@ ReAct 工具调用循环继续用原生 `fetch` + 手写 SSE 解析自行实现�
 
 **重要性能约束**：
 - 必须使用 `MATCH ? AND k = N` 的 KNN 运算符，不可用 `vec_distance_cosine() ORDER BY distance`（慢 190×）。
-- 向量维度需与 embedding Provider 输出一致（`memory_vec`/`kb_chunk_vec` 均使用 FLOAT[768]）。
+- 向量维度需与 embedding Provider 输出一致。`memory_vec`/`kb_chunk_vec` 按当前模型实际输出动态创建 `FLOAT[N]`；
+  当用户切换到不同维度的 embedding 模型时，系统会重建派生向量索引并等待重新 embedding。
 
 Embedding 通过 OpenAI 兼容 API 接入（`/v1/embeddings`），`baseUrl` 指向任一兼容后端即可：
 - **Ollama**：`http://127.0.0.1:11434/v1`，模型 `nomic-embed-text`（768 维）

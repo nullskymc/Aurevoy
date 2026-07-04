@@ -17,6 +17,12 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
+import {
+  buildFileMenuItems,
+  buildLinkMenuItems,
+  contextMenuPoint,
+  type ContextMenuState,
+} from "./contextMenuActions";
 
 /* ============ 类型定义 ============ */
 
@@ -489,12 +495,13 @@ function TimelineStepNode({
   // Context menu
   const [ctxMenu, setCtxMenu] = useState<{
     open: boolean;
-    rect?: DOMRect;
+    point?: { x: number; y: number };
     items: ContextMenuItem[];
   }>({ open: false, items: [] });
 
   function handleStepContextMenu(e: React.MouseEvent) {
     e.preventDefault();
+    e.stopPropagation();
     const items: ContextMenuItem[] = [
       {
         type: "item",
@@ -548,7 +555,7 @@ function TimelineStepNode({
     ];
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
+      point: contextMenuPoint(e),
       items,
     });
   }
@@ -640,7 +647,7 @@ function TimelineStepNode({
       <ContextMenu
         items={ctxMenu.items}
         open={ctxMenu.open}
-        anchorRect={ctxMenu.rect}
+        anchorPoint={ctxMenu.point}
         onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
       />
     </div>
@@ -720,50 +727,33 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
   };
 
   // Context menu for file_reference blocks
-  const [ctxMenu, setCtxMenu] = useState<{
-    open: boolean;
-    rect?: DOMRect;
-    items: ContextMenuItem[];
-  }>({ open: false, items: [] });
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   function handleFileContextMenu(e: React.MouseEvent) {
     e.preventDefault();
-    const filename = block.name || block.content.split("/").pop() || block.content;
-    const items: ContextMenuItem[] = [
-      {
-        type: "item",
-        id: "copy-path",
-        label: "复制路径",
-        action: () => navigator.clipboard.writeText(block.content).catch(() => {}),
-      },
-      {
-        type: "item",
-        id: "copy-filename",
-        label: "复制文件名",
-        action: () => navigator.clipboard.writeText(filename).catch(() => {}),
-      },
-      ...(platform.openFile
-        ? [
-            {
-              type: "item" as const,
-              id: "open-file",
-              label: "在系统中打开",
-              action: async () => {
-                try {
-                  await platform.openFile!(block.content);
-                  showFeedback("已打开");
-                } catch {
-                  showFeedback("无法打开文件");
-                }
-              },
-            },
-          ]
-        : []),
-    ];
+    e.stopPropagation();
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
-      items,
+      point: contextMenuPoint(e),
+      items: buildFileMenuItems({
+        path: block.content,
+        name: block.name,
+        platform,
+      }),
+    });
+  }
+
+  function handleLinkContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({
+      open: true,
+      point: contextMenuPoint(e),
+      items: buildLinkMenuItems({
+        url: block.content,
+        label: block.name,
+        platform,
+      }),
     });
   }
 
@@ -806,7 +796,7 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
           <ContextMenu
             items={ctxMenu.items}
             open={ctxMenu.open}
-            anchorRect={ctxMenu.rect}
+            anchorPoint={ctxMenu.point}
             onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
           />
         </>
@@ -816,21 +806,39 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
       const src = platform.filePathToUrl(block.content);
       if (!src) return null;
       return (
-        <div className="content-block is-image">
-          <img
-            src={src}
-            alt={block.name || "agent image"}
-            className="content-block-image"
+        <>
+          <div
+            className="content-block is-image"
+            onContextMenu={handleFileContextMenu}
+            title={block.content}
+          >
+            <img
+              src={src}
+              alt={block.name || "agent image"}
+              className="content-block-image"
+            />
+            {block.name && <span className="content-block-caption">{block.name}</span>}
+          </div>
+          <ContextMenu
+            items={ctxMenu.items}
+            open={ctxMenu.open}
+            anchorPoint={ctxMenu.point}
+            onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
           />
-          {block.name && <span className="content-block-caption">{block.name}</span>}
-        </div>
+        </>
       );
     }
     case "link": {
       return (
-        <a
+        <>
+          <a
           className="content-block is-link"
           href={block.content}
+          onClick={(event) => {
+            event.preventDefault();
+            void platform.openExternal?.(block.content);
+          }}
+          onContextMenu={handleLinkContextMenu}
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -841,6 +849,13 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
           </svg>
           <span>{block.name || block.content}</span>
         </a>
+          <ContextMenu
+            items={ctxMenu.items}
+            open={ctxMenu.open}
+            anchorPoint={ctxMenu.point}
+            onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
+          />
+        </>
       );
     }
     default:

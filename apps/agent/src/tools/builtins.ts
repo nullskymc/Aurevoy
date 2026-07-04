@@ -2,7 +2,6 @@ import { promises as fs } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { lookup } from 'node:dns/promises';
 import type { MemoryCategory, MemoryEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
 import { toolRegistry } from './registry.js';
@@ -14,7 +13,7 @@ import { commandExecutor } from '../sandbox/command-executor.js';
 import { runSubTask } from '../agent/subagent.js';
 
 /**
- * 内置基础工具：文件读写、目录列举、HTTP 抓取、搜索。
+ * 内置基础工具：文件读写、目录列举、记忆、交互和命令执行。
  *
  * 安全约束：
  * - 路径校验在 Node.js 层完成（resolveInWorkspace + assertRealPathInside）。
@@ -22,10 +21,6 @@ import { runSubTask } from '../agent/subagent.js';
  *   通过 execFile（非 shell）传参，避免 shell 注入。
  * - 跨平台：macOS 优先，BSD 系命令。
  */
-
-const MAX_FETCH_BYTES = 1024 * 1024;
-const FETCH_TIMEOUT_MS = 20000;
-const MAX_FETCH_REDIRECTS = 3;
 
 // ---- 路径安全校验（Node.js 层，命令执行前）----
 
@@ -305,48 +300,6 @@ toolRegistry.register({
 toolRegistry.setEnabled('delete_file', false);
 
 
-// ---- http_fetch（caution）----
-toolRegistry.register({
-  descriptor: {
-    name: 'http_fetch',
-    description: '安全抓取一个 http(s) URL。最多 3 次重定向，拒绝本机/内网地址，HTML 会清洗后返回正文与链接。',
-    inputSchema: {
-      type: 'object',
-      properties: { url: { type: 'string', description: '要抓取的 http/https URL' } },
-      required: ['url'],
-      additionalProperties: false,
-    },
-    riskLevel: 'caution',
-  },
-  async execute(args) {
-    const raw = readNonEmptyString(args.url, 'url');
-    const fetched = await fetchWithPolicy(raw);
-    const contentType = fetched.res.headers.get('content-type') ?? '';
-    const metadata = {
-      url: fetched.url.toString(),
-      fetchedAt: new Date().toISOString(),
-      status: fetched.res.status,
-      contentType: contentType || null,
-      redirects: fetched.redirects,
-    };
-    if (!isTextContentType(contentType)) {
-      return {
-        ...metadata,
-        binary: true,
-        body: null,
-        contentLength: fetched.res.headers.get('content-length'),
-        note: 'Content-Type 不是文本，未把二进制内容注入模型上下文。',
-      };
-    }
-    const { body, truncated } = await readResponseText(fetched.res);
-    if (isHtmlContentType(contentType) || /<html[\s>]/i.test(body)) {
-      const cleaned = cleanHtml(body, fetched.url);
-      return { ...metadata, truncated, cleanedText: cleaned.text, links: cleaned.links };
-    }
-    return { ...metadata, truncated, cleanedText: body };
-  },
-});
-
 // ---- remember（safe）----
 const MEMORY_CATEGORIES: readonly MemoryCategory[] = ['preference', 'directory', 'model', 'habit', 'fact', 'other'];
 const MAX_MEMORY_CONTENT = 2000;
@@ -361,7 +314,7 @@ async function generateMemoryEmbedding(memoryId: string, content: string): Promi
     const provider = getEmbeddingProvider();
     if (!provider) return;
     const vec = await provider.embed(content.slice(0, 2000));
-    upsertMemoryVec(memoryId, vec);
+    if (!upsertMemoryVec(memoryId, vec)) return;
     // 更新向量化时间戳
     memoryStore.update(memoryId, { embeddingUpdatedAt: new Date().toISOString() });
     // 记忆变更 → 清除摘要缓存
@@ -672,137 +625,6 @@ toolRegistry.register({
   },
 });
 toolRegistry.setEnabled('execute_command', config.sandbox.commandExecutionEnabled);
-
-// ---- HTTP 抓取工具函数 ----
-
-async function fetchWithPolicy(rawUrl: string): Promise<{ url: URL; res: Response; redirects: string[] }> {
-  let url = parseHttpUrl(rawUrl);
-  const redirects: string[] = [];
-  for (let i = 0; i <= MAX_FETCH_REDIRECTS; i++) {
-    await assertPublicHttpTarget(url);
-    const res = await fetch(url, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!isRedirectStatus(res.status)) return { url, res, redirects };
-    const location = res.headers.get('location');
-    if (!location) return { url, res, redirects };
-    if (i === MAX_FETCH_REDIRECTS) throw new Error(`重定向次数超过上限 ${MAX_FETCH_REDIRECTS}`);
-    url = parseHttpUrl(new URL(location, url).toString());
-    redirects.push(url.toString());
-  }
-  throw new Error(`重定向次数超过上限 ${MAX_FETCH_REDIRECTS}`);
-}
-
-function parseHttpUrl(raw: string): URL {
-  let parsed: URL;
-  try { parsed = new URL(raw); } catch { throw new Error(`非法 URL: ${raw}`); }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('只允许 http/https 协议');
-  return parsed;
-}
-
-async function assertPublicHttpTarget(url: URL): Promise<void> {
-  if (isHttpFetchPrivateHostAllowed(url.hostname)) return;
-  if (isPrivateHostname(url.hostname)) throw new Error(`拒绝访问本机或私有地址: ${url.hostname}`);
-  const records = await lookup(url.hostname, { all: true, verbatim: true });
-  if (records.length === 0) throw new Error(`无法解析主机: ${url.hostname}`);
-  for (const r of records) { if (isPrivateAddress(r.address)) throw new Error(`拒绝访问本机或私有地址: ${r.address}`); }
-}
-
-function isHttpFetchPrivateHostAllowed(hostname: string): boolean {
-  return config.network.httpFetchPrivateHostAllowlist.includes(hostname.replace(/^\[|\]$/g, '').toLowerCase());
-}
-
-function isPrivateHostname(hostname: string): boolean {
-  const n = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  return n === 'localhost' || n.endsWith('.localhost') || isPrivateAddress(n);
-}
-
-function isPrivateAddress(address: string): boolean {
-  const n = address.replace(/^::ffff:/i, '');
-  return isPrivateIpv4(n) || isPrivateIpv6(address);
-}
-
-function isPrivateIpv4(address: string): boolean {
-  const parts = address.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return false;
-  const [a, b] = parts;
-  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
-}
-
-function isPrivateIpv6(address: string): boolean {
-  const n = address.toLowerCase();
-  return n === '::1' || n === '::' || n.startsWith('fc') || n.startsWith('fd') || n.startsWith('fe80:') || n.startsWith('ff');
-}
-
-function isRedirectStatus(s: number): boolean { return s === 301 || s === 302 || s === 303 || s === 307 || s === 308; }
-
-function isTextContentType(ct: string): boolean {
-  const v = ct.toLowerCase();
-  return v.startsWith('text/') || v.includes('application/json') || v.includes('application/xml') ||
-    v.includes('application/xhtml+xml') || v.includes('application/javascript');
-}
-
-function isHtmlContentType(ct: string): boolean {
-  const v = ct.toLowerCase();
-  return v.includes('text/html') || v.includes('application/xhtml+xml');
-}
-
-async function readResponseText(res: Response): Promise<{ body: string; truncated: boolean }> {
-  const reader = res.body?.getReader();
-  const decoder = new TextDecoder();
-  let received = 0, body = '', truncated = false;
-  if (!reader) return { body, truncated };
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    received += value.byteLength;
-    if (received > MAX_FETCH_BYTES) {
-      body += decoder.decode(value.slice(0, MAX_FETCH_BYTES - (received - value.byteLength)));
-      truncated = true;
-      await reader.cancel().catch(() => {});
-      break;
-    }
-    body += decoder.decode(value, { stream: true });
-  }
-  return { body, truncated };
-}
-
-function cleanHtml(html: string, baseUrl: URL): { text: string; links: Array<{ text: string; url: string }> } {
-  const withoutDangerousBlocks = html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<iframe[\s\S]*?<\/iframe>/gi, ' ').replace(/<object[\s\S]*?<\/object>/gi, ' ')
-    .replace(/<embed[\s\S]*?>/gi, ' ');
-  const links = extractLinks(withoutDangerousBlocks, baseUrl);
-  const text = decodeHtmlEntities(
-    withoutDangerousBlocks
-      .replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|section|article|li|h[1-6])>/gi, '\n')
-      .replace(/<[^>]+>/g, ' ').replace(/[ \t]+/g, ' ').replace(/\n\s+/g, '\n').replace(/\n{3,}/g, '\n\n').trim(),
-  );
-  return { text, links };
-}
-
-function extractLinks(html: string, baseUrl: URL): Array<{ text: string; url: string }> {
-  const links: Array<{ text: string; url: string }> = [];
-  const pattern = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  for (;;) {
-    const match = pattern.exec(html);
-    if (!match || links.length >= 30) break;
-    try {
-      const url = new URL(decodeHtmlEntities(match[1]), baseUrl);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
-      const text = decodeHtmlEntities(match[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
-      links.push({ text: text.slice(0, 120), url: url.toString() });
-    } catch { /* skip bad href */ }
-  }
-  return links;
-}
-
-function decodeHtmlEntities(value: string): string {
-  return value
-    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/g, "'")
-    .replace(/&#x([0-9a-f]+);/gi, (_m, h: string) => String.fromCodePoint(Number.parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_m, d: string) => String.fromCodePoint(Number.parseInt(d, 10)));
-}
 
 // ---- delegate_task（safe）：P7 子代理委托 ----
 const DEFAULT_SUBAGENT_TOOLS = ['list_directory', 'open_file', 'scroll', 'search_grep', 'get_current_time'];

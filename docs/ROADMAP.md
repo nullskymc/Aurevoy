@@ -75,7 +75,7 @@ OpenAI 兼容 Provider + ReAct 循环 + 流式 tool_calls + 指数退避重试 +
 
 ### M7 — 工具扩展、安全加固、多步计划、UI 拆分
 文件工具(`search_files`/`copy_file`/`move_file`/`delete_file` + 行级工具集 `open_file`/`scroll`/`search_grep`/`create_file`/`replace_lines`/`append_file`) +
-网络安全(`http_fetch` SSRF 防护 + HTML 清洗) + 工具治理(schema validation + MCP 注入检测) +
+网络安全(`web_fetch` SSRF 防护 + HTML 正文提取) + 工具治理(schema validation + MCP 注入检测) +
 多步计划(LLM 驱动 + checkpoint) + 前端工作台(PlanCard/ClarificationCard/ArtifactCard/BudgetBar)。
 
 ### Rewind / Edit & Regenerate
@@ -91,7 +91,7 @@ P1 侦查+LLM 规划 → P2 3 区并行执行 → P3 工具结果截断 → P4 T
 斜杠命令激活 → `load_skill` 工具加载 + `install_skill` 从 Git 安装。
 
 ### WebSearch — 网页搜索
-`web_search` 工具(DuckDuckGo) + `web-search` 预装 skill。
+`web_search` 工具（可配置 DuckDuckGo Lite / SearXNG / Tavily / Custom JSON）+ `web-search` 预装 skill。
 
 ### CI/CD — 跨平台自动构建
 GitHub Actions 多平台(macOS/Windows/Linux) typecheck + tag 触发 DMG 构建。

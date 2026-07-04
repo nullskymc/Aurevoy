@@ -1,7 +1,7 @@
 ---
 name: web-search
 description: 搜索网页获取最新信息、文档、技术方案。支持多轮搜索和结果整合。当用户需要查找最新信息、技术文档、搜索错误解决方案、调研技术方案时使用此技能。
-allowed-tools: web_search http_fetch read_file list_directory search_files
+allowed-tools: web_search web_fetch read open_file list_directory grep search_grep
 metadata:
   version: "1.0"
 ---
@@ -34,7 +34,7 @@ metadata:
 ### 3. 深度研究
 - 先用宽泛关键词了解全貌
 - 再用精确关键词深入细节
-- 遇到重要结果可用 `http_fetch` 获取完整页面内容
+- 遇到重要结果可用 `web_fetch` 获取清洗后的正文与链接
 - 整合多处来源给出综合分析
 
 ## 输出格式
@@ -58,4 +58,4 @@ metadata:
 ## 注意事项
 - 搜索结果可能包含过时或不准确的信息，请标注不确定性
 - 搜索的是公开网页，不包含私有仓库或付费墙后的内容
-- 如需查看完整页面内容，使用 `http_fetch` 获取
+- 如需查看完整页面内容，使用 `web_fetch` 获取
