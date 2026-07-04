@@ -77,7 +77,7 @@ const MAX_SIDEBAR_WIDTH = 380;
 const MIN_INSPECTOR_WIDTH = 300;
 const MAX_INSPECTOR_WIDTH = 520;
 const MIN_FONT_SCALE = 0.86;
-const MAX_FONT_SCALE = 1.08;
+const MAX_FONT_SCALE = 1.2;
 const TOOL_DETAILS_OPEN_KEY = "aurevoy.defaultToolDetailsOpen";
 const THEME_MODE_KEY = "aurevoy.themeMode";
 const LOCALE_KEY = "aurevoy.locale";
@@ -622,14 +622,8 @@ function App() {
         }
         break;
       case "message": {
-        // 工具已转为历史消息 → 从 live map 移除（避免与历史区重复渲染）
         const isAssistant = event.message.role === "assistant";
         const hasToolCalls = (event.message.toolCalls?.length ?? 0) > 0;
-        if (isAssistant) {
-          for (const tc of event.message.toolCalls ?? []) {
-            liveActivityRef.current.remove(tc.id);
-          }
-        }
         // 最终回复（不带 toolCalls 的 assistant message）已进历史区，
         // 清空流式累积，避免 live tail 与历史区双写同一段内容。
         if (isAssistant && !hasToolCalls) {
@@ -646,7 +640,7 @@ function App() {
           updateTaskList(nextTask);
           return nextTask;
         });
-        // 清理后同步 live 状态（RAF 批处理合并同一帧内的多次更新）
+        // 同步 live 状态（RAF 批处理合并同一帧内的多次更新）
         scheduleLiveActivitySync();
         break;
       }

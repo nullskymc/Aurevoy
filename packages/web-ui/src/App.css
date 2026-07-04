@@ -27,10 +27,10 @@
   --btn-surface: #ffffff;
   /* 主区顶部柔光：浅色下做一层极淡的高光，深色下关闭以避免灰白色带 */
   --main-glow: rgba(247, 247, 248, 0.66);
-  --font-scale: 0.94;
+  --font-scale: 1.0;
   --ui-font-xs: calc(12px * var(--font-scale));
   --ui-font-sm: calc(13px * var(--font-scale));
-  --ui-font-base: calc(14px * var(--font-scale));
+  --ui-font-base: calc(15px * var(--font-scale));
   --ui-font-md: calc(15px * var(--font-scale));
   --ui-font-lg: calc(18px * var(--font-scale));
   --ui-control-sm: 30px;
@@ -872,7 +872,7 @@ button:disabled {
 
 .agent-text {
   color: var(--text);
-  font-size: calc(14px * var(--font-scale));
+  font-size: calc(15px * var(--font-scale));
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
@@ -907,7 +907,7 @@ button:disabled {
 
 .run-summary h2 {
   margin: 0;
-  font-size: calc(14px * var(--font-scale));
+  font-size: calc(15px * var(--font-scale));
   font-weight: 650;
 }
 
@@ -2265,7 +2265,7 @@ button:disabled {
 .clarification-card p {
   margin: 0;
   color: var(--text);
-  font-size: calc(14px * var(--font-scale));
+  font-size: calc(15px * var(--font-scale));
   line-height: 1.55;
 }
 
@@ -3920,7 +3920,7 @@ textarea:focus-visible,
   border-radius: 16px 16px 4px 16px;
   background: var(--accent-soft-bg);
   color: var(--accent-soft-fg);
-  font-size: calc(14.5px * var(--font-scale));
+  font-size: calc(15.5px * var(--font-scale));
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;

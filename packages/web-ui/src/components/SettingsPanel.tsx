@@ -629,7 +629,7 @@ function AppearanceSettings({
             <input
               type="range"
               min={0.86}
-              max={1.08}
+              max={1.2}
               step={0.01}
               value={fontScale}
               onChange={(event) => onFontScaleChange(Number(event.currentTarget.value))}

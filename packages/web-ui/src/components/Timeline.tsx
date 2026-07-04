@@ -572,7 +572,7 @@ function TimelineStepNode({
     }
   }, [step.status]);
 
-  const hasDetails = step.logs != null || step.error != null || (step.status === "running" && step.progress != null);
+  const hasDetails = step.logs != null || step.error != null || step.output != null || (step.status === "running" && step.progress != null);
 
   return (
     <div
@@ -602,11 +602,15 @@ function TimelineStepNode({
 
       {open && hasDetails && (
         <div className="timeline-step-details">
-          {step.logs && (
+          {step.logs ? (
             <div className="timeline-step-log">
               <pre>{step.logs}</pre>
             </div>
-          )}
+          ) : step.output ? (
+            <div className="timeline-step-log">
+              <pre>{step.output}</pre>
+            </div>
+          ) : null}
           {step.error && (
             <div className="timeline-step-error">
               <svg viewBox="0 0 14 14" width="12" height="12" fill="none" aria-hidden="true">
