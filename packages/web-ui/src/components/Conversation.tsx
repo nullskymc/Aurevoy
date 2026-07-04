@@ -25,6 +25,11 @@ import {
   linkFromEventTarget,
   type ContextMenuState,
 } from "./contextMenuActions";
+import {
+  buildConversationTurns,
+  collectLiveAssistantToolMessageIds,
+  type ConversationTurn,
+} from "./conversationWorkflow";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
 export interface ToolActivity {
@@ -243,60 +248,28 @@ export function Conversation({
   const messages = task.messages;
   const resultMap = buildToolResultMap(messages);
   const assistantToolCallIds = collectAssistantToolCallIds(messages);
-
-  // 运行时避开最后一条带 toolCalls 的 assistant 消息与 live 尾巴重复
-  const lastAssistantToolCallId = hasLiveTail
-    ? [...messages].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
-    : undefined;
+  const hiddenAssistantIds = collectLiveAssistantToolMessageIds(messages, hasLiveTail);
+  const turns = buildConversationTurns(messages, hiddenAssistantIds, assistantToolCallIds);
 
   return (
     <div className="conversation">
       <div ref={topRef} />
       <div className="conversation-thread">
 
-
-        {messages.map((message) => {
-          if (message.role === "user") {
-            return (
-              <UserBubble
-                key={message.id}
-                content={message.content}
-                messageId={message.id}
-                attachments={message.attachments}
-                onEdit={onUserMessageEdit}
-                onBranch={onBranch}
-              />
-            );
-          }
-          if (message.role === "assistant") {
-            // 运行时跳过最后一条带 toolCalls 的 assistant 消息——live 尾巴已展示它
-            if (message.id === lastAssistantToolCallId) return null;
-            return (
-              <div
-                key={message.id}
-                onContextMenu={(e) => handleAgentContextMenu(e, message)}
-              >
-                <AgentRound
-                  data={buildAgentRoundFromMessage(message, resultMap, task.plan)}
-                  busy={false}
-                  defaultToolDetailsOpen={defaultToolDetailsOpen}
-                />
-              </div>
-            );
-          }
-          if (message.role === "tool") {
-            if (message.toolCallId && assistantToolCallIds.has(message.toolCallId)) return null;
-            return (
-              <ToolActivityList
-                key={message.id}
-                items={[standaloneToolActivityFromMessage(message)]}
-                defaultDetailsOpen={defaultToolDetailsOpen}
-                onDecision={onToolDecision}
-              />
-            );
-          }
-          return null;
-        })}
+        {turns.map((turn, index) => (
+          <ConversationTurnView
+            key={turn.id}
+            turn={turn}
+            isLiveTurn={hasLiveTail && index === turns.length - 1}
+            resultMap={resultMap}
+            plan={task.plan}
+            defaultToolDetailsOpen={defaultToolDetailsOpen}
+            onToolDecision={onToolDecision}
+            onAgentContextMenu={handleAgentContextMenu}
+            onUserMessageEdit={onUserMessageEdit}
+            onBranch={onBranch}
+          />
+        ))}
 
         {/* 当前运行轮次的实时尾巴 */}
         {/* 当前运行轮次的实时尾巴 — Timeline 格式 */}
@@ -371,6 +344,161 @@ export function Conversation({
         onClose={closeCtxMenu}
       />
     </div>
+  );
+}
+
+function ConversationTurnView({
+  turn,
+  isLiveTurn,
+  resultMap,
+  plan,
+  defaultToolDetailsOpen,
+  onToolDecision,
+  onAgentContextMenu,
+  onUserMessageEdit,
+  onBranch,
+}: {
+  turn: ConversationTurn;
+  isLiveTurn: boolean;
+  resultMap: Map<string, ToolResultInfo>;
+  plan: PlanStep[];
+  defaultToolDetailsOpen: boolean;
+  onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  onAgentContextMenu: (event: React.MouseEvent, message: Message) => void;
+  onUserMessageEdit?: (messageId: string, content: string, mode: RevertMode) => void;
+  onBranch?: (messageId: string) => void;
+}) {
+  const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
+  const finalMessage = isLiveTurn ? null : findFinalAssistantMessage(turn.agentMessages);
+  const finalMessages = finalMessage ? [finalMessage] : [];
+  const workflowMessages = assistantMessages.filter((message) => message.id !== finalMessage?.id);
+  const standaloneToolMessages = turn.agentMessages.filter((message) => message.role === "tool");
+
+  return (
+    <div className="conversation-turn">
+      {turn.user && (
+        <UserBubble
+          content={turn.user.content}
+          messageId={turn.user.id}
+          attachments={turn.user.attachments}
+          onEdit={onUserMessageEdit}
+          onBranch={onBranch}
+        />
+      )}
+
+      {(finalMessages.length > 0 || workflowMessages.length > 0 || standaloneToolMessages.length > 0) && (
+        <div className="agent-turn">
+          {(workflowMessages.length > 0 || standaloneToolMessages.length > 0) && (
+            <AgentWorkflowDrawer
+              assistantMessages={workflowMessages}
+              standaloneToolMessages={standaloneToolMessages}
+              resultMap={resultMap}
+              plan={plan}
+              defaultToolDetailsOpen={defaultToolDetailsOpen}
+              onToolDecision={onToolDecision}
+              defaultOpen={isLiveTurn}
+            />
+          )}
+
+          {finalMessages.map((message) => (
+            <div
+              key={message.id}
+              className="agent-final-response"
+              onContextMenu={(event) => onAgentContextMenu(event, message)}
+            >
+              <AgentRound
+                data={buildAgentRoundFromMessage(message, resultMap, plan)}
+                busy={false}
+                defaultToolDetailsOpen={defaultToolDetailsOpen}
+                showWorkflow={false}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function findFinalAssistantMessage(messages: Message[]): Message | null {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant") return null;
+  if ((last.toolCalls?.length ?? 0) === 0) return last;
+  return isPresentationOnlyAssistantMessage(last) ? last : null;
+}
+
+function isPresentationOnlyAssistantMessage(message: Message): boolean {
+  const toolCalls = message.toolCalls ?? [];
+  return toolCalls.length > 0 && toolCalls.every((toolCall) => toolCall.function.name === "attach_content");
+}
+
+function AgentWorkflowDrawer({
+  assistantMessages,
+  standaloneToolMessages,
+  resultMap,
+  plan,
+  defaultToolDetailsOpen,
+  onToolDecision,
+  defaultOpen = false,
+}: {
+  assistantMessages: Message[];
+  standaloneToolMessages: Message[];
+  resultMap: Map<string, ToolResultInfo>;
+  plan: PlanStep[];
+  defaultToolDetailsOpen: boolean;
+  onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const rounds = assistantMessages.map((message) => buildAgentRoundFromMessage(message, resultMap, plan));
+  const failed = rounds.some((round) => round.status === "failed") ||
+    standaloneToolMessages.some((message) => !parseToolResultContent(message.content).ok);
+  const summary = "Thought process";
+
+  useEffect(() => {
+    setOpen(defaultOpen);
+  }, [defaultOpen]);
+
+  return (
+    <section className="workflow-drawer" data-open={open} data-status={failed ? "failed" : "completed"}>
+      <button
+        type="button"
+        className="workflow-drawer-toggle"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-label={`${open ? "收起" : "展开"}执行步骤${failed ? "，包含失败步骤" : ""}`}
+      >
+        <span className="workflow-drawer-icon" aria-hidden="true">
+          <WorkflowIcon />
+        </span>
+        <span className="workflow-drawer-count">{summary}</span>
+        <span className="workflow-drawer-caret" data-open={open} aria-hidden="true">
+          <ChevronRightIcon />
+        </span>
+      </button>
+
+      {open && (
+        <div className="workflow-drawer-body">
+          {rounds.map((round) => (
+            <AgentRound
+              key={round.id}
+              data={round}
+              busy={false}
+              defaultToolDetailsOpen={defaultToolDetailsOpen}
+              showWorkflow
+              showOutput
+            />
+          ))}
+          {standaloneToolMessages.length > 0 && (
+            <ToolActivityList
+              items={standaloneToolMessages.map(standaloneToolActivityFromMessage)}
+              defaultDetailsOpen={defaultToolDetailsOpen}
+              onDecision={onToolDecision}
+            />
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -733,6 +861,25 @@ function ForkIcon() {
       <circle cx="14" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
       <circle cx="10" cy="15" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
       <path d="M6 7v2a4 4 0 004 4M14 7v2a4 4 0 01-4 4" stroke="currentColor" strokeWidth="1.3" fill="none" />
+    </svg>
+  );
+}
+
+function WorkflowIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <circle cx="5" cy="5" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
+      <circle cx="15" cy="5" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
+      <circle cx="10" cy="15" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
+      <path d="M7.25 5h5.5M5 7.25v2.25A5.5 5.5 0 0010 15M15 7.25v2.25A5.5 5.5 0 0110 15" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

@@ -56,6 +56,7 @@ import { useProjects } from "./hooks/useProjects";
 import { useSkills } from "./hooks/useSkills";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
+import { collectLiveAssistantToolMessageIds } from "./components/conversationWorkflow";
 import { ArtifactView } from "./components/ArtifactView";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
@@ -72,8 +73,8 @@ type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" 
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
 
-const MIN_SIDEBAR_WIDTH = 220;
-const MAX_SIDEBAR_WIDTH = 380;
+const MIN_SIDEBAR_WIDTH = 260;
+const MAX_SIDEBAR_WIDTH = 420;
 const MIN_INSPECTOR_WIDTH = 300;
 const MAX_INSPECTOR_WIDTH = 520;
 const DEFAULT_FONT_SCALE = 1.0;
@@ -232,7 +233,7 @@ function App() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() =>
-    readStoredNumber("aurevoy.sidebarWidth", 280, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
+    readStoredNumber("aurevoy.sidebarWidth", 330, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
   );
   const [inspectorWidth, setInspectorWidth] = useState(() =>
     readStoredNumber("aurevoy.inspectorWidth", 340, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH),
@@ -1470,12 +1471,10 @@ function App() {
   }
   const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0;
   const hasLiveContent = derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0;
-  const hiddenAssistantId = hasLiveContent
-    ? [...(currentTask?.messages ?? [])].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
-    : undefined;
+  const hiddenAssistantIds = collectLiveAssistantToolMessageIds(currentTask?.messages ?? [], hasLiveContent);
   const renderedCallIds = new Set<string>();
   for (const message of currentTask?.messages ?? []) {
-    if (message.role === 'assistant' && message.id !== hiddenAssistantId) {
+    if (message.role === 'assistant' && !hiddenAssistantIds.has(message.id)) {
       for (const call of message.toolCalls ?? []) renderedCallIds.add(call.id);
     }
   }

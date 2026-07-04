@@ -43,6 +43,7 @@ export interface TimelineStepData {
   error?: string;
   args?: Record<string, unknown>;
   toolName?: string;
+  rawOutput?: unknown;
   progress?: {
     message: string;
     chunk?: { current: number; total: number };
@@ -83,6 +84,10 @@ export function detectStepKind(toolName: string): StepKind {
   return "other";
 }
 
+function shouldHideToolFromWorkflow(toolName: string): boolean {
+  return toolName === "attach_content";
+}
+
 /** 生成聚合摘要文本 */
 export function computeSummaryFromSteps(steps: TimelineStepData[]): string {
   const counts: Record<string, number> = {};
@@ -110,7 +115,7 @@ function buildStepsFromToolCalls(
   toolCalls: MessageToolCall[],
   resultMap: Map<string, { ok: boolean; output?: unknown; error?: string }>,
 ): TimelineStepData[] {
-  return toolCalls.map((tc) => {
+  return toolCalls.filter((tc) => !shouldHideToolFromWorkflow(tc.function.name)).map((tc) => {
     const kind = detectStepKind(tc.function.name);
     let args: Record<string, unknown> = {};
     try {
@@ -133,6 +138,7 @@ function buildStepsFromToolCalls(
       output: result?.output != null ? formatOutput(result.output) : undefined,
       error,
       toolName: tc.function.name,
+      rawOutput: result?.output,
     };
   });
 }
@@ -328,7 +334,7 @@ export function buildAgentRoundFromMessage(
     summary,
     markdownOutput: message.content,
     contentBlocks: message.contentBlocks,
-    status: "completed",
+    status: steps.some((step) => step.status === "failed") ? "failed" : "completed",
   };
 }
 
@@ -341,7 +347,7 @@ export function buildLiveAgentRoundData(params: {
   contentBlocks?: ContentBlock[];
 }): AgentRoundData {
   const { plan, liveToolActivity, output, phase, contentBlocks } = params;
-  const steps: TimelineStepData[] = liveToolActivity.map((act) => {
+  const steps: TimelineStepData[] = liveToolActivity.filter((act) => !shouldHideToolFromWorkflow(act.name)).map((act) => {
     const kind = detectStepKind(act.name);
     const args = typeof act.args === "object" && act.args !== null
       ? act.args as Record<string, unknown>
@@ -361,6 +367,7 @@ export function buildLiveAgentRoundData(params: {
       logs: extractLogContent(act.name, act.status !== "running" ? { ok: act.status === "ok", output: act.output, error: act.error } : undefined),
       error: act.error,
       output: act.output != null ? formatOutput(act.output) : undefined,
+      rawOutput: act.output,
       args,
       toolName: act.name,
       progress: act.progress,
@@ -449,6 +456,49 @@ function StepStatus({ status }: { status: TimelineStepData["status"] }) {
   if (status === "running") return <span className="timeline-step-status is-running">运行中</span>;
   if (status === "failed") return <span className="timeline-step-status is-failed">失败</span>;
   return null;
+}
+
+function StepGlyph({ step }: { step: TimelineStepData }) {
+  if (step.status === "running") {
+    return (
+      <span className="timeline-step-glyph is-running" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="15" height="15">
+          <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeDasharray="18" strokeLinecap="round" />
+        </svg>
+      </span>
+    );
+  }
+  if (step.kind === "search" || step.kind === "browse") {
+    return (
+      <span className="timeline-step-glyph" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none">
+          <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.25" />
+          <path d="M2.2 8h11.6M8 1.8c1.7 1.8 2.6 3.8 2.6 6.2S9.7 12.4 8 14.2M8 1.8C6.3 3.6 5.4 5.6 5.4 8s.9 4.4 2.6 6.2" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" />
+        </svg>
+      </span>
+    );
+  }
+  if (step.status === "failed") {
+    return <span className="timeline-step-glyph is-failed" aria-hidden="true">!</span>;
+  }
+  return (
+    <span className="timeline-step-glyph" aria-hidden="true">
+      <svg viewBox="0 0 16 16" width="15" height="15" fill="none">
+        <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.25" />
+        <path d="M8 4.4v4l2.6 1.5" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+  );
+}
+
+function stepDisplayLabel(step: TimelineStepData): string {
+  if (step.toolName === "web_search") return "Searched the web";
+  if (step.kind === "browse") return "Opened page";
+  if (step.kind === "file_read") return "Read file";
+  if (step.kind === "file_write") return "Wrote file";
+  if (step.kind === "edit") return "Edited file";
+  if (step.kind === "command") return "Ran command";
+  return step.toolName ?? "Ran tool";
 }
 
 /** 聚合摘要行 */
@@ -580,6 +630,7 @@ function TimelineStepNode({
   }, [step.status]);
 
   const hasDetails = step.logs != null || step.error != null || step.output != null || (step.status === "running" && step.progress != null);
+  const searchPreview = buildSearchPreview(step);
 
   return (
     <div
@@ -588,13 +639,14 @@ function TimelineStepNode({
       onContextMenu={handleStepContextMenu}
     >
       <div className="timeline-step-header">
+        <StepGlyph step={step} />
         <button
           type="button"
           className="timeline-step-title-btn"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
         >
-          <span className="timeline-step-tool">{step.toolName}</span>
+          <span className="timeline-step-tool">{stepDisplayLabel(step)}</span>
           {step.title && <span className="timeline-step-title">{step.title}</span>}
             <StepStatus status={step.status} />
           {hasDetails && (
@@ -609,7 +661,9 @@ function TimelineStepNode({
 
       {open && hasDetails && (
         <div className="timeline-step-details">
-          {step.logs ? (
+          {searchPreview ? (
+            <SearchPreviewView preview={searchPreview} />
+          ) : step.logs ? (
             <div className="timeline-step-log">
               <pre>{step.logs}</pre>
             </div>
@@ -650,6 +704,118 @@ function TimelineStepNode({
         anchorPoint={ctxMenu.point}
         onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
       />
+    </div>
+  );
+}
+
+interface SearchPreviewResult {
+  title: string;
+  url: string;
+  snippet?: string;
+  host: string;
+}
+
+interface SearchPreviewData {
+  query: string;
+  resultCount: number;
+  results: SearchPreviewResult[];
+}
+
+function buildSearchPreview(step: TimelineStepData): SearchPreviewData | null {
+  if (step.toolName !== "web_search") return null;
+  const source = normalizeSearchOutput(step.rawOutput ?? step.output);
+  if (!source) return null;
+  const query = source.query || (typeof step.args?.query === "string" ? step.args.query : "");
+  const results = source.results.slice(0, 6).map((item) => ({
+    title: item.title,
+    url: item.url,
+    snippet: item.snippet,
+    host: hostFromUrl(item.url),
+  }));
+  return {
+    query,
+    resultCount: source.resultCount || source.results.length,
+    results,
+  };
+}
+
+function normalizeSearchOutput(value: unknown): { query: string; resultCount: number; results: SearchPreviewResult[] } | null {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const record = parsed as Record<string, unknown>;
+  const rawResults = Array.isArray(record.results) ? record.results : [];
+  const results = rawResults
+    .map((item): SearchPreviewResult | null => {
+      if (!item || typeof item !== "object") return null;
+      const result = item as Record<string, unknown>;
+      const title = typeof result.title === "string" ? result.title : "";
+      const url = typeof result.url === "string" ? result.url : typeof result.link === "string" ? result.link : "";
+      if (!title || !url) return null;
+      const snippet = typeof result.snippet === "string"
+        ? result.snippet
+        : typeof result.content === "string"
+          ? result.content
+          : undefined;
+      return { title, url, snippet, host: hostFromUrl(url) };
+    })
+    .filter((item): item is SearchPreviewResult => item !== null);
+  return {
+    query: typeof record.query === "string" ? record.query : "",
+    resultCount: typeof record.resultCount === "number" ? record.resultCount : results.length,
+    results,
+  };
+}
+
+function hostFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function SearchPreviewView({ preview }: { preview: SearchPreviewData }) {
+  const platform = usePlatform();
+  return (
+    <div className="timeline-search-preview">
+      <div className="timeline-search-head">
+        <span className="timeline-search-query">{preview.query || "web search"}</span>
+        <span className="timeline-search-count">{preview.resultCount} result{preview.resultCount === 1 ? "" : "s"}</span>
+      </div>
+      {preview.results.length > 0 ? (
+        <div className="timeline-search-results">
+          {preview.results.map((result, index) => (
+            <a
+              key={`${result.url}-${index}`}
+              className="timeline-search-result"
+              href={result.url}
+              title={result.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(event) => {
+                event.preventDefault();
+                void platform.openExternal?.(result.url);
+              }}
+            >
+              <span className="timeline-search-favicon" aria-hidden="true">{result.host.slice(0, 1).toUpperCase()}</span>
+              <span className="timeline-search-result-main">
+                <span className="timeline-search-result-title">{result.title}</span>
+                {result.snippet && <span className="timeline-search-snippet">{result.snippet}</span>}
+              </span>
+              <span className="timeline-search-host">{result.host}</span>
+            </a>
+          ))}
+        </div>
+      ) : (
+        <div className="timeline-search-empty">No results</div>
+      )}
     </div>
   );
 }
@@ -873,13 +1039,18 @@ export function AgentRound({
   data,
   busy = false,
   defaultToolDetailsOpen = false,
+  showWorkflow = true,
+  showOutput = true,
 }: {
   data: AgentRoundData;
   busy?: boolean;
   defaultToolDetailsOpen?: boolean;
+  showWorkflow?: boolean;
+  showOutput?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
+  const shouldShowWorkflow = showWorkflow && (data.planStepGroups.length > 0 || busy);
 
   return (
     <div
@@ -887,36 +1058,40 @@ export function AgentRound({
       className={`timeline-agent-round ${busy ? "is-live" : ""} ${data.status === "failed" ? "is-failed" : ""}`}
       data-status={data.status}
     >
-      {/* Summary 行 */}
-      <AgentRoundSummary
-        summary={data.summary}
-        status={data.status}
-        stepCount={stepCount}
-      />
+      {shouldShowWorkflow && (
+        <>
+          {/* Summary 行 */}
+          <AgentRoundSummary
+            summary={data.summary}
+            status={data.status}
+            stepCount={stepCount}
+          />
 
-      {/* 时间线区域 */}
-      <div className="timeline-body">
-        {data.planStepGroups.length > 0 ? (
-          data.planStepGroups.map((group, i) => (
-            <PlanStepGroup
-              key={group.planStepId}
-              group={group}
-              index={i}
-              isLast={i === data.planStepGroups.length - 1}
-              defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
-            />
-          ))
-        ) : (
-          /* 无分组时显示空占位 */
-          <div className="timeline-empty">
-            <span className="timeline-step-icon is-pending" />
-            <span>{busy ? "思考中…" : "无执行步骤"}</span>
+          {/* 时间线区域 */}
+          <div className="timeline-body">
+            {data.planStepGroups.length > 0 ? (
+              data.planStepGroups.map((group, i) => (
+                <PlanStepGroup
+                  key={group.planStepId}
+                  group={group}
+                  index={i}
+                  isLast={i === data.planStepGroups.length - 1}
+                  defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
+                />
+              ))
+            ) : (
+              /* 无分组时仅实时阶段显示空占位 */
+              <div className="timeline-empty">
+                <span className="timeline-step-icon is-pending" />
+                <span>思考中…</span>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
       {/* 流式输出文本 — 流式阶段仅显示加载占位（禁打字机效果），本轮结束时渲染完整 markdown */}
-      {data.markdownOutput && (
+      {showOutput && data.markdownOutput && (
         <article className="timeline-output">
           <div className="doc-meta">
             <span className="doc-meta-icon">
@@ -934,7 +1109,7 @@ export function AgentRound({
       )}
 
       {/* Agent 附加的富内容块（文件引用/图片/超链接） */}
-      {data.contentBlocks && data.contentBlocks.length > 0 && (
+      {showOutput && data.contentBlocks && data.contentBlocks.length > 0 && (
         <div className="content-blocks">
           {data.contentBlocks.map((block) => (
             <ContentBlockView key={block.id} block={block} />

@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import type {
   AgentEvent,
   AutoModeLevel,
@@ -28,6 +29,7 @@ import { taskEvents } from './events.js';
 import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
 import { compactContext, buildMemorySystemMessage, buildSkillCatalogMessage, buildSystemContextMessage, buildToolGuidanceMessage, totalTokens } from './context.js';
 import { toolRegistry } from '../tools/registry.js';
+import { assertRealPathInside, resolveInWorkspace } from '../tools/builtins.js';
 
 import { runPlanAgent } from './plan-agent.js';
 import { withRetry } from './retry.js';
@@ -1771,7 +1773,7 @@ export async function runTask(task: Task): Promise<void> {
         const rawResult = !result.ok
           ? { ...result, fallback: toolRegistry.fallbackFor(v.call.toolName) }
           : result;
-        const enrichedResult = handleToolSideEffects(task, v.call, rawResult);
+        const enrichedResult = await handleToolSideEffects(task, v.call, rawResult, taskWorkspace, externalPaths);
         task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
         task.budgetUsage.outputBytes += estimatePayloadBytes(
           enrichedResult.output ?? enrichedResult.error ?? '',
@@ -2063,7 +2065,13 @@ function finishCancelled(
   taskEvents.publish({ type: 'done', taskId: task.id, status: 'cancelled' });
 }
 
-function handleToolSideEffects(task: Task, call: ToolCall, result: ToolResult): ToolResult {
+async function handleToolSideEffects(
+  task: Task,
+  call: ToolCall,
+  result: ToolResult,
+  workspaceDir: string,
+  externalPaths?: string[],
+): Promise<ToolResult> {
   if (!result.ok) return result;
   if (call.toolName === 'create_artifact' || call.toolName === 'apply_artifact') {
     const output = result.output as { artifactId?: unknown; path?: unknown } | undefined;
@@ -2080,7 +2088,7 @@ function handleToolSideEffects(task: Task, call: ToolCall, result: ToolResult): 
       const block: ContentBlock = {
         id: randomUUID(),
         type: blockData.type,
-        content: blockData.content,
+        content: await normalizeContentBlockPath(blockData, workspaceDir, externalPaths),
         name: blockData.name,
         mimeType: blockData.mimeType,
         size: blockData.size,
@@ -2101,6 +2109,31 @@ function handleToolSideEffects(task: Task, call: ToolCall, result: ToolResult): 
     return { callId: call.id, ok: false, error: 'attach_content 返回格式非法' };
   }
   return result;
+}
+
+async function normalizeContentBlockPath(
+  block: { type: ContentBlockType; content: string },
+  workspaceDir: string,
+  externalPaths?: string[],
+): Promise<string> {
+  if (block.type === 'link') return block.content;
+  if (looksLikeRemoteUrl(block.content)) return block.content;
+
+  try {
+    const rawPath = block.content.startsWith('file://')
+      ? fileURLToPath(block.content)
+      : block.content;
+    const resolved = resolveInWorkspace(rawPath, workspaceDir, externalPaths);
+    await assertRealPathInside(resolved, workspaceDir, externalPaths);
+    await fs.stat(resolved);
+    return resolved;
+  } catch {
+    return block.content;
+  }
+}
+
+function looksLikeRemoteUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
 }
 
 function extractContentBlockData(output: unknown): {
