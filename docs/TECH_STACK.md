@@ -8,14 +8,16 @@
 |---|---|---|---|
 | 桌面壳 | Tauri | 2.x（cargo 解析到 tauri 2.11） | 跨平台窗口/打包/系统集成 |
 | 壳语言 | Rust | stable（1.96） | Tauri 构建所需 |
-| 前端框架 | React | 19.1 | UI |
+| 前端框架 | React | 19.1 | UI（含独立 `@aurevoy/web-ui` 包）|
 | 前端语言 | TypeScript | ~5.8 | 类型安全 |
 | 前端构建 | Vite | 7.x | 开发服务器 + 打包 |
 | 后端运行时 | Node.js | >= 20（开发机 25） | Agent 引擎进程 |
 | 后端框架 | Fastify | 5.x | HTTP + SSE 服务 |
 | 后端语言 | TypeScript | 5.7 | 全栈统一语言 |
 | 开发热重载 | tsx | 4.x | 直接跑 TS，watch 模式 |
-| 本地存储 | better-sqlite3 | 11.x | 同步 SQLite，简单可靠 |
+| 本地存储 | better-sqlite3 | 11.x → 12.x | 同步 SQLite，简单可靠 |
+| 向量检索 | sqlite-vec | 0.1.x | SQLite 原生向量扩展，零额外服务 |
+| Effect 框架 | effect | 3.21.x | 新工具系统类型安全、依赖注入、作用域管理 |
 | 工具协议 | MCP TypeScript SDK | 1.29.0 | 标准化工具/数据源接入 |
 | Monorepo | npm workspaces | npm 11 | 多包管理，零额外工具 |
 
@@ -60,14 +62,15 @@ Aurevoy 的重点是本地 runtime、工具协议、状态恢复、安全治理�
 
 ### 2.7 Agent 循环 / 工具调用：原生 fetch（而非 SDK）
 
-ReAct 工具调用循环不引入 `openai` SDK、Vercel AI SDK 或 LangChain.js，
-继续用原生 `fetch` + 手写 SSE 解析自行实现（调研依据见 `docs/research/agent-loop-findings.md`）：
+ReAct 工具调用循环继续用原生 `fetch` + 手写 SSE 解析自行实现，
+已从单一的 OpenAI 兼容扩展到三种 Provider 协议（Chat Completions / Anthropic Messages / OpenAI Responses v2）：
 
-- **已在用且够用**：现有 `OpenAICompatibleProvider` 已基于原生 fetch 运行，只需扩展支持 `tools`。
+- **已在用且够用**：`OpenAICompatibleProvider`、`AnthropicProvider`、`OpenAIResponseProvider` 均已基于原生 fetch 运行。
 - **SSE 转发最直接**：需把上游 SSE 逐行解析后立刻转换为自有事件（`token`/`tool_call`/`tool_result`）推给前端；
   SDK 会把原始流抽象掉，反而要在 SDK 抽象层与自有事件层之间多做一次转换。
 - **累积逻辑不复杂**：流式 `tool_calls` 累积器约 60 行（按 `index` 跨 chunk 拼接），不值得为此引入 34–67 kB 依赖。
 - **保留非标准字段**：DeepSeek 的 `reasoning_content` 须原样透传与回传，SDK 可能会剥离。
+- **Anthropic SSE 格式不同**：`content_block_start`/`content_block_delta`/`content_block_stop` 结构需自行解析，SDK 不提供优势。
 - **零依赖原则**：符合本文「加依赖前自问」纪律。
 
 不选：`openai` SDK（抽象掉原始 SSE，自定义事件转发更繁）、Vercel AI SDK（依赖重、流协议为私有格式、与现有 SSE 契约不兼容）、LangChain.js（依赖与抽象过重）。
@@ -93,9 +96,9 @@ ReAct 工具调用循环不引入 `openai` SDK、Vercel AI SDK 或 LangChain.js�
 - M3 回归使用 `scripts/m3-regression.mjs` 启动真实后端、临时 OpenAI-compatible fixture、
   临时 MCP stdio server 和临时 SQLite；测试替身只存在于回归脚本，不进入生产路径。
 
-### 2.10 长期记忆检索：结构化 + 向量混合（M8）
+### 2.10 长期记忆检索：结构化 + 向量混合（已实现）
 
-M8 已验证并引入了 `sqlite-vec`（v0.1.x）作为向量检索扩展：
+已引入 `sqlite-vec`（v0.1.x）并完成全链路集成：
 
 - **选型理由**：与现有 better-sqlite3 共享同一 SQLite 文件，零额外服务、零新存储目录。
   同步 load/dump/备份策略不变。原生扩展在 macOS/Windows/Linux 可用（`npm install` 自动重编）。
@@ -105,7 +108,8 @@ M8 已验证并引入了 `sqlite-vec`（v0.1.x）作为向量检索扩展：
 
 **重要性能约束**：
 - 必须使用 `MATCH ? AND k = N` 的 KNN 运算符，不可用 `vec_distance_cosine() ORDER BY distance`（慢 190×）。
-- 向量维度需与 embedding Provider 输出一致（`memory_vec`/`kb_chunk_vec` 均使用 FLOAT[768]）。
+- 向量维度需与 embedding Provider 输出一致。`memory_vec`/`kb_chunk_vec` 按当前模型实际输出动态创建 `FLOAT[N]`；
+  当用户切换到不同维度的 embedding 模型时，系统会重建派生向量索引并等待重新 embedding。
 
 Embedding 通过 OpenAI 兼容 API 接入（`/v1/embeddings`），`baseUrl` 指向任一兼容后端即可：
 - **Ollama**：`http://127.0.0.1:11434/v1`，模型 `nomic-embed-text`（768 维）
@@ -122,8 +126,10 @@ Embedding 通过 OpenAI 兼容 API 接入（`/v1/embeddings`），`baseUrl` 指�
 
 | 方向 | 候选 | 触发条件 |
 |---|---|---|
-| 真实 LLM | 原生 fetch（OpenAI 兼容）——**已采用，不引 SDK**（见 2.7） | ✅ 已落地 |
+| 真实 LLM | 原生 fetch（OpenAI 兼容 + Anthropic Messages + OpenAI Responses）——**已采用，不引 SDK**（见 2.7） | ✅ 已落地三协议 |
 | 工具协议 | `@modelcontextprotocol/sdk` | ✅ 已接入 stdio client；未来扩展 Streamable HTTP / SSE |
+| 新工具框架 | **Effect-TS** (`effect` 3.21.x) —— Schema 驱动工具定义、作用域注册、执行管线 | ✅ 已落地 P0-P4 |
+| 向量检索 | **sqlite-vec** —— SQLite 原生扩展，零额外服务 | ✅ 已实现混合评分 + KB RAG + Dreams 管道 |
 | 显式状态机/图工作流 | 自研状态机；必要时评估 LangGraph/ADK | Agent 阶段和恢复逻辑复杂到当前 loop 不可维护 |
 | 可观测性 | SQLite 轨迹日志；后续 OpenTelemetry | ✅ 已接入任务级轨迹；跨任务指标或外部面板时再扩展 |
 | 评测 | 脚本化 M3 回归；后续 Vitest/Playwright | ✅ `npm run regression:m3` 覆盖 Agent/安全/恢复最小集 |

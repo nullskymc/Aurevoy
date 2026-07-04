@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RuntimeSettings } from "@aurevoy/shared";
 import { t } from "../i18n";
 
@@ -17,6 +17,21 @@ interface ModelSelectorDrawerProps {
   onSave: (draft: ModelSelectorDraft) => void;
 }
 
+const POPOVER_GAP = 8;
+const VIEWPORT_MARGIN = 12;
+const POPOVER_FALLBACK_WIDTH = 280;
+const POPOVER_MIN_WIDTH = 248;
+const POPOVER_MAX_WIDTH = 300;
+const POPOVER_MAX_HEIGHT = 390;
+const POPOVER_MIN_HEIGHT = 180;
+
+interface PopoverPosition {
+  left: number;
+  top: number;
+  width: number;
+  maxHeight: number;
+}
+
 export function ModelSelectorDrawer({
   open,
   provider,
@@ -28,21 +43,57 @@ export function ModelSelectorDrawer({
   onSave,
 }: ModelSelectorDrawerProps) {
   const currentModel = settings?.llm.model ?? parseProviderModel(provider);
+  const providerLabel = parseProviderLabel(provider);
   const models = settings?.llm.enabledModels ?? [];
   const popoverRef = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
+  const [pos, setPos] = useState<PopoverPosition | null>(null);
 
   const computePosition = useCallback(() => {
     const anchor = anchorRef?.current;
-    const container = popoverRef.current?.parentElement;
-    if (!anchor || !container) return;
+    if (!anchor) return;
     const anchorRect = anchor.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
+    const popoverRect = popoverRef.current?.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const anchorWidth = Math.ceil(anchorRect.width);
+    const popoverWidth = Math.max(
+      POPOVER_MIN_WIDTH,
+      Math.min(POPOVER_MAX_WIDTH, anchorWidth + 24, popoverRect?.width ?? POPOVER_FALLBACK_WIDTH),
+    );
+    const measuredHeight = popoverRect?.height ?? POPOVER_MAX_HEIGHT;
+    const availableAbove = anchorRect.top - VIEWPORT_MARGIN - POPOVER_GAP;
+    const availableBelow = viewportHeight - anchorRect.bottom - VIEWPORT_MARGIN - POPOVER_GAP;
+    const openAbove = availableAbove >= Math.min(measuredHeight, POPOVER_MIN_HEIGHT)
+      || availableAbove >= availableBelow;
+    const availableHeight = Math.max(
+      POPOVER_MIN_HEIGHT,
+      Math.min(POPOVER_MAX_HEIGHT, openAbove ? availableAbove : availableBelow),
+    );
+    const renderedHeight = Math.min(measuredHeight, availableHeight);
+    const preferredLeft = anchorRect.left;
+    const left = Math.max(
+      VIEWPORT_MARGIN,
+      Math.min(preferredLeft, viewportWidth - popoverWidth - VIEWPORT_MARGIN),
+    );
+    const top = openAbove
+      ? anchorRect.top - POPOVER_GAP - renderedHeight
+      : anchorRect.bottom + POPOVER_GAP;
+
     setPos({
-      left: anchorRect.left - containerRect.left,
-      bottom: containerRect.bottom - anchorRect.top + 4,
+      left,
+      top: Math.max(VIEWPORT_MARGIN, Math.min(top, viewportHeight - renderedHeight - VIEWPORT_MARGIN)),
+      width: popoverWidth,
+      maxHeight: availableHeight,
     });
   }, [anchorRef]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    computePosition();
+  }, [computePosition, open, models.length, currentModel]);
 
   useEffect(() => {
     if (!open) return;
@@ -52,6 +103,7 @@ export function ModelSelectorDrawer({
       const target = event.target;
       if (!(target instanceof Node)) return;
       if (popoverRef.current?.contains(target)) return;
+      if (anchorRef?.current?.contains(target)) return;
       onClose();
     }
 
@@ -62,12 +114,14 @@ export function ModelSelectorDrawer({
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", computePosition);
+    window.addEventListener("scroll", computePosition, { capture: true });
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", computePosition);
+      window.removeEventListener("scroll", computePosition, { capture: true });
     };
-  }, [onClose, open, computePosition]);
+  }, [anchorRef, onClose, open, computePosition]);
 
   if (!open) return null;
 
@@ -77,27 +131,36 @@ export function ModelSelectorDrawer({
       className="model-popover"
       role="dialog"
       aria-label={t("model.dialogLabel")}
-      style={pos ? { left: pos.left, bottom: pos.bottom } : undefined}
+      style={pos ? { left: pos.left, top: pos.top, width: pos.width, maxHeight: pos.maxHeight } : undefined}
     >
-      <div className="model-popover-section">
-        <p className="model-popover-label">{t("model.label")}</p>
+      <div className="model-popover-main">
+        <header className="model-popover-head">
+          <p className="model-popover-title">{t("model.label")}</p>
+          <span className="model-popover-provider">{providerLabel}</span>
+        </header>
         {models.length === 0 ? (
           <p className="model-popover-empty">{t("model.empty")}</p>
         ) : (
           <div className="model-popover-list">
-            {models.map((model) => (
-              <button
-                key={model}
-                type="button"
-                className="model-popover-item"
-                data-active={model === currentModel}
-                disabled={saving || model === currentModel}
-                onClick={() => onSave({ model })}
-              >
-                <span>{model}</span>
-                {model === currentModel && <CheckIcon />}
-              </button>
-            ))}
+            {models.map((model) => {
+              const active = model === currentModel;
+              return (
+                <button
+                  key={model}
+                  type="button"
+                  className="model-popover-item"
+                  data-active={active}
+                  disabled={saving || active}
+                  onClick={() => onSave({ model })}
+                >
+                  <span className="model-popover-model">
+                    <span className="model-popover-name">{model}</span>
+                    {active && <span className="model-popover-current">{t("settings.modelCurrent")}</span>}
+                  </span>
+                  {active && <CheckIcon />}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
@@ -115,6 +178,12 @@ function parseProviderModel(provider?: string): string {
   if (!provider || provider === "unconfigured") return "";
   const [, model] = provider.split(/:(.*)/s);
   return model ?? provider;
+}
+
+function parseProviderLabel(provider?: string): string {
+  if (!provider || provider === "unconfigured") return t("composer.providerUnconfigured");
+  const [kind] = provider.split(/:(.*)/s);
+  return kind || provider;
 }
 
 function CheckIcon() {

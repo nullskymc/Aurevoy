@@ -25,6 +25,14 @@ export const browserPlatform: PlatformAdapter = {
     }
   },
 
+  async revealFile(path: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(path);
+    } catch {
+      // 剪贴板不可用时忽略
+    }
+  },
+
   async openFileDialog() {
     // 浏览器环境通过 <input type="file"> 实现（仅用于兼容）
     return null;

@@ -12,13 +12,13 @@
  * - search_grep：全局只读文本搜索（类似 grep -rn）
  *
  * 写入（Write）三件套：
- * - write_file：原子全量写（≤50KB），新建或覆盖
- * - edit_lines：行级精确替换（≤200行/8KB），局部编辑
+ * - write_file：原子全量写（≤500KB），新建或覆盖
+ * - edit_lines：行级精确替换（≤2000行/128KB），局部编辑
  * - session_open / session_write / session_close：分批构建大文件
  *
  * 辅助：
  * - create_file：新建空文件
- * - append_file：尾部追加（≤200行/8KB）
+ * - append_file：尾部追加（≤2000行/128KB）
  *
  * 工程约束：
  * - 行号均采用 1-indexed（第 1 行 = 文件开头）
@@ -53,18 +53,18 @@ const MAX_GREP_RESULTS = 100;
 
 /**
  * 写入工具常量（新三件套契约）：
- * - write_file: 原子全量写，content 上限 50KB
- * - edit_lines: 行替换，content 上限 200 行 / 8KB
- * - session_write: 单次追加上限 200 行 / 10KB
- * - append_file: 单次追加上限 200 行 / 8KB
+ * - write_file: 原子全量写，content 上限 500KB
+ * - edit_lines: 行替换，content 上限 2000 行 / 128KB
+ * - session_write: 单次追加上限 2000 行 / 128KB
+ * - append_file: 单次追加上限 2000 行 / 128KB
  */
-const MAX_WRITE_BYTES = 50 * 1024;       // 50KB — write_file 单次上限
-const MAX_EDIT_LINES = 200;              // edit_lines 单次行数上限
-const MAX_EDIT_BYTES = 8 * 1024;         // 8KB — edit_lines content 上限
-const MAX_APPEND_LINES = 200;            // append_file 单次行数上限
-const MAX_APPEND_BYTES = 8 * 1024;       // 8KB — append_file content 上限
-const MAX_SESSION_WRITE_LINES = 200;     // session_write 单次行数上限
-const MAX_SESSION_WRITE_BYTES = 10 * 1024; // 10KB — session_write 单次上限
+const MAX_WRITE_BYTES = 500 * 1024;        // 500KB — write_file 单次上限
+const MAX_EDIT_LINES = 2000;               // edit_lines 单次行数上限
+const MAX_EDIT_BYTES = 128 * 1024;         // 128KB — edit_lines content 上限
+const MAX_APPEND_LINES = 2000;             // append_file 单次行数上限
+const MAX_APPEND_BYTES = 128 * 1024;       // 128KB — append_file content 上限
+const MAX_SESSION_WRITE_LINES = 2000;      // session_write 单次行数上限
+const MAX_SESSION_WRITE_BYTES = 128 * 1024; // 128KB — session_write 单次上限
 /** Session 空闲超时（10 分钟无操作自动清理） */
 const SESSION_IDLE_MS = 10 * 60 * 1000;
 
@@ -518,16 +518,16 @@ toolRegistry.register({
   descriptor: {
     name: 'write_file',
     description:
-      '原子全量写入文件（≤50KB）。文件不存在则创建，存在则覆盖。' +
+      '原子全量写入文件（≤500KB）。文件不存在则创建，存在则覆盖。' +
       '通过先写临时文件再 rename 实现原子写入，不会产生部分写入的文件。' +
       '是新建文件或完全重写已有文件的首选方式。' +
-      '内容超过 50KB 时会返回错误——请改用 session_open/session_write/session_close 分批写入。' +
+      '内容超过 500KB 时会返回错误——请改用 session_open/session_write/session_close 分批写入。' +
       '如需局部修改现有文件，使用 edit_lines。',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: '相对工作区的文件路径' },
-        content: { type: 'string', description: '文件内容（≤50KB，UTF-8 文本）' },
+        content: { type: 'string', description: '文件内容（≤500KB，UTF-8 文本）' },
       },
       required: ['path', 'content'],
       additionalProperties: false,
@@ -576,17 +576,17 @@ toolRegistry.register({
     name: 'edit_lines',
     description:
       '精确替换文件中指定行范围（start_line 到 end_line，闭区间，1-indexed）的内容。' +
-      'content 上限 200 行 / 8KB——适合局部编辑代码、修改配置等精确修改场景。' +
+      'content 上限 2000 行 / 128KB——适合局部编辑代码、修改配置等精确修改场景。' +
       '使用前务必先用 search_grep 或 open_file 确认行号准确。' +
-      '如需创建大文件（>200 行），用 session_open/session_write/session_close 分批写入。' +
-      '如需整体重写小文件（≤50KB），用 write_file 一步完成。',
+      '如需创建大文件（>2000 行），用 session_open/session_write/session_close 分批写入。' +
+      '如需整体重写小文件（≤500KB），用 write_file 一步完成。',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: '相对工作区的文件路径' },
         start_line: { type: 'integer', description: '起始行号（1-indexed，包含）' },
         end_line: { type: 'integer', description: '结束行号（1-indexed，包含），必须 >= start_line' },
-        content: { type: 'string', description: '替换后的新内容（≤200 行 / 8KB，可包含多行文本）' },
+        content: { type: 'string', description: '替换后的新内容（≤2000 行 / 128KB，可包含多行文本）' },
       },
       required: ['path', 'start_line', 'end_line', 'content'],
       additionalProperties: false,
@@ -609,7 +609,7 @@ toolRegistry.register({
       );
     }
 
-    // 校验 content 上限：200 行 / 8KB
+    // 校验 content 上限：2000 行 / 128KB
     const allNewLines = content.split('\n');
     const contentBytes = Buffer.byteLength(content, 'utf8');
     if (allNewLines.length > MAX_EDIT_LINES) {
@@ -670,16 +670,16 @@ toolRegistry.register({
   descriptor: {
     name: 'append_file',
     description:
-      '在文件末尾追加内容（≤200 行/8KB）。' +
+      '在文件末尾追加内容（≤2000 行/128KB）。' +
       '如果文件不存在则创建新文件并写入。' +
-      '如需追加多于 200 行，连续多次调用 append_file。' +
+      '如需追加多于 2000 行，连续多次调用 append_file。' +
       '如需替换文件中间某段内容，使用 edit_lines。' +
       '如需新建大文件，使用 session_open/session_write/session_close 分批写入。',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: '相对工作区的文件路径' },
-        content: { type: 'string', description: '要追加的文本内容（≤200 行/8KB）' },
+        content: { type: 'string', description: '要追加的文本内容（≤2000 行/128KB）' },
       },
       required: ['path', 'content'],
       additionalProperties: false,
@@ -730,10 +730,10 @@ toolRegistry.register({
   descriptor: {
     name: 'session_open',
     description:
-      '打开一个分批写入会话，用于构建大文件（>200 行 / >50KB）。' +
+      '打开一个分批写入会话，用于构建大文件（>2000 行 / >500KB）。' +
       '返回一个 session_id，后续通过 session_write 分多次追加内容，' +
       '最后用 session_close 完成写入。' +
-      '适用于：新建大型源文件、生成长篇文档、导出数据。',
+      '适用于：新建大型源文件、生成长篇文档、导出数据.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -787,7 +787,7 @@ toolRegistry.register({
   descriptor: {
     name: 'session_write',
     description:
-      '向一个分批写入会话追加一段内容（≤200 行/10KB 每次）。' +
+      '向一个分批写入会话追加一段内容（≤2000 行/128KB 每次）。' +
       '可连续多次调用，每段内容依次追加到临时文件。' +
       '最后必须调用 session_close 完成写入。' +
       '返回当前已写入的字节数和行数，便于跟踪进度。',
@@ -795,7 +795,7 @@ toolRegistry.register({
       type: 'object',
       properties: {
         session_id: { type: 'string', description: 'session_open 返回的 session_id' },
-        content: { type: 'string', description: '要追加的文本内容（≤200 行/10KB）' },
+        content: { type: 'string', description: '要追加的文本内容（≤2000 行/128KB）' },
       },
       required: ['session_id', 'content'],
       additionalProperties: false,

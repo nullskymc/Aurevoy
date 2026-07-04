@@ -52,7 +52,7 @@ export function buildSkillCatalogMessage(): Message | null {
 
 /** 输出较大的工具（内容会被 Microcompact 结构化压缩） */
 const TOOLS_WITH_LARGE_OUTPUT = new Set([
-  'open_file', 'scroll', 'search_grep', 'http_fetch', 'web_search',
+  'open_file', 'scroll', 'search_grep', 'web_fetch', 'web_search',
   'execute_command', 'edit_lines', 'replace_lines',
 ]);
 
@@ -200,11 +200,10 @@ function compactToolResult(toolName: string, rawContent: string): string | null 
       });
     }
 
-    case 'http_fetch':
-    case 'web_search': {
+    case 'web_fetch': {
       const url = parsed.url as string | undefined;
       const status = parsed.status as number | undefined;
-      const text = (parsed.cleanedText as string | undefined) ?? (parsed.text as string | undefined) ?? '';
+      const text = (parsed.content as string | undefined) ?? '';
       const links = Array.isArray(parsed.links) ? parsed.links as Record<string, unknown>[] : [];
       return JSON.stringify({
         url,
@@ -215,6 +214,29 @@ function compactToolResult(toolName: string, rawContent: string): string | null 
         _compacted: true,
         _note: text.length > 300
           ? `全文 ${text.length} 字符，已截取前 300 字符。`
+          : undefined,
+      });
+    }
+
+    case 'web_search': {
+      const query = parsed.query as string | undefined;
+      const error = parsed.error as string | undefined;
+      const results = Array.isArray(parsed.results)
+        ? (parsed.results as Array<Record<string, unknown>>)
+        : [];
+      const compacted = results.slice(0, 8).map(r => ({
+        title: r.title ?? '',
+        snippet: String(r.snippet ?? '').slice(0, 200),
+        url: r.url ?? '',
+      }));
+      return JSON.stringify({
+        query,
+        error,
+        result_count: parsed.resultCount ?? results.length,
+        results: compacted,
+        _compacted: true,
+        _note: results.length > 8
+          ? `共 ${results.length} 条结果，保留前 8 条。`
           : undefined,
       });
     }

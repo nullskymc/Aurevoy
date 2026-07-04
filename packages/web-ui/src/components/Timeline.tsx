@@ -15,9 +15,14 @@ import type {
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { usePlatform } from "../platform/context";
-import { ThinkingCard } from "./ThinkingTimeline";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
+import {
+  buildFileMenuItems,
+  buildLinkMenuItems,
+  contextMenuPoint,
+  type ContextMenuState,
+} from "./contextMenuActions";
 
 /* ============ 类型定义 ============ */
 
@@ -38,6 +43,7 @@ export interface TimelineStepData {
   error?: string;
   args?: Record<string, unknown>;
   toolName?: string;
+  rawOutput?: unknown;
   progress?: {
     message: string;
     chunk?: { current: number; total: number };
@@ -58,7 +64,6 @@ export interface AgentRoundData {
   id: string;
   planStepGroups: PlanStepGroupData[];
   summary: string;
-  reasoning?: string;
   markdownOutput?: string;
   contentBlocks?: ContentBlock[];
   status: "pending" | "running" | "completed" | "failed";
@@ -68,30 +73,20 @@ export interface AgentRoundData {
 
 /** 从工具名推断步骤类型 */
 export function detectStepKind(toolName: string): StepKind {
-  if (toolName === "execute_command") return "command";
-  if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll") return "file_read";
-  if (toolName === "write_file" || toolName === "create_file" || toolName === "append_file" || toolName === "session_open" || toolName === "session_write" || toolName === "session_close" || toolName === "session_abort") return "file_write";
-  if (toolName === "edit_file" || toolName === "apply_diff" || toolName === "replace_lines" || toolName === "edit_lines") return "edit";
-  if (toolName === "web_search" || toolName === "search_grep" || toolName === "search_files") return "search";
+  if (toolName === "execute_command" || toolName === "bash") return "command";
+  if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll" || toolName === "read") return "file_read";
+  if (toolName === "write_file" || toolName === "create_file" || toolName === "append_file" || toolName === "session_open" || toolName === "session_write" || toolName === "session_close" || toolName === "session_abort" || toolName === "write") return "file_write";
+  if (toolName === "edit_file" || toolName === "apply_diff" || toolName === "replace_lines" || toolName === "edit_lines" || toolName === "edit") return "edit";
+  if (toolName === "web_search" || toolName === "search_grep" || toolName === "search_files" || toolName === "grep" || toolName === "glob") return "search";
   if (toolName === "create_artifact" || toolName === "apply_artifact") return "artifact";
   if (toolName.startsWith("browser_")) return "browse";
   if (toolName.startsWith("mcp_")) return "api";
   return "other";
 }
 
-/** Badge 标签文本映射 */
-const BADGE_LABELS: Record<StepKind, string> = {
-  command: "Cmd",
-  file_read: "File",
-  file_write: "Write",
-  search: "Search",
-  browse: "Web",
-  think: "Think",
-  api: "API",
-  edit: "Edit",
-  artifact: "Art",
-  other: "Tool",
-};
+function shouldHideToolFromWorkflow(toolName: string): boolean {
+  return toolName === "attach_content";
+}
 
 /** 生成聚合摘要文本 */
 export function computeSummaryFromSteps(steps: TimelineStepData[]): string {
@@ -120,7 +115,7 @@ function buildStepsFromToolCalls(
   toolCalls: MessageToolCall[],
   resultMap: Map<string, { ok: boolean; output?: unknown; error?: string }>,
 ): TimelineStepData[] {
-  return toolCalls.map((tc) => {
+  return toolCalls.filter((tc) => !shouldHideToolFromWorkflow(tc.function.name)).map((tc) => {
     const kind = detectStepKind(tc.function.name);
     let args: Record<string, unknown> = {};
     try {
@@ -143,18 +138,19 @@ function buildStepsFromToolCalls(
       output: result?.output != null ? formatOutput(result.output) : undefined,
       error,
       toolName: tc.function.name,
+      rawOutput: result?.output,
     };
   });
 }
 
 /** 从步骤构建标题 */
 function buildStepTitle(toolName: string, args: Record<string, unknown>): string {
-  if (toolName === "execute_command") {
+  if (toolName === "execute_command" || toolName === "bash") {
     const cmd = typeof args.command === "string" ? args.command : "";
     const commandArgs = Array.isArray(args.args)
       ? (args.args as unknown[]).map(String).join(" ")
       : "";
-    return truncateTitle([cmd, commandArgs].filter(Boolean).join(" ")) || "执行命令";
+    return truncateTitle([cmd, commandArgs].filter(Boolean).join(" ")) || "";
   }
   if (toolName === "replace_lines" || toolName === "edit_lines") {
     const path = typeof args.path === "string" ? args.path : "";
@@ -163,38 +159,38 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
     if (path && startLine != null && endLine != null) {
       return truncateTitle(`${path} L${startLine}-${endLine}`);
     }
-    return truncateTitle(path) || "edit_lines";
+    return truncateTitle(path) || "";
   }
   if (toolName === "write_file") {
     const path = typeof args.path === "string" ? args.path : "";
-    return `write: ${truncateTitle(path)}` || "write_file";
+    return truncateTitle(path) || "";
   }
   if (toolName === "append_file") {
     const path = typeof args.path === "string" ? args.path : "";
-    return `append: ${truncateTitle(path)}` || "append_file";
+    return truncateTitle(path) || "";
   }
   if (toolName === "session_open") {
     const path = typeof args.path === "string" ? args.path : "";
-    return `session: ${truncateTitle(path)}` || "session_open";
+    return truncateTitle(path) || "";
   }
   if (toolName === "session_write" || toolName === "session_close" || toolName === "session_abort") {
     const sid = typeof args.session_id === "string" ? args.session_id.slice(0, 8) : "";
-    return `${toolName} ${sid}`;
+    return sid || "";
   }
   if (toolName === "open_file") {
     const path = typeof args.path === "string" ? args.path : "";
     const line = typeof args.line_number === "number" ? args.line_number : null;
     if (path && line != null) return truncateTitle(`${path} :${line}`);
-    return truncateTitle(path) || "open_file";
+    return truncateTitle(path) || "";
   }
   if (toolName === "scroll") {
     const file = typeof args.file === "string" ? args.file : "";
     const dir = typeof args.direction === "string" ? args.direction : "";
-    return file ? truncateTitle(`${file} ${dir}`) : "scroll";
+    return file ? truncateTitle(`${file} ${dir}`) : "";
   }
   if (toolName === "search_grep") {
     const pattern = typeof args.pattern === "string" ? args.pattern : "";
-    return pattern ? `grep: ${truncateTitle(pattern)}` : "search_grep";
+    return pattern ? truncateTitle(pattern) : "";
   }
   const target =
     (typeof args.TargetFile === "string" ? args.TargetFile :
@@ -206,9 +202,9 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
   if (target) return truncateTitle(target);
   if (toolName === "web_search") {
     const query = typeof args.query === "string" ? args.query : typeof args.Query === "string" ? args.Query : "";
-    return query ? `搜索：${truncateTitle(query)}` : "搜索";
+    return query ? truncateTitle(query) : "";
   }
-  return toolName;
+  return "";
 }
 
 function truncateTitle(s: string, max = 55): string {
@@ -336,10 +332,9 @@ export function buildAgentRoundFromMessage(
     id: `${message.id}-timeline`,
     planStepGroups,
     summary,
-    reasoning: message.reasoningContent,
     markdownOutput: message.content,
     contentBlocks: message.contentBlocks,
-    status: "completed",
+    status: steps.some((step) => step.status === "failed") ? "failed" : "completed",
   };
 }
 
@@ -348,12 +343,11 @@ export function buildLiveAgentRoundData(params: {
   plan: PlanStep[];
   liveToolActivity: { id: string; name: string; args: unknown; status: string; planStepId?: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
   output?: string;
-  reasoning?: string;
   phase?: string | null;
   contentBlocks?: ContentBlock[];
 }): AgentRoundData {
-  const { plan, liveToolActivity, output, reasoning, phase, contentBlocks } = params;
-  const steps: TimelineStepData[] = liveToolActivity.map((act) => {
+  const { plan, liveToolActivity, output, phase, contentBlocks } = params;
+  const steps: TimelineStepData[] = liveToolActivity.filter((act) => !shouldHideToolFromWorkflow(act.name)).map((act) => {
     const kind = detectStepKind(act.name);
     const args = typeof act.args === "object" && act.args !== null
       ? act.args as Record<string, unknown>
@@ -373,6 +367,7 @@ export function buildLiveAgentRoundData(params: {
       logs: extractLogContent(act.name, act.status !== "running" ? { ok: act.status === "ok", output: act.output, error: act.error } : undefined),
       error: act.error,
       output: act.output != null ? formatOutput(act.output) : undefined,
+      rawOutput: act.output,
       args,
       toolName: act.name,
       progress: act.progress,
@@ -396,6 +391,7 @@ export function buildLiveAgentRoundData(params: {
 
   const planStepGroups: PlanStepGroupData[] = [];
   const isFailed = phase === "failed" || phase === "cancelled";
+  const isActivePhase = phase === "thinking" || phase === "planning" || phase === "initializing";
 
   if (stepsByPlanStepId.size > 0) {
     for (const ps of plan) {
@@ -421,6 +417,7 @@ export function buildLiveAgentRoundData(params: {
     }
   } else if (steps.length === 0) {
     for (const ps of plan) {
+      if (isActivePhase && (ps.status === "completed" || ps.status === "failed")) continue;
       planStepGroups.push({
         planStepId: ps.id,
         description: ps.description,
@@ -446,10 +443,9 @@ export function buildLiveAgentRoundData(params: {
     id: "live-tail",
     planStepGroups,
     summary,
-    reasoning,
     markdownOutput: output,
     contentBlocks,
-    status: isFailed ? "failed" : steps.some((s) => s.status === "running") ? "running" : "completed",
+    status: isFailed ? "failed" : (steps.some((s) => s.status === "running") || isActivePhase) ? "running" : "completed",
   };
 }
 
@@ -462,11 +458,47 @@ function StepStatus({ status }: { status: TimelineStepData["status"] }) {
   return null;
 }
 
-/** Badge 标签 */
-function StepBadge({ kind }: { kind: StepKind }) {
-  return <span className={`timeline-step-badge is-${kind}`}>
-    {BADGE_LABELS[kind] ?? "Tool"}
-  </span>;
+function StepGlyph({ step }: { step: TimelineStepData }) {
+  if (step.status === "running") {
+    return (
+      <span className="timeline-step-glyph is-running" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="15" height="15">
+          <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeDasharray="18" strokeLinecap="round" />
+        </svg>
+      </span>
+    );
+  }
+  if (step.kind === "search" || step.kind === "browse") {
+    return (
+      <span className="timeline-step-glyph" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none">
+          <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.25" />
+          <path d="M2.2 8h11.6M8 1.8c1.7 1.8 2.6 3.8 2.6 6.2S9.7 12.4 8 14.2M8 1.8C6.3 3.6 5.4 5.6 5.4 8s.9 4.4 2.6 6.2" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" />
+        </svg>
+      </span>
+    );
+  }
+  if (step.status === "failed") {
+    return <span className="timeline-step-glyph is-failed" aria-hidden="true">!</span>;
+  }
+  return (
+    <span className="timeline-step-glyph" aria-hidden="true">
+      <svg viewBox="0 0 16 16" width="15" height="15" fill="none">
+        <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.25" />
+        <path d="M8 4.4v4l2.6 1.5" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+  );
+}
+
+function stepDisplayLabel(step: TimelineStepData): string {
+  if (step.toolName === "web_search") return "Searched the web";
+  if (step.kind === "browse") return "Opened page";
+  if (step.kind === "file_read") return "Read file";
+  if (step.kind === "file_write") return "Wrote file";
+  if (step.kind === "edit") return "Edited file";
+  if (step.kind === "command") return "Ran command";
+  return step.toolName ?? "Ran tool";
 }
 
 /** 聚合摘要行 */
@@ -513,12 +545,13 @@ function TimelineStepNode({
   // Context menu
   const [ctxMenu, setCtxMenu] = useState<{
     open: boolean;
-    rect?: DOMRect;
+    point?: { x: number; y: number };
     items: ContextMenuItem[];
   }>({ open: false, items: [] });
 
   function handleStepContextMenu(e: React.MouseEvent) {
     e.preventDefault();
+    e.stopPropagation();
     const items: ContextMenuItem[] = [
       {
         type: "item",
@@ -572,7 +605,7 @@ function TimelineStepNode({
     ];
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
+      point: contextMenuPoint(e),
       items,
     });
   }
@@ -596,7 +629,8 @@ function TimelineStepNode({
     }
   }, [step.status]);
 
-  const hasDetails = step.logs != null || step.error != null || (step.status === "running" && step.progress != null);
+  const hasDetails = step.logs != null || step.error != null || step.output != null || (step.status === "running" && step.progress != null);
+  const searchPreview = buildSearchPreview(step);
 
   return (
     <div
@@ -605,16 +639,15 @@ function TimelineStepNode({
       onContextMenu={handleStepContextMenu}
     >
       <div className="timeline-step-header">
-        <div className="timeline-step-left">
-          <StepBadge kind={step.kind} />
-        </div>
+        <StepGlyph step={step} />
         <button
           type="button"
           className="timeline-step-title-btn"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
         >
-          <span className="timeline-step-title">{step.title}</span>
+          <span className="timeline-step-tool">{stepDisplayLabel(step)}</span>
+          {step.title && <span className="timeline-step-title">{step.title}</span>}
             <StepStatus status={step.status} />
           {hasDetails && (
             <span className="timeline-step-caret" data-open={open}>
@@ -628,11 +661,17 @@ function TimelineStepNode({
 
       {open && hasDetails && (
         <div className="timeline-step-details">
-          {step.logs && (
+          {searchPreview ? (
+            <SearchPreviewView preview={searchPreview} />
+          ) : step.logs ? (
             <div className="timeline-step-log">
               <pre>{step.logs}</pre>
             </div>
-          )}
+          ) : step.output ? (
+            <div className="timeline-step-log">
+              <pre>{step.output}</pre>
+            </div>
+          ) : null}
           {step.error && (
             <div className="timeline-step-error">
               <svg viewBox="0 0 14 14" width="12" height="12" fill="none" aria-hidden="true">
@@ -662,9 +701,121 @@ function TimelineStepNode({
       <ContextMenu
         items={ctxMenu.items}
         open={ctxMenu.open}
-        anchorRect={ctxMenu.rect}
+        anchorPoint={ctxMenu.point}
         onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
       />
+    </div>
+  );
+}
+
+interface SearchPreviewResult {
+  title: string;
+  url: string;
+  snippet?: string;
+  host: string;
+}
+
+interface SearchPreviewData {
+  query: string;
+  resultCount: number;
+  results: SearchPreviewResult[];
+}
+
+function buildSearchPreview(step: TimelineStepData): SearchPreviewData | null {
+  if (step.toolName !== "web_search") return null;
+  const source = normalizeSearchOutput(step.rawOutput ?? step.output);
+  if (!source) return null;
+  const query = source.query || (typeof step.args?.query === "string" ? step.args.query : "");
+  const results = source.results.slice(0, 6).map((item) => ({
+    title: item.title,
+    url: item.url,
+    snippet: item.snippet,
+    host: hostFromUrl(item.url),
+  }));
+  return {
+    query,
+    resultCount: source.resultCount || source.results.length,
+    results,
+  };
+}
+
+function normalizeSearchOutput(value: unknown): { query: string; resultCount: number; results: SearchPreviewResult[] } | null {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const record = parsed as Record<string, unknown>;
+  const rawResults = Array.isArray(record.results) ? record.results : [];
+  const results = rawResults
+    .map((item): SearchPreviewResult | null => {
+      if (!item || typeof item !== "object") return null;
+      const result = item as Record<string, unknown>;
+      const title = typeof result.title === "string" ? result.title : "";
+      const url = typeof result.url === "string" ? result.url : typeof result.link === "string" ? result.link : "";
+      if (!title || !url) return null;
+      const snippet = typeof result.snippet === "string"
+        ? result.snippet
+        : typeof result.content === "string"
+          ? result.content
+          : undefined;
+      return { title, url, snippet, host: hostFromUrl(url) };
+    })
+    .filter((item): item is SearchPreviewResult => item !== null);
+  return {
+    query: typeof record.query === "string" ? record.query : "",
+    resultCount: typeof record.resultCount === "number" ? record.resultCount : results.length,
+    results,
+  };
+}
+
+function hostFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function SearchPreviewView({ preview }: { preview: SearchPreviewData }) {
+  const platform = usePlatform();
+  return (
+    <div className="timeline-search-preview">
+      <div className="timeline-search-head">
+        <span className="timeline-search-query">{preview.query || "web search"}</span>
+        <span className="timeline-search-count">{preview.resultCount} result{preview.resultCount === 1 ? "" : "s"}</span>
+      </div>
+      {preview.results.length > 0 ? (
+        <div className="timeline-search-results">
+          {preview.results.map((result, index) => (
+            <a
+              key={`${result.url}-${index}`}
+              className="timeline-search-result"
+              href={result.url}
+              title={result.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(event) => {
+                event.preventDefault();
+                void platform.openExternal?.(result.url);
+              }}
+            >
+              <span className="timeline-search-favicon" aria-hidden="true">{result.host.slice(0, 1).toUpperCase()}</span>
+              <span className="timeline-search-result-main">
+                <span className="timeline-search-result-title">{result.title}</span>
+                {result.snippet && <span className="timeline-search-snippet">{result.snippet}</span>}
+              </span>
+              <span className="timeline-search-host">{result.host}</span>
+            </a>
+          ))}
+        </div>
+      ) : (
+        <div className="timeline-search-empty">No results</div>
+      )}
     </div>
   );
 }
@@ -742,50 +893,33 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
   };
 
   // Context menu for file_reference blocks
-  const [ctxMenu, setCtxMenu] = useState<{
-    open: boolean;
-    rect?: DOMRect;
-    items: ContextMenuItem[];
-  }>({ open: false, items: [] });
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   function handleFileContextMenu(e: React.MouseEvent) {
     e.preventDefault();
-    const filename = block.name || block.content.split("/").pop() || block.content;
-    const items: ContextMenuItem[] = [
-      {
-        type: "item",
-        id: "copy-path",
-        label: "复制路径",
-        action: () => navigator.clipboard.writeText(block.content).catch(() => {}),
-      },
-      {
-        type: "item",
-        id: "copy-filename",
-        label: "复制文件名",
-        action: () => navigator.clipboard.writeText(filename).catch(() => {}),
-      },
-      ...(platform.openFile
-        ? [
-            {
-              type: "item" as const,
-              id: "open-file",
-              label: "在系统中打开",
-              action: async () => {
-                try {
-                  await platform.openFile!(block.content);
-                  showFeedback("已打开");
-                } catch {
-                  showFeedback("无法打开文件");
-                }
-              },
-            },
-          ]
-        : []),
-    ];
+    e.stopPropagation();
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
-      items,
+      point: contextMenuPoint(e),
+      items: buildFileMenuItems({
+        path: block.content,
+        name: block.name,
+        platform,
+      }),
+    });
+  }
+
+  function handleLinkContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({
+      open: true,
+      point: contextMenuPoint(e),
+      items: buildLinkMenuItems({
+        url: block.content,
+        label: block.name,
+        platform,
+      }),
     });
   }
 
@@ -828,7 +962,7 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
           <ContextMenu
             items={ctxMenu.items}
             open={ctxMenu.open}
-            anchorRect={ctxMenu.rect}
+            anchorPoint={ctxMenu.point}
             onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
           />
         </>
@@ -838,21 +972,39 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
       const src = platform.filePathToUrl(block.content);
       if (!src) return null;
       return (
-        <div className="content-block is-image">
-          <img
-            src={src}
-            alt={block.name || "agent image"}
-            className="content-block-image"
+        <>
+          <div
+            className="content-block is-image"
+            onContextMenu={handleFileContextMenu}
+            title={block.content}
+          >
+            <img
+              src={src}
+              alt={block.name || "agent image"}
+              className="content-block-image"
+            />
+            {block.name && <span className="content-block-caption">{block.name}</span>}
+          </div>
+          <ContextMenu
+            items={ctxMenu.items}
+            open={ctxMenu.open}
+            anchorPoint={ctxMenu.point}
+            onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
           />
-          {block.name && <span className="content-block-caption">{block.name}</span>}
-        </div>
+        </>
       );
     }
     case "link": {
       return (
-        <a
+        <>
+          <a
           className="content-block is-link"
           href={block.content}
+          onClick={(event) => {
+            event.preventDefault();
+            void platform.openExternal?.(block.content);
+          }}
+          onContextMenu={handleLinkContextMenu}
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -863,6 +1015,13 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
           </svg>
           <span>{block.name || block.content}</span>
         </a>
+          <ContextMenu
+            items={ctxMenu.items}
+            open={ctxMenu.open}
+            anchorPoint={ctxMenu.point}
+            onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
+          />
+        </>
       );
     }
     default:
@@ -880,14 +1039,18 @@ export function AgentRound({
   data,
   busy = false,
   defaultToolDetailsOpen = false,
+  showWorkflow = true,
+  showOutput = true,
 }: {
   data: AgentRoundData;
   busy?: boolean;
   defaultToolDetailsOpen?: boolean;
+  showWorkflow?: boolean;
+  showOutput?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
-  const hasLiveRunning = busy && data.status === "running";
+  const shouldShowWorkflow = showWorkflow && (data.planStepGroups.length > 0 || busy);
 
   return (
     <div
@@ -895,48 +1058,41 @@ export function AgentRound({
       className={`timeline-agent-round ${busy ? "is-live" : ""} ${data.status === "failed" ? "is-failed" : ""}`}
       data-status={data.status}
     >
-      {/* Summary 行 */}
-      <AgentRoundSummary
-        summary={data.summary}
-        status={data.status}
-        stepCount={stepCount}
-      />
+      {shouldShowWorkflow && (
+        <>
+          {/* Summary 行 */}
+          <AgentRoundSummary
+            summary={data.summary}
+            status={data.status}
+            stepCount={stepCount}
+          />
 
-      {/* 推理过程 */}
-      {data.reasoning && (
-        <ThinkingCard data={{
-          id: `reasoning-${data.id}`,
-          phase: 1,
-          summary: data.reasoning.split('\n')[0]?.trim()?.slice(0, 80) || '',
-          fullText: data.reasoning,
-          defaultOpen: false,
-        }} />
+          {/* 时间线区域 */}
+          <div className="timeline-body">
+            {data.planStepGroups.length > 0 ? (
+              data.planStepGroups.map((group, i) => (
+                <PlanStepGroup
+                  key={group.planStepId}
+                  group={group}
+                  index={i}
+                  isLast={i === data.planStepGroups.length - 1}
+                  defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
+                />
+              ))
+            ) : (
+              /* 无分组时仅实时阶段显示空占位 */
+              <div className="timeline-empty">
+                <span className="timeline-step-icon is-pending" />
+                <span>思考中…</span>
+              </div>
+            )}
+          </div>
+        </>
       )}
 
-      {/* 时间线区域 */}
-      <div className="timeline-body">
-        {data.planStepGroups.length > 0 ? (
-          data.planStepGroups.map((group, i) => (
-            <PlanStepGroup
-              key={group.planStepId}
-              group={group}
-              index={i}
-              isLast={i === data.planStepGroups.length - 1}
-              defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
-            />
-          ))
-        ) : (
-          /* 无分组时显示空占位 */
-          <div className="timeline-empty">
-            <span className="timeline-step-icon is-pending" />
-            <span>{busy ? "处理中…" : "无执行步骤"}</span>
-          </div>
-        )}
-      </div>
-
       {/* 流式输出文本 — 流式阶段仅显示加载占位（禁打字机效果），本轮结束时渲染完整 markdown */}
-      {data.markdownOutput && (
-        <article className={`timeline-output ${hasLiveRunning ? "is-streaming" : ""}`}>
+      {showOutput && data.markdownOutput && (
+        <article className="timeline-output">
           <div className="doc-meta">
             <span className="doc-meta-icon">
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
@@ -947,17 +1103,13 @@ export function AgentRound({
             <span>Aurevoy</span>
           </div>
           <div className="doc-body" style={{ paddingLeft: 0 }}>
-            {hasLiveRunning ? (
-              <span className="stream-placeholder">生成中…</span>
-            ) : (
-              <MarkdownRenderer content={data.markdownOutput} />
-            )}
+            <MarkdownRenderer content={data.markdownOutput} />
           </div>
         </article>
       )}
 
       {/* Agent 附加的富内容块（文件引用/图片/超链接） */}
-      {data.contentBlocks && data.contentBlocks.length > 0 && (
+      {showOutput && data.contentBlocks && data.contentBlocks.length > 0 && (
         <div className="content-blocks">
           {data.contentBlocks.map((block) => (
             <ContentBlockView key={block.id} block={block} />

@@ -91,6 +91,8 @@ export function addTokenUsage(task: Task, usage: TokenUsage | null | undefined):
     promptTokens: addOptional(current.promptTokens, usage.promptTokens),
     completionTokens: addOptional(current.completionTokens, usage.completionTokens),
     totalTokens: addOptional(current.totalTokens, usage.totalTokens),
+    cacheReadTokens: addOptional(current.cacheReadTokens, usage.cacheReadTokens),
+    cacheWriteTokens: addOptional(current.cacheWriteTokens, usage.cacheWriteTokens),
     estimatedCostUsd: addOptional(current.estimatedCostUsd, usage.estimatedCostUsd),
     updatedAt: now,
   };

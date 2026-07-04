@@ -333,8 +333,8 @@ function parseYamlFrontmatter(yaml: string): Record<string, unknown> | null {
  * 解析 allowed-tools 字段。
  * 支持两种格式：
  * - 标准（空格分隔字符串）："Bash(git:*) Bash(jq:*) Read" → ["Bash(git:*)", "Bash(jq:*)", "Read"]
- * - 旧版（YAML 数组）：[web_search, http_fetch] → ["web_search", "http_fetch"]
- * - 旧版（逗号分隔字符串）："web_search, http_fetch" → ["web_search", "http_fetch"]
+ * - 旧版（YAML 数组）：[web_search, web_fetch] → ["web_search", "web_fetch"]
+ * - 旧版（逗号分隔字符串）："web_search, web_fetch" → ["web_search", "web_fetch"]
  */
 function parseAllowedTools(value: unknown): string[] | undefined {
   if (Array.isArray(value)) {

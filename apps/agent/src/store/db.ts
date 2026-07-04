@@ -179,14 +179,6 @@ if (!memoryColumnsM8.some((column) => column.name === 'embedding_updated_at')) {
 // M8: sqlite-vec 虚拟表 + KB 普通表（扩展未加载时虚拟表创建静默失败）
 try {
   db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(
-      memory_id TEXT PRIMARY KEY,
-      embedding FLOAT[768]
-    );
-    CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunk_vec USING vec0(
-      chunk_id TEXT PRIMARY KEY,
-      embedding FLOAT[768]
-    );
     CREATE TABLE IF NOT EXISTS kb_dirs (
       id TEXT PRIMARY KEY, dir_path TEXT NOT NULL UNIQUE,
       recursive INTEGER NOT NULL DEFAULT 1, enabled INTEGER NOT NULL DEFAULT 1,
@@ -789,7 +781,7 @@ export function isVecLoaded(): boolean {
 
 /** 将 Float32Array 序列化为 sqlite-vec 可接受的 BLOB。 */
 export function serializeVector(vec: Float32Array): Buffer {
-  return Buffer.from(vec.buffer);
+  return Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
 }
 
 /** 将 sqlite-vec BLOB 反序列化为 Float32Array。 */
@@ -871,7 +863,15 @@ function hashString(s: string): string {
 /** 向量维度检测：若表存在 + vec 已加载，返回维度；否则 0。 */
 export function detectVectorDimensions(tableName: string): number {
   if (!isVecLoaded()) return 0;
+  const config = getVectorTableConfig(tableName);
+  if (!config) return 0;
   try {
+    const schema = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+    ).get(config.tableName) as { sql: string | null } | undefined;
+    const schemaMatch = schema?.sql?.match(/embedding\s+FLOAT\[(\d+)\]/i);
+    if (schemaMatch) return parseInt(schemaMatch[1], 10);
+
     const row = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string; type: string }>;
     const embeddingCol = row.find(c => c.name === 'embedding');
     if (embeddingCol) {
@@ -886,13 +886,89 @@ export function detectVectorDimensions(tableName: string): number {
 // M8: 向量存储辅助函数
 // ============================================================
 
+type VectorTableName = 'memory_vec' | 'kb_chunk_vec';
+
+interface VectorTableConfig {
+  tableName: VectorTableName;
+  idColumn: 'memory_id' | 'chunk_id';
+  resetSql: string;
+}
+
+const VECTOR_TABLES: Record<VectorTableName, VectorTableConfig> = {
+  memory_vec: {
+    tableName: 'memory_vec',
+    idColumn: 'memory_id',
+    resetSql: 'UPDATE memories SET embedding_updated_at = NULL',
+  },
+  kb_chunk_vec: {
+    tableName: 'kb_chunk_vec',
+    idColumn: 'chunk_id',
+    resetSql: 'UPDATE kb_chunks SET embedding_updated_at = NULL',
+  },
+};
+
+function getVectorTableConfig(tableName: string): VectorTableConfig | undefined {
+  return tableName === 'memory_vec' || tableName === 'kb_chunk_vec'
+    ? VECTOR_TABLES[tableName]
+    : undefined;
+}
+
+function vectorTableExists(config: VectorTableConfig): boolean {
+  const row = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get(config.tableName) as { name: string } | undefined;
+  return Boolean(row);
+}
+
+function createVectorTable(config: VectorTableConfig, dimensions: number): void {
+  db.exec(`
+    CREATE VIRTUAL TABLE ${config.tableName} USING vec0(
+      ${config.idColumn} TEXT PRIMARY KEY,
+      embedding FLOAT[${dimensions}]
+    )
+  `);
+}
+
+/**
+ * sqlite-vec 的列维度不可 ALTER。用户切换 embedding 模型时，旧向量索引必须重建。
+ * 这里只删除派生向量表并重置 embedding 时间戳，不删除 memories/kb_chunks 正文。
+ */
+function ensureVectorTableDimensions(config: VectorTableConfig, dimensions: number): boolean {
+  if (!isVecLoaded()) return false;
+  if (!Number.isInteger(dimensions) || dimensions <= 0) return false;
+
+  const exists = vectorTableExists(config);
+  const currentDimensions = exists ? detectVectorDimensions(config.tableName) : 0;
+  if (exists && currentDimensions === dimensions) return true;
+
+  try {
+    db.exec(`DROP TABLE IF EXISTS ${config.tableName}`);
+    createVectorTable(config, dimensions);
+    db.exec(config.resetSql);
+    if (config.tableName === 'memory_vec') invalidateMemorySummary();
+    if (exists && currentDimensions > 0 && currentDimensions !== dimensions) {
+      console.warn(
+        `[db] ${config.tableName} 向量维度从 ${currentDimensions} 切换为 ${dimensions}，已重建索引并等待重新 embedding`,
+      );
+    }
+    return true;
+  } catch (err) {
+    console.warn(
+      `[db] ${config.tableName} 向量表维度初始化失败:`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return false;
+  }
+}
+
 /** 向 memory_vec 表写入或更新记忆的 embedding 向量。 */
-export function upsertMemoryVec(memoryId: string, embedding: Float32Array): void {
-  if (!isVecLoaded()) return;
+export function upsertMemoryVec(memoryId: string, embedding: Float32Array): boolean {
+  if (!ensureVectorTableDimensions(VECTOR_TABLES.memory_vec, embedding.length)) return false;
   try {
     db.prepare(
       'INSERT INTO memory_vec (memory_id, embedding) VALUES (?, ?)'
     ).run(memoryId, serializeVector(embedding));
+    return true;
   } catch {
     // 已存在则更新
     try {
@@ -900,7 +976,8 @@ export function upsertMemoryVec(memoryId: string, embedding: Float32Array): void
       db.prepare(
         'INSERT INTO memory_vec (memory_id, embedding) VALUES (?, ?)'
       ).run(memoryId, serializeVector(embedding));
-    } catch { /* 降级 */ }
+      return true;
+    } catch { return false; }
   }
 }
 
@@ -920,7 +997,7 @@ export function searchMemoryVec(
   queryVec: Float32Array,
   k: number,
 ): Array<{ memoryId: string; distance: number }> {
-  if (!isVecLoaded()) return [];
+  if (!ensureVectorTableDimensions(VECTOR_TABLES.memory_vec, queryVec.length)) return [];
   try {
     const rows = db.prepare(`
       SELECT memory_id, distance
@@ -936,19 +1013,21 @@ export function searchMemoryVec(
 }
 
 /** 向 kb_chunk_vec 表写入块的 embedding 向量。 */
-export function upsertKbChunkVec(chunkId: string, embedding: Float32Array): void {
-  if (!isVecLoaded()) return;
+export function upsertKbChunkVec(chunkId: string, embedding: Float32Array): boolean {
+  if (!ensureVectorTableDimensions(VECTOR_TABLES.kb_chunk_vec, embedding.length)) return false;
   try {
     db.prepare(
       'INSERT INTO kb_chunk_vec (chunk_id, embedding) VALUES (?, ?)'
     ).run(chunkId, serializeVector(embedding));
+    return true;
   } catch {
     try {
       db.prepare('DELETE FROM kb_chunk_vec WHERE chunk_id = ?').run(chunkId);
       db.prepare(
         'INSERT INTO kb_chunk_vec (chunk_id, embedding) VALUES (?, ?)'
       ).run(chunkId, serializeVector(embedding));
-    } catch { /* 降级 */ }
+      return true;
+    } catch { return false; }
   }
 }
 
@@ -972,7 +1051,7 @@ export function searchKbChunkVec(
   queryVec: Float32Array,
   k: number,
 ): Array<{ chunkId: string; distance: number }> {
-  if (!isVecLoaded()) return [];
+  if (!ensureVectorTableDimensions(VECTOR_TABLES.kb_chunk_vec, queryVec.length)) return [];
   try {
     const rows = db.prepare(`
       SELECT chunk_id, distance

@@ -117,7 +117,7 @@ async function backfillEmbeddings(max: number): Promise<number> {
   for (const row of rows) {
     try {
       const vec = await provider.embed(row.content.slice(0, 2000));
-      upsertMemoryVec(row.id, vec);
+      if (!upsertMemoryVec(row.id, vec)) continue;
       db.prepare(
         'UPDATE memories SET embedding_updated_at = ? WHERE id = ?',
       ).run(new Date().toISOString(), row.id);

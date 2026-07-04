@@ -1,5 +1,7 @@
 import type { ToolExecutionPolicy, ToolRiskLevel } from "@aurevoy/shared"
 import { resolve } from "node:path"
+import { bundleReportHtml } from "../tool/tools/bundle-report/bundler.js"
+import { fetchWebContent, searchWeb } from "../tools/web-content.js"
 
 const resolvePath = (workspaceDir: string, segment: unknown): string => {
   const path = typeof segment === "string" ? segment : "."
@@ -185,35 +187,24 @@ async function runTool(name: string, args: Record<string, unknown>, workspaceDir
     }
 
     case "web_search": {
-      const query = encodeURIComponent(String(args.query))
-      const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${query}`, {
-        headers: { "User-Agent": "Aurevoy/1.0" },
-        signal: AbortSignal.timeout(15000),
-      })
-      const html = await resp.text()
-      const results: Array<{ title: string; url: string; snippet: string }> = []
-      const linkRe = /<a[^>]*href="([^"]*)"[^>]*class="result-link"[^>]*>([^<]*)<\/a>/gi
-      let m
-      while ((m = linkRe.exec(html)) !== null) {
-        if (m[1].includes("duckduckgo.com")) continue
-        results.push({ title: m[2].replace(/<[^>]+>/g, ""), url: m[1], snippet: "" })
-      }
-      return results.slice(0, 10).map((r) => `**${r.title}**\n${r.url}\n${r.snippet}`).join("\n\n") || "No results found"
+      const rawQuery = String(args.query ?? "").trim()
+      return searchWeb(rawQuery)
     }
 
     case "web_fetch": {
-      const urlStr = String(args.url)
-      const url = new URL(urlStr)
-      if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]") {
-        throw new Error("Fetching from localhost is not allowed")
-      }
-      const resp = await fetch(urlStr, {
-        headers: { "User-Agent": "Aurevoy/1.0" },
-        signal: AbortSignal.timeout(30000),
-        redirect: "follow",
+      return fetchWebContent(String(args.url))
+    }
+
+    case "bundle_report": {
+      return bundleReportHtml({
+        htmlPath: String(args.htmlPath),
+        outputPath: args.outputPath ? String(args.outputPath) : undefined,
+        componentsPath: args.componentsPath ? String(args.componentsPath) : undefined,
+        workspaceDir,
+        inlineImages: args.inlineImages === undefined ? true : Boolean(args.inlineImages),
+        inlineScripts: args.inlineScripts === undefined ? true : Boolean(args.inlineScripts),
+        inlineStyles: args.inlineStyles === undefined ? true : Boolean(args.inlineStyles),
       })
-      const text = await resp.text()
-      return text.slice(0, 10000)
     }
 
     default:
@@ -331,7 +322,7 @@ export const NEW_TOOLS: NewToolEntry[] = [
   },
   {
     name: "web_search",
-    description: "Search the web using DuckDuckGo. Returns top results with titles and URLs.",
+    description: "Search the web using the configured search provider. Returns structured top results with titles, URLs, and snippets; it does not return raw HTML.",
     inputSchema: {
       type: "object",
       properties: {
@@ -344,7 +335,7 @@ export const NEW_TOOLS: NewToolEntry[] = [
   },
   {
     name: "web_fetch",
-    description: "Fetch content from a URL. Localhost is blocked. Returns text content.",
+    description: "Fetch a public http(s) URL. HTML is extracted into readable text with links; binary content is returned as metadata only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -354,5 +345,24 @@ export const NEW_TOOLS: NewToolEntry[] = [
     },
     riskLevel: "caution" as ToolRiskLevel,
     execute: (args, ctx) => runTool("web_fetch", args, ctx?.workspaceDir ?? process.cwd()),
+  },
+  {
+    name: "bundle_report",
+    description:
+      "Bundle a report HTML draft into a single self-contained file. Inlines the report components.js library, local stylesheets, and base64-encodes local images so the report can be opened without file:// subresource restrictions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        htmlPath: { type: "string", description: "Path to the input HTML draft. Relative to workspace root." },
+        outputPath: { type: "string", description: "Optional output path. Defaults to overwriting htmlPath." },
+        componentsPath: { type: "string", description: "Optional override path to components.js. Defaults to built-in report-design skill library." },
+        inlineImages: { type: "boolean", description: "Base64-encode local images. Default true." },
+        inlineScripts: { type: "boolean", description: "Inline local scripts. Default true." },
+        inlineStyles: { type: "boolean", description: "Inline local stylesheets. Default true." },
+      },
+      required: ["htmlPath"],
+    },
+    riskLevel: "safe" as ToolRiskLevel,
+    execute: (args, ctx) => runTool("bundle_report", args, ctx?.workspaceDir ?? process.cwd()),
   },
 ]

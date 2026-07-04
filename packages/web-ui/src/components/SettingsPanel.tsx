@@ -5,9 +5,10 @@ import type {
   MemoryCategory,
   MemoryEntry,
   RuntimeSettings,
+  TokenUsageReport,
 } from "@aurevoy/shared";
 import { t, type Locale } from "../i18n";
-import { setBaseUrl } from "../api";
+import { getTokenUsageReport, setBaseUrl } from "../api";
 
 interface KbDir {
   id: string;
@@ -53,7 +54,9 @@ interface SettingsPanelProps {
   memories: MemoryEntry[];
   saving: boolean;
   fetchingModels: boolean;
-  fontScale: number;
+  chatFontSize: number;
+  uiFontSize: number;
+  codeFontSize: number;
   workMode: WorkMode;
   themeMode: ThemeMode;
   locale: Locale;
@@ -64,7 +67,9 @@ interface SettingsPanelProps {
   onRefresh: () => void;
   onFetchModels: () => void;
   onSaveEnabledModels: (models: string[]) => void;
-  onFontScaleChange: (scale: number) => void;
+  onChatFontSizeChange: (size: number) => void;
+  onUiFontSizeChange: (size: number) => void;
+  onCodeFontSizeChange: (size: number) => void;
   onWorkModeChange: (mode: WorkMode) => void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onLocaleChange: (locale: Locale) => void;
@@ -75,10 +80,10 @@ interface SettingsPanelProps {
   onConnectionChange?: () => void;
 }
 
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb" | "search";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb" | "search" | "usage";
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
-const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search"];
+const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search", "usage"];
 
 /** 每次调用都会重新计算 t()，确保语言切换后侧边栏标签即时更新 */
 function getSettingsGroups(): Array<{
@@ -105,6 +110,7 @@ function getSettingsGroups(): Array<{
     label: t("settings.group.data"),
     items: [
       { id: "data", label: t("settings.nav.data"), icon: "database" },
+      { id: "usage", label: t("settings.nav.usage"), icon: "usage" },
       { id: "kb", label: t("settings.nav.knowledgeBase"), icon: "kb" },
       { id: "memory", label: t("settings.nav.memory"), icon: "memory" },
     ],
@@ -112,7 +118,7 @@ function getSettingsGroups(): Array<{
 ];
 }
 
-type SettingsIconName = "appearance" | "database" | "kb" | "memory" | "search" | "server" | "sliders" | "spark";
+type SettingsIconName = "appearance" | "database" | "kb" | "memory" | "search" | "server" | "sliders" | "spark" | "usage";
 
 export function SettingsPanel({
   settings,
@@ -121,7 +127,9 @@ export function SettingsPanel({
   memories,
   saving,
   fetchingModels,
-  fontScale,
+  chatFontSize,
+  uiFontSize,
+  codeFontSize,
   workMode,
   themeMode,
   locale,
@@ -132,7 +140,9 @@ export function SettingsPanel({
   onRefresh,
   onFetchModels,
   onSaveEnabledModels,
-  onFontScaleChange,
+  onChatFontSizeChange,
+  onUiFontSizeChange,
+  onCodeFontSizeChange,
   onWorkModeChange,
   onThemeModeChange,
   onLocaleChange,
@@ -144,7 +154,6 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const safeInitialSection = normalizeSettingsSection(initialSection);
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(safeInitialSection);
-  const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<SettingsDraft>(() => makeDraft(settings));
   const [cleanupDays, setCleanupDays] = useState(settings?.cleanupPolicyDays ?? 30);
   useEffect(() => {
@@ -157,23 +166,14 @@ export function SettingsPanel({
   }, [initialSection]);
 
   const groups = getSettingsGroups();
-  const normalized = query.trim().toLowerCase();
-  const visibleGroups = !normalized
-    ? groups
-    : groups
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => item.label.toLowerCase().includes(normalized)),
-      }))
-      .filter((group) => group.items.length > 0);
-
-  const activeTitle = getSettingsGroups().flatMap((group) => group.items).find(
+  const activeTitle = groups.flatMap((group) => group.items).find(
     (item) => item.id === activeSection,
   )?.label;
 
   return (
     <section className="settings-workspace" aria-label={t("settings.pageLabel")}>
       <aside className="sidebar settings-nav" aria-label={t("settings.navLabel")}>
+        <div className="window-drag-strip window-drag-region" data-tauri-drag-region aria-hidden="true" />
         <div className="sidebar-brand settings-nav-brand">
           <img className="sidebar-brand-logo" src="/aurevoy-wordmark.svg" alt="Aurevoy" />
         </div>
@@ -182,15 +182,8 @@ export function SettingsPanel({
           {t("settings.backToApp")}
         </button>
 
-        <input
-          className="settings-search"
-          value={query}
-          placeholder={t("settings.searchPlaceholder")}
-          onChange={(event) => setQuery(event.currentTarget.value)}
-        />
-
         <div className="sidebar-scroll settings-nav-scroll">
-          {visibleGroups.map((group) => (
+          {groups.map((group) => (
             <section key={group.label} className="settings-nav-group">
               <p className="sidebar-section-label">{group.label}</p>
               {group.items.map((item) => (
@@ -235,10 +228,14 @@ export function SettingsPanel({
 
           {activeSection === "appearance" && (
             <AppearanceSettings
-              fontScale={fontScale}
+              chatFontSize={chatFontSize}
+              uiFontSize={uiFontSize}
+              codeFontSize={codeFontSize}
               themeMode={themeMode}
               locale={locale}
-              onFontScaleChange={onFontScaleChange}
+              onChatFontSizeChange={onChatFontSizeChange}
+              onUiFontSizeChange={onUiFontSizeChange}
+              onCodeFontSizeChange={onCodeFontSizeChange}
               onThemeModeChange={onThemeModeChange}
               onLocaleChange={onLocaleChange}
             />
@@ -300,6 +297,10 @@ export function SettingsPanel({
               onDraftChange={setDraft}
               onSave={onSave}
             />
+          )}
+
+          {activeSection === "usage" && (
+            <UsageSettings />
           )}
         </div>
       </main>
@@ -391,6 +392,17 @@ function SettingsNavIcon({ name }: { name: SettingsIconName }) {
       <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
         <path d="M4 3.5h12v13H4z" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" />
         <path d="M7 7.5h6M7 10.5h4" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  if (name === "usage") {
+    return (
+      <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+        <rect x="2.5" y="7" width="3.5" height="9" rx="0.5" fill="currentColor" opacity="0.4" />
+        <rect x="7" y="3" width="3.5" height="13" rx="0.5" fill="currentColor" opacity="0.55" />
+        <rect x="11.5" y="5" width="3.5" height="11" rx="0.5" fill="currentColor" opacity="0.8" />
+        <rect x="16" y="2" width="3.5" height="14" rx="0.5" fill="currentColor" />
       </svg>
     );
   }
@@ -565,20 +577,32 @@ function GeneralSettings({
 }
 
 function AppearanceSettings({
-  fontScale,
+  chatFontSize,
+  uiFontSize,
+  codeFontSize,
   themeMode,
   locale,
-  onFontScaleChange,
+  onChatFontSizeChange,
+  onUiFontSizeChange,
+  onCodeFontSizeChange,
   onThemeModeChange,
   onLocaleChange,
 }: {
-  fontScale: number;
+  chatFontSize: number;
+  uiFontSize: number;
+  codeFontSize: number;
   themeMode: ThemeMode;
   locale: Locale;
-  onFontScaleChange: (scale: number) => void;
+  onChatFontSizeChange: (size: number) => void;
+  onUiFontSizeChange: (size: number) => void;
+  onCodeFontSizeChange: (size: number) => void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onLocaleChange: (locale: Locale) => void;
 }) {
+  const isDefaultChatFontSize = Math.abs(chatFontSize - 14) < 0.001;
+  const isDefaultUiFontSize = Math.abs(uiFontSize - 12.5) < 0.001;
+  const isDefaultCodeFontSize = Math.abs(codeFontSize - 12) < 0.001;
+
   return (
     <SettingsGroup title={t("settings.appearance")}>
       <SettingsSelectRow
@@ -605,24 +629,130 @@ function AppearanceSettings({
         onChange={(value) => onLocaleChange(value as Locale)}
       />
       <SettingsActionRow
-        title={t("settings.fontScaleTitle")}
-        description={t("settings.fontScaleDesc")}
+        title={t("settings.uiFontSizeTitle")}
+        description={t("settings.uiFontSizeDesc")}
         control={
-          <label className="settings-range-control">
-            <input
-              type="range"
-              min={0.86}
-              max={1.08}
-              step={0.01}
-              value={fontScale}
-              onChange={(event) => onFontScaleChange(Number(event.currentTarget.value))}
-            />
-            <strong>{Math.round(fontScale * 100)}%</strong>
-          </label>
+          <FontSizeControl
+            value={uiFontSize}
+            defaultValue={12.5}
+            min={10}
+            max={20}
+            step={0.5}
+            ariaLabel={t("settings.uiFontSizeTitle")}
+            resetDisabled={isDefaultUiFontSize}
+            onChange={onUiFontSizeChange}
+          />
+        }
+      />
+      <SettingsActionRow
+        title={t("settings.chatFontSizeTitle")}
+        description={t("settings.chatFontSizeDesc")}
+        control={
+          <FontSizeControl
+            value={chatFontSize}
+            defaultValue={14}
+            min={11}
+            max={24}
+            step={0.5}
+            ariaLabel={t("settings.chatFontSizeTitle")}
+            resetDisabled={isDefaultChatFontSize}
+            onChange={onChatFontSizeChange}
+          />
+        }
+      />
+      <SettingsActionRow
+        title={t("settings.codeFontSizeTitle")}
+        description={t("settings.codeFontSizeDesc")}
+        control={
+          <FontSizeControl
+            value={codeFontSize}
+            defaultValue={12}
+            min={10}
+            max={18}
+            ariaLabel={t("settings.codeFontSizeTitle")}
+            resetDisabled={isDefaultCodeFontSize}
+            onChange={onCodeFontSizeChange}
+          />
         }
       />
     </SettingsGroup>
   );
+}
+
+function FontSizeControl({
+  value,
+  defaultValue,
+  min,
+  max,
+  step = 1,
+  ariaLabel,
+  resetDisabled,
+  onChange,
+}: {
+  value: number;
+  defaultValue: number;
+  min: number;
+  max: number;
+  step?: number;
+  ariaLabel: string;
+  resetDisabled: boolean;
+  onChange: (size: number) => void;
+}) {
+  const [draft, setDraft] = useState(() => formatFontSizeInput(value));
+
+  useEffect(() => {
+    setDraft(formatFontSizeInput(value));
+  }, [value]);
+
+  function commitValue(rawValue: string): void {
+    setDraft(rawValue);
+    if (rawValue.trim() === "") return;
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) return;
+    onChange(parsed);
+  }
+
+  function restoreValidValue(): void {
+    if (draft.trim() === "") {
+      setDraft(formatFontSizeInput(value));
+      return;
+    }
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(formatFontSizeInput(value));
+    }
+  }
+
+  return (
+    <div className="settings-font-size-control">
+      <div className="settings-font-size-input-wrap">
+        <input
+          className="settings-number-input settings-font-size-input"
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={draft}
+          aria-label={ariaLabel}
+          onChange={(event) => commitValue(event.target.value)}
+          onBlur={restoreValidValue}
+        />
+        <span className="settings-font-size-unit">px</span>
+      </div>
+      <button
+        type="button"
+        className="settings-inline-btn settings-font-size-reset"
+        disabled={resetDisabled}
+        onClick={() => onChange(defaultValue)}
+      >
+        {t("settings.fontSizeReset")}
+      </button>
+    </div>
+  );
+}
+
+function formatFontSizeInput(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
 function ProviderSettings({
@@ -1016,6 +1146,122 @@ function DataSettings({
   );
 }
 
+function UsageSettings() {
+  const [report, setReport] = useState<TokenUsageReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  const reload = () => {
+    setLoading(true);
+    setError(false);
+    getTokenUsageReport()
+      .then(setReport)
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { reload(); }, []);
+
+  const ready = !loading && !error && report && report.available;
+
+  if (loading) {
+    return (
+      <SettingsGroup title={t("settings.usageOverview")}>
+        <div className="usage-loading">
+          <div className="usage-loading-spinner" />
+          <span>{t("settings.fetching")}</span>
+        </div>
+      </SettingsGroup>
+    );
+  }
+
+  if (error || !ready) {
+    return (
+      <SettingsGroup title={t("settings.usageOverview")}>
+        <div className="usage-error">
+          <span>{error ? t("settings.usageFetchFailed") : t("settings.tokenUsageUnavailable")}</span>
+          <button type="button" className="settings-secondary-btn" onClick={reload}>
+            {t("settings.refresh")}
+          </button>
+        </div>
+      </SettingsGroup>
+    );
+  }
+
+  const inputPct = report.totalTokens > 0 ? (report.promptTokens / report.totalTokens) * 100 : 0;
+  const outputPct = report.totalTokens > 0 ? (report.completionTokens / report.totalTokens) * 100 : 0;
+  const cachePct = report.promptTokens > 0 ? (report.cacheReadTokens / report.promptTokens) * 100 : 0;
+
+  return (
+    <>
+      <SettingsGroup title={t("settings.usageOverview")}>
+        <div className="usage-stats-grid">
+          <div className="usage-stat-card">
+            <div className="usage-stat-label">{t("settings.tokenUsageTotal")}</div>
+            <div className="usage-stat-value">{formatTokenCount(report.totalTokens)}</div>
+            <div className="usage-stat-sub">{report.tasks} {t("settings.tokenUsageTasks")}</div>
+          </div>
+          <div className="usage-stat-card">
+            <div className="usage-stat-label">{t("settings.tokenUsagePrompt")}</div>
+            <div className="usage-stat-value usage-stat-input">{formatTokenCount(report.promptTokens)}</div>
+            <div className="usage-stat-sub">{inputPct.toFixed(1)}%</div>
+          </div>
+          <div className="usage-stat-card">
+            <div className="usage-stat-label">{t("settings.tokenUsageCompletion")}</div>
+            <div className="usage-stat-value usage-stat-output">{formatTokenCount(report.completionTokens)}</div>
+            <div className="usage-stat-sub">{outputPct.toFixed(1)}%</div>
+          </div>
+          {report.estimatedCostUsd > 0 && (
+            <div className="usage-stat-card">
+              <div className="usage-stat-label">{t("settings.tokenUsageEstimatedCost")}</div>
+              <div className="usage-stat-value usage-stat-cost">${report.estimatedCostUsd.toFixed(4)}</div>
+              <div className="usage-stat-sub">USD</div>
+            </div>
+          )}
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.usageBreakdown")}>
+        <div className="usage-breakdown-card">
+          <div className="usage-breakdown-header">
+            <span className="usage-breakdown-title">{t("settings.usageInputTokens")}</span>
+            <span className="usage-breakdown-value">{formatTokenCount(report.promptTokens)}</span>
+          </div>
+          <div className="usage-breakdown-desc">{t("settings.usageInputDetail")}</div>
+          
+          {report.cacheReadTokens > 0 && (
+            <>
+              <div className="usage-breakdown-sub">
+                <div className="usage-breakdown-header">
+                  <span className="usage-breakdown-title">{t("settings.usageInputCache")}</span>
+                  <span className="usage-breakdown-value">{formatTokenCount(report.cacheReadTokens)}</span>
+                </div>
+                <div className="usage-breakdown-desc">
+                  {t("settings.usageCacheHitRate")} {cachePct.toFixed(1)}%
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="usage-breakdown-divider" />
+
+          <div className="usage-breakdown-header">
+            <span className="usage-breakdown-title">{t("settings.usageOutputTokens")}</span>
+            <span className="usage-breakdown-value">{formatTokenCount(report.completionTokens)}</span>
+          </div>
+          <div className="usage-breakdown-desc">{t("settings.usageOutputDetail")}</div>
+        </div>
+      </SettingsGroup>
+    </>
+  );
+}
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
 const MEMORY_CATEGORIES: MemoryCategory[] = ["preference", "directory", "model", "habit", "fact", "other"];
 
 function memoryCategoryLabel(category: MemoryCategory): string {
@@ -1227,7 +1473,7 @@ return (
           <ul className="memory-list">
             {dirs.map((dir) => (
               <li key={dir.id} className="memory-item">
-                <code className="memory-content" style={{ fontSize: 13 }}>{dir.dirPath}</code>
+                <code className="memory-content">{dir.dirPath}</code>
                 <div className="memory-item-foot">
                   <span className="memory-source">{dir.recursive ? "recursive" : "non-recursive"}</span>
                   <button type="button" className="memory-link danger" onClick={() => removeDir(dir.id)}>

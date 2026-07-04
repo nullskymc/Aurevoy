@@ -286,7 +286,7 @@ toolRegistry.register({
   },
 });
 
-// 内置基础工具（文件/网络）在 tools/builtins.ts 中注册，由进程入口导入触发。
+// 旧注册表基础工具在 tools/builtins.ts 中注册，由进程入口导入触发。
 // TODO: 在此处接入 MCP server 暴露的工具：
 //   const mcpTools = await connectMcpServer(...);
 //   mcpTools.forEach((t) => toolRegistry.register(t));

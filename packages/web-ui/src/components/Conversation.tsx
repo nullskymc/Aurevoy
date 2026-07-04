@@ -11,14 +11,25 @@ import type {
   TaskStatus,
   ToolRiskLevel,
 } from "@aurevoy/shared";
-import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ImageViewer } from "./ImageViewer";
 import { t } from "../i18n";
 import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData } from "./Timeline";
-import { ThinkingCard } from "./ThinkingTimeline";
 import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
+import {
+  buildFileMenuItems,
+  buildLinkMenuItems,
+  buildTextMenuItems,
+  contextMenuPoint,
+  linkFromEventTarget,
+  type ContextMenuState,
+} from "./contextMenuActions";
+import {
+  buildConversationTurns,
+  collectLiveAssistantToolMessageIds,
+  type ConversationTurn,
+} from "./conversationWorkflow";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
 export interface ToolActivity {
@@ -44,8 +55,6 @@ interface ConversationProps {
   plan: PlanStep[];
   /** 当前正在生成的这一轮的流式文本尾巴（仅运行中有值） */
   output: string;
-  /** 模型思考链流式文本（DeepSeek R1/V3 reasoning_content，仅运行中有值） */
-  reasoning: string;
   busy: boolean;
   /** 当前运行轮次的实时工具活动（来自事件流） */
   liveToolActivity: ToolActivity[];
@@ -80,27 +89,52 @@ interface ToolResultInfo {
   error?: string;
 }
 
+function parseToolResultContent(content: string): ToolResultInfo {
+  let parsed: unknown = content;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    /* 保留原文 */
+  }
+  if (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)) {
+    return {
+      ok: false,
+      error: String((parsed as Record<string, unknown>).error),
+    };
+  }
+  return { ok: true, output: parsed };
+}
+
 /** 扫描消息，建立 toolCallId → 工具结果 的映射 */
 function buildToolResultMap(messages: Message[]): Map<string, ToolResultInfo> {
   const map = new Map<string, ToolResultInfo>();
   for (const message of messages) {
     if (message.role !== "tool" || !message.toolCallId) continue;
-    let parsed: unknown = message.content;
-    try {
-      parsed = JSON.parse(message.content);
-    } catch {
-      /* 保留原文 */
-    }
-    if (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)) {
-      map.set(message.toolCallId, {
-        ok: false,
-        error: String((parsed as Record<string, unknown>).error),
-      });
-    } else {
-      map.set(message.toolCallId, { ok: true, output: parsed });
-    }
+    map.set(message.toolCallId, parseToolResultContent(message.content));
   }
   return map;
+}
+
+function collectAssistantToolCallIds(messages: Message[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const toolCall of message.toolCalls ?? []) ids.add(toolCall.id);
+  }
+  return ids;
+}
+
+function standaloneToolActivityFromMessage(message: Message): ToolActivity {
+  const result = parseToolResultContent(message.content);
+  const shortId = (message.toolCallId ?? message.id).slice(0, 8);
+  return {
+    id: message.toolCallId ?? message.id,
+    name: `tool_result:${shortId}`,
+    args: {},
+    status: result.ok ? "ok" : "error",
+    output: result.output,
+    error: result.error,
+  };
 }
 
 /** 把一条 assistant 消息携带的 toolCalls 派生为工具活动卡片数据 */
@@ -134,7 +168,6 @@ export function Conversation({
   phase,
   plan,
   output,
-  reasoning,
   liveToolActivity,
   hasLiveTail,
   defaultToolDetailsOpen = false,
@@ -148,17 +181,14 @@ export function Conversation({
   onResume,
   liveContentBlocks = [],
 }: ConversationProps) {
+  const platform = usePlatform();
   const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const previousTaskIdRef = useRef<string | null>(null);
   const hasScrolledToTail = useRef(false);
 
   // Context menu state
-  const [ctxMenu, setCtxMenu] = useState<{
-    open: boolean;
-    rect?: DOMRect;
-    items: ContextMenuItem[];
-  }>({ open: false, items: [] });
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   const closeCtxMenu = useCallback(() => {
     setCtxMenu((prev) => ({ ...prev, open: false }));
@@ -166,18 +196,14 @@ export function Conversation({
 
   function handleAgentContextMenu(e: React.MouseEvent, message: Message) {
     e.preventDefault();
-    const items: ContextMenuItem[] = [
-      {
-        type: "item",
-        id: "copy-output",
-        label: t("action.copy"),
-        icon: <CopyIcon />,
-        action: () => navigator.clipboard.writeText(message.content).catch(() => {}),
-      },
-    ];
+    e.stopPropagation();
+    const link = linkFromEventTarget(e.target);
+    const items = link
+      ? buildLinkMenuItems({ url: link.url, label: link.label, platform })
+      : buildTextMenuItems({ text: message.content, copyLabel: t("action.copy") });
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
+      point: contextMenuPoint(e),
       items,
     });
   }
@@ -221,50 +247,29 @@ export function Conversation({
 
   const messages = task.messages;
   const resultMap = buildToolResultMap(messages);
-
-  // 运行时避开最后一条带 toolCalls 的 assistant 消息与 live 尾巴重复
-  const lastAssistantToolCallId = hasLiveTail
-    ? [...messages].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
-    : undefined;
+  const assistantToolCallIds = collectAssistantToolCallIds(messages);
+  const hiddenAssistantIds = collectLiveAssistantToolMessageIds(messages, hasLiveTail);
+  const turns = buildConversationTurns(messages, hiddenAssistantIds, assistantToolCallIds);
 
   return (
     <div className="conversation">
       <div ref={topRef} />
       <div className="conversation-thread">
 
-
-        {messages.map((message) => {
-          if (message.role === "user") {
-            return (
-              <UserBubble
-                key={message.id}
-                content={message.content}
-                messageId={message.id}
-                attachments={message.attachments}
-                onEdit={onUserMessageEdit}
-                onBranch={onBranch}
-              />
-            );
-          }
-          if (message.role === "assistant") {
-            // 运行时跳过最后一条带 toolCalls 的 assistant 消息——live 尾巴已展示它
-            if (message.id === lastAssistantToolCallId) return null;
-            return (
-              <div
-                key={message.id}
-                onContextMenu={(e) => handleAgentContextMenu(e, message)}
-              >
-                <AgentRound
-                  data={buildAgentRoundFromMessage(message, resultMap, task.plan)}
-                  busy={false}
-                  defaultToolDetailsOpen={defaultToolDetailsOpen}
-                />
-              </div>
-            );
-          }
-          if (message.role === "tool") return null;
-          return null;
-        })}
+        {turns.map((turn, index) => (
+          <ConversationTurnView
+            key={turn.id}
+            turn={turn}
+            isLiveTurn={hasLiveTail && index === turns.length - 1}
+            resultMap={resultMap}
+            plan={task.plan}
+            defaultToolDetailsOpen={defaultToolDetailsOpen}
+            onToolDecision={onToolDecision}
+            onAgentContextMenu={handleAgentContextMenu}
+            onUserMessageEdit={onUserMessageEdit}
+            onBranch={onBranch}
+          />
+        ))}
 
         {/* 当前运行轮次的实时尾巴 */}
         {/* 当前运行轮次的实时尾巴 — Timeline 格式 */}
@@ -276,7 +281,6 @@ export function Conversation({
                 plan,
                 liveToolActivity,
                 output,
-                reasoning,
                 phase,
                 contentBlocks: liveContentBlocks,
               })}
@@ -336,11 +340,223 @@ export function Conversation({
       <ContextMenu
         items={ctxMenu.items}
         open={ctxMenu.open}
-        anchorRect={ctxMenu.rect}
+        anchorPoint={ctxMenu.point}
         onClose={closeCtxMenu}
       />
     </div>
   );
+}
+
+function ConversationTurnView({
+  turn,
+  isLiveTurn,
+  resultMap,
+  plan,
+  defaultToolDetailsOpen,
+  onToolDecision,
+  onAgentContextMenu,
+  onUserMessageEdit,
+  onBranch,
+}: {
+  turn: ConversationTurn;
+  isLiveTurn: boolean;
+  resultMap: Map<string, ToolResultInfo>;
+  plan: PlanStep[];
+  defaultToolDetailsOpen: boolean;
+  onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  onAgentContextMenu: (event: React.MouseEvent, message: Message) => void;
+  onUserMessageEdit?: (messageId: string, content: string, mode: RevertMode) => void;
+  onBranch?: (messageId: string) => void;
+}) {
+  const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
+  const attachContentToolCallIds = collectAttachContentToolCallIds(turn.agentMessages);
+  const finalMessage = isLiveTurn ? null : findFinalAssistantMessage(turn.agentMessages);
+  const finalMessages = finalMessage ? [finalMessage] : [];
+  const presentationMessages = assistantMessages.filter(
+    (message) => message.id !== finalMessage?.id && isPresentationAssistantMessage(message),
+  );
+  const presentationMessageIds = new Set(presentationMessages.map((message) => message.id));
+  const workflowMessages = assistantMessages.filter(
+    (message) => message.id !== finalMessage?.id && !isPresentationOnlyAssistantMessage(message),
+  );
+  const standaloneToolMessages = turn.agentMessages.filter(
+    (message) => message.role === "tool" && (!message.toolCallId || !attachContentToolCallIds.has(message.toolCallId)),
+  );
+
+  return (
+    <div className="conversation-turn">
+      {turn.user && (
+        <UserBubble
+          content={turn.user.content}
+          messageId={turn.user.id}
+          attachments={turn.user.attachments}
+          onEdit={onUserMessageEdit}
+          onBranch={onBranch}
+        />
+      )}
+
+      {(finalMessages.length > 0 || presentationMessages.length > 0 || workflowMessages.length > 0 || standaloneToolMessages.length > 0) && (
+        <div className="agent-turn">
+          {(workflowMessages.length > 0 || standaloneToolMessages.length > 0) && (
+            <AgentWorkflowDrawer
+              assistantMessages={workflowMessages}
+              presentationMessageIds={presentationMessageIds}
+              standaloneToolMessages={standaloneToolMessages}
+              resultMap={resultMap}
+              plan={plan}
+              defaultToolDetailsOpen={defaultToolDetailsOpen}
+              onToolDecision={onToolDecision}
+              defaultOpen={isLiveTurn}
+            />
+          )}
+
+          {presentationMessages.map((message) => (
+            <div
+              key={`presentation-${message.id}`}
+              className="agent-final-response"
+              onContextMenu={(event) => onAgentContextMenu(event, message)}
+            >
+              <AgentRound
+                data={buildAgentRoundFromMessage(message, resultMap, plan)}
+                busy={false}
+                defaultToolDetailsOpen={defaultToolDetailsOpen}
+                showWorkflow={false}
+              />
+            </div>
+          ))}
+
+          {finalMessages.map((message) => (
+            <div
+              key={message.id}
+              className="agent-final-response"
+              onContextMenu={(event) => onAgentContextMenu(event, message)}
+            >
+              <AgentRound
+                data={buildAgentRoundFromMessage(message, resultMap, plan)}
+                busy={false}
+                defaultToolDetailsOpen={defaultToolDetailsOpen}
+                showWorkflow={false}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function findFinalAssistantMessage(messages: Message[]): Message | null {
+  const attachContentToolCallIds = collectAttachContentToolCallIds(messages);
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role === "tool") {
+      if (message.toolCallId && attachContentToolCallIds.has(message.toolCallId)) continue;
+      return null;
+    }
+    if (message.role !== "assistant") continue;
+    if ((message.toolCalls?.length ?? 0) === 0) return message;
+    return isPresentationOnlyAssistantMessage(message) ? message : null;
+  }
+  return null;
+}
+
+function isPresentationOnlyAssistantMessage(message: Message): boolean {
+  const toolCalls = message.toolCalls ?? [];
+  return toolCalls.length > 0 && toolCalls.every((toolCall) => toolCall.function.name === "attach_content");
+}
+
+function isPresentationAssistantMessage(message: Message): boolean {
+  return isPresentationOnlyAssistantMessage(message) || (message.contentBlocks?.length ?? 0) > 0;
+}
+
+function collectAttachContentToolCallIds(messages: Message[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const toolCall of message.toolCalls ?? []) {
+      if (toolCall.function.name === "attach_content") ids.add(toolCall.id);
+    }
+  }
+  return ids;
+}
+
+function AgentWorkflowDrawer({
+  assistantMessages,
+  presentationMessageIds,
+  standaloneToolMessages,
+  resultMap,
+  plan,
+  defaultToolDetailsOpen,
+  onToolDecision,
+  defaultOpen = false,
+}: {
+  assistantMessages: Message[];
+  presentationMessageIds: Set<string>;
+  standaloneToolMessages: Message[];
+  resultMap: Map<string, ToolResultInfo>;
+  plan: PlanStep[];
+  defaultToolDetailsOpen: boolean;
+  onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const rounds = assistantMessages.map((message) =>
+    buildAgentRoundFromMessage(stripPresentationBlocksForWorkflow(message, presentationMessageIds), resultMap, plan),
+  );
+  const failed = rounds.some((round) => round.status === "failed") ||
+    standaloneToolMessages.some((message) => !parseToolResultContent(message.content).ok);
+  const summary = "Thought process";
+
+  useEffect(() => {
+    setOpen(defaultOpen);
+  }, [defaultOpen]);
+
+  return (
+    <section className="workflow-drawer" data-open={open} data-status={failed ? "failed" : "completed"}>
+      <button
+        type="button"
+        className="workflow-drawer-toggle"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-label={`${open ? "收起" : "展开"}执行步骤${failed ? "，包含失败步骤" : ""}`}
+      >
+        <span className="workflow-drawer-icon" aria-hidden="true">
+          <WorkflowIcon />
+        </span>
+        <span className="workflow-drawer-count">{summary}</span>
+        <span className="workflow-drawer-caret" data-open={open} aria-hidden="true">
+          <ChevronRightIcon />
+        </span>
+      </button>
+
+      {open && (
+        <div className="workflow-drawer-body">
+          {rounds.map((round) => (
+            <AgentRound
+              key={round.id}
+              data={round}
+              busy={false}
+              defaultToolDetailsOpen={defaultToolDetailsOpen}
+              showWorkflow
+              showOutput
+            />
+          ))}
+          {standaloneToolMessages.length > 0 && (
+            <ToolActivityList
+              items={standaloneToolMessages.map(standaloneToolActivityFromMessage)}
+              defaultDetailsOpen={defaultToolDetailsOpen}
+              onDecision={onToolDecision}
+            />
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function stripPresentationBlocksForWorkflow(message: Message, presentationMessageIds: Set<string>): Message {
+  if (!presentationMessageIds.has(message.id) && !(message.contentBlocks?.length)) return message;
+  return { ...message, contentBlocks: undefined };
 }
 
 function ClarificationCard({
@@ -399,6 +615,13 @@ function ClarificationCard({
 
 
 /** 用户消息气泡：可复制；可编辑，编辑后选择恢复模式再提交。 */
+function formatFileSize(size: number): string {
+  if (!Number.isFinite(size) || size <= 0) return "";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function UserBubble({
   content,
   messageId,
@@ -418,22 +641,13 @@ function UserBubble({
   const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   // User bubble context menu
-  const [ctxMenu, setCtxMenu] = useState<{
-    open: boolean;
-    rect?: DOMRect;
-    items: ContextMenuItem[];
-  }>({ open: false, items: [] });
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   function handleUserBubbleContextMenu(e: React.MouseEvent) {
     e.preventDefault();
+    e.stopPropagation();
     const items: ContextMenuItem[] = [
-      {
-        type: "item",
-        id: "copy",
-        label: t("action.copy"),
-        icon: <CopyIcon />,
-        action: () => navigator.clipboard.writeText(content).catch(() => {}),
-      },
+      ...buildTextMenuItems({ text: content, copyLabel: t("action.copy") }),
       ...(onEdit
         ? [
             {
@@ -462,8 +676,23 @@ function UserBubble({
     ];
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
+      point: contextMenuPoint(e),
       items,
+    });
+  }
+
+  function handleAttachmentContextMenu(e: React.MouseEvent, attachment: MessageAttachment) {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({
+      open: true,
+      point: contextMenuPoint(e),
+      items: buildFileMenuItems({
+        path: attachment.path,
+        name: attachment.name,
+        platform,
+        openLabel: attachment.type === "image" ? "打开图片" : "用默认 App 打开",
+      }),
     });
   }
 
@@ -511,30 +740,63 @@ function UserBubble({
     );
   }
 
-  const imageAttachments = attachments?.filter((a) => a.type === 'image') ?? [];
+  const visibleAttachments = attachments ?? [];
 
   return (
     <div className="user-bubble-row" onContextMenu={handleUserBubbleContextMenu}>
       <div className="user-bubble-col">
         <div className="user-bubble">{content}</div>
-        {imageAttachments.length > 0 && (
-          <div className="user-bubble-images">
-            {imageAttachments.map((att) => {
+        {visibleAttachments.length > 0 && (
+          <div className="user-bubble-attachments">
+            {visibleAttachments.map((att) => {
               const src = (() => {
                 try { return platform.filePathToUrl(att.path); } catch { return null; }
               })();
-              return src ? (
-                <img
+              if (att.type === 'image') {
+                return src ? (
+                  <button
+                    key={att.id}
+                    type="button"
+                    className="user-bubble-attachment is-image"
+                    onClick={() => setViewingImage(att.path)}
+                    onContextMenu={(event) => handleAttachmentContextMenu(event, att)}
+                    title={att.path}
+                  >
+                    <img
+                      className="user-bubble-image"
+                      src={src}
+                      alt={att.name}
+                      loading="lazy"
+                    />
+                    <span className="user-bubble-attachment-name">{att.name}</span>
+                  </button>
+                ) : (
+                  <span
+                    key={att.id}
+                    className="user-bubble-attachment"
+                    title={att.path}
+                    onContextMenu={(event) => handleAttachmentContextMenu(event, att)}
+                  >
+                    <AttachmentFileIcon />
+                    <span className="user-bubble-attachment-copy">
+                      <span className="user-bubble-attachment-name">{att.name}</span>
+                      <span className="user-bubble-attachment-meta">{formatFileSize(att.size)}</span>
+                    </span>
+                  </span>
+                );
+              }
+              return (
+                <span
                   key={att.id}
-                  className="user-bubble-image"
-                  src={src}
-                  alt={att.name}
-                  loading="lazy"
-                  onClick={() => setViewingImage(att.path)}
-                />
-              ) : (
-                <span key={att.id} className="user-bubble-image-placeholder">
-                  📷 {att.name}
+                  className="user-bubble-attachment"
+                  title={att.path}
+                  onContextMenu={(event) => handleAttachmentContextMenu(event, att)}
+                >
+                  <AttachmentFileIcon />
+                  <span className="user-bubble-attachment-copy">
+                    <span className="user-bubble-attachment-name">{att.name}</span>
+                    <span className="user-bubble-attachment-meta">{formatFileSize(att.size)}</span>
+                  </span>
                 </span>
               );
             })}
@@ -564,7 +826,7 @@ function UserBubble({
       <ContextMenu
         items={ctxMenu.items}
         open={ctxMenu.open}
-        anchorRect={ctxMenu.rect}
+        anchorPoint={ctxMenu.point}
         onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
       />
     </div>
@@ -660,28 +922,21 @@ function ForkIcon() {
   );
 }
 
-function DocumentMeta({ icon, label }: { icon: ReactNode; label: string }) {
+function WorkflowIcon() {
   return (
-    <div className="doc-meta">
-      <span className="doc-meta-icon" aria-hidden="true">
-        {icon}
-      </span>
-      <span>{label}</span>
-    </div>
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <circle cx="5" cy="5" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
+      <circle cx="15" cy="5" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
+      <circle cx="10" cy="15" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
+      <path d="M7.25 5h5.5M5 7.25v2.25A5.5 5.5 0 0010 15M15 7.25v2.25A5.5 5.5 0 0110 15" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinecap="round" />
+    </svg>
   );
 }
 
-function AgentIcon() {
+function ChevronRightIcon() {
   return (
-    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-      <path
-        d="M4.2 5.8c0-.9.7-1.6 1.6-1.6h8.4c.9 0 1.6.7 1.6 1.6v5.9c0 .9-.7 1.6-1.6 1.6H8l-3.2 2.5v-2.5c-.5-.2-.8-.8-.8-1.4V5.8z"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        fill="none"
-        strokeLinejoin="round"
-      />
-      <path d="M7.2 8.2h5.6M7.2 10.6h3.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -761,6 +1016,16 @@ function ToolChip({
   );
 }
 
+function AttachmentFileIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <path d="M6 2.75h5.1L15 6.65v10.6H6a2 2 0 01-2-2V4.75a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" />
+      <path d="M11 3v4h4" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" />
+      <path d="M7.25 11h5.5M7.25 14h4" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function toolStatusIcon(status: ToolActivity["status"]): string {
   switch (status) {
     case "ok":
@@ -776,7 +1041,7 @@ function toolStatusIcon(status: ToolActivity["status"]): string {
 }
 
 function getToolKindLabel(name: string): string {
-  return /cmd|command|exec|shell|terminal/i.test(name) ? t("tool.kind.command") : t("tool.kind.tool");
+  return /cmd|command|exec|shell|terminal|bash/i.test(name) ? t("tool.kind.command") : t("tool.kind.tool");
 }
 
 function ToolActivityCard({
@@ -937,282 +1202,6 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function PlanCard({ plan, defaultOpen = true }: { plan: PlanStep[]; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const done = plan.filter((step) => step.status === "completed").length;
-
-  return (
-    <section className="plan-card" aria-label={t("plan.title")}>
-      <button type="button" className="plan-card-head" onClick={() => setOpen((value) => !value)}>
-        <span className="plan-card-title">{t("plan.title")}</span>
-        <span className="plan-card-progress">
-          {done}/{plan.length}
-        </span>
-        <span className="plan-card-caret" data-open={open}>
-          ⌄
-        </span>
-      </button>
-
-      {open && (
-        <ol className="plan-steps">
-          {plan.map((step, index) => (
-            <li key={step.id} className="plan-step" data-status={step.status}>
-              <span className="plan-step-marker">
-                {String(index + 1).padStart(2, "0")}
-              </span>
-              <span className="plan-step-text">{step.description}</span>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
-  );
-}
-
-function PlanApprovalCard({
-  plan,
-  onDecision,
-}: {
-  plan: PlanStep[];
-  onDecision: (approved: boolean) => void;
-}) {
-  const [decided, setDecided] = useState(false);
-
-  function decide(approved: boolean): void {
-    setDecided(true);
-    onDecision(approved);
-  }
-
-  return (
-    <section className="plan-approval-card" aria-label={t("event.planApprovalRequest")}>
-      <div className="plan-approval-head">
-        <strong>{t("event.planApprovalRequest")}</strong>
-        <span>{plan.length} {t("event.unitPlanSteps")}</span>
-      </div>
-      <PlanCard plan={plan} defaultOpen />
-      <div className="plan-approval-actions">
-        <button type="button" disabled={decided} onClick={() => decide(true)}>
-          {t("action.approveOnce")}
-        </button>
-        <button type="button" disabled={decided} onClick={() => decide(false)}>
-          {t("action.reject")}
-        </button>
-      </div>
-    </section>
-  );
-}
-
-interface AgentRunningTimelineProps {
-  busy: boolean;
-  online: boolean | null;
-  phase: TaskPhase | null;
-  status: TaskStatus | null;
-  plan: PlanStep[];
-  output: string;
-  reasoning: string;
-  liveToolActivity: ToolActivity[];
-  onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
-  onPlanDecision: (approved: boolean) => void;
-}
-
-/** 阶段 → 展示信息映射 */
-interface PhaseDisplay {
-  badge: string;
-  icon: ReactNode;
-  label: string;
-  colorClass: string;
-}
-
-function phaseDisplay(phase: TaskPhase | null): PhaseDisplay {
-  switch (phase) {
-    case "initializing":
-      return { badge: "初始化", icon: <PlayIcon />, label: "初始化中", colorClass: "is-init" };
-    case "planning":
-      return { badge: "计划", icon: <ClipboardIcon />, label: "生成执行计划", colorClass: "is-plan" };
-    case "thinking":
-      return { badge: "思考", icon: <BrainIcon className="spin-icon" />, label: "思考中", colorClass: "is-thought" };
-    case "calling_tool":
-      return { badge: "工具", icon: <ToolIcon />, label: "调用工具", colorClass: "is-tool" };
-    case "waiting_approval":
-      return { badge: "确认", icon: <ShieldIcon />, label: "等待审批", colorClass: "is-wait" };
-    case "waiting_clarification":
-      return { badge: "追问", icon: <ChatIcon />, label: "等待回复", colorClass: "is-ask" };
-    case "finalizing":
-      return { badge: "收尾", icon: <CheckIcon />, label: "整理结果", colorClass: "is-done" };
-    case "failed":
-      return { badge: "失败", icon: <ErrorIcon />, label: "任务失败", colorClass: "is-error" };
-    case "cancelled":
-      return { badge: "停止", icon: <StopIcon />, label: "已取消", colorClass: "is-stop" };
-    default:
-      return { badge: "思考", icon: <BrainIcon className="spin-icon" />, label: "思考中", colorClass: "is-thought" };
-  }
-}
-
-export function AgentRunningTimeline({
-  busy,
-  online,
-  phase,
-  status: _status,
-  plan,
-  output,
-  reasoning,
-  liveToolActivity,
-  onToolDecision,
-  onPlanDecision,
-}: AgentRunningTimelineProps) {
-  const [seconds, setSeconds] = useState(0);
-  useEffect(() => {
-    if (!busy) {
-      setSeconds(0);
-      return;
-    }
-    const timer = setInterval(() => {
-      setSeconds((s) => s + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [busy]);
-
-  const display = phaseDisplay(phase);
-  const hasOutput = output.trim().length > 0;
-  const hasReasoning = reasoning.trim().length > 0;
-  const isThinking = phase === "thinking";
-  const showStreamingReasoning = hasReasoning && (isThinking || busy);
-  const showStreamingOutput = hasOutput && (isThinking || busy);
-  const pendingApprovalTools = liveToolActivity.filter((item) => item.status === "awaiting");
-  const awaitingPlanApproval = phase === "waiting_approval" && pendingApprovalTools.length === 0 && plan.some((step) => step.status === "proposed");
-
-  return (
-    <div className="aurevoy-agent-runner-box">
-      {online === false && (
-        <div className="runner-node is-active fade-in-up">
-          <div className="node-dot is-warning">
-            <NetworkIcon />
-          </div>
-          <div className="node-content">
-            <span className="badge-network">NETWORK</span>
-            <span className="meta-text">正在重新连接…</span>
-          </div>
-        </div>
-      )}
-
-      {awaitingPlanApproval ? (
-        <PlanApprovalCard plan={plan} onDecision={onPlanDecision} />
-      ) : !pendingApprovalTools.length && plan.length > 0 && phase !== "planning" && phase !== "initializing" && (
-        <PlanCard plan={plan} defaultOpen={false} />
-      )}
-
-      {liveToolActivity.length > 0 && (
-        <ToolRunSummary items={liveToolActivity} onDecision={onToolDecision} />
-      )}
-
-      {busy && liveToolActivity.length === 0 && (
-        <div className="runner-node is-active fade-in-up">
-          <div className={`node-dot ${isThinking ? "is-loading" : ""} ${display.colorClass}`}>
-            {display.icon}
-          </div>
-          <div className="node-content">
-            <span className={`badge-thought ${display.colorClass}`}>{display.badge}</span>
-            <span className="meta-text">{display.label} · {seconds}s</span>
-          </div>
-        </div>
-      )}
-
-      {/* 思考链（ThinkingCard）— 已禁用打字机效果，保留为将来可配置选项 */}
-      {false && showStreamingReasoning && (
-        <ThinkingCard data={{
-          id: 'live-reasoning',
-          phase: 1,
-          summary: '',
-          fullText: reasoning,
-          defaultOpen: false,
-        }} />
-      )}
-
-      {/* 流式输出文本 — 已禁用打字机效果（无意义），改用 spinner 代表进行中 */}
-      {false && showStreamingOutput && (
-        <article className="doc-block doc-block-agent">
-          <DocumentMeta icon={<AgentIcon />} label="Aurevoy" />
-          <div className="doc-body">
-            <div className="stream-preview">
-              <MarkdownRenderer content={output} />
-              {busy && <span className="stream-caret" aria-hidden="true" />}
-            </div>
-          </div>
-        </article>
-      )}
-
-    </div>
-  );
-}
-
-function ToolRunSummary({
-  items,
-  defaultOpen = false,
-  onDecision,
-}: {
-  items: ToolActivity[];
-  defaultOpen?: boolean;
-  onDecision?: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
-}) {
-  const awaiting = items.filter((item) => item.status === "awaiting");
-  const [open, setOpen] = useState(defaultOpen || awaiting.length > 0);
-  const running = items.filter((item) => item.status === "running").length;
-  const failed = items.filter((item) => item.status === "error").length;
-  const done = items.filter((item) => item.status === "ok").length;
-  const groupedNames = summarizeToolNames(items);
-  const statusText = awaiting.length
-    ? `等待确认 ${awaiting.length}`
-    : running
-      ? `执行中 ${running}`
-      : failed
-        ? `失败 ${failed}`
-        : `完成 ${done}`;
-
-  useEffect(() => {
-    if (awaiting.length > 0) setOpen(true);
-  }, [awaiting.length]);
-
-  return (
-    <section className="tool-run-summary" data-status={awaiting.length ? "awaiting" : running ? "running" : failed ? "error" : "ok"}>
-      <div className="tool-run-head">
-        <span className="tool-run-dot" aria-hidden="true" />
-        <span className="tool-run-title">执行工具</span>
-        <span className="tool-run-names">{groupedNames}</span>
-        <span className="tool-run-status">{statusText}</span>
-        <button type="button" className="tool-run-toggle" onClick={() => setOpen((value) => !value)}>
-          {open ? "收起" : "详情"}
-        </button>
-      </div>
-      {open && (
-        <div className="tool-run-details">
-          {items.map((item) => (
-            <div key={item.id}>
-              <div className="tool-run-detail-row" data-status={item.status}>
-                <span>{item.name}</span>
-                <small>{toolTargetLabel(item)}</small>
-                <em>{toolStatusLabel(item.status)}</em>
-              </div>
-              {item.status === "ok" && item.output != null && (
-                <div className="tool-run-detail-result">
-                  <code>{formatToolResult(item)}</code>
-                </div>
-              )}
-              {item.status === "error" && item.error && (
-                <div className="tool-run-detail-result tool-run-detail-result--error">
-                  <code>{item.error}</code>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-      {onDecision && awaiting.map((item) => (
-        <ApprovalInline key={item.id} item={item} onDecision={onDecision} />
-      ))}
-    </section>
-  );
-}
-
 function ApprovalInline({
   item,
   onDecision,
@@ -1257,7 +1246,7 @@ function ApprovalInline({
 }
 
 function toolApprovalLabel(item: ToolActivity): string {
-  if (item.name !== "execute_command") return item.name;
+  if (item.name !== "execute_command" && item.name !== "bash") return item.name;
   const argsObj = item.args as Record<string, unknown> | null;
   if (!argsObj || typeof argsObj !== "object") return item.name;
   const command = typeof argsObj.command === "string" ? argsObj.command : "";
@@ -1267,157 +1256,12 @@ function toolApprovalLabel(item: ToolActivity): string {
   return truncateCommandLine([command, ...commandArgs].filter(Boolean).join(" ")) || item.name;
 }
 
-function summarizeToolNames(items: ToolActivity[]): string {
-  const counts = new Map<string, number>();
-  for (const item of items) counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
-  const entries = [...counts.entries()];
-  const visible = entries.slice(0, 3).map(([name, count]) => (count > 1 ? `${name} x${count}` : name));
-  const hidden = entries.length - visible.length;
-  return hidden > 0 ? `${visible.join("、")} +${hidden}` : visible.join("、");
-}
-
-function toolStatusLabel(status: ToolActivity["status"]): string {
-  switch (status) {
-    case "awaiting":
-      return "待确认";
-    case "running":
-      return "执行中";
-    case "ok":
-      return "完成";
-    case "error":
-      return "失败";
-  }
-}
-
-function formatToolResult(item: ToolActivity): string {
-  if (item.output == null) return "";
-  if (typeof item.output === "string") return item.output;
-  try {
-    const text = JSON.stringify(item.output, null, 2);
-    return text.length > 2000 ? text.slice(0, 1997) + "..." : text;
-  } catch {
-    return String(item.output);
-  }
-}
-
-function toolTargetLabel(item: ToolActivity): string {
-  const argsObj = item.args as Record<string, unknown> | null;
-  if (!argsObj || typeof argsObj !== "object") return "";
-  if (item.name === "execute_command") return toolApprovalLabel(item);
-  if (item.name === "search_grep") {
-    const pattern = argsObj.pattern;
-    return typeof pattern === "string" ? truncateCommandLine(pattern) : "";
-  }
-  const target =
-    argsObj.TargetFile ??
-    argsObj.AbsolutePath ??
-    argsObj.path ??
-    argsObj.file ??
-    argsObj.filePath ??
-    argsObj.CommandLine ??
-    argsObj.Query;
-  return typeof target === "string" ? truncateCommandLine(getFilename(target) || target) : "";
-}
-
-function getFilename(pathStr: string): string {
-  if (!pathStr) return "";
-  const parts = pathStr.split(/[/\\]/);
-  return parts[parts.length - 1] || pathStr;
-}
-
 function truncateCommandLine(cmd: string): string {
   if (!cmd) return "";
   if (cmd.length > 50) {
     return cmd.slice(0, 47) + "...";
   }
   return cmd;
-}
-
-/* ============ Vector Icons (Premium outline SVGs, no emojis) ============ */
-
-function NetworkIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
-      <path
-        d="M10 3.5l6.5 11.5H3.5L10 3.5z"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="M10 8v3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <circle cx="10" cy="14" r="0.8" fill="currentColor" />
-    </svg>
-  );
-}
-
-function BrainIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
-      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.6" />
-      <circle cx="10" cy="10" r="3" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M10 3v4M10 13v4M3 10h4M13 10h4" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
-
-function StopIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true" fill="none">
-      <rect x="5" y="5" width="10" height="10" rx="1.5" fill="currentColor" />
-    </svg>
-  );
-}
-
-function ToolIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
-      <circle cx="10" cy="10" r="3" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function PlayIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
-      <polygon points="5,2 18,10 5,18" fill="currentColor" />
-    </svg>
-  );
-}
-
-function ClipboardIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
-      <rect x="6" y="2" width="10" height="14" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M4 5h2v11.5A1.5 1.5 0 007.5 18H15" stroke="currentColor" strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-function ShieldIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
-      <path d="M10 2L3 5v5c0 3.5 3 7 7 8 4-1 7-4.5 7-8V5L10 2z" stroke="currentColor" strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-function ChatIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
-      <path d="M3 5h14v9H7l-4 3V5z" stroke="currentColor" strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-function ErrorIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none">
-      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
-      <line x1="7" y1="7" x2="13" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <line x1="13" y1="7" x2="7" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
 }
 
 // Keep references for unused type exports

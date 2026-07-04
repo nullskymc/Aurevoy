@@ -15,13 +15,23 @@ apps/
     index.ts            进程入口
     config.ts           配置
     server.ts           路由层（只做 HTTP/SSE，不写业务）
-    agent/              Agent 循环与事件总线
-    llm/                LLM Provider 抽象与实现
-    tools/              工具与注册表
+    agent/              Agent 循环、事件总线、审批引擎
+    llm/                LLM Provider 抽象与实现（三协议）
+    tool/               新一代 Effect-TS 工具系统（推荐）
+      framework/        工具框架（定义/注册/执行/权限）
+      tools/            领域工具（read/write/edit/grep/...）
+      filesystem/       Effect 文件系统服务
+    tools/              旧工具注册表（兼容过渡）
+    skills/             技能系统
+    memory/             长期记忆（向量检索 + Dreams）
+    knowledge-base/     知识库 RAG（索引 + 语义召回）
+    embedding/          Embedding Provider
     sandbox/            高风险执行器边界（命令/代码执行默认关闭）
     store/              持久化
   scripts/              回归/冒烟脚本
-packages/shared/src/    跨进程类型（契约）
+packages/
+  shared/src/           跨进程类型（契约）
+  web-ui/               独立 React 组件库（Vite 构建）
 ```
 
 - 文件名：`camelCase.ts`（模块）/ `PascalCase.tsx`（React 组件）。
@@ -105,6 +115,31 @@ packages/shared/src/    跨进程类型（契约）
 ## 7. 扩展配方（Cookbook）
 
 ### 新增一个工具
+
+**新框架（推荐）**——使用 Effect-TS `make()` + Schema：
+
+```ts
+// apps/agent/src/tool/tools/myTool/myTool.ts
+import { Schema } from 'effect';
+import { make } from '../../framework/definition.js';
+
+const Input = Schema.Struct({ path: Schema.String, limit: Schema.optional(Schema.Number) });
+const Output = Schema.Union(/* typed output variants */);
+
+export const myTool = make({
+  name: 'my_tool',
+  description: '…',
+  input: Input,
+  output: Output,
+  execute: async (input) => { /* raw logic */ },
+  toModelOutput: (input, output) => [{ type: 'text', text: '…' }],
+});
+```
+
+然后在 `apps/agent/src/tool/builtins.ts` 中注册，或在 `register-new-tools.ts` 中桥接到旧注册表。
+
+**旧框架（兼容）**：
+
 ```ts
 // apps/agent/src/tools/myTool.ts
 import { toolRegistry } from './registry.js';
@@ -149,7 +184,7 @@ npm run regression:m7         # 文件工具、网络安全、schema、计划、
 - **m4**：多轮上下文、上下文压缩、长期记忆 CRUD、Agent 写入记忆、记忆注入/禁用、启动期中断任务恢复扫描。
 - **m5**：运行设置生效、Provider 缓存失效、工作区切换、工具启停影响模型可见工具、MCP 配置校验/状态、数据清理。
 - **m6**：`ask_user` 追问与恢复、追问超时、artifact 草稿/确认/拒绝、预算超限、token usage、`execute_command` 审批后执行、cwd 越界拒绝。
-- **m7**：文件搜索/复制/移动/删除、删除默认禁用与审批、`http_fetch` SSRF/重定向、工具 schema validation、MCP 描述净化、本地风险覆盖、多步计划、checkpoint 恢复。
+- **m7**：文件搜索/复制/移动/删除、删除默认禁用与审批、`web_fetch` SSRF/重定向/HTML 正文提取、工具 schema validation、MCP 描述净化、本地风险覆盖、多步计划、checkpoint 恢复。
 
 ## 8. 提交前检查清单
 

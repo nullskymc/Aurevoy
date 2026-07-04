@@ -2,8 +2,14 @@ import { useState } from "react";
 import type { HealthResponse, Message, Task, TaskArtifact, TaskPhase } from "@aurevoy/shared";
 import { getPhaseLabel } from "./status";
 import { t } from "../i18n";
+import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
-import type { ContextMenuItem } from "./ContextMenu";
+import {
+  buildArtifactMenuItems,
+  buildTextMenuItems,
+  contextMenuPoint,
+  type ContextMenuState,
+} from "./contextMenuActions";
 
 interface InspectorPanelProps {
   open: boolean;
@@ -22,51 +28,31 @@ export function InspectorPanel({
   task,
   onClose,
 }: InspectorPanelProps) {
+  const platform = usePlatform();
   const [expanded, setExpanded] = useState<Set<string>>(EXPANDED_SECTIONS);
   const userMessages = task?.messages.filter((m): m is Message & { role: "user" } => m.role === "user") ?? [];
 
   // Context menu
-  const [ctxMenu, setCtxMenu] = useState<{
-    open: boolean;
-    rect?: DOMRect;
-    items: ContextMenuItem[];
-  }>({ open: false, items: [] });
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   function handleArtifactMiniContextMenu(e: React.MouseEvent, artifact: TaskArtifact) {
     e.preventDefault();
-    const items: ContextMenuItem[] = [
-      {
-        type: "item",
-        id: "copy-name",
-        label: "复制名称",
-        action: () => navigator.clipboard.writeText(artifact.name).catch(() => {}),
-      },
-      ...(artifact.appliedPath
-        ? [
-            {
-              type: "item" as const,
-              id: "copy-path",
-              label: "复制路径",
-              action: () =>
-                navigator.clipboard.writeText(artifact.appliedPath!).catch(() => {}),
-            },
-          ]
-        : []),
-    ];
-    setCtxMenu({ open: true, rect: e.currentTarget.getBoundingClientRect(), items });
+    e.stopPropagation();
+    setCtxMenu({
+      open: true,
+      point: contextMenuPoint(e),
+      items: buildArtifactMenuItems({ artifact, platform }),
+    });
   }
 
   function handleQueryContextMenu(e: React.MouseEvent, msg: Message) {
     e.preventDefault();
-    const items: ContextMenuItem[] = [
-      {
-        type: "item",
-        id: "copy-query",
-        label: "复制查询",
-        action: () => navigator.clipboard.writeText(msg.content).catch(() => {}),
-      },
-    ];
-    setCtxMenu({ open: true, rect: e.currentTarget.getBoundingClientRect(), items });
+    e.stopPropagation();
+    setCtxMenu({
+      open: true,
+      point: contextMenuPoint(e),
+      items: buildTextMenuItems({ text: msg.content, copyLabel: "复制查询" }),
+    });
   }
 
   function toggleSection(id: string): void {
@@ -186,7 +172,7 @@ export function InspectorPanel({
       <ContextMenu
         items={ctxMenu.items}
         open={ctxMenu.open}
-        anchorRect={ctxMenu.rect}
+        anchorPoint={ctxMenu.point}
         onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
       />
     </>
@@ -238,7 +224,14 @@ function formatTokenUsage(task: Task | null): string {
   const usage = task?.tokenUsage;
   if (!usage) return t("inspector.notRecorded");
   if (!usage.available) return t("inspector.unavailable");
-  return `${usage.totalTokens ?? 0} total / ${usage.promptTokens ?? 0} in / ${usage.completionTokens ?? 0} out`;
+  const parts: string[] = [
+    `${usage.totalTokens ?? 0} total`,
+    `${usage.promptTokens ?? 0} in`,
+    `${usage.completionTokens ?? 0} out`,
+  ];
+  if (usage.cacheReadTokens) parts.push(`${usage.cacheReadTokens} cache read`);
+  if (usage.cacheWriteTokens) parts.push(`${usage.cacheWriteTokens} cache write`);
+  return parts.join(" / ");
 }
 
 function formatBudgetUsage(task: Task | null): string {

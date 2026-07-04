@@ -372,7 +372,7 @@ export class AnthropicProvider implements LLMProvider {
         switch (event.type) {
           case 'message_start': {
             if (event.message.usage) {
-              tokenUsage = toTokenUsage(event.message.usage.input_tokens, event.message.usage.output_tokens);
+              tokenUsage = toTokenUsage(event.message.usage.input_tokens, event.message.usage.output_tokens, event.message.usage as Record<string, unknown>);
             }
             break;
           }
@@ -425,7 +425,13 @@ export class AnthropicProvider implements LLMProvider {
           case 'message_delta': {
             finishReason = event.delta.stop_reason;
             if (event.usage) {
-              tokenUsage = toTokenUsage(undefined, event.usage.output_tokens);
+              // 合并而非覆盖：保留 message_start 已设置的 input/cache 字段
+              const prev: TokenUsage = tokenUsage ?? {};
+              tokenUsage = {
+                ...prev,
+                completionTokens: event.usage.output_tokens,
+                totalTokens: (prev.promptTokens ?? 0) + event.usage.output_tokens,
+              };
             }
             break;
           }
@@ -557,12 +563,18 @@ function normalizeAnthropicFinish(reason: string | null, hasToolCalls: boolean):
   return hasToolCalls ? 'tool_calls' : 'stop';
 }
 
-function toTokenUsage(inputTokens?: number, outputTokens?: number): TokenUsage | null {
+function toTokenUsage(inputTokens?: number, outputTokens?: number, usage?: Record<string, unknown>): TokenUsage | null {
   const out: TokenUsage = {};
   if (typeof inputTokens === 'number') out.promptTokens = inputTokens;
   if (typeof outputTokens === 'number') out.completionTokens = outputTokens;
   if (typeof inputTokens === 'number' && typeof outputTokens === 'number') {
     out.totalTokens = inputTokens + outputTokens;
+  }
+  if (usage && typeof usage === 'object') {
+    const cacheRead = usage.cache_read_input_tokens;
+    const cacheWrite = usage.cache_creation_input_tokens;
+    if (typeof cacheRead === 'number') out.cacheReadTokens = cacheRead;
+    if (typeof cacheWrite === 'number') out.cacheWriteTokens = cacheWrite;
   }
   return Object.keys(out).length > 0 ? out : null;
 }

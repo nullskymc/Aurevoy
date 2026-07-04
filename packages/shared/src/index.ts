@@ -199,11 +199,35 @@ export interface AggregatedTokenUsage {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /** 命中 prompt cache 的 token 数。 */
+  cacheReadTokens?: number;
+  /** 写入 prompt cache 的 token 数。 */
+  cacheWriteTokens?: number;
   estimatedCostUsd?: number;
   available: boolean;
   provider?: string;
   model?: string;
   updatedAt?: string;
+}
+
+/** 全库任务 token 使用汇总报告（用于设置页成本管理）。 */
+export interface TokenUsageReport {
+  /** 参与汇总的任务数量。 */
+  tasks: number;
+  /** 是否有任一任务返回过 usage。 */
+  available: boolean;
+  /** 输入 token 总计。 */
+  promptTokens: number;
+  /** 输出 token 总计。 */
+  completionTokens: number;
+  /** token 总计。 */
+  totalTokens: number;
+  /** 命中 prompt cache 的 token 总计。 */
+  cacheReadTokens: number;
+  /** 写入 prompt cache 的 token 总计。 */
+  cacheWriteTokens: number;
+  /** 估算成本（USD）总计。 */
+  estimatedCostUsd: number;
 }
 
 export interface TaskCheckpoint {
@@ -340,6 +364,10 @@ export interface TokenUsage {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /** 命中 prompt cache 的 token 数（OpenAI/Anthropic 部分模型支持）。 */
+  cacheReadTokens?: number;
+  /** 写入 prompt cache 的 token 数（Anthropic 部分模型支持）。 */
+  cacheWriteTokens?: number;
   estimatedCostUsd?: number;
 }
 

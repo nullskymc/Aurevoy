@@ -23,12 +23,20 @@
 | CI/CD | GitHub Actions 跨平台自动构建 | ✅ |
 | Multimodal | 多模态图片/文件拖拽粘贴、视觉模型、图片查看器 | ✅ |
 | Skill Evolution | Git 安装 skill + load_skill 工具加载 | ✅ |
-| Python Runtime | 内置 python-build-standalone 运行时 | ✅ |
-| Line-oriented File Tools | open_file/scroll/search_grep/replace_lines/create_file/append_file | ✅ |
+| Python Runtime | 系统 Python + venv 运行时 | ✅ |
+| Line-oriented File Tools | 行级文件工具统一 | ✅ |
 | Timeline Format | planStepId 关联的 timeline 分组渲染 | ✅ |
 | ThinkingCard | 替 ReasoningBlock，干净的思考过程卡片 | ✅ |
 | Approval 3-way Partition | safe/approved-sequential/needs-approval 三分区 | ✅ |
-| M8 | 知识库、评测、浏览器与发布体验 | 🚧 |
+| Multi-Provider LLM | Anthropic / OpenAI 兼容 / OpenAI Responses v2 | ✅ |
+| Auto Mode | 4 级自动模式 + 安全暂停 + 自动规划 | ✅ |
+| Plan Mode | 自动复杂度检测 + Scout + LLM 规划 | ✅ |
+| Tool Framework | Effect-TS 新一代工具系统（P0-P4） | ✅ |
+| Memory Vectorization | sqlite-vec 向量检索 + Dreams 维护管道 | ✅ |
+| KB RAG | 索引目录管理 + 增量索引 + KNN 语义召回 | ✅ |
+| KB Settings Panel | 前端知识库设置面板 + Embedding 配置 | ✅ |
+| Context Menu | 自定义右键菜单组件 | ✅ |
+| M8 | 评测、浏览器与发布体验 | 🚧 |
 
 ## 验证口径
 
@@ -40,6 +48,7 @@ npm run regression:m4   # 多轮、记忆、恢复
 npm run regression:m5   # 设置、工具管理、数据管理、MCP
 npm run regression:m6   # 追问、产物、预算、token、命令执行
 npm run regression:m7   # 文件工具、网络安全、schema、计划、checkpoint
+npm run regression:m8   # 知识库/RAG、嵌入 provider、混合检索
 ```
 
 ---
@@ -66,7 +75,7 @@ OpenAI 兼容 Provider + ReAct 循环 + 流式 tool_calls + 指数退避重试 +
 
 ### M7 — 工具扩展、安全加固、多步计划、UI 拆分
 文件工具(`search_files`/`copy_file`/`move_file`/`delete_file` + 行级工具集 `open_file`/`scroll`/`search_grep`/`create_file`/`replace_lines`/`append_file`) +
-网络安全(`http_fetch` SSRF 防护 + HTML 清洗) + 工具治理(schema validation + MCP 注入检测) +
+网络安全(`web_fetch` SSRF 防护 + HTML 正文提取) + 工具治理(schema validation + MCP 注入检测) +
 多步计划(LLM 驱动 + checkpoint) + 前端工作台(PlanCard/ClarificationCard/ArtifactCard/BudgetBar)。
 
 ### Rewind / Edit & Regenerate
@@ -82,7 +91,7 @@ P1 侦查+LLM 规划 → P2 3 区并行执行 → P3 工具结果截断 → P4 T
 斜杠命令激活 → `load_skill` 工具加载 + `install_skill` 从 Git 安装。
 
 ### WebSearch — 网页搜索
-`web_search` 工具(DuckDuckGo) + `web-search` 预装 skill。
+`web_search` 工具（可配置 DuckDuckGo Lite / SearXNG / Tavily / Custom JSON）+ `web-search` 预装 skill。
 
 ### CI/CD — 跨平台自动构建
 GitHub Actions 多平台(macOS/Windows/Linux) typecheck + tag 触发 DMG 构建。
@@ -96,7 +105,7 @@ GitHub Actions 多平台(macOS/Windows/Linux) typecheck + tag 触发 DMG 构建�
 
 已完成：
 
-- 设置界面（Provider/Base URL/Model/API Key/工作区/工具开关/MCP servers）
+- 设置界面（Provider/Base URL/Model/API Key/工作区/工具开关/MCP servers/自动模式等级）
 - 设置变更实时影响运行配置
 - 模型列表管理（手动获取 + 勾选启用）
 - 工具管理（启停 + MCP 连接状态）
@@ -105,6 +114,8 @@ GitHub Actions 多平台(macOS/Windows/Linux) typecheck + tag 触发 DMG 构建�
 - 跨平台 CI（macOS + Windows + Linux）
 - macOS 红绿灯与窗口一体化整合
 - i18n（英文默认 + 中文/日文/韩文）
+- KB 设置面板（索引目录管理 + Embedding 配置 + 状态统计）
+- Web 搜索后端可配置（Settings → Web Search → 选择后端）
 
 待完成：
 
@@ -117,8 +128,9 @@ GitHub Actions 多平台(macOS/Windows/Linux) typecheck + tag 触发 DMG 构建�
 
 > 浏览器自动化已通过 browser 预装 skill + Playwright MCP 提供基础能力。
 > 网页搜索已通过 web_search 工具 + web-search 预装 skill 落地。
+> 知识库 RAG（M8.1）已完成索引、召回、向量检索和前端设置面板，仅隐式自动召回待实现。
 
-### M8.1 知识库与 RAG ✅
+### M8.1 知识库与 RAG ✅（隐式召回 🚧）
 
 已引入 `sqlite-vec` 向量扩展 + 混合评分（关键词+向量），支持记忆语义检索和知识库文件索引。
 
@@ -128,10 +140,10 @@ GitHub Actions 多平台(macOS/Windows/Linux) typecheck + tag 触发 DMG 构建�
 - [x] 知识库设置入口（`/api/knowledge-base/dirs` CRUD）
 - [x] 索引状态表（`kb_dirs`/`kb_files`/`kb_chunks` + 变更检测）
 - [x] `index_files` + `recall` 工具（增量索引 + KNN 语义召回）
-- [x] 前端展示来源（MemoryPanel 向量化徽章、KB 结果文件路径+片段）
+- [x] 前端 KB 设置面板（索引目录管理 + Embedding 配置 + 状态统计）
 - [x] 禁用/删除知识库时索引自动清理（级联删除）
+- [x] Embedding 配置可继承 LLM Base URL / API Key（`GET /api/knowledge-base/embedding-config`）
 - [ ] 后端自动隐式 recall（Agent 自动对目标做 KB 检索注入上下文）
-- [ ] 前端 KB 设置面板 UI（当前仅 API 可用）
 
 ### M8.2 Agent 评测
 

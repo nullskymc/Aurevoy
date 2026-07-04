@@ -27,6 +27,7 @@ export interface PlanAgentInput {
   taskId: string;
   goal: string;
   workspaceDir: string;
+  externalPaths?: string[];
   signal: AbortSignal;
 }
 
@@ -47,13 +48,13 @@ export interface PlanAgentOutput {
  * 运行 Plan Agent：侦查 → LLM 生成计划 → 启发式兜底。
  */
 export async function runPlanAgent(input: PlanAgentInput): Promise<PlanAgentOutput> {
-  const { taskId, goal, workspaceDir, signal } = input;
+  const { taskId, goal, workspaceDir, externalPaths, signal } = input;
 
   if (config.agent.llmPlanningEnabled) {
     try {
       taskEvents.publish({ type: 'scout_started', taskId });
 
-      const scoutReport = await runScoutPhase(goal, workspaceDir, signal);
+      const scoutReport = await runScoutPhase(goal, workspaceDir, externalPaths, signal);
 
       if (scoutReport && !signal.aborted) {
         taskEvents.publish({ type: 'scout_report', taskId, report: scoutReport });
@@ -100,11 +101,15 @@ export async function runPlanAgent(input: PlanAgentInput): Promise<PlanAgentOutp
 async function runScoutPhase(
   goal: string,
   workspaceDir: string,
+  externalPaths: string[] | undefined,
   signal: AbortSignal,
 ): Promise<ScoutReport | null> {
   const startedAt = Date.now();
   const maxRounds = config.agent.maxScoutRounds;
   const scoutTools = toolRegistry.list().filter((t) => SCOUT_TOOL_NAMES.has(t.name));
+  const attachmentPathsText = externalPaths?.length
+    ? `\n用户上传附件路径（已授权只读访问）：\n${externalPaths.map((p) => `- ${p}`).join('\n')}\n`
+    : '';
 
   const messages: Message[] = [
     {
@@ -114,8 +119,10 @@ async function runScoutPhase(
         '你是 Aurevoy 的侦查 Agent。你的任务是快速了解工作区的文件结构和关键信息，' +
         '为后续的任务规划提供依据。\n\n' +
         `当前环境：${process.platform} ${process.arch}，工作区：${workspaceDir}\n\n` +
+        attachmentPathsText +
         '约束：\n' +
-        '- 只能使用 list_directory、read_file、search_files 工具\n' +
+        '- 只能使用 list_directory、open_file、scroll、search_grep 工具\n' +
+        '- 用户上传附件路径可只读访问，即使它们不在工作区目录内\n' +
         '- 不要修改任何文件，不要执行命令\n' +
         '- 不要做深入分析——这是快速侦查，不是执行任务\n' +
         '- 当你觉得已经掌握了足够信息来制定计划时，直接输出侦查报告，不再调用工具',
@@ -203,7 +210,7 @@ async function runScoutPhase(
       try {
         const result = await toolRegistry.invokeWithTimeout(
           { id: tc.id, toolName: name, args },
-          { taskId: undefined, workspaceDir, abortSignal: signal },
+          { taskId: undefined, workspaceDir, externalPaths, abortSignal: signal },
           config.agent.toolTimeoutMs,
         );
         messages.push({

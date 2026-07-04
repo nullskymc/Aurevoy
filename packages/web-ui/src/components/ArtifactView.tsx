@@ -2,8 +2,16 @@ import { useEffect, useState } from "react";
 import type { TaskArtifact } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { t } from "../i18n";
+import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
-import type { ContextMenuItem } from "./ContextMenu";
+import {
+  buildArtifactMenuItems,
+  buildLinkMenuItems,
+  buildTextMenuItems,
+  contextMenuPoint,
+  linkFromEventTarget,
+  type ContextMenuState,
+} from "./contextMenuActions";
 
 interface ArtifactViewProps {
   artifacts: TaskArtifact[];
@@ -25,6 +33,7 @@ function artifactIcon(type: TaskArtifact["type"]): string {
 
 /** 产物浏览器：左侧产物列表 + 右侧文档预览，draft 状态可确认/拒绝。 */
 export function ArtifactView({ artifacts, onDecision }: ArtifactViewProps) {
+  const platform = usePlatform();
   const [selectedId, setSelectedId] = useState<string | null>(
     artifacts.length > 0 ? artifacts[0].id : null,
   );
@@ -45,47 +54,31 @@ export function ArtifactView({ artifacts, onDecision }: ArtifactViewProps) {
   const selected = artifacts.find((artifact) => artifact.id === selectedId) ?? null;
 
   // Context menu
-  const [ctxMenu, setCtxMenu] = useState<{
-    open: boolean;
-    rect?: DOMRect;
-    items: ContextMenuItem[];
-  }>({ open: false, items: [] });
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   function handleArtifactContextMenu(
     e: React.MouseEvent,
     artifact: TaskArtifact,
   ) {
     e.preventDefault();
-    const items: ContextMenuItem[] = [
-      {
-        type: "item",
-        id: "copy-name",
-        label: "复制名称",
-        action: () => navigator.clipboard.writeText(artifact.name).catch(() => {}),
-      },
-      ...(artifact.appliedPath
-        ? [
-            {
-              type: "item" as const,
-              id: "copy-path",
-              label: "复制路径",
-              action: () =>
-                navigator.clipboard.writeText(artifact.appliedPath!).catch(() => {}),
-            },
-          ]
-        : []),
-      {
-        type: "item",
-        id: "copy-content",
-        label: "复制内容",
-        action: () =>
-          navigator.clipboard.writeText(artifact.content).catch(() => {}),
-      },
-    ];
+    e.stopPropagation();
     setCtxMenu({
       open: true,
-      rect: e.currentTarget.getBoundingClientRect(),
-      items,
+      point: contextMenuPoint(e),
+      items: buildArtifactMenuItems({ artifact, platform }),
+    });
+  }
+
+  function handleArtifactBodyContextMenu(e: React.MouseEvent, artifact: TaskArtifact) {
+    e.preventDefault();
+    e.stopPropagation();
+    const link = linkFromEventTarget(e.target);
+    setCtxMenu({
+      open: true,
+      point: contextMenuPoint(e),
+      items: link
+        ? buildLinkMenuItems({ url: link.url, label: link.label, platform })
+        : buildTextMenuItems({ text: artifact.content, copyLabel: "复制内容" }),
     });
   }
 
@@ -151,7 +144,7 @@ export function ArtifactView({ artifacts, onDecision }: ArtifactViewProps) {
               </div>
             )}
           </header>
-          <div className="artifact-doc-body">
+          <div className="artifact-doc-body" onContextMenu={(e) => handleArtifactBodyContextMenu(e, selected)}>
             <MarkdownRenderer content={selected.content} />
           </div>
         </article>
@@ -160,7 +153,7 @@ export function ArtifactView({ artifacts, onDecision }: ArtifactViewProps) {
       <ContextMenu
         items={ctxMenu.items}
         open={ctxMenu.open}
-        anchorRect={ctxMenu.rect}
+        anchorPoint={ctxMenu.point}
         onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
       />
     </div>

@@ -400,5 +400,30 @@ function normalizeUsage(usage: OpenAIPayload['usage']): TokenUsage | null {
   if (typeof usage.prompt_tokens === 'number') out.promptTokens = usage.prompt_tokens;
   if (typeof usage.completion_tokens === 'number') out.completionTokens = usage.completion_tokens;
   if (typeof usage.total_tokens === 'number') out.totalTokens = usage.total_tokens;
+  
+  // 尝试多种可能的 cache 字段位置
+  const usageObj = usage as Record<string, unknown>;
+  
+  // OpenAI 标准格式：prompt_tokens_details.cached_tokens
+  const promptDetails = usageObj.prompt_tokens_details as Record<string, unknown> | undefined;
+  if (promptDetails && typeof promptDetails.cached_tokens === 'number') {
+    out.cacheReadTokens = promptDetails.cached_tokens;
+  }
+  
+  // 备选：直接在 usage 下的 cached_tokens 或 cache_read_tokens
+  if (out.cacheReadTokens === undefined) {
+    if (typeof usageObj.cached_tokens === 'number') {
+      out.cacheReadTokens = usageObj.cached_tokens;
+    } else if (typeof usageObj.cache_read_tokens === 'number') {
+      out.cacheReadTokens = usageObj.cache_read_tokens;
+    }
+  }
+  
+  // cache write tokens (较少见，但某些 provider 可能返回)
+  const cacheWrite = usageObj.cache_creation_tokens ?? usageObj.cache_write_tokens;
+  if (typeof cacheWrite === 'number') {
+    out.cacheWriteTokens = cacheWrite;
+  }
+  
   return Object.keys(out).length > 0 ? out : null;
 }

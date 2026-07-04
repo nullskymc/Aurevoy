@@ -56,6 +56,7 @@ import { useProjects } from "./hooks/useProjects";
 import { useSkills } from "./hooks/useSkills";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
+import { collectLiveAssistantToolMessageIds } from "./components/conversationWorkflow";
 import { ArtifactView } from "./components/ArtifactView";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
@@ -68,21 +69,25 @@ import "./App.css";
 
 type MainView = "chat" | "search" | "skills" | "settings";
 type ContentMode = "conversation" | "artifacts";
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory";
+type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb" | "search" | "usage";
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
 
-const MIN_SIDEBAR_WIDTH = 220;
-const MAX_SIDEBAR_WIDTH = 380;
+const MIN_SIDEBAR_WIDTH = 260;
+const MAX_SIDEBAR_WIDTH = 420;
 const MIN_INSPECTOR_WIDTH = 300;
 const MAX_INSPECTOR_WIDTH = 520;
-const MIN_FONT_SCALE = 0.86;
-const MAX_FONT_SCALE = 1.08;
+const DEFAULT_CHAT_FONT_SIZE = 14;
+const DEFAULT_UI_FONT_SIZE = 12.5;
+const DEFAULT_CODE_FONT_SIZE = 12;
+const CHAT_FONT_SIZE_KEY = "aurevoy.chatFontSizePx.v2";
+const UI_FONT_SIZE_KEY = "aurevoy.uiFontSizePx.v2";
+const CODE_FONT_SIZE_KEY = "aurevoy.codeFontSizePx.v2";
 const TOOL_DETAILS_OPEN_KEY = "aurevoy.defaultToolDetailsOpen";
 const THEME_MODE_KEY = "aurevoy.themeMode";
 const LOCALE_KEY = "aurevoy.locale";
 const WORK_MODE_KEY = "aurevoy.workMode";
-const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory"];
+const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search", "usage"];
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -194,7 +199,7 @@ function mergeById<T extends { id: string }>(items: T[], next: T): T[] {
 function App() {
   const platform = usePlatform();
   useEffect(() => {
-    platform.setupWindowDrag?.(".topbar");
+    platform.setupWindowDrag?.(".window-drag-region");
   }, [platform]);
   const [activeView, setActiveView] = useState<MainView>("chat");
   const [contentMode, setContentMode] = useState<ContentMode>("conversation");
@@ -206,13 +211,19 @@ function App() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() =>
-    readStoredNumber("aurevoy.sidebarWidth", 280, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
+    readStoredNumber("aurevoy.sidebarWidth", 330, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
   );
   const [inspectorWidth, setInspectorWidth] = useState(() =>
     readStoredNumber("aurevoy.inspectorWidth", 340, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH),
   );
-  const [fontScale, setFontScale] = useState(() =>
-    readStoredNumber("aurevoy.fontScale", 0.94, MIN_FONT_SCALE, MAX_FONT_SCALE),
+  const [chatFontSize, setChatFontSize] = useState(() =>
+    readStoredNumber(CHAT_FONT_SIZE_KEY, DEFAULT_CHAT_FONT_SIZE, 11, 24),
+  );
+  const [uiFontSize, setUiFontSize] = useState(() =>
+    readStoredNumber(UI_FONT_SIZE_KEY, DEFAULT_UI_FONT_SIZE, 10, 20),
+  );
+  const [codeFontSize, setCodeFontSize] = useState(() =>
+    readStoredNumber(CODE_FONT_SIZE_KEY, DEFAULT_CODE_FONT_SIZE, 10, 18),
   );
   const [defaultToolDetailsOpen, setDefaultToolDetailsOpen] = useState(() =>
     readStoredBoolean(TOOL_DETAILS_OPEN_KEY, false),
@@ -262,8 +273,8 @@ function App() {
     patchCurrentTask,
     updateTaskList,
   } = useTaskState();
-  const [reasoning, setReasoning] = useState("");
   const previousPhaseRef = useRef<TaskPhase | null>(null);
+  const nextOutputFreshRef = useRef(false);
   const { closeStream, openStream } = useSSEStream();
   const liveActivitySyncRafRef = useRef<number | null>(null);
 
@@ -287,8 +298,8 @@ function App() {
     liveActivityRef.current.clear();
     setLiveToolActivity([]);
     setOutput("");
-    setReasoning("");
     setLiveContentBlocks([]);
+    nextOutputFreshRef.current = false;
   }, []);
 
   // 组件卸载时取消待处理的 live activity 同步，防止 setState 已卸载组件。
@@ -343,8 +354,16 @@ function App() {
   }, [inspectorWidth]);
 
   useEffect(() => {
-    window.localStorage.setItem("aurevoy.fontScale", String(fontScale));
-  }, [fontScale]);
+    window.localStorage.setItem(CHAT_FONT_SIZE_KEY, String(chatFontSize));
+  }, [chatFontSize]);
+
+  useEffect(() => {
+    window.localStorage.setItem(UI_FONT_SIZE_KEY, String(uiFontSize));
+  }, [uiFontSize]);
+
+  useEffect(() => {
+    window.localStorage.setItem(CODE_FONT_SIZE_KEY, String(codeFontSize));
+  }, [codeFontSize]);
 
   useEffect(() => {
     window.localStorage.setItem(TOOL_DETAILS_OPEN_KEY, String(defaultToolDetailsOpen));
@@ -573,11 +592,8 @@ function App() {
     switch (event.type) {
       case "task_created":
         setCurrentTask(event.task);
-        setStatus(event.task.status);
-        setPhase(event.task.phase);
         setPlan(event.task.plan);
         setOutput("");
-        setReasoning("");
         setTraces([]);
         updateTaskList(event.task);
         break;
@@ -588,13 +604,14 @@ function App() {
       case "phase":
         setPhase(event.phase);
         patchCurrentTask({ phase: event.phase });
-        // 进入新一轮思考时清空 live 状态
         if (event.phase !== previousPhaseRef.current) {
+          const prevPhase = previousPhaseRef.current;
           previousPhaseRef.current = event.phase;
           if (event.phase === "thinking") {
+            if (prevPhase === "calling_tool") {
+              nextOutputFreshRef.current = true;
+            }
             setLiveContentBlocks([]);
-            setOutput("");
-            setReasoning("");
           }
         }
         break;
@@ -616,39 +633,35 @@ function App() {
         });
         break;
       case "token":
-        // 保留字符累积以防 history 回看需要完整文本
-        setOutput((previous) => previous + event.delta);
-        break;
-      case "reasoning":
-        setReasoning((previous) => previous + event.delta);
+        if (nextOutputFreshRef.current) {
+          setOutput(event.delta);
+          nextOutputFreshRef.current = false;
+        } else {
+          setOutput((previous) => previous + event.delta);
+        }
         break;
       case "message": {
-        // 工具已转为历史消息 → 从 live map 移除（避免与历史区重复渲染）
         const isAssistant = event.message.role === "assistant";
         const hasToolCalls = (event.message.toolCalls?.length ?? 0) > 0;
-        if (isAssistant) {
-          for (const tc of event.message.toolCalls ?? []) {
-            liveActivityRef.current.remove(tc.id);
-          }
-        }
         // 最终回复（不带 toolCalls 的 assistant message）已进历史区，
         // 清空流式累积，避免 live tail 与历史区双写同一段内容。
         if (isAssistant && !hasToolCalls) {
           setOutput("");
-          setReasoning("");
         }
         setCurrentTask((previous) => {
           const previousMessages = previous?.messages ?? [];
-          const hasMessage = previousMessages.some((message) => message.id === event.message.id);
-          const messages = hasMessage
-            ? previousMessages
-            : [...previousMessages, event.message];
           if (!previous) return previous;
+          const messageIndex = previousMessages.findIndex((message) => message.id === event.message.id);
+          const messages = messageIndex >= 0
+            ? previousMessages.map((message) =>
+                message.id === event.message.id ? { ...message, ...event.message } : message,
+              )
+            : [...previousMessages, event.message];
           const nextTask = { ...previous, messages };
           updateTaskList(nextTask);
           return nextTask;
         });
-        // 清理后同步 live 状态（RAF 批处理合并同一帧内的多次更新）
+        // 同步 live 状态（RAF 批处理合并同一帧内的多次更新）
         scheduleLiveActivitySync();
         break;
       }
@@ -833,7 +846,6 @@ function App() {
         }
         break;
       case "done":
-        // 同步清除 output/reasoning，配合 setBusy(false) 在同一帧使 hasLiveTail 变为 false
         clearLiveState();
         setStatus(event.status);
         setPhase(
@@ -1351,8 +1363,16 @@ function App() {
       .catch((err) => setNotice(`${t("notice.deleteMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
 
-  function handleFontScaleChange(nextScale: number): void {
-    setFontScale(clamp(nextScale, MIN_FONT_SCALE, MAX_FONT_SCALE));
+  function handleChatFontSizeChange(nextSize: number): void {
+    setChatFontSize(clamp(nextSize, 11, 24));
+  }
+
+  function handleUiFontSizeChange(nextSize: number): void {
+    setUiFontSize(clamp(nextSize, 10, 20));
+  }
+
+  function handleCodeFontSizeChange(nextSize: number): void {
+    setCodeFontSize(clamp(nextSize, 10, 18));
   }
 
   async function handleImportProject(): Promise<void> {
@@ -1449,16 +1469,12 @@ function App() {
       });
     }
   }
-  const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0 || reasoning.trim().length > 0;
-  // 只有当有实际 live 内容（流式文本/推理/工具活动/审批）时才隐藏历史中最后一条 assistant，
-  // 避免在轮次切换间隙（output/reasoning 已清空但新 streaming 尚未开始）时历史和 live 双空。
-  const hasLiveContent = derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0 || reasoning.trim().length > 0;
-  const hiddenAssistantId = hasLiveContent
-    ? [...(currentTask?.messages ?? [])].reverse().find((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0)?.id
-    : undefined;
+  const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0;
+  const hasLiveContent = derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0;
+  const hiddenAssistantIds = collectLiveAssistantToolMessageIds(currentTask?.messages ?? [], hasLiveContent);
   const renderedCallIds = new Set<string>();
   for (const message of currentTask?.messages ?? []) {
-    if (message.role === 'assistant' && message.id !== hiddenAssistantId) {
+    if (message.role === 'assistant' && !hiddenAssistantIds.has(message.id)) {
       for (const call of message.toolCalls ?? []) renderedCallIds.add(call.id);
     }
   }
@@ -1466,7 +1482,9 @@ function App() {
   const shellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
     "--inspector-width": `${inspectorWidth}px`,
-    "--font-scale": fontScale,
+    "--ui-font-size": `${uiFontSize}px`,
+    "--chat-font-size": `${chatFontSize}px`,
+    "--code-font-size": `${codeFontSize}px`,
   } as CSSProperties;
   const isChatView = activeView === "chat";
 
@@ -1504,7 +1522,7 @@ function App() {
       />
 
       <main className="main">
-        <header className="topbar" data-tauri-drag-region>
+        <header className="topbar window-drag-region" data-tauri-drag-region>
           <div className="topbar-left-tools">
             <button
               type="button"
@@ -1612,7 +1630,9 @@ function App() {
             memories={memories}
             saving={settingsSaving}
             fetchingModels={fetchingModels}
-            fontScale={fontScale}
+            chatFontSize={chatFontSize}
+            uiFontSize={uiFontSize}
+            codeFontSize={codeFontSize}
             workMode={workMode}
             themeMode={themeMode}
             locale={locale}
@@ -1623,7 +1643,9 @@ function App() {
             onRefresh={refreshSettings}
             onFetchModels={handleFetchModels}
             onSaveEnabledModels={handleSaveEnabledModels}
-            onFontScaleChange={handleFontScaleChange}
+            onChatFontSizeChange={handleChatFontSizeChange}
+            onUiFontSizeChange={handleUiFontSizeChange}
+            onCodeFontSizeChange={handleCodeFontSizeChange}
             onWorkModeChange={handleWorkModeChange}
             onThemeModeChange={setThemeMode}
             onLocaleChange={setLocaleState}
@@ -1650,7 +1672,6 @@ function App() {
                 phase={phase}
                 plan={plan}
                 output={output}
-                reasoning={reasoning}
                 busy={busy}
                 liveToolActivity={displayedLiveActivity}
                 liveContentBlocks={liveContentBlocks}
@@ -1844,7 +1865,7 @@ function SearchPage({
             <button key={task.id} type="button" className="page-list-row" onClick={() => onSelectTask(task)}>
               <span className="page-list-title">{task.goal}</span>
               <span className="page-list-meta">
-                {task.status} · {new Date(task.updatedAt).toLocaleString("zh-CN")}
+                {getStatusLabel(task.status)} · {new Date(task.updatedAt).toLocaleString("zh-CN")}
               </span>
             </button>
           ))

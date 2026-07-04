@@ -44,6 +44,7 @@ import type {
   TaskArtifactContentResponse,
   TaskArtifactListResponse,
   TaskTraceListResponse,
+  TokenUsageReport,
   UpdateProjectRequest,
   UpdateTaskArtifactRequest,
   UpdateRuntimeSettingsRequest,
@@ -105,7 +106,7 @@ export async function buildServer(externalLogger?: Logger) {
   app.get('/api/health', async (): Promise<HealthResponse> => {
     return {
       status: 'ok',
-      version: '0.5.9-dev',
+      version: '0.5.11',
       uptimeMs: Date.now() - startedAt,
       provider: getProviderName(),
       contextCharBudget: config.agent.contextCharBudget,
@@ -248,6 +249,38 @@ export async function buildServer(externalLogger?: Logger) {
         memories: memoryStore.count(),
         projects: projectStore.count(),
       },
+    };
+  });
+
+  app.get('/api/data/token-usage', async (): Promise<TokenUsageReport> => {
+    const tasks = taskStore.list();
+    let available = false;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let totalTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    let estimatedCostUsd = 0;
+    for (const task of tasks) {
+      const usage = task.tokenUsage;
+      if (!usage || !usage.available) continue;
+      available = true;
+      promptTokens += usage.promptTokens ?? 0;
+      completionTokens += usage.completionTokens ?? 0;
+      totalTokens += usage.totalTokens ?? 0;
+      cacheReadTokens += usage.cacheReadTokens ?? 0;
+      cacheWriteTokens += usage.cacheWriteTokens ?? 0;
+      estimatedCostUsd += usage.estimatedCostUsd ?? 0;
+    }
+    return {
+      tasks: tasks.length,
+      available,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      estimatedCostUsd,
     };
   });
 
@@ -726,7 +759,7 @@ export async function buildServer(externalLogger?: Logger) {
       'plan_approval_request', 'plan_approval_resolved',
       'clarification_request', 'clarification_resolved',
       'approval_request',
-      'tool_result', 'message',
+      'tool_call', 'tool_result', 'message',
     ]);
 
     const send = (event: AgentEvent) => {

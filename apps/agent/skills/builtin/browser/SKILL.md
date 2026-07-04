@@ -1,7 +1,7 @@
 ---
 name: browser
 description: 浏览器自动化——打开网页、截图、获取 DOM 摘要、抓取控制台错误。需要配置 Playwright MCP Server。当用户需要查看页面渲染效果、操作 JS 动态页面、模拟用户交互、截图或调试前端错误时使用此技能。
-allowed-tools: http_fetch web_search read_file
+allowed-tools: web_fetch web_search read open_file
 compatibility: Requires Playwright MCP Server configured via AUREVOY_MCP_SERVERS_JSON
 metadata:
   version: "1.0"
@@ -35,18 +35,18 @@ metadata:
 
 ### 何时使用浏览器
 - 需要查看页面实际渲染效果时
-- 需要抓取 JavaScript 动态渲染的内容（`http_fetch` 只能获取静态 HTML）
+- 需要抓取 JavaScript 动态渲染的内容（`web_fetch` 只能获取静态 HTML/文本）
 - 需要模拟用户操作（登录、搜索、提交表单）
 - 需要调试前端错误
 - 需要截图作为产物交付
 
 ### 何时不用浏览器
-- 仅获取静态 HTML 内容 → 用 `http_fetch`（更快更轻量）
+- 仅获取静态页面正文 → 用 `web_fetch`（更快更轻量）
 - 仅搜索信息 → 用 `web_search`
 - 仅读取本地文件 → 用 `read_file`
 
 ### 操作原则
-1. **先轻后重**：优先用 `http_fetch` 获取内容，确认需要 JS 渲染再用浏览器
+1. **先轻后重**：优先用 `web_fetch` 获取内容，确认需要 JS 渲染再用浏览器
 2. **快速收窄**：打开页面后先看 DOM 摘要定位关键元素，再精确交互
 3. **保存证据**：重要页面状态用截图保存为 artifact
 4. **处理错误**：检查控制台输出中的错误信息
