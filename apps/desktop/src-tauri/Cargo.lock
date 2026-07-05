@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.5.12"
+version = "0.5.13-dev"
 dependencies = [
  "base64 0.22.1",
  "mime_guess",

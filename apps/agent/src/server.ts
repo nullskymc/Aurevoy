@@ -106,7 +106,7 @@ export async function buildServer(externalLogger?: Logger) {
   app.get('/api/health', async (): Promise<HealthResponse> => {
     return {
       status: 'ok',
-      version: '0.5.12',
+      version: '0.5.13-dev',
       uptimeMs: Date.now() - startedAt,
       provider: getProviderName(),
       contextCharBudget: config.agent.contextCharBudget,
