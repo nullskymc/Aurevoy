@@ -14,7 +14,7 @@ import { getProviderName } from '../llm/provider.js';
 import { config } from '../config.js';
 
 export const DEFAULT_TASK_BUDGET: Required<TaskBudget> = {
-  maxIterations: 20,
+  maxIterations: 40,
   maxToolCalls: 80,
   maxWallTimeMs: 10 * 60 * 1000,
   maxOutputBytes: 1024 * 1024,

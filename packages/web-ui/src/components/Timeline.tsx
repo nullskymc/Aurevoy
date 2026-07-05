@@ -304,15 +304,26 @@ export function buildAgentRoundFromMessage(
 
   // 有 named group 时：按 task.plan 顺序遍历，填充步骤
   if (groupsByPlanStepId.size > 0) {
+    const renderedPlanStepIds = new Set<string>();
     for (const ps of planSteps) {
       const stepsInGroup = groupsByPlanStepId.get(ps.id) ?? [];
       if (stepsInGroup.length === 0) continue;
+      renderedPlanStepIds.add(ps.id);
       planStepGroups.push({
         planStepId: ps.id,
         description: ps.description,
         status: ps.status === "completed" ? "completed"
           : ps.status === "failed" ? "failed"
           : "completed",
+        steps: stepsInGroup,
+      });
+    }
+    for (const [planStepId, stepsInGroup] of groupsByPlanStepId) {
+      if (renderedPlanStepIds.has(planStepId)) continue;
+      planStepGroups.push({
+        planStepId,
+        description: "执行工具",
+        status: stepsInGroup.some((step) => step.status === "failed") ? "failed" : "completed",
         steps: stepsInGroup,
       });
     }
@@ -394,9 +405,11 @@ export function buildLiveAgentRoundData(params: {
   const isActivePhase = phase === "thinking" || phase === "planning" || phase === "initializing";
 
   if (stepsByPlanStepId.size > 0) {
+    const renderedPlanStepIds = new Set<string>();
     for (const ps of plan) {
       const stepsInGroup = stepsByPlanStepId.get(ps.id) ?? [];
       if (stepsInGroup.length === 0 && !unnamedSteps.length) continue;
+      renderedPlanStepIds.add(ps.id);
       planStepGroups.push({
         planStepId: ps.id,
         description: ps.description,
@@ -404,6 +417,18 @@ export function buildLiveAgentRoundData(params: {
           : ps.status === "failed" ? "failed"
           : isFailed ? "failed"
           : "running",
+        steps: stepsInGroup,
+      });
+    }
+    for (const [planStepId, stepsInGroup] of stepsByPlanStepId) {
+      if (renderedPlanStepIds.has(planStepId)) continue;
+      planStepGroups.push({
+        planStepId,
+        description: "执行工具",
+        status: isFailed ? "failed"
+          : stepsInGroup.some((step) => step.status === "failed") ? "failed"
+          : stepsInGroup.some((step) => step.status === "running" || step.status === "pending") ? "running"
+          : "completed",
         steps: stepsInGroup,
       });
     }
@@ -533,13 +558,15 @@ function AgentRoundSummary({ summary, status, stepCount }: {
 function TimelineStepNode({
   step,
   defaultOpen,
+  autoOpenRunning = true,
   onAutoCollapse,
 }: {
   step: TimelineStepData;
   defaultOpen?: boolean;
+  autoOpenRunning?: boolean;
   onAutoCollapse?: () => void;
 }) {
-  const [open, setOpen] = useState(defaultOpen ?? step.status === "running");
+  const [open, setOpen] = useState(defaultOpen ?? (autoOpenRunning && step.status === "running"));
   const prevStatusRef = useRef(step.status);
 
   // Context menu
@@ -614,7 +641,7 @@ function TimelineStepNode({
   useEffect(() => {
     const prev = prevStatusRef.current;
     prevStatusRef.current = step.status;
-    if (step.status === "running") {
+    if (autoOpenRunning && step.status === "running") {
       setOpen(true);
     } else if (prev === "running" && (step.status === "success" || step.status === "failed")) {
       // 刚完成：短暂停留后折叠（成功）或保持展开（失败）
@@ -627,7 +654,7 @@ function TimelineStepNode({
       }
       // 失败保持展开
     }
-  }, [step.status]);
+  }, [autoOpenRunning, step.status]);
 
   const hasDetails = step.logs != null || step.error != null || step.output != null || (step.status === "running" && step.progress != null);
   const searchPreview = buildSearchPreview(step);
@@ -825,12 +852,14 @@ function PlanStepGroup({
   group,
   isLast,
   defaultOpen,
+  autoOpenRunningTools = true,
   onStepAutoCollapse,
 }: {
   group: PlanStepGroupData;
   index: number;
   isLast: boolean;
   defaultOpen?: boolean;
+  autoOpenRunningTools?: boolean;
   onStepAutoCollapse?: () => void;
 }) {
   const runningCount = group.steps.filter((s) => s.status === "running").length;
@@ -868,6 +897,7 @@ function PlanStepGroup({
               key={step.id}
               step={step}
               defaultOpen={defaultOpen}
+              autoOpenRunning={autoOpenRunningTools}
               onAutoCollapse={onStepAutoCollapse}
             />
           ))}
@@ -1051,6 +1081,30 @@ export function AgentRound({
   const containerRef = useRef<HTMLDivElement>(null);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
   const shouldShowWorkflow = showWorkflow && (data.planStepGroups.length > 0 || busy);
+  const autoOpenRunningTools = !busy;
+  const outputNode = showOutput && data.markdownOutput ? (
+    <article className="timeline-output">
+      <div className="doc-meta">
+        <span className="doc-meta-icon">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+            <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.2" />
+            <path d="M5 8l2 2 4-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span>Aurevoy</span>
+      </div>
+      <div className="doc-body" style={{ paddingLeft: 0 }}>
+        <MarkdownRenderer content={data.markdownOutput} />
+      </div>
+    </article>
+  ) : null;
+  const contentBlocksNode = showOutput && data.contentBlocks && data.contentBlocks.length > 0 ? (
+    <div className="content-blocks">
+      {data.contentBlocks.map((block) => (
+        <ContentBlockView key={block.id} block={block} />
+      ))}
+    </div>
+  ) : null;
 
   return (
     <div
@@ -1058,6 +1112,10 @@ export function AgentRound({
       className={`timeline-agent-round ${busy ? "is-live" : ""} ${data.status === "failed" ? "is-failed" : ""}`}
       data-status={data.status}
     >
+      {/* 同一轮里模型正文先于工具调用产生，展示顺序也保持正文在前、工具过程在后。 */}
+      {outputNode}
+      {contentBlocksNode}
+
       {shouldShowWorkflow && (
         <>
           {/* Summary 行 */}
@@ -1076,7 +1134,8 @@ export function AgentRound({
                   group={group}
                   index={i}
                   isLast={i === data.planStepGroups.length - 1}
-                  defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
+                  defaultOpen={busy ? false : defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
+                  autoOpenRunningTools={autoOpenRunningTools}
                 />
               ))
             ) : (
@@ -1088,33 +1147,6 @@ export function AgentRound({
             )}
           </div>
         </>
-      )}
-
-      {/* 流式输出文本 — 流式阶段仅显示加载占位（禁打字机效果），本轮结束时渲染完整 markdown */}
-      {showOutput && data.markdownOutput && (
-        <article className="timeline-output">
-          <div className="doc-meta">
-            <span className="doc-meta-icon">
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
-                <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M5 8l2 2 4-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </span>
-            <span>Aurevoy</span>
-          </div>
-          <div className="doc-body" style={{ paddingLeft: 0 }}>
-            <MarkdownRenderer content={data.markdownOutput} />
-          </div>
-        </article>
-      )}
-
-      {/* Agent 附加的富内容块（文件引用/图片/超链接） */}
-      {showOutput && data.contentBlocks && data.contentBlocks.length > 0 && (
-        <div className="content-blocks">
-          {data.contentBlocks.map((block) => (
-            <ContentBlockView key={block.id} block={block} />
-          ))}
-        </div>
       )}
     </div>
   );

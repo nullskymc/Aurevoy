@@ -67,6 +67,22 @@ export function setBaseUrl(url: string): void {
   }
 }
 
+async function throwApiError(res: Response, fallback: string): Promise<never> {
+  let detail = "";
+  try {
+    const body = (await res.json()) as { error?: unknown; message?: unknown };
+    const raw = body.error ?? body.message;
+    if (typeof raw === "string") detail = raw;
+  } catch {
+    try {
+      detail = await res.text();
+    } catch {
+      detail = "";
+    }
+  }
+  throw new Error(detail ? `${fallback}: ${detail}` : `${fallback}: ${res.status}`);
+}
+
 export async function checkHealth(): Promise<HealthResponse> {
   const res = await fetch(`${BASE_URL}/api/health`);
   if (!res.ok) throw new Error(`health check failed: ${res.status}`);
@@ -83,7 +99,7 @@ export async function createTask(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ goal, projectId, attachments }),
   });
-  if (!res.ok) throw new Error(`create task failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, "create task failed");
   return res.json();
 }
 
@@ -96,13 +112,13 @@ export async function listTasks(): Promise<Task[]> {
 /** 恢复已暂停的 auto mode */
 export async function resumeAutoMode(taskId: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/auto-mode-resume`, { method: 'POST' });
-  if (!res.ok) throw new Error(`resume auto mode failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, "resume auto mode failed");
 }
 
 /** 读取单个任务的完整快照（含工具结果等持久化消息） */
 export async function getTask(taskId: string): Promise<Task> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}`);
-  if (!res.ok) throw new Error(`get task failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, "get task failed");
   return res.json();
 }
 
@@ -117,7 +133,7 @@ export async function continueTask(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, attachments }),
   });
-  if (!res.ok) throw new Error(`continue task failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, "continue task failed");
   return res.json();
 }
 
@@ -126,7 +142,7 @@ export async function resumeTask(taskId: string): Promise<ResumeTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/resume`, {
     method: 'POST',
   });
-  if (!res.ok) throw new Error(`resume task failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, "resume task failed");
   return res.json();
 }
 
@@ -194,7 +210,7 @@ export async function listTaskTraces(taskId: string): Promise<TaskTraceEntry[]> 
 /** 请求后端取消一个进行中的任务（中断其 LLM 流） */
 export async function cancelTask(taskId: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/cancel`, { method: 'POST' });
-  if (!res.ok) throw new Error(`cancel task failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, "cancel task failed");
 }
 
 /** 删除任务及其关联数据（轨迹、事件等） */
@@ -215,7 +231,7 @@ export async function approveToolCall(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ callId, approved, sessionApprove }),
   });
-  if (!res.ok) throw new Error(`approve tool call failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, "approve tool call failed");
 }
 
 export async function answerClarification(
@@ -228,7 +244,7 @@ export async function answerClarification(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ answer }),
   });
-  if (!res.ok) throw new Error(`answer clarification failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, "answer clarification failed");
   return res.json();
 }
 
@@ -497,7 +513,7 @@ export async function approvePlan(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ approved, reason }),
   });
-  if (!res.ok) throw new Error(`plan approval failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res, "plan approval failed");
 }
 
 /**

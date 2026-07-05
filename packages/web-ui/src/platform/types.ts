@@ -44,6 +44,7 @@ export interface PlatformAdapter {
 
   /** 确保 Agent 引擎在运行（桌面壳进程管理） */
   ensureAgentRunning?(): Promise<{
+    baseUrl?: string;
     running: boolean;
     error?: string | null;
     message?: string;

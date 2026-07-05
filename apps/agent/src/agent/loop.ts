@@ -299,7 +299,7 @@ export function prepareTaskForResume(task: Task): Task {
   const now = new Date().toISOString();
   const previousStatus = task.status;
   const previousPhase = task.phase;
-  const patchedToolResults = patchDanglingToolResults(task.messages);
+  const patchedToolResults = patchDanglingToolResults(task.messages).length;
   const lastCheckpoint = task.checkpoints?.at(-1);
   task.status = 'pending';
   task.phase = 'initializing';
@@ -632,6 +632,11 @@ export function addUserTurn(
   content: string,
   attachments?: MessageAttachment[],
 ): Message {
+  const patchedToolResults = patchDanglingToolResults(task.messages);
+  for (const patched of patchedToolResults) {
+    taskEvents.publish({ type: 'message', taskId: task.id, message: patched });
+  }
+
   // Skill: 解析斜杠命令前缀
   const parsed = parseSlashCommand(content);
   let messageContent = content;
@@ -658,7 +663,7 @@ export function addUserTurn(
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
     summary: '收到后续输入，继续任务',
-    data: { message: messageContent },
+    data: { message: messageContent, patchedToolResults: patchedToolResults.length },
   });
   return userMsg;
 }
@@ -1084,6 +1089,19 @@ export async function runTask(task: Task): Promise<void> {
     taskStore.save(task);
   };
 
+  const patchedToolResults = patchDanglingToolResults(task.messages);
+  if (patchedToolResults.length > 0) {
+    saveFull();
+    for (const patched of patchedToolResults) {
+      taskEvents.publish({ type: 'message', taskId: task.id, message: patched });
+    }
+    writeTrace(task.id, 'phase', 'initializing', {
+      ok: true,
+      summary: `进入 Agent 循环前补齐 ${patchedToolResults.length} 条悬空工具结果`,
+      data: { patchedToolResults: patchedToolResults.length },
+    });
+  }
+
   let activeStepIndex = task.plan.findIndex((step) => step.status === 'running');
   if (activeStepIndex < 0) activeStepIndex = 0;
 
@@ -1425,6 +1443,8 @@ export async function runTask(task: Task): Promise<void> {
             tokenUsage = undefined;
             toolCalls = [];
             oversizedToolCall = null as typeof oversizedToolCall;
+            const announcedStreamingToolCallIds = new Set<string>();
+            let announcedStreamingToolPhase = false;
             const stream = getProvider().stream(requestMessages, {
               tools: toolDescriptors.length > 0 ? toolDescriptors : undefined,
               toolChoice: 'auto',
@@ -1443,8 +1463,24 @@ export async function runTask(task: Task): Promise<void> {
               }
               if (chunk.toolCallsSnapshot) {
                 for (const tc of chunk.toolCallsSnapshot) {
-                  // 流式阶段不发布 tool_call 事件（避免阶段仍是 thinking 时前端提前渲染工具卡片）
-                  // tool_call 事件延后到 phase 切换为 calling_tool 后统一发布
+                  if (tc.id && tc.function.name && !announcedStreamingToolCallIds.has(tc.id)) {
+                    if (!announcedStreamingToolPhase) {
+                      setRuntimePhase('calling_tool', '准备调用工具', 'running');
+                      announcedStreamingToolPhase = true;
+                    }
+                    announcedStreamingToolCallIds.add(tc.id);
+                    // 参数仍在流式拼接时先发占位工具事件；完整参数会在预校验后用同一 call id 覆盖。
+                    taskEvents.publish({
+                      type: 'tool_call',
+                      taskId: task.id,
+                      call: {
+                        id: tc.id,
+                        toolName: tc.function.name,
+                        args: parseToolArgsOrEmpty(tc.function.arguments),
+                        planStepId: task.plan[activeStepIndex]?.id,
+                      },
+                    });
+                  }
                   if (tc.function.arguments.length > MAX_TOOL_ARG_STREAM_CHARS) {
                     oversizedToolCall = { id: tc.id, name: tc.function.name, argChars: tc.function.arguments.length };
                   }
@@ -1987,16 +2023,24 @@ export async function runTask(task: Task): Promise<void> {
     task.status = 'failed';
     task.phase = 'failed';
     updateStep('任务失败', 'failed');
-    saveFull();
     const message = err instanceof Error ? err.message : String(err);
+    const patchedToolResults = patchDanglingToolResults(task.messages);
+    const failureMessage = makeFailureMessage(message, classifyError(err));
+    task.messages.push(failureMessage);
+    saveFull();
+    for (const patched of patchedToolResults) {
+      taskEvents.publish({ type: 'message', taskId: task.id, message: patched });
+    }
     writeTrace(task.id, 'error', 'failed', {
       ok: false,
       errorCategory: classifyError(err),
       errorMessage: message,
       summary: '任务失败',
+      data: { patchedToolResults: patchedToolResults.length },
     });
     taskEvents.publish({ type: 'status', taskId: task.id, status: 'failed' });
     taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'failed', detail: message });
+    taskEvents.publish({ type: 'message', taskId: task.id, message: failureMessage });
     taskEvents.publish({ type: 'error', taskId: task.id, message });
     taskEvents.publish({ type: 'done', taskId: task.id, status: 'failed' });
   } finally {
@@ -2255,6 +2299,18 @@ function makeAssistantWithToolCalls(
   return msg;
 }
 
+function parseToolArgsOrEmpty(argumentsJson: string): Record<string, unknown> {
+  if (!argumentsJson) return {};
+  try {
+    const parsed = JSON.parse(argumentsJson);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function makeToolResult(toolCallId: string, payload: unknown): Message {
   return {
     id: randomUUID(),
@@ -2265,8 +2321,18 @@ function makeToolResult(toolCallId: string, payload: unknown): Message {
   };
 }
 
-function patchDanglingToolResults(messages: Message[]): number {
-  let patched = 0;
+function makeFailureMessage(message: string, category: TaskErrorCategory): Message {
+  return {
+    id: randomUUID(),
+    role: 'assistant',
+    content: '',
+    failure: { message, category },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function patchDanglingToolResults(messages: Message[]): Message[] {
+  const patched: Message[] = [];
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
     if (message.role !== 'assistant' || !message.toolCalls?.length) continue;
@@ -2288,7 +2354,7 @@ function patchDanglingToolResults(messages: Message[]): number {
       }),
     );
     messages.splice(insertAt, 0, ...results);
-    patched += results.length;
+    patched.push(...results);
     i = insertAt + results.length - 1;
   }
   return patched;
