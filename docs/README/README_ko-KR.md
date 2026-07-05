@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../apps/desktop/public/aurevoy-wordmark.svg" width="320" alt="Aurevoy" />
+  <img src="../../apps/desktop/public/aurevoy-wordmark.svg" width="320" alt="Aurevoy" />
 </p>
 
 # Aurevoy
@@ -122,7 +122,7 @@ npm run typecheck    # 타입 검사
 npm run build        # 프로덕션 빌드
 ```
 
-자세한 내용은 [AGENTS.md](../AGENTS.md) 및 [docs/](docs/)를 참조하세요.
+자세한 내용은 [AGENTS.md](../../AGENTS.md) 및 [docs/](../)를 참조하세요.
 
 ---
 
@@ -136,7 +136,7 @@ npm run build        # 프로덕션 빌드
 | 도구 확장 | 내장 도구 + MCP 프로토콜 (외부 도구 서버 연결) |
 | Skill 시스템 | 슬래시 명령으로 활성화, 사용자 정의 스킬 지원 |
 
-자세한 내용은 [docs/ARCHITECTURE.md](ARCHITECTURE.md)를 참조하세요.
+자세한 내용은 [docs/ARCHITECTURE.md](../ARCHITECTURE.md)를 참조하세요.
 
 ---
 
@@ -152,7 +152,7 @@ npm run build        # 프로덕션 빌드
 - Skill 시스템 (슬래시 명령, 사용자 정의 스킬)
 - macOS 네이티브 데스크톱 앱
 
-다음 예정: 지식 베이스 / RAG, Agent 평가 프레임워크, 릴리스 완성도 향상. 자세한 내용은 [ROADMAP](ROADMAP.md)을 참조하세요.
+다음 예정: 지식 베이스 / RAG, Agent 평가 프레임워크, 릴리스 완성도 향상. 자세한 내용은 [ROADMAP](../ROADMAP.md)을 참조하세요.
 
 ---
 

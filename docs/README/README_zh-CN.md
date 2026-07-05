@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../apps/desktop/public/aurevoy-wordmark.svg" width="320" alt="Aurevoy" />
+  <img src="../../apps/desktop/public/aurevoy-wordmark.svg" width="320" alt="Aurevoy" />
 </p>
 
 # Aurevoy
@@ -123,7 +123,7 @@ npm run typecheck    # 类型检查
 npm run build        # 构建
 ```
 
-更多细节见 [AGENTS.md](../AGENTS.md) 和 [docs/](docs/)。
+更多细节见 [AGENTS.md](../../AGENTS.md) 和 [docs/](../)。
 
 ---
 
@@ -137,7 +137,7 @@ npm run build        # 构建
 | 工具扩展 | 内置工具 + MCP 协议（可接外部工具服务器） |
 | Skill 系统 | 斜杠命令激活专业能力，支持自定义 |
 
-详见 [docs/ARCHITECTURE.md](ARCHITECTURE.md)。
+详见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md)。
 
 ---
 
@@ -153,7 +153,7 @@ npm run build        # 构建
 - Skill 系统（斜杠命令、自定义技能）
 - macOS 原生桌面应用
 
-接下来：知识库/RAG、Agent 评测体系、发布体验优化。详见 [ROADMAP](ROADMAP.md)。
+接下来：知识库/RAG、Agent 评测体系、发布体验优化。详见 [ROADMAP](../ROADMAP.md)。
 
 ---
 
