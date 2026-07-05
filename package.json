@@ -1,6 +1,6 @@
 {
   "name": "aurevoy",
-  "version": "0.5.11",
+  "version": "0.5.12",
   "private": true,
   "description": "Aurevoy \u2014 \u8ba9\u6bcf\u4e2a\u4eba\u90fd\u62e5\u6709\u5c5e\u4e8e\u81ea\u5df1\u7684 AI Agent\u3002\u901a\u7528\u4e2a\u4eba AI Agent \u684c\u9762\u4ea7\u54c1\u3002",
   "workspaces": [
