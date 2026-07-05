@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../apps/desktop/public/aurevoy-wordmark.svg" width="320" alt="Aurevoy" />
+  <img src="../../apps/desktop/public/aurevoy-wordmark.svg" width="320" alt="Aurevoy" />
 </p>
 
 # Aurevoy
@@ -122,7 +122,7 @@ npm run typecheck    # 型チェック
 npm run build        # プロダクションビルド
 ```
 
-詳細は [AGENTS.md](../AGENTS.md) と [docs/](docs/) を参照してください。
+詳細は [AGENTS.md](../../AGENTS.md) と [docs/](../) を参照してください。
 
 ---
 
@@ -136,7 +136,7 @@ npm run build        # プロダクションビルド
 | ツール拡張 | 内蔵ツール + MCP プロトコル (外部ツールサーバー接続) |
 | スキルシステム | スラッシュコマンドでアクティブ化、カスタムスキル対応 |
 
-詳細は [docs/ARCHITECTURE.md](ARCHITECTURE.md) を参照してください。
+詳細は [docs/ARCHITECTURE.md](../ARCHITECTURE.md) を参照してください。
 
 ---
 
@@ -152,7 +152,7 @@ npm run build        # プロダクションビルド
 - スキルシステム (スラッシュコマンド、カスタムスキル)
 - macOS ネイティブデスクトップアプリ
 
-次回予定: ナレッジベース/RAG、Agent 評価フレームワーク、リリース品質の向上。詳細は [ROADMAP](ROADMAP.md) を参照してください。
+次回予定: ナレッジベース/RAG、Agent 評価フレームワーク、リリース品質の向上。詳細は [ROADMAP](../ROADMAP.md) を参照してください。
 
 ---
 

@@ -737,7 +737,12 @@ export async function buildServer(externalLogger?: Logger) {
       'X-Accel-Buffering': 'no',
     });
 
-    let heartbeat: ReturnType<typeof setInterval>;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let unsubscribe = () => {};
+    let replayingSnapshot = true;
+    let streamClosed = false;
+    const bufferedLiveEvents: AgentEvent[] = [];
+    const snapshotMessageIds = new Set<string>();
 
     // ---- SSE 批量写入（cork + coalescing） ----
     let sseBuf: string[] = [];
@@ -763,12 +768,14 @@ export async function buildServer(externalLogger?: Logger) {
     ]);
 
     const send = (event: AgentEvent) => {
+      if (streamClosed) return;
       const line = `data: ${JSON.stringify(event)}\n\n`;
 
       if (event.type === 'done' || event.type === 'task_deleted') {
+        streamClosed = true;
         if (sseBuf.length > 0) sseFlush();
         reply.raw.write(line);
-        clearInterval(heartbeat);
+        if (heartbeat) clearInterval(heartbeat);
         unsubscribe();
         taskEvents.cleanup(id);
         reply.raw.end();
@@ -785,46 +792,68 @@ export async function buildServer(externalLogger?: Logger) {
       }
     };
 
-    // 先补发数据库快照，保证 UI 可恢复。
-    // 注意：快照必须在订阅实时事件之前完整发送，避免快照事件与实时事件在 SSE 缓冲区中交叠。
-    send({ type: 'task_created', taskId: task.id, task });
-    send({ type: 'status', taskId: task.id, status: task.status });
+    const sendSnapshot = (event: AgentEvent) => {
+      if (event.type === 'message') snapshotMessageIds.add(event.message.id);
+      send(event);
+    };
+
+    const sendLive = (event: AgentEvent) => {
+      if (replayingSnapshot) {
+        bufferedLiveEvents.push(event);
+        return;
+      }
+      send(event);
+    };
+
+    // 先订阅实时事件，再补发数据库快照。
+    // 这样快照期间发生的新 message/tool_result 不会落入“快照之后、订阅之前”的空窗。
+    // 快照发送期间的实时事件先缓冲，等快照完整发完后再按原顺序补发。
+    unsubscribe = taskEvents.subscribe(id, sendLive);
+
+    sendSnapshot({ type: 'task_created', taskId: task.id, task });
+    sendSnapshot({ type: 'status', taskId: task.id, status: task.status });
     if (task.phase) {
-      send({ type: 'phase', taskId: task.id, phase: task.phase, detail: '数据库快照' });
+      sendSnapshot({ type: 'phase', taskId: task.id, phase: task.phase, detail: '数据库快照' });
     }
     if (task.plan.length > 0) {
-      send({ type: 'plan', taskId: task.id, plan: task.plan });
+      sendSnapshot({ type: 'plan', taskId: task.id, plan: task.plan });
     }
     if (task.budgetUsage) {
-      send({ type: 'budget_usage', taskId: task.id, usage: task.budgetUsage, budget: task.budget });
+      sendSnapshot({ type: 'budget_usage', taskId: task.id, usage: task.budgetUsage, budget: task.budget });
     }
     if (task.tokenUsage) {
-      send({ type: 'token_usage', taskId: task.id, usage: task.tokenUsage });
+      sendSnapshot({ type: 'token_usage', taskId: task.id, usage: task.tokenUsage });
     }
     for (const message of task.messages) {
-      send({ type: 'message', taskId: task.id, message });
+      sendSnapshot({ type: 'message', taskId: task.id, message });
     }
     for (const artifact of task.artifacts ?? []) {
-      send({ type: 'artifact_updated', taskId: task.id, artifact });
+      sendSnapshot({ type: 'artifact_updated', taskId: task.id, artifact });
     }
     for (const checkpoint of task.checkpoints ?? []) {
-      send({ type: 'checkpoint_created', taskId: task.id, checkpoint });
+      sendSnapshot({ type: 'checkpoint_created', taskId: task.id, checkpoint });
     }
     for (const clarification of task.clarifications ?? []) {
-      send(
+      sendSnapshot(
         clarification.status === 'pending'
           ? { type: 'clarification_request', taskId: task.id, clarification }
           : { type: 'clarification_resolved', taskId: task.id, clarification },
       );
     }
     if (['completed', 'failed', 'cancelled'].includes(task.status)) {
-      send({ type: 'done', taskId: task.id, status: task.status });
+      replayingSnapshot = false;
+      sendSnapshot({ type: 'done', taskId: task.id, status: task.status });
       return;
     }
 
-    // 快照发送完毕，排空缓冲区后再订阅实时事件，避免快照与实时事件交叠
+    // 快照发送完毕，排空缓冲区后再补发快照期间捕获的实时事件。
     if (sseBuf.length > 0) sseFlush();
-    const unsubscribe = taskEvents.subscribe(id, send);
+    replayingSnapshot = false;
+    for (const event of bufferedLiveEvents.splice(0)) {
+      if (event.type === 'message' && snapshotMessageIds.has(event.message.id)) continue;
+      send(event);
+      if (streamClosed) return;
+    }
 
     // 心跳，避免连接被中间层断开
     heartbeat = setInterval(() => {
@@ -834,7 +863,7 @@ export async function buildServer(externalLogger?: Logger) {
     }, 15000);
 
     req.raw.on('close', () => {
-      clearInterval(heartbeat);
+      if (heartbeat) clearInterval(heartbeat);
       if (sseTimer) clearImmediate(sseTimer);
       sseBuf = [];
       unsubscribe();

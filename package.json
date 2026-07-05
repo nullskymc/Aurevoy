@@ -19,6 +19,7 @@
     "regression:m5": "node scripts/m5-regression.mjs",
     "regression:m6": "node scripts/m6-regression.mjs",
     "regression:m7": "node scripts/m7-regression.mjs",
+    "regression:long-loop": "npm run build:shared && npm run build:web-ui && npm run build -w @aurevoy/agent && vitest run packages/web-ui/src/components/conversationWorkflow.test.ts packages/web-ui/src/components/Timeline.test.tsx && node scripts/long-loop-regression.mjs",
     "typecheck": "npm run build:shared && npm run build:web-ui && npm run typecheck --workspaces --if-present",
     "clean": "rimraf \"packages/*/dist\" \"apps/*/dist\"",
     "build:web-ui": "npm run build -w @aurevoy/web-ui",

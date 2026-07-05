@@ -13,7 +13,7 @@ import type {
 } from "@aurevoy/shared";
 import { ImageViewer } from "./ImageViewer";
 import { t } from "../i18n";
-import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData } from "./Timeline";
+import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData, type AgentRoundData } from "./Timeline";
 import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -26,8 +26,7 @@ import {
   type ContextMenuState,
 } from "./contextMenuActions";
 import {
-  buildConversationTurns,
-  collectLiveAssistantToolMessageIds,
+  buildConversationViewModel,
   type ConversationTurn,
 } from "./conversationWorkflow";
 
@@ -115,15 +114,6 @@ function buildToolResultMap(messages: Message[]): Map<string, ToolResultInfo> {
   return map;
 }
 
-function collectAssistantToolCallIds(messages: Message[]): Set<string> {
-  const ids = new Set<string>();
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const toolCall of message.toolCalls ?? []) ids.add(toolCall.id);
-  }
-  return ids;
-}
-
 function standaloneToolActivityFromMessage(message: Message): ToolActivity {
   const result = parseToolResultContent(message.content);
   const shortId = (message.toolCallId ?? message.id).slice(0, 8);
@@ -208,26 +198,32 @@ export function Conversation({
     });
   }
 
+  const liveScrollSignature = liveToolActivity
+    .map((item) => `${item.id}:${item.status}:${item.progress?.message ?? ""}:${item.progress?.percent ?? ""}`)
+    .join("|");
+
   // 只在实时运行/等待审批时跟随最新输出；历史回看保持自然阅读位置。
   useEffect(() => {
-    if (liveToolActivity.length > 0) {
-      // 有工具活动时，首次出现时滚动一次即可，避免 liveToolActivity 新引用反复触发
-      if (!hasScrolledToTail.current) {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-        hasScrolledToTail.current = true;
-      }
-    } else if (phase === "waiting_approval") {
-      // 审批态下且 liveToolActivity 仍为空，仍滚动到尾部
-      if (!hasScrolledToTail.current) {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-        hasScrolledToTail.current = true;
-      }
-    } else if (hasLiveTail) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    } else {
+    const shouldTrackTail = hasLiveTail || phase === "waiting_approval";
+    if (!shouldTrackTail) {
       hasScrolledToTail.current = false;
+      return;
     }
-  }, [hasLiveTail, output, phase, plan, status, liveToolActivity.length, task.messages.length]);
+
+    const scrollParent = bottomRef.current?.closest(".main-scroll");
+    const distanceFromBottom = scrollParent instanceof HTMLElement
+      ? scrollParent.scrollHeight - scrollParent.scrollTop - scrollParent.clientHeight
+      : 0;
+    const userIsNearTail = distanceFromBottom < 180;
+    const shouldFollow = !hasScrolledToTail.current || userIsNearTail;
+
+    hasScrolledToTail.current = true;
+    if (shouldFollow) {
+      window.requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+      });
+    }
+  }, [hasLiveTail, output, phase, plan, status, liveScrollSignature, task.messages.length, liveContentBlocks.length]);
 
   // 切换历史任务时回到任务顶部，避免复用滚动容器导致摘要被顶栏遮住。
   useEffect(() => {
@@ -247,20 +243,32 @@ export function Conversation({
 
   const messages = task.messages;
   const resultMap = buildToolResultMap(messages);
-  const assistantToolCallIds = collectAssistantToolCallIds(messages);
-  const hiddenAssistantIds = collectLiveAssistantToolMessageIds(messages, hasLiveTail);
-  const turns = buildConversationTurns(messages, hiddenAssistantIds, assistantToolCallIds);
+  const viewModel = buildConversationViewModel({
+    messages,
+    liveToolActivity,
+    output,
+    hasLiveTail,
+  });
+  const liveRoundData = hasLiveTail
+    ? buildLiveAgentRoundData({
+        plan,
+        liveToolActivity: viewModel.liveToolActivity,
+        output: viewModel.liveOutput,
+        phase,
+        contentBlocks: liveContentBlocks,
+      })
+    : null;
 
   return (
     <div className="conversation">
       <div ref={topRef} />
       <div className="conversation-thread">
 
-        {turns.map((turn, index) => (
+        {viewModel.turns.map((turn, index) => (
           <ConversationTurnView
             key={turn.id}
             turn={turn}
-            isLiveTurn={hasLiveTail && index === turns.length - 1}
+            isLiveTurn={hasLiveTail && index === viewModel.turns.length - 1}
             resultMap={resultMap}
             plan={task.plan}
             defaultToolDetailsOpen={defaultToolDetailsOpen}
@@ -268,28 +276,14 @@ export function Conversation({
             onAgentContextMenu={handleAgentContextMenu}
             onUserMessageEdit={onUserMessageEdit}
             onBranch={onBranch}
+            liveRoundData={hasLiveTail && index === viewModel.turns.length - 1 ? liveRoundData : null}
           />
         ))}
 
-        {/* 当前运行轮次的实时尾巴 */}
-        {/* 当前运行轮次的实时尾巴 — Timeline 格式 */}
         {hasLiveTail && (
           <div className="aurevoy-agent-runner-container">
-            <AgentRound
-              key="live-tail"
-              data={buildLiveAgentRoundData({
-                plan,
-                liveToolActivity,
-                output,
-                phase,
-                contentBlocks: liveContentBlocks,
-              })}
-              busy={true}
-              defaultToolDetailsOpen={defaultToolDetailsOpen}
-            />
-
             {/* 兜底审批 UI：当 liveToolActivity 尚无审批项但 task.pendingApprovals 已有数据时 */}
-            {phase === "waiting_approval" && liveToolActivity.filter((item) => item.status === "awaiting").length === 0 && (task.pendingApprovals ?? []).length > 0 && (
+            {phase === "waiting_approval" && viewModel.liveToolActivity.filter((item) => item.status === "awaiting").length === 0 && (task.pendingApprovals ?? []).length > 0 && (
               <section className="tool-run-summary" data-status="awaiting">
                 <div className="tool-run-head">
                   <span className="tool-run-dot" aria-hidden="true" />
@@ -357,6 +351,7 @@ function ConversationTurnView({
   onAgentContextMenu,
   onUserMessageEdit,
   onBranch,
+  liveRoundData,
 }: {
   turn: ConversationTurn;
   isLiveTurn: boolean;
@@ -367,6 +362,7 @@ function ConversationTurnView({
   onAgentContextMenu: (event: React.MouseEvent, message: Message) => void;
   onUserMessageEdit?: (messageId: string, content: string, mode: RevertMode) => void;
   onBranch?: (messageId: string) => void;
+  liveRoundData?: AgentRoundData | null;
 }) {
   const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
   const attachContentToolCallIds = collectAttachContentToolCallIds(turn.agentMessages);
@@ -395,13 +391,14 @@ function ConversationTurnView({
         />
       )}
 
-      {(finalMessages.length > 0 || presentationMessages.length > 0 || workflowMessages.length > 0 || standaloneToolMessages.length > 0) && (
+      {(finalMessages.length > 0 || presentationMessages.length > 0 || workflowMessages.length > 0 || standaloneToolMessages.length > 0 || liveRoundData) && (
         <div className="agent-turn">
-          {(workflowMessages.length > 0 || standaloneToolMessages.length > 0) && (
+          {(workflowMessages.length > 0 || standaloneToolMessages.length > 0 || liveRoundData) && (
             <AgentWorkflowDrawer
               assistantMessages={workflowMessages}
               presentationMessageIds={presentationMessageIds}
               standaloneToolMessages={standaloneToolMessages}
+              liveRoundData={liveRoundData}
               resultMap={resultMap}
               plan={plan}
               defaultToolDetailsOpen={defaultToolDetailsOpen}
@@ -431,12 +428,16 @@ function ConversationTurnView({
               className="agent-final-response"
               onContextMenu={(event) => onAgentContextMenu(event, message)}
             >
-              <AgentRound
-                data={buildAgentRoundFromMessage(message, resultMap, plan)}
-                busy={false}
-                defaultToolDetailsOpen={defaultToolDetailsOpen}
-                showWorkflow={false}
-              />
+              {getFailureInfo(message) ? (
+                <AgentFailureCard message={message} />
+              ) : (
+                <AgentRound
+                  data={buildAgentRoundFromMessage(message, resultMap, plan)}
+                  busy={false}
+                  defaultToolDetailsOpen={defaultToolDetailsOpen}
+                  showWorkflow={false}
+                />
+              )}
             </div>
           ))}
         </div>
@@ -458,6 +459,31 @@ function findFinalAssistantMessage(messages: Message[]): Message | null {
     return isPresentationOnlyAssistantMessage(message) ? message : null;
   }
   return null;
+}
+
+function getFailureInfo(message: Message): { message: string; category?: string } | null {
+  if (message.failure) return message.failure;
+  const legacyMatch = message.content.match(/^任务失败，原因：([\s\S]*?)(?:\n\n错误分类：([a-z_]+))?$/);
+  if (!legacyMatch) return null;
+  return {
+    message: legacyMatch[1]?.trim() || message.content,
+    category: legacyMatch[2],
+  };
+}
+
+function AgentFailureCard({ message }: { message: Message }) {
+  const failure = getFailureInfo(message);
+  if (!failure) return null;
+  return (
+    <section className="agent-failure-card" role="alert" aria-label="任务失败">
+      <div className="agent-failure-head">
+        <span className="agent-failure-rule" aria-hidden="true" />
+        <strong>运行失败</strong>
+        {failure.category && <span>{failure.category}</span>}
+      </div>
+      <div className="agent-failure-message">{failure.message}</div>
+    </section>
+  );
 }
 
 function isPresentationOnlyAssistantMessage(message: Message): boolean {
@@ -484,6 +510,7 @@ function AgentWorkflowDrawer({
   assistantMessages,
   presentationMessageIds,
   standaloneToolMessages,
+  liveRoundData,
   resultMap,
   plan,
   defaultToolDetailsOpen,
@@ -493,6 +520,7 @@ function AgentWorkflowDrawer({
   assistantMessages: Message[];
   presentationMessageIds: Set<string>;
   standaloneToolMessages: Message[];
+  liveRoundData?: AgentRoundData | null;
   resultMap: Map<string, ToolResultInfo>;
   plan: PlanStep[];
   defaultToolDetailsOpen: boolean;
@@ -504,7 +532,8 @@ function AgentWorkflowDrawer({
     buildAgentRoundFromMessage(stripPresentationBlocksForWorkflow(message, presentationMessageIds), resultMap, plan),
   );
   const failed = rounds.some((round) => round.status === "failed") ||
-    standaloneToolMessages.some((message) => !parseToolResultContent(message.content).ok);
+    standaloneToolMessages.some((message) => !parseToolResultContent(message.content).ok) ||
+    liveRoundData?.status === "failed";
   const summary = "Thought process";
 
   useEffect(() => {
@@ -541,6 +570,16 @@ function AgentWorkflowDrawer({
               showOutput
             />
           ))}
+          {liveRoundData && (
+            <AgentRound
+              key="live-workflow-round"
+              data={liveRoundData}
+              busy={true}
+              defaultToolDetailsOpen={defaultToolDetailsOpen}
+              showWorkflow
+              showOutput
+            />
+          )}
           {standaloneToolMessages.length > 0 && (
             <ToolActivityList
               items={standaloneToolMessages.map(standaloneToolActivityFromMessage)}

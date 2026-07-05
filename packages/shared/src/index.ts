@@ -87,6 +87,11 @@ export interface Message {
   role: MessageRole;
   content: string;
   createdAt: string; // ISO 8601
+  /** 仅 role='assistant'：Runtime 生成的结构化失败说明，不应当作为 LLM 正文渲染。 */
+  failure?: {
+    message: string;
+    category: TaskErrorCategory;
+  };
   /** 仅 role='assistant'：本轮模型请求的工具调用 */
   toolCalls?: MessageToolCall[];
   /** 仅 role='tool'：该结果关联的 tool_call id */

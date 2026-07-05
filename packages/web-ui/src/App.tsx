@@ -5,6 +5,7 @@ import type {
   ContentBlock,
   HealthResponse,
   MemoryCategory,
+  Message,
   MessageAttachment,
   RevertMode,
   SkillDescriptor,
@@ -40,6 +41,7 @@ import {
   listTasks,
   resumeAutoMode as resumeAutoModeApi,
   resumeTask,
+  setBaseUrl,
   updateSettings,
   revertTask,
   unrevertTask,
@@ -56,7 +58,6 @@ import { useProjects } from "./hooks/useProjects";
 import { useSkills } from "./hooks/useSkills";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
-import { collectLiveAssistantToolMessageIds } from "./components/conversationWorkflow";
 import { ArtifactView } from "./components/ArtifactView";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
@@ -194,6 +195,16 @@ function mergeById<T extends { id: string }>(items: T[], next: T): T[] {
   const index = items.findIndex((item) => item.id === next.id);
   if (index < 0) return [...items, next];
   return items.map((item) => (item.id === next.id ? next : item));
+}
+
+function createFailureMessage(taskId: string, message: string): Message {
+  return {
+    id: `failure-${taskId}-${Date.now()}`,
+    role: "assistant",
+    content: "",
+    failure: { message, category: "unknown" },
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function App() {
@@ -517,6 +528,9 @@ function App() {
   async function bootstrapRuntime(): Promise<void> {
     try {
       const status = platform.ensureAgentRunning ? await platform.ensureAgentRunning() : null;
+      if (status?.baseUrl) {
+        setBaseUrl(status.baseUrl);
+      }
       if (status?.error) {
         setNotice(`${status.message}：${status.error}`);
       }
@@ -524,6 +538,29 @@ function App() {
       setNotice(`${t("notice.startEngineFailed")}${err instanceof Error ? err.message : String(err)}`);
     } finally {
       await refreshRuntime();
+    }
+  }
+
+  async function ensureAgentAvailable(): Promise<void> {
+    if (!platform.ensureAgentRunning) return;
+    const status = await platform.ensureAgentRunning();
+    if (status?.baseUrl) {
+      setBaseUrl(status.baseUrl);
+    }
+    if (status && !status.running) {
+      throw new Error(status.error ? `${status.message}: ${status.error}` : status.message ?? "Agent 引擎未运行");
+    }
+    setOnline(true);
+  }
+
+  async function runAgentRequest<T>(request: () => Promise<T>): Promise<T> {
+    await ensureAgentAvailable();
+    try {
+      return await request();
+    } catch (err) {
+      if (!(err instanceof TypeError)) throw err;
+      await ensureAgentAvailable();
+      return request();
     }
   }
 
@@ -882,11 +919,30 @@ function App() {
       case "error":
         setStatus("failed");
         setPhase("failed");
-        setOutput((previous) =>
-          previous ? `${previous}\n\n${t("notice.errorTag")}${event.message}` : `${t("notice.errorTag")}${event.message}`,
-        );
+        setOutput("");
         setBusy(false);
-        patchCurrentTask({ status: "failed", phase: "failed" });
+        setCurrentTask((previous) => {
+          if (!previous || previous.id !== event.taskId) return previous;
+          const failureText = event.message.trim();
+          const alreadyHasFailure = previous.messages.some(
+            (message) =>
+              message.role === "assistant" &&
+              (message.failure?.message.includes(failureText) ||
+                message.content.includes(failureText) ||
+                message.id.startsWith(`failure-${event.taskId}-`)),
+          );
+          const messages = alreadyHasFailure
+            ? previous.messages
+            : [...previous.messages, createFailureMessage(event.taskId, event.message)];
+          const nextTask = {
+            ...previous,
+            messages,
+            status: "failed" as const,
+            phase: "failed" as const,
+          };
+          updateTaskList(nextTask);
+          return nextTask;
+        });
         break;
     }
   }
@@ -906,7 +962,9 @@ function App() {
     closeStream();
 
     try {
-      const { task } = await createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach);
+      const { task } = await runAgentRequest(() =>
+        createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach),
+      );
       setCurrentTask(task);
       setPhase(task.phase);
       setTraces([]);
@@ -947,7 +1005,7 @@ function App() {
     closeStream();
 
     try {
-      const { task } = await continueTask(currentTask.id, trimmed, attach);
+      const { task } = await runAgentRequest(() => continueTask(currentTask.id, trimmed, attach));
       setCurrentTask(task);
       setPhase(task.phase);
       updateTaskList(task);
@@ -1035,7 +1093,7 @@ function App() {
     closeStream();
 
     try {
-      const { task } = await resumeTask(currentTask.id);
+      const { task } = await runAgentRequest(() => resumeTask(currentTask.id));
       setCurrentTask(task);
       setPhase(task.phase);
       updateTaskList(task);
@@ -1470,15 +1528,6 @@ function App() {
     }
   }
   const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0;
-  const hasLiveContent = derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0;
-  const hiddenAssistantIds = collectLiveAssistantToolMessageIds(currentTask?.messages ?? [], hasLiveContent);
-  const renderedCallIds = new Set<string>();
-  for (const message of currentTask?.messages ?? []) {
-    if (message.role === 'assistant' && !hiddenAssistantIds.has(message.id)) {
-      for (const call of message.toolCalls ?? []) renderedCallIds.add(call.id);
-    }
-  }
-  const displayedLiveActivity = derivedLive.filter((item) => !renderedCallIds.has(item.id));
   const shellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
     "--inspector-width": `${inspectorWidth}px`,
@@ -1673,7 +1722,7 @@ function App() {
                 plan={plan}
                 output={output}
                 busy={busy}
-                liveToolActivity={displayedLiveActivity}
+                liveToolActivity={derivedLive}
                 liveContentBlocks={liveContentBlocks}
                 hasLiveTail={hasLiveTail}
                 defaultToolDetailsOpen={defaultToolDetailsOpen}
