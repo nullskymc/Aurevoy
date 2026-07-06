@@ -203,7 +203,7 @@ function assertRealtimeEventOrder(events) {
         event.message.toolCalls?.some((call) => call.id === callId),
     );
 
-    assert(tokenIndex >= 0, `第 ${i} 轮缺少正文 token`);
+    assert(tokenIndex >= 0, `第 ${i} 轮缺少正文 token；事件摘要=${debugEventSummary(events)}`);
     assert(toolCallIndex >= 0, `第 ${i} 轮缺少 tool_call 事件`);
     assert(
       toolResultIndex >= 0,
@@ -256,6 +256,19 @@ function eventsAroundCall(events, callId) {
       if (event.type === 'message') return `${event.type}:${event.message.role}`;
       return event.type;
     });
+}
+
+function debugEventSummary(events) {
+  const counts = new Map();
+  for (const event of events) counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+  const firstEvents = events.slice(0, 20).map((event) => {
+    if (event.type === 'token') return `token:${event.delta}`;
+    if (event.type === 'message') return `message:${event.message.role}:${event.message.content?.slice(0, 30) ?? ''}`;
+    if (event.type === 'tool_call') return `tool_call:${event.call.id}`;
+    if (event.type === 'tool_result') return `tool_result:${event.result.callId}`;
+    return event.type;
+  });
+  return `counts=${JSON.stringify(Object.fromEntries(counts))}; first=${firstEvents.join(' | ')}`;
 }
 
 function assertReplayEquivalent(fullMessages, replayMessages) {
@@ -359,7 +372,9 @@ async function startLlmFixture() {
       return;
     }
     const body = JSON.parse(await readRequestBody(req));
-    const userText = body.messages.find((message) => message.role === 'user')?.content ?? '';
+    const userText = textFromMessageContent(
+      body.messages.find((message) => message.role === 'user')?.content ?? '',
+    );
 
     if (!userText.includes('LONG_LOOP')) {
       return sendFinal(res, `unexpected:${userText}`);
@@ -437,6 +452,20 @@ function sendFinal(res, content) {
 
 function sendSse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function textFromMessageContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (typeof block === 'string') return block;
+        if (block && typeof block === 'object' && typeof block.text === 'string') return block.text;
+        return '';
+      })
+      .join('\n');
+  }
+  return String(content ?? '');
 }
 
 async function readRequestBody(req) {
