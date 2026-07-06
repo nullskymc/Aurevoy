@@ -15,6 +15,8 @@
     "build": "npm run build:shared && npm run build:web-ui && npm run build -w @aurevoy/agent && npm run prepare-agent-deps && npm run build -w @aurevoy/desktop",
     "build:shared": "npm run build -w @aurevoy/shared",
     "prepare-agent-deps": "node scripts/prepare-agent-deps.mjs",
+    "prepare-node-runtime": "node scripts/prepare-node-runtime.mjs",
+    "prepare-desktop-bundle": "npm run prepare-agent-deps && npm run prepare-node-runtime",
     "prepare-agent-dev": "node scripts/prepare-agent-dev.mjs",
     "regression:m3": "node scripts/m3-regression.mjs",
     "regression:m4": "node scripts/m4-regression.mjs",

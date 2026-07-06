@@ -6,5 +6,6 @@
 # will have schema files for capabilities auto-completion
 /gen/schemas
 
-# Bundled Node.js runtime (CI-generated binary only)
-/node-runtime/bin/
+# Bundled Node.js runtime (generated before packaging)
+/node-runtime/*
+!/node-runtime/.gitkeep

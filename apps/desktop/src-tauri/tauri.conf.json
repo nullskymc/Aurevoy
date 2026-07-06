@@ -55,6 +55,7 @@
     ],
     "resources": {
       "../../agent/dist": "agent-dist",
+      "../../agent/node_modules": "agent-dist/node_modules",
       "../../agent/package.json": "agent-pkg",
       "../../agent/skills/builtin": "skills/builtin",
       "node-runtime": "node-runtime"

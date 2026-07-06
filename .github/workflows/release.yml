@@ -37,15 +37,8 @@ jobs:
       - name: Build (shared + agent + desktop)
         run: npm run build
 
-      - name: Prepare agent node_modules (for Tauri bundle)
-        run: npm run prepare-agent-deps
-
-      - name: Bundle Node.js runtime
-        run: |
-          mkdir -p apps/desktop/src-tauri/node-runtime/bin
-          cp "$(which node)" apps/desktop/src-tauri/node-runtime/bin/node
-          chmod +x apps/desktop/src-tauri/node-runtime/bin/node
-          echo "Bundled Node.js $(node --version) to node-runtime/bin/node"
+      - name: Prepare desktop bundle resources
+        run: npm run prepare-desktop-bundle
 
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli
@@ -84,16 +77,8 @@ jobs:
       - name: Build (shared + agent + desktop)
         run: npm run build
 
-      - name: Prepare agent node_modules (for Tauri bundle)
-        run: npm run prepare-agent-deps
-
-      - name: Bundle Node.js runtime
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path apps/desktop/src-tauri/node-runtime/bin
-          $nodePath = (Get-Command node).Source
-          Copy-Item $nodePath apps/desktop/src-tauri/node-runtime/bin/node.exe
-          Write-Output "Bundled Node.js $(& node --version) to node-runtime/bin/node.exe"
+      - name: Prepare desktop bundle resources
+        run: npm run prepare-desktop-bundle
 
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli
@@ -148,15 +133,8 @@ jobs:
       - name: Build (shared + agent + desktop)
         run: npm run build
 
-      - name: Prepare agent node_modules (for Tauri bundle)
-        run: npm run prepare-agent-deps
-
-      - name: Bundle Node.js runtime
-        run: |
-          mkdir -p apps/desktop/src-tauri/node-runtime/bin
-          cp "$(which node)" apps/desktop/src-tauri/node-runtime/bin/node
-          chmod +x apps/desktop/src-tauri/node-runtime/bin/node
-          echo "Bundled Node.js $(node --version) to node-runtime/bin/node"
+      - name: Prepare desktop bundle resources
+        run: npm run prepare-desktop-bundle
 
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli

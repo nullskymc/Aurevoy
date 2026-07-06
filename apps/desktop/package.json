@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "pretauri:build": "npm --prefix ../.. run prepare-desktop-bundle",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "typecheck": "tsc --noEmit",
