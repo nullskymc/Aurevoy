@@ -45,18 +45,15 @@ export const config = {
   /** LLM Provider 配置。未配置 apiKey 时引擎会在执行任务时明确报错（不再回退占位实现）。 */
   llm: {
     /**
-     * 提供商标识。支持:
-     * - 'openai' / 'openai-compatible' — OpenAI 兼容协议（/chat/completions），支持 OpenAI/DeepSeek/Ollama 等
-     * - 'anthropic' — Anthropic Messages API（/v1/messages），原生 Claude
-     * - 'openai-response' — OpenAI Responses API（/v1/responses），新一代 API
+     * Pi provider id。常用值:
+     * openai, openai-compatible, anthropic, deepseek, openrouter, google, xai,
+     * groq, mistral, moonshotai, together, fireworks, vercel-ai-gateway 等。
      */
     provider: (process.env.AUREVOY_LLM_PROVIDER ?? 'openai').toLowerCase(),
     apiKey: process.env.AUREVOY_LLM_API_KEY ?? '',
     /**
-     * Provider 端点基础地址：
-     * - 'openai' / 'openai-compatible': 不含 /chat/completions，如 https://api.openai.com/v1
-     * - 'anthropic': https://api.anthropic.com
-     * - 'openai-response': https://api.openai.com/v1
+     * Pi provider 端点基础地址。内置 provider 可保留默认；自定义 OpenAI 兼容端点
+     * 使用 provider=openai-compatible 并填写对应 /v1 base URL。
      */
     baseUrl: process.env.AUREVOY_LLM_BASE_URL ?? 'https://api.openai.com/v1',
     model: process.env.AUREVOY_LLM_MODEL ?? 'gpt-4o-mini',
@@ -72,6 +69,10 @@ export const config = {
   agent: {
     /** 等待用户审批的超时（毫秒）；测试可通过环境变量缩短。 */
     approvalTimeoutMs: parseNumber(process.env.AUREVOY_APPROVAL_TIMEOUT_MS, 5 * 60 * 1000),
+    /** Pi runtime 推理深度。 */
+    thinkingLevel: parseAgentThinkingLevel(process.env.AUREVOY_AGENT_THINKING_LEVEL),
+    /** Pi runtime 工具执行策略。 */
+    toolExecution: parseAgentToolExecution(process.env.AUREVOY_AGENT_TOOL_EXECUTION),
     /**
      * 会话级短期记忆的上下文字符预算（M4.2）。
      * 单轮喂给 LLM 的历史消息总字符超过此值时触发确定性压缩，避免裸拼接撑爆上下文。
@@ -200,6 +201,15 @@ export const config = {
     apiKey: process.env.AUREVOY_SEARCH_API_KEY ?? '',
   },
 };
+
+function parseAgentThinkingLevel(value: string | undefined): 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' {
+  if (value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
+  return 'off';
+}
+
+function parseAgentToolExecution(value: string | undefined): 'sequential' | 'parallel' {
+  return value === 'sequential' ? 'sequential' : 'parallel';
+}
 
 /** 解析数字环境变量，非法或缺失时回退默认值（避免 NaN 污染配置）。 */
 export function parseNumber(raw: string | undefined, fallback: number): number {

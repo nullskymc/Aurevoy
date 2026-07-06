@@ -3,7 +3,7 @@ import type { Logger } from 'pino';
 import type { TaskErrorCategory, TaskPhase, TaskTraceEntry, TaskTraceKind, TokenUsage, ToolRiskLevel } from '@aurevoy/shared';
 import { traceStore } from '../store/db.js';
 import { config } from '../config.js';
-import { getProviderName } from '../llm/provider.js';
+import { getPiProviderName } from '../llm/pi-provider.js';
 import { getRootLogger } from './logger.js';
 
 let _log: Logger | undefined;
@@ -44,7 +44,7 @@ export class TaskLogger {
     const endedAtMs = Date.now();
     const startedAtMs = entry.startedAtMs ?? endedAtMs;
     const durationMs = Math.max(0, endedAtMs - startedAtMs);
-    const provider = getProviderName();
+    const provider = getPiProviderName();
     const model = config.llm.model;
 
     const traceEntry: TaskTraceEntry = {

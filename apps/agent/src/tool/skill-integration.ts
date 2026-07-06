@@ -1,19 +1,21 @@
 /**
- * load_skill 工具（Agent Skills 标准）。
+ * Skill 工具集成：将 Skill 系统集成到统一工具框架。
  *
- * 允许 LLM 在对话中一次性加载 skill 到上下文。调用后返回 skill 的完整
- * 操作指南和附属资源列表，内容通过工具结果进入对话历史。
- *
- * 该工具始终可用（不受 skill 白名单限制）。
- * 只有当可用 skill 数 > 0 时才注册此工具。
- *
- * 注册必须在 skillRegistry.load() 之后调用。
+ * 本文件负责：
+ * 1. 注册 load_skill 工具到统一注册表
+ * 2. 管理 Skill 的 allowed-tools 白名单
+ * 3. 提供基于 Skill 上下文的工具过滤
  */
 
-import { unifiedToolRegistry } from '../tool/unified-registry.js';
 import { skillRegistry } from '../skills/registry.js';
+import { unifiedToolRegistry, type UnifiedToolDef } from './unified-registry.js';
 import { getLogger } from '../logging/logger.js';
 
+/**
+ * 注册 load_skill 工具到统一注册表。
+ *
+ * 该工具允许 LLM 在对话中加载 Skill 的完整指令。
+ */
 export function registerLoadSkillTool(): void {
   const allDescriptors = skillRegistry.listAll();
   const enabledDescriptors = allDescriptors.filter((s) => s.enabled);
@@ -28,7 +30,7 @@ export function registerLoadSkillTool(): void {
 
   const enabledNames = enabledDescriptors.map((s) => s.name);
 
-  unifiedToolRegistry.register({
+  const loadSkillTool: UnifiedToolDef = {
     name: 'load_skill',
     description:
       '将技能（skill）的完整指令一次性加载到当前对话上下文中。\n' +
@@ -49,9 +51,8 @@ export function registerLoadSkillTool(): void {
     riskLevel: 'safe',
     executionPolicy: { parallelizable: false },
     source: { type: 'builtin' },
-
-    async execute(args, context) {
-      const log = getLogger('tools/load-skill');
+    execute: async (args, context) => {
+      const log = getLogger('tool/skill-integration');
       const name = typeof args.name === 'string' && args.name.trim() ? args.name.trim() : null;
 
       if (!name) {
@@ -105,5 +106,74 @@ export function registerLoadSkillTool(): void {
         message: `已加载技能 "${name}"。指令已注入当前上下文。`,
       };
     },
-  });
+  };
+
+  unifiedToolRegistry.register(loadSkillTool);
+}
+
+/**
+ * 获取 Skill 的 allowed-tools 白名单。
+ *
+ * @param skillName Skill 名称
+ * @returns 工具名称数组，如果 Skill 不存在或没有白名单则返回 undefined
+ */
+export function getSkillAllowedTools(skillName: string): string[] | undefined {
+  const entry = skillRegistry.get(skillName);
+  if (!entry) return undefined;
+  return entry.frontmatter['allowed-tools'];
+}
+
+/**
+ * 获取所有已启用 Skill 的合并白名单。
+ *
+ * @returns 工具名称数组（去重），如果没有 Skill 有白名单则返回 undefined
+ */
+export function getAllSkillAllowedTools(): string[] | undefined {
+  const allDescriptors = skillRegistry.listAll();
+  const enabledDescriptors = allDescriptors.filter((s) => s.enabled);
+
+  const allowedTools = new Set<string>();
+  let hasAnyAllowedTools = false;
+
+  for (const descriptor of enabledDescriptors) {
+    const tools = descriptor.allowedTools;
+    if (tools && tools.length > 0) {
+      hasAnyAllowedTools = true;
+      for (const tool of tools) {
+        allowedTools.add(tool);
+      }
+    }
+  }
+
+  return hasAnyAllowedTools ? [...allowedTools] : undefined;
+}
+
+/**
+ * 根据当前激活的 Skill 过滤工具列表。
+ *
+ * @param allToolNames 所有可用工具名称
+ * @param activeSkill 当前激活的 Skill 名称（可选）
+ * @returns 过滤后的工具名称数组
+ */
+export function filterToolsBySkill(allToolNames: string[], activeSkill?: string): string[] {
+  if (!activeSkill) {
+    // 没有激活的 Skill，返回所有工具
+    return allToolNames;
+  }
+
+  const allowedTools = getSkillAllowedTools(activeSkill);
+  if (!allowedTools || allowedTools.length === 0) {
+    // Skill 没有白名单限制，返回所有工具
+    return allToolNames;
+  }
+
+  // 过滤出白名单中的工具
+  return allToolNames.filter(name => allowedTools.includes(name));
+}
+
+/**
+ * 初始化 Skill 工具集成。
+ */
+export function initializeSkillIntegration(): void {
+  registerLoadSkillTool();
 }

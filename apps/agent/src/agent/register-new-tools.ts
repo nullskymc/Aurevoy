@@ -343,7 +343,7 @@ export const NEW_TOOLS: NewToolEntry[] = [
       },
       required: ["url"],
     },
-    riskLevel: "caution" as ToolRiskLevel,
+    riskLevel: "dangerous" as ToolRiskLevel,
     execute: (args, ctx) => runTool("web_fetch", args, ctx?.workspaceDir ?? process.cwd()),
   },
   {
@@ -362,7 +362,8 @@ export const NEW_TOOLS: NewToolEntry[] = [
       },
       required: ["htmlPath"],
     },
-    riskLevel: "safe" as ToolRiskLevel,
+    riskLevel: "dangerous" as ToolRiskLevel,
+    executionPolicy: { parallelizable: false },
     execute: (args, ctx) => runTool("bundle_report", args, ctx?.workspaceDir ?? process.cwd()),
   },
 ]

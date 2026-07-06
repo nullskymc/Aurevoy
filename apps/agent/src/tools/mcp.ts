@@ -7,9 +7,9 @@ import {
   type StdioServerParameters,
 } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { Tool as McpSdkTool } from '@modelcontextprotocol/sdk/types.js';
-import type { McpServerStatus, ToolDescriptor, ToolRiskLevel } from '@aurevoy/shared';
+import type { McpServerStatus, ToolRiskLevel } from '@aurevoy/shared';
 import { config, type McpServerConfig } from '../config.js';
-import { toolRegistry } from './registry.js';
+import { unifiedToolRegistry } from '../tool/unified-registry.js';
 import { getLogger } from '../logging/logger.js';
 import { getPythonBinDir, isPythonInstalled } from '../runtime/python-runtime.js';
 
@@ -48,7 +48,7 @@ const statuses = new Map<string, McpServerStatus>();
  */
 export async function initializeMcpTools(): Promise<McpInitSummary> {
   const enabledServers = config.mcpServers.filter((server) => server.enabled);
-  const usedNames = new Set(toolRegistry.listAll().map((tool) => tool.name));
+  const usedNames = new Set(unifiedToolRegistry.listNames());
   let connectedServers = 0;
   let registeredTools = 0;
   let failedServers = 0;
@@ -73,7 +73,7 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
       for (const tool of tools) {
         const registeredName = makeRegistryToolName(server.name, tool.name, usedNames);
         usedNames.add(registeredName);
-        toolRegistry.register(toRegistryTool(server, client, tool, registeredName));
+        unifiedToolRegistry.register(toRegistryTool(server, client, tool, registeredName));
         registeredTools += 1;
       }
       statuses.set(server.name, {
@@ -112,7 +112,7 @@ export async function closeMcpTools(): Promise<void> {
 
 export async function reloadMcpTools(): Promise<McpInitSummary> {
   await closeMcpTools();
-  toolRegistry.unregisterMcpTools();
+  unifiedToolRegistry.unregisterBySource('mcp');
   return initializeMcpTools();
 }
 
@@ -181,16 +181,12 @@ function toRegistryTool(
   mcpTool: McpSdkTool,
   registeredName: string,
 ) {
-  const descriptor: ToolDescriptor = {
+  return {
     name: registeredName,
     description: sanitizeMcpToolDescription(server, mcpTool),
     inputSchema: mcpTool.inputSchema,
     riskLevel: inferRiskLevel(server, mcpTool),
-    source: { type: 'mcp', serverName: server.name, originalName: mcpTool.name },
-  };
-
-  return {
-    descriptor,
+    source: { type: 'mcp' as const, serverName: server.name, originalName: mcpTool.name },
     async execute(args: Record<string, unknown>) {
       const result = await client.callTool({
         name: mcpTool.name,

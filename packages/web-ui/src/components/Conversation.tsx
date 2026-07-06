@@ -4,6 +4,7 @@ import type {
   ContentBlock,
   Message,
   MessageAttachment,
+  PendingToolApproval,
   PlanStep,
   RevertMode,
   Task,
@@ -47,10 +48,13 @@ export interface ToolActivity {
   };
 }
 
+type ToolDecisionHandler = (callId: string, approved: boolean) => void;
+
 interface ConversationProps {
   task: Task;
   status: TaskStatus | null;
   phase: TaskPhase | null;
+  phaseDetail?: string;
   plan: PlanStep[];
   /** 当前正在生成的这一轮的流式文本尾巴（仅运行中有值） */
   output: string;
@@ -62,8 +66,8 @@ interface ConversationProps {
   /** 是否默认展开工具参数/结果详情。等待审批的工具始终展开。 */
   defaultToolDetailsOpen?: boolean;
   online?: boolean | null;
-  /** 工具审批决策回调（批准/拒绝），sessionApprove 表示本次会话自动批准该工具 */
-  onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  /** 工具审批决策回调（批准/拒绝），只作用于当前这一次工具调用。 */
+  onToolDecision: ToolDecisionHandler;
   onPlanDecision: (approved: boolean) => void;
   onClarificationAnswer: (clarificationId: string, answer: string) => void;
   /** 当前任务是否可恢复（中断/失败等可续跑状态） */
@@ -146,22 +150,48 @@ function toolActivitiesFromAssistant(
       name: tc.function.name,
       args,
       status: result ? (result.ok ? "ok" : "error") : "running",
+      planStepId: tc.function.planStepId,
       output: result?.output,
       error: result?.error,
     };
   });
 }
 
+function collectApprovalItems(
+  liveToolActivity: ToolActivity[],
+  pendingApprovals: PendingToolApproval[],
+): ToolActivity[] {
+  const byId = new Map<string, ToolActivity>();
+  for (const item of liveToolActivity) {
+    if (item.status === "awaiting") byId.set(item.id, item);
+  }
+  for (const approval of pendingApprovals) {
+    const existing = byId.get(approval.call.id);
+    byId.set(approval.call.id, {
+      id: approval.call.id,
+      name: approval.call.toolName,
+      args: approval.call.args,
+      status: "awaiting",
+      riskLevel: approval.riskLevel,
+      planStepId: approval.call.planStepId,
+      ...existing,
+    });
+  }
+  return [...byId.values()];
+}
+
 export function Conversation({
   task,
   status,
   phase,
+  phaseDetail,
   plan,
   output,
   liveToolActivity,
   hasLiveTail,
   defaultToolDetailsOpen = false,
   onToolDecision,
+  onPlanDecision,
   onClarificationAnswer,
   canResume = false,
   hasArchivedMessages = false,
@@ -255,9 +285,12 @@ export function Conversation({
         liveToolActivity: viewModel.liveToolActivity,
         output: viewModel.liveOutput,
         phase,
+        phaseDetail,
         contentBlocks: liveContentBlocks,
       })
     : null;
+  const approvalItems = collectApprovalItems(viewModel.liveToolActivity, task.pendingApprovals ?? []);
+  const showPlanApproval = task.planMode === "manual" && phase === "waiting_approval" && approvalItems.length === 0 && plan.length > 0;
 
   return (
     <div className="conversation">
@@ -282,25 +315,25 @@ export function Conversation({
 
         {hasLiveTail && (
           <div className="aurevoy-agent-runner-container">
-            {/* 兜底审批 UI：当 liveToolActivity 尚无审批项但 task.pendingApprovals 已有数据时 */}
-            {phase === "waiting_approval" && viewModel.liveToolActivity.filter((item) => item.status === "awaiting").length === 0 && (task.pendingApprovals ?? []).length > 0 && (
+            {approvalItems.length > 0 && (
               <section className="tool-run-summary" data-status="awaiting">
                 <div className="tool-run-head">
                   <span className="tool-run-dot" aria-hidden="true" />
                   <span className="tool-run-title">执行工具</span>
-                  <span className="tool-run-names">{(task.pendingApprovals ?? []).map(pa => pa.call.toolName).join("、")}</span>
-                  <span className="tool-run-status">等待确认 {(task.pendingApprovals ?? []).length}</span>
+                  <span className="tool-run-names">{approvalItems.map((item) => item.name).join("、")}</span>
+                  <span className="tool-run-status">等待确认 {approvalItems.length}</span>
                 </div>
-                {(task.pendingApprovals ?? []).map(pa => ({
-                  id: pa.call.id,
-                  name: pa.call.toolName,
-                  args: pa.call.args,
-                  status: "awaiting" as const,
-                  riskLevel: pa.riskLevel,
-                })).map(item => (
+                {approvalItems.map(item => (
                   <ApprovalInline key={item.id} item={item} onDecision={onToolDecision} />
                 ))}
               </section>
+            )}
+
+            {showPlanApproval && (
+              <PlanApprovalInline
+                plan={plan}
+                onDecision={onPlanDecision}
+              />
             )}
 
             {(task.clarifications ?? []).filter((item) => item.status === "pending").map((clarification) => (
@@ -358,7 +391,7 @@ function ConversationTurnView({
   resultMap: Map<string, ToolResultInfo>;
   plan: PlanStep[];
   defaultToolDetailsOpen: boolean;
-  onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  onToolDecision: ToolDecisionHandler;
   onAgentContextMenu: (event: React.MouseEvent, message: Message) => void;
   onUserMessageEdit?: (messageId: string, content: string, mode: RevertMode) => void;
   onBranch?: (messageId: string) => void;
@@ -367,14 +400,19 @@ function ConversationTurnView({
   const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
   const attachContentToolCallIds = collectAttachContentToolCallIds(turn.agentMessages);
   const finalMessage = isLiveTurn ? null : findFinalAssistantMessage(turn.agentMessages);
-  const finalMessages = finalMessage ? [finalMessage] : [];
+  const finalMessages = finalMessage
+    ? [stripProcessNarrationForPresentation(finalMessage)].filter(isRenderableAssistantMessage)
+    : [];
   const presentationMessages = assistantMessages.filter(
     (message) => message.id !== finalMessage?.id && isPresentationAssistantMessage(message),
-  );
+  ).map(stripProcessNarrationForPresentation).filter(isRenderableAssistantMessage);
   const presentationMessageIds = new Set(presentationMessages.map((message) => message.id));
+  const finalProcessMessages = finalMessage && isPresentationOnlyAssistantMessage(finalMessage) && hasProcessNarration(finalMessage)
+    ? [finalMessage]
+    : [];
   const workflowMessages = assistantMessages.filter(
-    (message) => message.id !== finalMessage?.id && !isPresentationOnlyAssistantMessage(message),
-  );
+    (message) => message.id !== finalMessage?.id && (!isPresentationOnlyAssistantMessage(message) || hasProcessNarration(message)),
+  ).concat(finalProcessMessages);
   const standaloneToolMessages = turn.agentMessages.filter(
     (message) => message.role === "tool" && (!message.toolCallId || !attachContentToolCallIds.has(message.toolCallId)),
   );
@@ -495,6 +533,18 @@ function isPresentationAssistantMessage(message: Message): boolean {
   return isPresentationOnlyAssistantMessage(message) || (message.contentBlocks?.length ?? 0) > 0;
 }
 
+function hasProcessNarration(message: Message): boolean {
+  return (message.toolCalls?.length ?? 0) > 0 && message.content.trim().length > 0;
+}
+
+function stripProcessNarrationForPresentation(message: Message): Message {
+  return hasProcessNarration(message) ? { ...message, content: "" } : message;
+}
+
+function isRenderableAssistantMessage(message: Message): boolean {
+  return !!message.failure || message.content.trim().length > 0 || (message.contentBlocks?.length ?? 0) > 0;
+}
+
 function collectAttachContentToolCallIds(messages: Message[]): Set<string> {
   const ids = new Set<string>();
   for (const message of messages) {
@@ -524,7 +574,7 @@ function AgentWorkflowDrawer({
   resultMap: Map<string, ToolResultInfo>;
   plan: PlanStep[];
   defaultToolDetailsOpen: boolean;
-  onToolDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  onToolDecision: ToolDecisionHandler;
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -987,7 +1037,7 @@ export function ToolActivityList({
 }: {
   items: ToolActivity[];
   defaultDetailsOpen?: boolean;
-  onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  onDecision: ToolDecisionHandler;
 }) {
   return (
     <div className="tool-activity">
@@ -1014,7 +1064,7 @@ function ToolChip({
   onDecision,
 }: {
   item: ToolActivity;
-  onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  onDecision: ToolDecisionHandler;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -1090,7 +1140,7 @@ function ToolActivityCard({
   defaultOpen,
 }: {
   item: ToolActivity;
-  onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  onDecision: ToolDecisionHandler;
   /** 由 chip 展开时传入：点击头部收起回到 chip 形态。 */
   onCollapse?: () => void;
   /** chip 展开时默认打开 body（已结束工具的初始 open 否则为 false）。 */
@@ -1122,9 +1172,9 @@ function ToolActivityCard({
         : null;
   const argsText = safeStringify(item.args);
 
-  function decide(approved: boolean, sessionApprove?: boolean) {
+  function decide(approved: boolean) {
     setDecided(approved ? 'approve' : 'reject');
-    onDecision(item.id, approved, sessionApprove);
+    onDecision(item.id, approved);
   }
 
   return (
@@ -1206,13 +1256,6 @@ function ToolActivityCard({
             </button>
             <button
               type="button"
-              className="tool-approval-btn approve-session"
-              onClick={() => decide(true, true)}
-            >
-              {t("action.approveSession")}
-            </button>
-            <button
-              type="button"
               className="tool-approval-btn reject"
               onClick={() => decide(false)}
             >
@@ -1246,14 +1289,14 @@ function ApprovalInline({
   onDecision,
 }: {
   item: ToolActivity;
-  onDecision: (callId: string, approved: boolean, sessionApprove?: boolean) => void;
+  onDecision: ToolDecisionHandler;
 
 }) {
   const [decided, setDecided] = useState<'approve' | 'reject' | null>(null);
 
-  function handleDecide(approved: boolean, sessionApprove?: boolean) {
+  function handleDecide(approved: boolean) {
     setDecided(approved ? 'approve' : 'reject');
-    onDecision(item.id, approved, sessionApprove);
+    onDecision(item.id, approved);
   }
 
   if (decided) {
@@ -1273,14 +1316,64 @@ function ApprovalInline({
         <button type="button" onClick={() => handleDecide(true)}>
           {t("action.approveOnce")}
         </button>
-        <button type="button" onClick={() => handleDecide(true, true)}>
-          {t("action.approveSession")}
-        </button>
         <button type="button" onClick={() => handleDecide(false)}>
           {t("action.reject")}
         </button>
       </div>
     </div>
+  );
+}
+
+function PlanApprovalInline({
+  plan,
+  onDecision,
+}: {
+  plan: PlanStep[];
+  onDecision: (approved: boolean) => void;
+}) {
+  const [decided, setDecided] = useState<'approve' | 'reject' | null>(null);
+
+  function handleDecide(approved: boolean) {
+    setDecided(approved ? 'approve' : 'reject');
+    onDecision(approved);
+  }
+
+  return (
+    <section className="tool-run-summary plan-approval-inline" data-status={decided ?? "awaiting"}>
+      <div className="tool-run-head">
+        <span className="tool-run-dot" aria-hidden="true" />
+        <span className="tool-run-title">执行计划</span>
+        <span className="tool-run-names">{plan.length} 个步骤</span>
+        <span className="tool-run-status">{decided ? "已处理" : "等待确认"}</span>
+      </div>
+      <ol className="plan-approval-steps">
+        {plan.map((step, index) => (
+          <li key={step.id}>
+            <span>{index + 1}</span>
+            <p>{step.description}</p>
+          </li>
+        ))}
+      </ol>
+      {decided ? (
+        <div className="tool-run-approval tool-run-approval--decided" data-decision={decided}>
+          <span className="tool-run-approval-result">
+            {decided === 'approve' ? '✓ 已批准' : '✕ 已拒绝'}
+          </span>
+        </div>
+      ) : (
+        <div className="tool-run-approval">
+          <span>确认后 Agent 将按该计划继续执行</span>
+          <div className="tool-run-approval-actions">
+            <button type="button" onClick={() => handleDecide(true)}>
+              {t("action.approveOnce")}
+            </button>
+            <button type="button" onClick={() => handleDecide(false)}>
+              {t("action.reject")}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

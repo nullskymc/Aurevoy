@@ -45,7 +45,6 @@ import {
   updateSettings,
   revertTask,
   unrevertTask,
-  updateArtifact,
   updateMemory,
 } from "./api";
 import { usePlatform } from "./platform/context";
@@ -58,7 +57,6 @@ import { useProjects } from "./hooks/useProjects";
 import { useSkills } from "./hooks/useSkills";
 import { Composer } from "./components/Composer";
 import { Conversation, type ToolActivity } from "./components/Conversation";
-import { ArtifactView } from "./components/ArtifactView";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
 import { SettingsPanel, type SettingsDraft } from "./components/SettingsPanel";
@@ -69,7 +67,6 @@ import { setLocale, t, type Locale } from "./i18n";
 import "./App.css";
 
 type MainView = "chat" | "search" | "skills" | "settings";
-type ContentMode = "conversation" | "artifacts";
 type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb" | "search" | "usage";
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
@@ -213,7 +210,6 @@ function App() {
     platform.setupWindowDrag?.(".window-drag-region");
   }, [platform]);
   const [activeView, setActiveView] = useState<MainView>("chat");
-  const [contentMode, setContentMode] = useState<ContentMode>("conversation");
   const liveActivityRef = useRef(createLiveActivityStore());
   const [liveToolActivity, setLiveToolActivity] = useState<ToolActivity[]>([]);
   const [goal, setGoal] = useState("");
@@ -263,6 +259,7 @@ function App() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [liveContentBlocks, setLiveContentBlocks] = useState<ContentBlock[]>([]);
+  const [phaseDetail, setPhaseDetail] = useState("");
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const {
@@ -310,6 +307,7 @@ function App() {
     setLiveToolActivity([]);
     setOutput("");
     setLiveContentBlocks([]);
+    setPhaseDetail("");
     nextOutputFreshRef.current = false;
   }, []);
 
@@ -634,12 +632,26 @@ function App() {
         setTraces([]);
         updateTaskList(event.task);
         break;
+      case "agent_start":
+        setStatus("running");
+        setPhase("thinking");
+        patchCurrentTask({ status: "running", phase: "thinking" });
+        break;
+      case "scout_started":
+        setPhase("planning");
+        setPhaseDetail("侦查工作区");
+        patchCurrentTask({ phase: "planning" });
+        break;
+      case "scout_report":
+        setPhaseDetail(event.report.summary);
+        break;
       case "status":
         setStatus(event.status);
         patchCurrentTask({ status: event.status });
         break;
       case "phase":
         setPhase(event.phase);
+        setPhaseDetail(event.detail ?? "");
         patchCurrentTask({ phase: event.phase });
         if (event.phase !== previousPhaseRef.current) {
           const prevPhase = previousPhaseRef.current;
@@ -677,7 +689,18 @@ function App() {
           setOutput((previous) => previous + event.delta);
         }
         break;
+      case "reasoning":
+        break;
+      case "message_start":
+        if (event.role === "assistant") {
+          nextOutputFreshRef.current = true;
+          setOutput("");
+        }
+        break;
       case "message": {
+        if (event.message.role === "system") {
+          break;
+        }
         const isAssistant = event.message.role === "assistant";
         const hasToolCalls = (event.message.toolCalls?.length ?? 0) > 0;
         // 最终回复（不带 toolCalls 的 assistant message）已进历史区，
@@ -723,10 +746,12 @@ function App() {
           args: event.call.args,
           status: 'awaiting',
           riskLevel: event.riskLevel,
+          planStepId: event.call.planStepId,
         });
         scheduleLiveActivitySync();
         setStatus("paused");
         setPhase("waiting_approval");
+        setPhaseDetail(`等待确认工具 ${event.call.toolName}`);
         setCurrentTask((previous) => {
           if (!previous) return previous;
           const nextApprovals = [
@@ -775,10 +800,6 @@ function App() {
         break;
       case "artifact_created":
         mergeArtifact(event.artifact);
-        // 新产物草稿自动切换到 Artifacts 面板，方便用户立即预览和确认
-        if (event.artifact.status === 'draft') {
-          setContentMode('artifacts');
-        }
         break;
       case "artifact_updated":
         mergeArtifact(event.artifact);
@@ -863,6 +884,9 @@ function App() {
       case "skill_installed":
         refreshSkills();
         break;
+      case "skill_deactivated":
+        refreshSkills();
+        break;
       case "skill_uninstalled":
         refreshSkills();
         break;
@@ -892,6 +916,7 @@ function App() {
               ? "failed"
               : "finalizing",
         );
+        setPhaseDetail("");
         setBusy(false);
         setAutoModeState(null);
         patchCurrentTask({
@@ -919,6 +944,7 @@ function App() {
       case "error":
         setStatus("failed");
         setPhase("failed");
+        setPhaseDetail(event.message);
         setOutput("");
         setBusy(false);
         setCurrentTask((previous) => {
@@ -985,7 +1011,6 @@ function App() {
     setModelDrawerOpen(false);
     setEditingMessageId(null);
     setActiveView("chat");
-    setContentMode("conversation");
     applyTaskSnapshot(task);
   }
 
@@ -1043,7 +1068,6 @@ function App() {
     setModelDrawerOpen(false);
     setEditingMessageId(null);
     setActiveView("chat");
-    setContentMode("conversation");
     setCurrentTask(null);
     setStatus(null);
     setPhase(null);
@@ -1165,12 +1189,11 @@ function App() {
   function handleToolDecision(
     callId: string,
     approved: boolean,
-    sessionApprove?: boolean,
   ): void {
     const taskId = currentTask?.id;
     if (!taskId) return;
     setNotice(null);
-    void approveToolCall(taskId, callId, approved, sessionApprove).catch((err) => {
+    void approveToolCall(taskId, callId, approved).catch((err) => {
       setNotice(
         `${t("notice.submit")}${approved ? t("action.approve") : t("action.reject")}${t("notice.failedColon")}${err instanceof Error ? err.message : String(err)}${t("notice.pleaseRetry")}`,
       );
@@ -1193,27 +1216,6 @@ function App() {
     void answerClarification(taskId, clarificationId, answer).catch((err) => {
       setNotice(`${t("notice.replyClarificationFailed")}${err instanceof Error ? err.message : String(err)}`);
     });
-  }
-
-  function handleArtifactDecision(artifactId: string, status: "confirmed" | "rejected"): void {
-    const taskId = currentTask?.id;
-    if (!taskId) return;
-    setNotice(null);
-    void updateArtifact(taskId, artifactId, { status })
-      .then((artifact) => {
-        setCurrentTask((previous) => {
-          if (!previous) return previous;
-          const nextTask = {
-            ...previous,
-            artifacts: mergeById(previous.artifacts ?? [], artifact),
-          };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-      })
-      .catch((err) => {
-        setNotice(`${t("notice.updateArtifactFailed")}${err instanceof Error ? err.message : String(err)}`);
-      });
   }
 
   async function refreshMemories(): Promise<void> {
@@ -1285,7 +1287,7 @@ function App() {
 
     const body: UpdateRuntimeSettingsRequest = {
       llm: {
-        provider: draft.provider as 'openai' | 'anthropic' | 'openai-response',
+        provider: draft.provider,
         baseUrl: draft.baseUrl,
         model: draft.model,
         visionModel: draft.visionModel,
@@ -1329,7 +1331,6 @@ function App() {
     setSettingsSaving(true);
     void updateSettings({
       llm: {
-        provider: "openai",
         model: draft.model,
       },
     })
@@ -1524,10 +1525,15 @@ function App() {
         args: pa.call.args,
         status: 'awaiting' as const,
         riskLevel: pa.riskLevel,
+        planStepId: pa.call.planStepId,
       });
     }
   }
-  const hasLiveTail = busy || derivedLive.length > 0 || phase === "waiting_approval" || output.trim().length > 0;
+  const hasLiveTail =
+    busy ||
+    derivedLive.length > 0 ||
+    phase === "waiting_approval" ||
+    output.trim().length > 0;
   const shellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
     "--inspector-width": `${inspectorWidth}px`,
@@ -1596,31 +1602,6 @@ function App() {
                 </div>
               </div>
               <div className="topbar-actions">
-                <div className="content-mode-switcher" role="tablist" aria-label={t("mode.switcherLabel")}>
-                  <button
-                    type="button"
-                    className="mode-btn"
-                    role="tab"
-                    aria-selected={contentMode === "conversation"}
-                    data-active={contentMode === "conversation"}
-                    onClick={() => setContentMode("conversation")}
-                  >
-                    {t("mode.conversation")}
-                  </button>
-                  <button
-                    type="button"
-                    className="mode-btn"
-                    role="tab"
-                    aria-selected={contentMode === "artifacts"}
-                    data-active={contentMode === "artifacts"}
-                    onClick={() => setContentMode("artifacts")}
-                  >
-                    {t("mode.artifacts")}
-                    {(currentTask?.artifacts?.length ?? 0) > 0 && (
-                      <span className="mode-badge">{currentTask?.artifacts?.length}</span>
-                    )}
-                  </button>
-                </div>
                 <button
                   type="button"
                   className="ghost-btn"
@@ -1705,20 +1686,13 @@ function App() {
             onConnectionChange={refreshRuntime}
           />
         ) : showConversation ? (
-          contentMode === "artifacts" ? (
-            <div className="main-scroll">
-              <ArtifactView
-                artifacts={currentTask?.artifacts ?? []}
-                onDecision={handleArtifactDecision}
-              />
-            </div>
-          ) : (
           <>
             <div className="main-scroll" ref={mainScrollRef}>
               <Conversation
                 task={currentTask}
                 status={status}
                 phase={phase}
+                phaseDetail={phaseDetail}
                 plan={plan}
                 output={output}
                 busy={busy}
@@ -1784,7 +1758,6 @@ function App() {
               />
             </div>
           </>
-          )
         ) : (
           <div className="hero">
             <h1 className="hero-title">{t("hero.title")}</h1>
@@ -1834,6 +1807,7 @@ function App() {
       <InspectorPanel
         open={inspectorOpen}
         health={health}
+        settings={runtimeSettings}
         task={currentTask}
         phase={phase}
         onClose={() => setInspectorOpen(false)}
@@ -1879,7 +1853,7 @@ function getMainViewTitle(view: MainView): string {
   if (view === "search") return t("nav.search");
   if (view === "skills") return t("nav.skills");
   if (view === "settings") return t("nav.settings");
-  return t("mode.conversation");
+  return t("nav.conversations");
 }
 
 function SearchPage({

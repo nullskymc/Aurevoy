@@ -270,7 +270,6 @@ function rowToTask(row: TaskRow): Task {
     artifacts: (parseJsonColumn(row.artifacts) as Task['artifacts']) ?? [],
     clarifications: (parseJsonColumn(row.clarifications) as Task['clarifications']) ?? [],
     pendingApprovals: (parseJsonColumn(row.pending_approvals) as Task['pendingApprovals']) ?? [],
-    approvedApprovalKeys: (parseJsonColumn(row.approved_approval_keys) as Task['approvedApprovalKeys']) ?? [],
     checkpoints: (parseJsonColumn(row.checkpoints) as Task['checkpoints']) ?? [],
     budget: (parseJsonColumn(row.budget) as Task['budget']) ?? undefined,
     budgetUsage: (parseJsonColumn(row.budget_usage) as Task['budgetUsage']) ?? undefined,
@@ -328,20 +327,19 @@ export const taskStore = {
   save(task: Task): void {
     db.prepare(
       `INSERT INTO tasks (
-         id, goal, status, phase, plan, messages, artifacts, clarifications, pending_approvals, approved_approval_keys, checkpoints,
+         id, goal, status, phase, plan, messages, artifacts, clarifications, pending_approvals, checkpoints,
          budget, budget_usage, token_usage, archived_messages, parent_task_id, project_id,
          plan_mode, context_tokens, created_at, updated_at
        )
        VALUES (
          @id, @goal, @status, @phase, @plan, @messages, @artifacts, @clarifications,
-         @pendingApprovals, @approvedApprovalKeys, @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId,
+         @pendingApprovals, @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId,
          @projectId, @planMode, @contextTokens, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
          goal=excluded.goal, status=excluded.status, phase=excluded.phase, plan=excluded.plan,
          messages=excluded.messages, artifacts=excluded.artifacts,
          clarifications=excluded.clarifications, pending_approvals=excluded.pending_approvals,
-         approved_approval_keys=excluded.approved_approval_keys,
          checkpoints=excluded.checkpoints,
          budget=excluded.budget, budget_usage=excluded.budget_usage,
          token_usage=excluded.token_usage, archived_messages=excluded.archived_messages,
@@ -359,7 +357,6 @@ export const taskStore = {
       artifacts: JSON.stringify(task.artifacts ?? []),
       clarifications: JSON.stringify(task.clarifications ?? []),
       pendingApprovals: JSON.stringify(task.pendingApprovals ?? []),
-      approvedApprovalKeys: JSON.stringify(task.approvedApprovalKeys ?? []),
       checkpoints: JSON.stringify(task.checkpoints ?? []),
       budget: task.budget === undefined ? null : JSON.stringify(task.budget),
       budgetUsage: task.budgetUsage === undefined ? null : JSON.stringify(task.budgetUsage),
@@ -379,7 +376,7 @@ export const taskStore = {
    * 传入的 fields 只会 SET 对应列，updated_at 自动刷新。
    * 高频场景（每轮 touch）用此替代 save()。
    */
-  patch(taskId: string, fields: Partial<Pick<Task, 'status' | 'phase' | 'budgetUsage' | 'tokenUsage' | 'contextTokens' | 'pendingApprovals' | 'approvedApprovalKeys'>>): void {
+  patch(taskId: string, fields: Partial<Pick<Task, 'status' | 'phase' | 'budgetUsage' | 'tokenUsage' | 'contextTokens' | 'pendingApprovals'>>): void {
     const now = new Date().toISOString();
     const assignments: string[] = ['updated_at = ?'];
     const values: unknown[] = [now];
@@ -390,7 +387,6 @@ export const taskStore = {
     if (fields.tokenUsage !== undefined) { assignments.push('token_usage = ?'); values.push(JSON.stringify(fields.tokenUsage)); }
     if (fields.contextTokens !== undefined) { assignments.push('context_tokens = ?'); values.push(fields.contextTokens); }
     if (fields.pendingApprovals !== undefined) { assignments.push('pending_approvals = ?'); values.push(JSON.stringify(fields.pendingApprovals)); }
-    if (fields.approvedApprovalKeys !== undefined) { assignments.push('approved_approval_keys = ?'); values.push(JSON.stringify(fields.approvedApprovalKeys)); }
 
     values.push(taskId);
     db.prepare(`UPDATE tasks SET ${assignments.join(', ')} WHERE id = ?`).run(...values);

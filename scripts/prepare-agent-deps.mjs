@@ -15,7 +15,6 @@
  *   node scripts/prepare-agent-deps.mjs
  */
 
-import { execSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, cpSync, realpathSync, rmSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 
@@ -71,8 +70,7 @@ function main() {
       continue;
     }
 
-    // 跨平台递归拷贝，跟随符号链接（workspace 包是 symlink）
-    cpSync(src, dest, { recursive: true, dereference: true });
+    copyPackage(name, src, dest);
     ok++;
   }
 
@@ -84,6 +82,41 @@ function main() {
     );
     process.exit(1);
   }
+}
+
+function copyPackage(name, src, dest) {
+  if (isWorkspacePackage(name)) {
+    copyWorkspacePackage(name, dest);
+    return;
+  }
+
+  // 跨平台递归拷贝，跟随符号链接（普通 npm 包可能含 symlink）
+  cpSync(src, dest, { recursive: true, dereference: true });
+}
+
+function copyWorkspacePackage(name, dest) {
+  const src = workspacePackageDir(name);
+  if (!src) {
+    throw new Error(`无法定位 workspace 包 ${name}`);
+  }
+  const dist = join(src, 'dist');
+  if (!existsSync(dist)) {
+    throw new Error(`workspace 包 ${name} 尚未构建，请先运行 npm run build:shared`);
+  }
+  mkdirSync(dest, { recursive: true });
+  cpSync(join(src, 'package.json'), join(dest, 'package.json'));
+  cpSync(dist, join(dest, 'dist'), { recursive: true });
+}
+
+function isWorkspacePackage(name) {
+  return workspacePackageDir(name) !== null;
+}
+
+function workspacePackageDir(name) {
+  const parts = name.split('/');
+  if (parts.length <= 1) return null;
+  const wsPath = join(PACKAGES_DIR, parts[1]);
+  return existsSync(join(wsPath, 'package.json')) ? wsPath : null;
 }
 
 /**
@@ -113,16 +146,12 @@ function resolveTransitive(name, resolved) {
  * 优先级：共享 node_modules → packages/ 目录（workspace 包）
  */
 function resolvePackageJson(name) {
+  const workspace = workspacePackageDir(name);
+  if (workspace) return join(workspace, 'package.json');
+
   // 1. 标准 npm 路径
   const npmPath = join(ROOT_NM, name, 'package.json');
   if (existsSync(npmPath)) return npmPath;
-
-  // 2. workspace 包（如 @aurevoy/shared → packages/shared）
-  const parts = name.split('/');
-  if (parts.length > 1) {
-    const wsPath = join(PACKAGES_DIR, parts[1], 'package.json');
-    if (existsSync(wsPath)) return wsPath;
-  }
 
   return null;
 }
@@ -132,16 +161,12 @@ function resolvePackageJson(name) {
  * 优先级：共享 node_modules → packages/ 目录（workspace 包）
  */
 function resolveSource(name) {
+  const workspace = workspacePackageDir(name);
+  if (workspace) return workspace;
+
   // 1. 标准 npm 路径
   const npmPath = join(ROOT_NM, name);
   if (existsSync(npmPath)) return npmPath;
-
-  // 2. workspace 包
-  const parts = name.split('/');
-  if (parts.length > 1) {
-    const wsPath = join(PACKAGES_DIR, parts[1]);
-    if (existsSync(wsPath)) return wsPath;
-  }
 
   return null;
 }

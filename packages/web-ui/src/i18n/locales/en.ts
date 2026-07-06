@@ -28,10 +28,6 @@ export const en = {
   "action.runDetails": "Run Details",
   "action.hideDetails": "Hide Details",
 
-  // Content mode
-  "mode.conversation": "Conversation",
-  "mode.artifacts": "Artifacts",
-  "mode.switcherLabel": "Content View",
   "time.justNow": "Just now",
   "time.minutesAgo": "minutes ago",
   "time.hoursAgo": "hours ago",
@@ -41,7 +37,6 @@ export const en = {
   "action.reject": "Reject",
   "action.approve": "Approve This Time",
   "action.approveOnce": "Approve Once",
-  "action.approveSession": "Approve for Session",
   "action.reply": "Reply",
   "action.close": "Close",
   "action.copy": "Copy",
@@ -112,11 +107,6 @@ export const en = {
   "settings.embeddingApiKeyTitle": "API Key",
   "settings.embeddingApiKeyDesc": "Leave empty for local Ollama models",
 
-
-  // Artifact view
-  "artifact.empty.title": "No Artifacts Yet",
-  "artifact.empty.hint": "Files and content created by the Agent will appear here",
-  "artifact.listLabel": "Artifact List",
 
   // Composer (input area)
   "composer.placeholder": "Tell Aurevoy what you want to accomplish",
@@ -289,6 +279,14 @@ export const en = {
   // Run inspector
   "inspector.panelLabel": "Task Inspector",
   "inspector.title": "Run Details",
+  "inspector.piRuntime": "Pi Agent Runtime",
+  "inspector.provider": "Provider",
+  "inspector.thinking": "Thinking",
+  "inspector.toolExecution": "Tool Execution",
+  "inspector.autoMode": "Auto Mode",
+  "inspector.commandExecution": "Command Execution",
+  "inspector.enabled": "Enabled",
+  "inspector.disabled": "Disabled",
   "inspector.taskContext": "Task Context",
   "inspector.currentTask": "Current Task",
   "inspector.unselected": "Not Selected",
@@ -298,13 +296,14 @@ export const en = {
   "inspector.token": "Token",
   "inspector.notRecorded": "Not Recorded",
   "inspector.unavailable": "Unavailable",
+  "inspector.contextWindow": "Context Window",
   "inspector.budget": "Budget",
+  "inspector.planProgress": "Plan Progress",
+  "inspector.pendingApprovals": "Pending Approvals",
   "inspector.engineVersion": "Engine Version",
   "inspector.notConnected": "Not Connected",
   "inspector.uptime": "Uptime",
   "inspector.uptimeUnit": "seconds",
-  "inspector.artifacts": "Artifacts",
-  "inspector.emptyArtifacts": "No task artifacts",
   "inspector.traces": "Trace Logs",
   "inspector.emptyTraces": "No persistent traces",
   "inspector.toolCatalog": "Tool Catalog",
@@ -403,9 +402,9 @@ export const en = {
   "settings.languageJa": "日本語",
   // Model configuration
   "settings.providerConfig": "Model Configuration",
-  "settings.baseUrlDesc": "OpenAI-compatible API endpoint.",
+  "settings.baseUrlDesc": "Mainly used by openai-compatible or custom providers; built-in providers use their own endpoints by default.",
   "settings.providerTitle": "Provider",
-  "settings.providerDesc": "Select the LLM provider backend.",
+  "settings.providerDesc": "Select the provider used by the Agent. This applies to main tasks and subagents.",
   "settings.maxTokensTitle": "Max Output Tokens",
   "settings.maxTokensDesc": "Maximum output tokens per request (required by Anthropic).",
   "settings.modelDescFetchedPrefix": "Fetched ",
@@ -416,7 +415,7 @@ export const en = {
   "settings.visionModelDesc": "Automatically switches to this model when messages contain images. Leave empty to use the main model.",
   "settings.visionModelPlaceholder": "Leave empty to use main model",
   "settings.fetchModelsTitle": "Fetch Model List",
-  "settings.fetchModelsDesc": "Fetches once from the current Base URL / API Key on click, and saves the list for management.",
+  "settings.fetchModelsDesc": "Reads models from the provider catalog; custom compatible endpoints keep the current model when no catalog is available.",
   "settings.fetching": "Fetching",
   "settings.fetchModels": "Fetch Models",
   "settings.enabledModelsTitle": "Available Models in Chat",
@@ -435,7 +434,7 @@ export const en = {
   "settings.timeoutTitle": "Request Timeout",
   "settings.timeoutDesc": "Model call timeout in milliseconds.",
   "settings.saveProviderTitle": "Save Model Configuration",
-  "settings.saveProviderDesc": "Writes to the backend runtime settings.",
+  "settings.saveProviderDesc": "Writes to the Agent runtime settings.",
   // MCP
   "settings.mcpServers": "MCP Servers",
   "settings.saveMcp": "Save MCP Configuration",
@@ -467,6 +466,7 @@ export const en = {
   "settings.tokenUsagePrompt": "Input tokens",
   "settings.tokenUsageCompletion": "Output tokens",
   "settings.tokenUsageTotal": "Total tokens",
+  "settings.tokenUsageReasoning": "Reasoning tokens",
   "settings.tokenUsageCacheRead": "Cache read tokens",
   "settings.tokenUsageCacheWrite": "Cache write tokens",
   "settings.tokenUsageEstimatedCost": "Estimated cost",
@@ -483,6 +483,9 @@ export const en = {
   "settings.usageOutputTokens": "Output tokens",
   "settings.usageOutputDetail": "Model-generated response content",
   "settings.usageOutputCache": "Cache write tokens",
+  "settings.usageOfOutput": "of output",
+  "settings.usageByModel": "By Model",
+  "settings.usageProviderModel": "Provider / Model",
 
   // Notifications (errors / success)
   "notice.startEngineFailed": "Failed to start Agent engine: ",
@@ -505,7 +508,6 @@ export const en = {
   "notice.pleaseRetry": ". Please retry.",
   "notice.replyClarificationFailed": "Failed to submit clarification reply: ",
   "notice.planApprovalFailed": "Failed to approve plan: ",
-  "notice.updateArtifactFailed": "Failed to update artifact status: ",
   "notice.readMemoryFailed": "Failed to read memories: ",
   "notice.settingsSaved": "Settings saved and applied to Agent runtime",
   "notice.saveSettingsFailed": "Failed to save settings: ",

@@ -10,7 +10,7 @@ import type {
   TaskCheckpoint,
   TokenUsage,
 } from '@aurevoy/shared';
-import { getProviderName } from '../llm/provider.js';
+import { getPiProviderName } from '../llm/pi-provider.js';
 import { config } from '../config.js';
 
 export const DEFAULT_TASK_BUDGET: Required<TaskBudget> = {
@@ -77,7 +77,7 @@ export function addTokenUsage(task: Task, usage: TokenUsage | null | undefined):
   const now = new Date().toISOString();
   const current: AggregatedTokenUsage = task.tokenUsage ?? {
     available: false,
-    provider: getProviderName(),
+    provider: getPiProviderName(),
     model: config.llm.model,
   };
   if (!usage || Object.keys(usage).length === 0) {
@@ -86,11 +86,12 @@ export function addTokenUsage(task: Task, usage: TokenUsage | null | undefined):
   }
   task.tokenUsage = {
     available: true,
-    provider: getProviderName(),
+    provider: getPiProviderName(),
     model: config.llm.model,
     promptTokens: addOptional(current.promptTokens, usage.promptTokens),
     completionTokens: addOptional(current.completionTokens, usage.completionTokens),
     totalTokens: addOptional(current.totalTokens, usage.totalTokens),
+    reasoningTokens: addOptional(current.reasoningTokens, usage.reasoningTokens),
     cacheReadTokens: addOptional(current.cacheReadTokens, usage.cacheReadTokens),
     cacheWriteTokens: addOptional(current.cacheWriteTokens, usage.cacheWriteTokens),
     estimatedCostUsd: addOptional(current.estimatedCostUsd, usage.estimatedCostUsd),

@@ -224,12 +224,11 @@ export async function approveToolCall(
   taskId: string,
   callId: string,
   approved: boolean,
-  sessionApprove?: boolean,
 ): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/approvals`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ callId, approved, sessionApprove }),
+    body: JSON.stringify({ callId, approved }),
   });
   if (!res.ok) await throwApiError(res, "approve tool call failed");
 }
@@ -347,15 +346,27 @@ export async function updateSettings(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`update settings failed: ${res.status}`);
+  if (!res.ok) throw new Error(`update settings failed: ${await readErrorMessage(res)}`);
   return res.json();
 }
 
 export async function listProviderModels(): Promise<string[]> {
   const res = await fetch(`${BASE_URL}/api/settings/models`);
-  if (!res.ok) throw new Error(`list provider models failed: ${res.status}`);
+  if (!res.ok) throw new Error(`list provider models failed: ${await readErrorMessage(res)}`);
   const body = (await res.json()) as ModelListResponse;
   return body.models;
+}
+
+async function readErrorMessage(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    if (typeof body.error === 'string' && body.error.trim()) {
+      return `${res.status}: ${body.error}`;
+    }
+  } catch {
+    // Fall through to the status code when the backend did not return JSON.
+  }
+  return String(res.status);
 }
 
 export async function getMcpStatus(): Promise<McpStatusResponse> {

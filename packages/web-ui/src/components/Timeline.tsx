@@ -66,6 +66,7 @@ export interface AgentRoundData {
   summary: string;
   markdownOutput?: string;
   contentBlocks?: ContentBlock[];
+  phaseDetail?: string;
   status: "pending" | "running" | "completed" | "failed";
 }
 
@@ -78,6 +79,7 @@ export function detectStepKind(toolName: string): StepKind {
   if (toolName === "write_file" || toolName === "create_file" || toolName === "append_file" || toolName === "session_open" || toolName === "session_write" || toolName === "session_close" || toolName === "session_abort" || toolName === "write") return "file_write";
   if (toolName === "edit_file" || toolName === "apply_diff" || toolName === "replace_lines" || toolName === "edit_lines" || toolName === "edit") return "edit";
   if (toolName === "web_search" || toolName === "search_grep" || toolName === "search_files" || toolName === "grep" || toolName === "glob") return "search";
+  if (toolName === "web_fetch") return "browse";
   if (toolName === "create_artifact" || toolName === "apply_artifact") return "artifact";
   if (toolName.startsWith("browser_")) return "browse";
   if (toolName.startsWith("mcp_")) return "api";
@@ -152,7 +154,7 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
       : "";
     return truncateTitle([cmd, commandArgs].filter(Boolean).join(" ")) || "";
   }
-  if (toolName === "replace_lines" || toolName === "edit_lines") {
+  if (toolName === "replace_lines" || toolName === "edit_lines" || toolName === "edit") {
     const path = typeof args.path === "string" ? args.path : "";
     const startLine = typeof args.start_line === "number" ? args.start_line : null;
     const endLine = typeof args.end_line === "number" ? args.end_line : null;
@@ -161,7 +163,7 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
     }
     return truncateTitle(path) || "";
   }
-  if (toolName === "write_file") {
+  if (toolName === "write_file" || toolName === "write") {
     const path = typeof args.path === "string" ? args.path : "";
     return truncateTitle(path) || "";
   }
@@ -177,7 +179,7 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
     const sid = typeof args.session_id === "string" ? args.session_id.slice(0, 8) : "";
     return sid || "";
   }
-  if (toolName === "open_file") {
+  if (toolName === "open_file" || toolName === "read") {
     const path = typeof args.path === "string" ? args.path : "";
     const line = typeof args.line_number === "number" ? args.line_number : null;
     if (path && line != null) return truncateTitle(`${path} :${line}`);
@@ -204,6 +206,10 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
     const query = typeof args.query === "string" ? args.query : typeof args.Query === "string" ? args.Query : "";
     return query ? truncateTitle(query) : "";
   }
+  if (toolName === "web_fetch") {
+    const url = typeof args.url === "string" ? args.url : "";
+    return url ? truncateTitle(url) : "";
+  }
   return "";
 }
 
@@ -226,17 +232,19 @@ function extractLogContent(
     }
     return undefined;
   }
-  if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll") {
+  if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll" || toolName === "read") {
     const out = result.output;
     if (typeof out === "string") return out.slice(0, 2000);
     if (typeof out === "object" && out !== null) {
       const record = out as Record<string, unknown>;
       if (typeof record.text === "string") return record.text.slice(0, 2000);
+      if (typeof record.content === "string") return record.content.slice(0, 2000);
     }
     return undefined;
   }
-  if (toolName === "search_grep" || toolName === "search_files") {
+  if (toolName === "search_grep" || toolName === "search_files" || toolName === "grep" || toolName === "glob") {
     const out = result.output;
+    if (typeof out === "string") return out.slice(0, 2000);
     if (typeof out === "object" && out !== null) {
       const record = out as Record<string, unknown>;
       const matches = record.matches;
@@ -247,7 +255,7 @@ function extractLogContent(
     }
     return undefined;
   }
-  if (toolName === "replace_lines" || toolName === "edit_lines" || toolName === "write_file" || toolName === "append_file" || toolName === "edit_file" || toolName === "create_file") {
+  if (toolName === "replace_lines" || toolName === "edit_lines" || toolName === "write_file" || toolName === "append_file" || toolName === "edit_file" || toolName === "create_file" || toolName === "write") {
     const out = result.output;
     if (typeof out === "object" && out !== null) {
       const record = out as Record<string, unknown>;
@@ -355,9 +363,10 @@ export function buildLiveAgentRoundData(params: {
   liveToolActivity: { id: string; name: string; args: unknown; status: string; planStepId?: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
   output?: string;
   phase?: string | null;
+  phaseDetail?: string;
   contentBlocks?: ContentBlock[];
 }): AgentRoundData {
-  const { plan, liveToolActivity, output, phase, contentBlocks } = params;
+  const { plan, liveToolActivity, output, phase, phaseDetail, contentBlocks } = params;
   const steps: TimelineStepData[] = liveToolActivity.filter((act) => !shouldHideToolFromWorkflow(act.name)).map((act) => {
     const kind = detectStepKind(act.name);
     const args = typeof act.args === "object" && act.args !== null
@@ -385,7 +394,7 @@ export function buildLiveAgentRoundData(params: {
     };
   });
 
-  const summary = computeSummaryFromSteps(steps);
+  const summary = computeSummaryFromSteps(steps) || phaseDetail || "";
 
   // 优先按 per-tool planStepId 分组，无 planStepId 时回退到按活跃 step 分组
   const stepsByPlanStepId = new Map<string, TimelineStepData[]>();
@@ -470,6 +479,7 @@ export function buildLiveAgentRoundData(params: {
     summary,
     markdownOutput: output,
     contentBlocks,
+    phaseDetail,
     status: isFailed ? "failed" : (steps.some((s) => s.status === "running") || isActivePhase) ? "running" : "completed",
   };
 }
@@ -517,7 +527,8 @@ function StepGlyph({ step }: { step: TimelineStepData }) {
 }
 
 function stepDisplayLabel(step: TimelineStepData): string {
-  if (step.toolName === "web_search") return "Searched the web";
+  if (step.toolName === "web_search" || step.toolName === "search_grep" || step.toolName === "grep" || step.toolName === "glob") return "Searched";
+  if (step.toolName === "web_fetch") return "Fetched URL";
   if (step.kind === "browse") return "Opened page";
   if (step.kind === "file_read") return "Read file";
   if (step.kind === "file_write") return "Wrote file";
@@ -1081,7 +1092,7 @@ export function AgentRound({
   const containerRef = useRef<HTMLDivElement>(null);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
   const shouldShowWorkflow = showWorkflow && (data.planStepGroups.length > 0 || busy);
-  const autoOpenRunningTools = !busy;
+  const autoOpenRunningTools = true;
   const outputNode = showOutput && data.markdownOutput ? (
     <article className="timeline-output">
       <div className="doc-meta">
@@ -1134,7 +1145,7 @@ export function AgentRound({
                   group={group}
                   index={i}
                   isLast={i === data.planStepGroups.length - 1}
-                  defaultOpen={busy ? false : defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
+                  defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
                   autoOpenRunningTools={autoOpenRunningTools}
                 />
               ))
@@ -1142,7 +1153,7 @@ export function AgentRound({
               /* 无分组时仅实时阶段显示空占位 */
               <div className="timeline-empty">
                 <span className="timeline-step-icon is-pending" />
-                <span>思考中…</span>
+                <span>{data.phaseDetail || "思考中…"}</span>
               </div>
             )}
           </div>

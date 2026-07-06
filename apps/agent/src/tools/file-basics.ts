@@ -33,7 +33,7 @@ import { execFile } from 'node:child_process';
 import { join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { toolRegistry } from './registry.js';
+import { unifiedToolRegistry } from '../tool/unified-registry.js';
 import {
   resolveInWorkspace,
   assertRealPathInside,
@@ -227,32 +227,32 @@ function publishProgress(
 // ============================================================
 // 1. open_file（safe）：打开文件并定位
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'open_file',
-    description:
-      '打开工作区内的文本文件，定位到指定行，返回一个可读视口（约 100 行带行号文本）。' +
-      '这是代码探索的入口操作——每次打开文件都应先用此工具定位。' +
-      '返回当前视口范围（window_start ~ window_end）和中心行号（center_line），' +
-      '后续可通过 scroll 工具浏览文件其他部分。' +
-      'line_number 传入文件中间行号可获得最佳上下文（上方 ~50 行 + 下方 ~50 行）。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的文件路径' },
-        line_number: {
-          type: 'integer',
-          description:
-            '要定位到的行号（1-indexed），缺省为第 1 行。' +
-            '传入文件中间行号可同时看到上下方上下文。',
-        },
+unifiedToolRegistry.register({
+  
+  name: 'open_file',
+  description:
+    '打开工作区内的文本文件，定位到指定行，返回一个可读视口（约 100 行带行号文本）。' +
+    '这是代码探索的入口操作——每次打开文件都应先用此工具定位。' +
+    '返回当前视口范围（window_start ~ window_end）和中心行号（center_line），' +
+    '后续可通过 scroll 工具浏览文件其他部分。' +
+    'line_number 传入文件中间行号可获得最佳上下文（上方 ~50 行 + 下方 ~50 行）。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '相对工作区的文件路径' },
+      line_number: {
+        type: 'integer',
+        description:
+          '要定位到的行号（1-indexed），缺省为第 1 行。' +
+          '传入文件中间行号可同时看到上下方上下文。',
       },
-      required: ['path'],
-      additionalProperties: false,
     },
-    riskLevel: 'safe',
-    executionPolicy: { parallelizable: true },
+    required: ['path'],
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  executionPolicy: { parallelizable: true },
+  source: { type: 'builtin' },
 
   async execute(args, context) {
     const { root, externalPaths } = rootAndExternals(context);
@@ -289,37 +289,37 @@ toolRegistry.register({
 // ============================================================
 // 2. scroll（safe）：视口滚动
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'scroll',
-    description:
-      '在已通过 open_file 打开的文件中滚动视口。' +
-      '需要传入 file（文件路径）和 current_line（当前中心行号，从 open_file 或上次 scroll 的 center_line 获取）。' +
-      'direction 支持：up（上滚）、down（下滚）、top（跳到文件开头）、bottom（跳到文件末尾）。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        file: { type: 'string', description: '相对工作区的文件路径（与 open_file 的 path 一致）' },
-        direction: {
-          type: 'string',
-          enum: ['up', 'down', 'top', 'bottom'],
-          description: '滚动方向：up（向上）、down（向下）、top（跳到开头）、bottom（跳到末尾）',
-        },
-        current_line: {
-          type: 'integer',
-          description: '当前视口中心行号（从 open_file 或上次 scroll 的 center_line 获取）',
-        },
-        lines_count: {
-          type: 'integer',
-          description: '滚动行数，缺省为 50。direction 为 top/bottom 时忽略。',
-        },
+unifiedToolRegistry.register({
+  
+  name: 'scroll',
+  description:
+    '在已通过 open_file 打开的文件中滚动视口。' +
+    '需要传入 file（文件路径）和 current_line（当前中心行号，从 open_file 或上次 scroll 的 center_line 获取）。' +
+    'direction 支持：up（上滚）、down（下滚）、top（跳到文件开头）、bottom（跳到文件末尾）。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      file: { type: 'string', description: '相对工作区的文件路径（与 open_file 的 path 一致）' },
+      direction: {
+        type: 'string',
+        enum: ['up', 'down', 'top', 'bottom'],
+        description: '滚动方向：up（向上）、down（向下）、top（跳到开头）、bottom（跳到末尾）',
       },
-      required: ['file', 'direction', 'current_line'],
-      additionalProperties: false,
+      current_line: {
+        type: 'integer',
+        description: '当前视口中心行号（从 open_file 或上次 scroll 的 center_line 获取）',
+      },
+      lines_count: {
+        type: 'integer',
+        description: '滚动行数，缺省为 50。direction 为 top/bottom 时忽略。',
+      },
     },
-    riskLevel: 'safe',
-    executionPolicy: { parallelizable: true },
+    required: ['file', 'direction', 'current_line'],
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  executionPolicy: { parallelizable: true },
+  source: { type: 'builtin' },
 
   async execute(args, context) {
     const { root, externalPaths } = rootAndExternals(context);
@@ -373,29 +373,29 @@ toolRegistry.register({
 // ============================================================
 // 3. search_grep（safe）：全局只读检索
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'search_grep',
-    description:
-      '在工作区内全局搜索文本内容（类似 grep -rn）。' +
-      '返回所有匹配的文件路径、行号与内容片段。' +
-      '不区分大小写，纯只读操作。' +
-      '搜索范围大时建议配合 glob 参数（如 "*.ts"、"*.md"）缩小范围，' +
-      '避免匹配节点模块或构建产物。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        pattern: { type: 'string', description: '要搜索的关键词或 grep 正则表达式' },
-        path: { type: 'string', description: '搜索起始目录（相对工作区根），缺省为工作区根目录' },
-        glob: { type: 'string', description: '文件名 glob 过滤，例如 "*.ts"、"./src/**/*.ts"、忽略 node_modules' },
-        maxResults: { type: 'integer', description: '最多返回结果数，默认 50，上限 100' },
-      },
-      required: ['pattern'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  
+  name: 'search_grep',
+  description:
+    '在工作区内全局搜索文本内容（类似 grep -rn）。' +
+    '返回所有匹配的文件路径、行号与内容片段。' +
+    '不区分大小写，纯只读操作。' +
+    '搜索范围大时建议配合 glob 参数（如 "*.ts"、"*.md"）缩小范围，' +
+    '避免匹配节点模块或构建产物。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      pattern: { type: 'string', description: '要搜索的关键词或 grep 正则表达式' },
+      path: { type: 'string', description: '搜索起始目录（相对工作区根），缺省为工作区根目录' },
+      glob: { type: 'string', description: '文件名 glob 过滤，例如 "*.ts"、"./src/**/*.ts"、忽略 node_modules' },
+      maxResults: { type: 'integer', description: '最多返回结果数，默认 50，上限 100' },
     },
-    riskLevel: 'safe',
-    executionPolicy: { parallelizable: true },
+    required: ['pattern'],
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  executionPolicy: { parallelizable: true },
+  source: { type: 'builtin' },
 
   async execute(args, context) {
     const { root, externalPaths } = rootAndExternals(context);
@@ -465,23 +465,23 @@ toolRegistry.register({
 // ============================================================
 // 4. create_file（dangerous）：新建空文件
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'create_file',
-    description:
-      '在工作区内创建一个新的空文件。' +
-      '如果文件已存在则不覆盖，返回已存在状态。' +
-      '如需写入内容到新文件，创建后用 write_file 批量写入或 session_open/session_write/session_close 分批写入。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的文件路径' },
-      },
-      required: ['path'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  
+  name: 'create_file',
+  description:
+    '在工作区内创建一个新的空文件。' +
+    '如果文件已存在则不覆盖，返回已存在状态。' +
+    '如需写入内容到新文件，创建后用 write_file 批量写入或 session_open/session_write/session_close 分批写入。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '相对工作区的文件路径' },
     },
-    riskLevel: 'dangerous',
+    required: ['path'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
 
   async execute(args, context) {
     const { root, externalPaths } = rootAndExternals(context);
@@ -514,26 +514,26 @@ toolRegistry.register({
 // ============================================================
 // 5. write_file（dangerous）：原子全量写
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'write_file',
-    description:
-      '原子全量写入文件（≤500KB）。文件不存在则创建，存在则覆盖。' +
-      '通过先写临时文件再 rename 实现原子写入，不会产生部分写入的文件。' +
-      '是新建文件或完全重写已有文件的首选方式。' +
-      '内容超过 500KB 时会返回错误——请改用 session_open/session_write/session_close 分批写入。' +
-      '如需局部修改现有文件，使用 edit_lines。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的文件路径' },
-        content: { type: 'string', description: '文件内容（≤500KB，UTF-8 文本）' },
-      },
-      required: ['path', 'content'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  
+  name: 'write_file',
+  description:
+    '原子全量写入文件（≤500KB）。文件不存在则创建，存在则覆盖。' +
+    '通过先写临时文件再 rename 实现原子写入，不会产生部分写入的文件。' +
+    '是新建文件或完全重写已有文件的首选方式。' +
+    '内容超过 500KB 时会返回错误——请改用 session_open/session_write/session_close 分批写入。' +
+    '如需局部修改现有文件，使用 edit_lines。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '相对工作区的文件路径' },
+      content: { type: 'string', description: '文件内容（≤500KB，UTF-8 文本）' },
     },
-    riskLevel: 'dangerous',
+    required: ['path', 'content'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
 
   async execute(args, context) {
     const { root, externalPaths } = rootAndExternals(context);
@@ -571,28 +571,28 @@ toolRegistry.register({
 // ============================================================
 // 6. edit_lines（dangerous）：行级精确替换
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'edit_lines',
-    description:
-      '精确替换文件中指定行范围（start_line 到 end_line，闭区间，1-indexed）的内容。' +
-      'content 上限 2000 行 / 128KB——适合局部编辑代码、修改配置等精确修改场景。' +
-      '使用前务必先用 search_grep 或 open_file 确认行号准确。' +
-      '如需创建大文件（>2000 行），用 session_open/session_write/session_close 分批写入。' +
-      '如需整体重写小文件（≤500KB），用 write_file 一步完成。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的文件路径' },
-        start_line: { type: 'integer', description: '起始行号（1-indexed，包含）' },
-        end_line: { type: 'integer', description: '结束行号（1-indexed，包含），必须 >= start_line' },
-        content: { type: 'string', description: '替换后的新内容（≤2000 行 / 128KB，可包含多行文本）' },
-      },
-      required: ['path', 'start_line', 'end_line', 'content'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  
+  name: 'edit_lines',
+  description:
+    '精确替换文件中指定行范围（start_line 到 end_line，闭区间，1-indexed）的内容。' +
+    'content 上限 2000 行 / 128KB——适合局部编辑代码、修改配置等精确修改场景。' +
+    '使用前务必先用 search_grep 或 open_file 确认行号准确。' +
+    '如需创建大文件（>2000 行），用 session_open/session_write/session_close 分批写入。' +
+    '如需整体重写小文件（≤500KB），用 write_file 一步完成。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '相对工作区的文件路径' },
+      start_line: { type: 'integer', description: '起始行号（1-indexed，包含）' },
+      end_line: { type: 'integer', description: '结束行号（1-indexed，包含），必须 >= start_line' },
+      content: { type: 'string', description: '替换后的新内容（≤2000 行 / 128KB，可包含多行文本）' },
     },
-    riskLevel: 'dangerous',
+    required: ['path', 'start_line', 'end_line', 'content'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
 
   async execute(args, context) {
     const { root, externalPaths } = rootAndExternals(context);
@@ -666,26 +666,26 @@ toolRegistry.register({
 // ============================================================
 // 7. append_file（dangerous）：尾部追加
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'append_file',
-    description:
-      '在文件末尾追加内容（≤2000 行/128KB）。' +
-      '如果文件不存在则创建新文件并写入。' +
-      '如需追加多于 2000 行，连续多次调用 append_file。' +
-      '如需替换文件中间某段内容，使用 edit_lines。' +
-      '如需新建大文件，使用 session_open/session_write/session_close 分批写入。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的文件路径' },
-        content: { type: 'string', description: '要追加的文本内容（≤2000 行/128KB）' },
-      },
-      required: ['path', 'content'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  
+  name: 'append_file',
+  description:
+    '在文件末尾追加内容（≤2000 行/128KB）。' +
+    '如果文件不存在则创建新文件并写入。' +
+    '如需追加多于 2000 行，连续多次调用 append_file。' +
+    '如需替换文件中间某段内容，使用 edit_lines。' +
+    '如需新建大文件，使用 session_open/session_write/session_close 分批写入。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '相对工作区的文件路径' },
+      content: { type: 'string', description: '要追加的文本内容（≤2000 行/128KB）' },
     },
-    riskLevel: 'dangerous',
+    required: ['path', 'content'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
 
   async execute(args, context) {
     const { root, externalPaths } = rootAndExternals(context);
@@ -726,24 +726,24 @@ toolRegistry.register({
 // ============================================================
 // 8. session_open（dangerous）：打开分批写入会话
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'session_open',
-    description:
-      '打开一个分批写入会话，用于构建大文件（>2000 行 / >500KB）。' +
-      '返回一个 session_id，后续通过 session_write 分多次追加内容，' +
-      '最后用 session_close 完成写入。' +
-      '适用于：新建大型源文件、生成长篇文档、导出数据.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的目标文件路径' },
-      },
-      required: ['path'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  
+  name: 'session_open',
+  description:
+    '打开一个分批写入会话，用于构建大文件（>2000 行 / >500KB）。' +
+    '返回一个 session_id，后续通过 session_write 分多次追加内容，' +
+    '最后用 session_close 完成写入。' +
+    '适用于：新建大型源文件、生成长篇文档、导出数据.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '相对工作区的目标文件路径' },
     },
-    riskLevel: 'dangerous',
+    required: ['path'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
 
   async execute(args, context) {
     const { root, externalPaths } = rootAndExternals(context);
@@ -783,25 +783,25 @@ toolRegistry.register({
 // ============================================================
 // 9. session_write（dangerous）：向写作会话追加一段内容
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'session_write',
-    description:
-      '向一个分批写入会话追加一段内容（≤2000 行/128KB 每次）。' +
-      '可连续多次调用，每段内容依次追加到临时文件。' +
-      '最后必须调用 session_close 完成写入。' +
-      '返回当前已写入的字节数和行数，便于跟踪进度。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        session_id: { type: 'string', description: 'session_open 返回的 session_id' },
-        content: { type: 'string', description: '要追加的文本内容（≤2000 行/128KB）' },
-      },
-      required: ['session_id', 'content'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  
+  name: 'session_write',
+  description:
+    '向一个分批写入会话追加一段内容（≤2000 行/128KB 每次）。' +
+    '可连续多次调用，每段内容依次追加到临时文件。' +
+    '最后必须调用 session_close 完成写入。' +
+    '返回当前已写入的字节数和行数，便于跟踪进度。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      session_id: { type: 'string', description: 'session_open 返回的 session_id' },
+      content: { type: 'string', description: '要追加的文本内容（≤2000 行/128KB）' },
     },
-    riskLevel: 'dangerous',
+    required: ['session_id', 'content'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
 
   async execute(args, context) {
     const sessionId = readNonEmptyString(args.session_id, 'session_id');
@@ -852,23 +852,23 @@ toolRegistry.register({
 // ============================================================
 // 10. session_close（dangerous）：完成分批写入
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'session_close',
-    description:
-      '完成分批写入会话：将临时文件原子地 rename 到目标路径，清理 session 状态。' +
-      '调用后 session_id 失效。文件写入完成，可正常读取。' +
-      '如果目标路径已存在，会被覆盖。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        session_id: { type: 'string', description: 'session_open 返回的 session_id' },
-      },
-      required: ['session_id'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  
+  name: 'session_close',
+  description:
+    '完成分批写入会话：将临时文件原子地 rename 到目标路径，清理 session 状态。' +
+    '调用后 session_id 失效。文件写入完成，可正常读取。' +
+    '如果目标路径已存在，会被覆盖。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      session_id: { type: 'string', description: 'session_open 返回的 session_id' },
     },
-    riskLevel: 'dangerous',
+    required: ['session_id'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
 
   async execute(args, context) {
     const sessionId = readNonEmptyString(args.session_id, 'session_id');
@@ -912,23 +912,23 @@ toolRegistry.register({
 // ============================================================
 // 11. session_abort（safe）：放弃分批写入
 // ============================================================
-toolRegistry.register({
-  descriptor: {
-    name: 'session_abort',
-    description:
-      '放弃一个进行中的分批写入会话，清理临时文件。' +
-      '目标路径不受影响（临时文件尚未 rename）。' +
-      '如果 session_id 已过期或不存在，返回已清理状态。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        session_id: { type: 'string', description: 'session_open 返回的 session_id' },
-      },
-      required: ['session_id'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  
+  name: 'session_abort',
+  description:
+    '放弃一个进行中的分批写入会话，清理临时文件。' +
+    '目标路径不受影响（临时文件尚未 rename）。' +
+    '如果 session_id 已过期或不存在，返回已清理状态。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      session_id: { type: 'string', description: 'session_open 返回的 session_id' },
     },
-    riskLevel: 'safe',
+    required: ['session_id'],
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  source: { type: 'builtin' },
 
   async execute(args) {
     const sessionId = readNonEmptyString(args.session_id, 'session_id');

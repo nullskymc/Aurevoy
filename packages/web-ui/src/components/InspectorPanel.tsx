@@ -1,69 +1,29 @@
-import { useState } from "react";
-import type { HealthResponse, Message, Task, TaskArtifact, TaskPhase } from "@aurevoy/shared";
+import type {
+  HealthResponse,
+  RuntimeSettings,
+  Task,
+  TaskPhase,
+} from "@aurevoy/shared";
 import { getPhaseLabel } from "./status";
 import { t } from "../i18n";
-import { usePlatform } from "../platform/context";
-import { ContextMenu } from "./ContextMenu";
-import {
-  buildArtifactMenuItems,
-  buildTextMenuItems,
-  contextMenuPoint,
-  type ContextMenuState,
-} from "./contextMenuActions";
 
 interface InspectorPanelProps {
   open: boolean;
   health: HealthResponse | null;
   phase: TaskPhase | null;
+  settings: RuntimeSettings | null;
   task: Task | null;
   onClose: () => void;
 }
-
-const EXPANDED_SECTIONS = new Set<string>();
 
 export function InspectorPanel({
   open,
   health,
   phase,
+  settings,
   task,
   onClose,
 }: InspectorPanelProps) {
-  const platform = usePlatform();
-  const [expanded, setExpanded] = useState<Set<string>>(EXPANDED_SECTIONS);
-  const userMessages = task?.messages.filter((m): m is Message & { role: "user" } => m.role === "user") ?? [];
-
-  // Context menu
-  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
-
-  function handleArtifactMiniContextMenu(e: React.MouseEvent, artifact: TaskArtifact) {
-    e.preventDefault();
-    e.stopPropagation();
-    setCtxMenu({
-      open: true,
-      point: contextMenuPoint(e),
-      items: buildArtifactMenuItems({ artifact, platform }),
-    });
-  }
-
-  function handleQueryContextMenu(e: React.MouseEvent, msg: Message) {
-    e.preventDefault();
-    e.stopPropagation();
-    setCtxMenu({
-      open: true,
-      point: contextMenuPoint(e),
-      items: buildTextMenuItems({ text: msg.content, copyLabel: "复制查询" }),
-    });
-  }
-
-  function toggleSection(id: string): void {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
   return (
     <>
       <div
@@ -89,134 +49,63 @@ export function InspectorPanel({
                 <dd>{task ? task.goal : t("inspector.unselected")}</dd>
               </div>
               <div>
-                <dt>{t("inspector.messageCount")}</dt>
-                <dd>{task?.messages.length ?? 0}</dd>
-              </div>
-              <div>
                 <dt>{t("inspector.currentPhase")}</dt>
                 <dd>{getPhaseLabel(phase ?? task?.phase ?? null) || t("inspector.notStarted")}</dd>
               </div>
-              <div>
-                <dt>{t("inspector.token")}</dt>
-                <dd>{formatTokenUsage(task)}</dd>
-              </div>
-              <div>
-                <dt>{t("inspector.budget")}</dt>
-                <dd>{formatBudgetUsage(task)}</dd>
-              </div>
-              <div>
-                <dt>{t("inspector.engineVersion")}</dt>
-                <dd>{health ? health.version : t("inspector.notConnected")}</dd>
-              </div>
-              <div>
-                <dt>{t("inspector.uptime")}</dt>
-                <dd>{health ? `${Math.round(health.uptimeMs / 1000)} ${t("inspector.uptimeUnit")}` : t("inspector.notConnected")}</dd>
-              </div>
+              {task?.contextTokens != null && (
+                <div>
+                  <dt>{t("inspector.contextWindow")}</dt>
+                  <dd>{formatContextUsage(task.contextTokens, health?.contextTokenBudget)}</dd>
+                </div>
+              )}
+              {task?.tokenUsage && (
+                <div>
+                  <dt>{t("inspector.token")}</dt>
+                  <dd>{formatTokenUsage(task)}</dd>
+                </div>
+              )}
+              {task?.budgetUsage && (
+                <div>
+                  <dt>{t("inspector.budget")}</dt>
+                  <dd>{formatBudgetUsage(task)}</dd>
+                </div>
+              )}
+              {(task?.plan?.length ?? 0) > 0 && (
+                <div>
+                  <dt>{t("inspector.planProgress")}</dt>
+                  <dd>{formatPlanProgress(task)}</dd>
+                </div>
+              )}
+              {(task?.pendingApprovals?.length ?? 0) > 0 && (
+                <div>
+                  <dt>{t("inspector.pendingApprovals")}</dt>
+                  <dd>{task?.pendingApprovals?.length ?? 0}</dd>
+                </div>
+              )}
             </dl>
           </section>
 
-          <InspectorCollapsible
-            id="artifacts"
-            label={t("inspector.artifacts")}
-            count={task?.artifacts?.length ?? 0}
-            expanded={expanded}
-            onToggle={toggleSection}
-          >
-            {!task?.artifacts?.length ? (
-              <p className="inspector-empty">{t("inspector.emptyArtifacts")}</p>
-            ) : (
-              <div className="artifact-mini-list">
-                {task.artifacts.map((artifact) => (
-                  <article
-                    key={artifact.id}
-                    className="artifact-mini"
-                    data-status={artifact.status}
-                    onContextMenu={(e) => handleArtifactMiniContextMenu(e, artifact)}
-                  >
-                    <strong>{artifact.name}</strong>
-                    <span>{artifact.type} · {artifact.status}</span>
-                    {artifact.appliedPath && <small>{artifact.appliedPath}</small>}
-                  </article>
-                ))}
-              </div>
-            )}
-          </InspectorCollapsible>
-
-          <InspectorCollapsible
-            id="queries"
-            label={t("inspector.queryIndex")}
-            count={userMessages.length}
-            expanded={expanded}
-            onToggle={toggleSection}
-          >
-            {userMessages.length === 0 ? (
-              <p className="inspector-empty">{t("inspector.emptyQueries")}</p>
-            ) : (
-              <div className="artifact-mini-list">
-                {userMessages.map((msg, i) => (
-                  <article
-                    key={msg.id}
-                    className="artifact-mini"
-                    onContextMenu={(e) => handleQueryContextMenu(e, msg)}
-                  >
-                    <strong>#{i + 1} {msg.content.slice(0, 80)}{msg.content.length > 80 ? "…" : ""}</strong>
-                    <span>{new Date(msg.createdAt).toLocaleTimeString()}</span>
-                  </article>
-                ))}
-              </div>
-            )}
-          </InspectorCollapsible>
+          <section className="inspector-section">
+            <p className="inspector-label">{t("inspector.piRuntime")}</p>
+            <div className="runtime-chip-grid">
+              <RuntimeChip label={t("inspector.provider")} value={formatRuntimeProvider(health, settings)} />
+              <RuntimeChip label={t("inspector.thinking")} value={settings?.agentThinkingLevel ?? t("inspector.notConnected")} />
+              <RuntimeChip label={t("inspector.toolExecution")} value={settings?.agentToolExecution ?? t("inspector.notConnected")} />
+              <RuntimeChip label={t("inspector.autoMode")} value={settings?.autoModeLevel ?? t("inspector.notConnected")} />
+            </div>
+          </section>
         </div>
       </aside>
-
-      <ContextMenu
-        items={ctxMenu.items}
-        open={ctxMenu.open}
-        anchorPoint={ctxMenu.point}
-        onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
-      />
     </>
   );
 }
 
-function InspectorCollapsible({
-  id,
-  label,
-  count,
-  expanded,
-  onToggle,
-  children,
-}: {
-  id: string;
-  label: string;
-  count?: number;
-  expanded: Set<string>;
-  onToggle: (id: string) => void;
-  children: React.ReactNode;
-}) {
-  const isOpen = expanded.has(id);
+function RuntimeChip({ label, value }: { label: string; value: string }) {
   return (
-    <section className="inspector-section">
-      <button
-        type="button"
-        className="inspector-section-head"
-        onClick={() => onToggle(id)}
-        aria-expanded={isOpen}
-      >
-        <span className="inspector-label">{label}</span>
-        {count != null && <span className="inspector-count">{count}</span>}
-        <ChevronIcon className="inspector-chevron" data-open={isOpen ? "true" : undefined} />
-      </button>
-      {isOpen && <div className="inspector-section-body">{children}</div>}
-    </section>
-  );
-}
-
-function ChevronIcon({ className, ...rest }: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" className={className} {...rest}>
-      <path d="M7.2 5.8l4.2 4.2-4.2 4.2" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    <div className="runtime-chip">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -229,13 +118,46 @@ function formatTokenUsage(task: Task | null): string {
     `${usage.promptTokens ?? 0} in`,
     `${usage.completionTokens ?? 0} out`,
   ];
+  if (usage.reasoningTokens) parts.push(`${usage.reasoningTokens} reasoning`);
   if (usage.cacheReadTokens) parts.push(`${usage.cacheReadTokens} cache read`);
   if (usage.cacheWriteTokens) parts.push(`${usage.cacheWriteTokens} cache write`);
   return parts.join(" / ");
 }
 
+function formatRuntimeProvider(health: HealthResponse | null, settings: RuntimeSettings | null): string {
+  if (health?.provider && health.provider !== "unconfigured") return health.provider;
+  if (settings?.llm.provider && settings.llm.model) return `${settings.llm.provider}:${settings.llm.model}`;
+  return t("inspector.notConnected");
+}
+
+function formatContextUsage(tokens?: number, budget?: number): string {
+  if (tokens == null) return t("inspector.notRecorded");
+  if (!budget) return `~${formatCompactNumber(tokens)}`;
+  const percent = Math.min(999, Math.round((tokens / budget) * 100));
+  return `~${formatCompactNumber(tokens)} / ${formatCompactNumber(budget)} (${percent}%)`;
+}
+
 function formatBudgetUsage(task: Task | null): string {
   const usage = task?.budgetUsage;
   if (!usage) return t("inspector.notStarted");
-  return `${usage.iterations} ${t("budget.unitIterations")} / ${usage.toolCalls} ${t("budget.tools")} / ${usage.outputBytes} bytes`;
+  return `${usage.iterations} ${t("budget.unitIterations")} / ${usage.toolCalls} ${t("budget.tools")} / ${formatCompactNumber(usage.outputBytes)} bytes / ${formatDuration(usage.wallTimeMs)}`;
+}
+
+function formatPlanProgress(task: Task | null): string {
+  const steps = task?.plan ?? [];
+  if (steps.length === 0) return t("inspector.notStarted");
+  const completed = steps.filter((step) => step.status === "completed").length;
+  const running = steps.filter((step) => step.status === "running").length;
+  return `${completed}/${steps.length}${running > 0 ? ` · ${running} running` : ""}`;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+}
+
+function formatCompactNumber(value: number): string {
+  if (value < 1000) return String(value);
+  if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`;
+  return `${(value / 1_000_000).toFixed(1)}m`;
 }

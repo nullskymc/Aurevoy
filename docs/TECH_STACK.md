@@ -60,18 +60,14 @@ Aurevoy 的重点是本地 runtime、工具协议、状态恢复、安全治理�
 - Node 自带，零额外安装；当前包数量少，够用。
 - 包多了或构建变慢，再考虑 pnpm + turborepo。
 
-### 2.7 Agent 循环 / 工具调用：原生 fetch（而非 SDK）
+### 2.7 Agent 循环 / 工具调用：Pi Agent Core
 
-ReAct 工具调用循环继续用原生 `fetch` + 手写 SSE 解析自行实现，
-已从单一的 OpenAI 兼容扩展到三种 Provider 协议（Chat Completions / Anthropic Messages / OpenAI Responses v2）：
+主 Agent loop 使用 `@earendil-works/pi-agent-core`，Aurevoy 后端只保留本地 HTTP/SSE 控制面、
+工具注册表、审批桥接、任务持久化和 Pi 事件适配。旧的手写 ReAct stream/provider 后端已移除。
 
-- **已在用且够用**：`OpenAICompatibleProvider`、`AnthropicProvider`、`OpenAIResponseProvider` 均已基于原生 fetch 运行。
-- **SSE 转发最直接**：需把上游 SSE 逐行解析后立刻转换为自有事件（`token`/`tool_call`/`tool_result`）推给前端；
-  SDK 会把原始流抽象掉，反而要在 SDK 抽象层与自有事件层之间多做一次转换。
-- **累积逻辑不复杂**：流式 `tool_calls` 累积器约 60 行（按 `index` 跨 chunk 拼接），不值得为此引入 34–67 kB 依赖。
-- **保留非标准字段**：DeepSeek 的 `reasoning_content` 须原样透传与回传，SDK 可能会剥离。
-- **Anthropic SSE 格式不同**：`content_block_start`/`content_block_delta`/`content_block_stop` 结构需自行解析，SDK 不提供优势。
-- **零依赖原则**：符合本文「加依赖前自问」纪律。
+- **统一运行时**：主任务和 `delegate_task` 子代理都走 Pi Agent。
+- **保留本地治理**：工具沙箱、审批、任务事件和 SQLite 审计仍在 Aurevoy 控制面执行。
+- **Provider 入口**：`AUREVOY_LLM_*` 配置映射为 Pi `Model`，不再维护第二套 `LLMProvider` 抽象。
 
 不选：`openai` SDK（抽象掉原始 SSE，自定义事件转发更繁）、Vercel AI SDK（依赖重、流协议为私有格式、与现有 SSE 契约不兼容）、LangChain.js（依赖与抽象过重）。
 
@@ -126,7 +122,7 @@ Embedding 通过 OpenAI 兼容 API 接入（`/v1/embeddings`），`baseUrl` 指�
 
 | 方向 | 候选 | 触发条件 |
 |---|---|---|
-| 真实 LLM | 原生 fetch（OpenAI 兼容 + Anthropic Messages + OpenAI Responses）——**已采用，不引 SDK**（见 2.7） | ✅ 已落地三协议 |
+| 真实 LLM / Agent loop | `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`（见 2.7） | ✅ 主任务与子代理已切换到 Pi |
 | 工具协议 | `@modelcontextprotocol/sdk` | ✅ 已接入 stdio client；未来扩展 Streamable HTTP / SSE |
 | 新工具框架 | **Effect-TS** (`effect` 3.21.x) —— Schema 驱动工具定义、作用域注册、执行管线 | ✅ 已落地 P0-P4 |
 | 向量检索 | **sqlite-vec** —— SQLite 原生扩展，零额外服务 | ✅ 已实现混合评分 + KB RAG + Dreams 管道 |

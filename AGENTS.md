@@ -29,8 +29,8 @@ apps/desktop  (Tauri 2.0 + React + TS)   ──HTTP + SSE──▶  apps/agent (
 packages/shared (TS 类型)  ← 前后端共享契约，跨进程数据结构唯一来源
 ```
 
-引擎默认监听 `http://127.0.0.1:8787`。LLM Provider 支持 OpenAI 兼容（含 DeepSeek/Ollama/vLLM）、
-Anthropic（Claude Messages API）和 OpenAI Responses API v2 三种协议。
+引擎默认监听 `http://127.0.0.1:8787`。主 Agent loop 使用 Pi Agent；
+LLM 配置以 Pi provider id 为准（如 openai、anthropic、deepseek、openrouter、google、openai-compatible 等）。
 详见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
 
 ## 3. 文档地图
@@ -55,8 +55,8 @@ Anthropic（Claude Messages API）和 OpenAI Responses API v2 三种协议。
 3. **新增工具**：新工具优先放到 `apps/agent/src/tool/tools/`（Effect-TS 新一代框架），
    通过 `framework/registry.ts` 的 `register()` 注册；旧工具仍可放 `apps/agent/src/tools/`。
    不要把工具逻辑写进 Agent 循环里。
-4. **新增 LLM Provider**：实现 `apps/agent/src/llm/provider.ts` 的 `LLMProvider` 接口，
-   在 `getProvider()` 里按配置返回。Agent 循环不感知具体厂商。
+4. **新增 LLM Provider**：优先扩展 Pi model/provider 映射并保持 `AUREVOY_LLM_*` 配置入口。
+   Agent 循环固定通过 Pi runtime 执行，不再维护第二套 ReAct 后端。
 5. **跨平台意识**：后端不要依赖 macOS 专有路径/命令；前端不要假设 Tauri 之外的运行环境。
    目标是 macOS → Windows 平滑扩展。
 6. **不做假能力**：禁止用 Mock、占位回复、演示数据或“看起来能用”的前端状态冒充真实能力。
@@ -84,11 +84,11 @@ npm run regression:m7    # M7 文件工具、网络安全、schema、计划、ch
 npm run regression:m8    # M8 知识库/RAG、嵌入 provider、混合检索
 ```
 
-环境要求：Node >= 20、Rust (stable)、macOS Xcode CLT。详见 README。
+环境要求：Node >= 22.19.0、Rust (stable)、macOS Xcode CLT。详见 README。
 
 ## 6. 当前进度与交付方向
 
-- ✅ M0-M2：Monorepo、前后端通信、SSE、LLM Provider、ReAct 循环、内置工具、审批、MCP
+- ✅ M0-M2：Monorepo、前后端通信、SSE、LLM Provider、Pi-backed Agent runtime、内置工具、审批、MCP
 - ✅ M3：工程治理（runtime phase、轨迹日志、`m3` 回归集、沙箱边界）
 - ✅ M4：多轮对话、长期记忆、任务恢复
 - ✅ M5：设置界面、工具管理、数据管理、跨平台 CI

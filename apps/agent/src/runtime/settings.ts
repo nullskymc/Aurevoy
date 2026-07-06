@@ -1,6 +1,12 @@
-import type { AutoModeLevel, RuntimeSettings, UpdateRuntimeSettingsRequest } from '@aurevoy/shared';
+import type {
+  AgentThinkingLevel,
+  AgentToolExecutionMode,
+  AutoModeLevel,
+  RuntimeSettings,
+  UpdateRuntimeSettingsRequest,
+} from '@aurevoy/shared';
 import { config, parseMcpServers, parseNumber } from '../config.js';
-import { resetProviderCache } from '../llm/provider.js';
+import { resetPiProviderCache } from '../llm/pi-provider.js';
 import { resetEmbeddingCache } from '../embedding/provider.js';
 import { settingsStore } from '../store/db.js';
 import { resetPythonCache } from './python-runtime.js';
@@ -24,6 +30,8 @@ const SETTING_KEYS = {
   cleanupPolicyDays: 'cleanupPolicyDays',
   autoModeLevel: 'autoMode.level',
   autoModeSafetyEnabled: 'autoMode.safetyEnabled',
+  agentThinkingLevel: 'agent.thinkingLevel',
+  agentToolExecution: 'agent.toolExecution',
   embeddingProvider: 'embedding.provider',
   embeddingModel: 'embedding.model',
   embeddingBaseUrl: 'embedding.baseUrl',
@@ -111,6 +119,10 @@ export function loadPersistedSettings(): void {
   if (autoModeStored === 'off' || autoModeStored === 'plan' || autoModeStored === 'auto-edit' || autoModeStored === 'full') {
     config.autoMode.level = autoModeStored;
   }
+  const thinkingLevel = normalizeThinkingLevel(entries[SETTING_KEYS.agentThinkingLevel]);
+  if (thinkingLevel) config.agent.thinkingLevel = thinkingLevel;
+  const toolExecution = normalizeToolExecution(entries[SETTING_KEYS.agentToolExecution]);
+  if (toolExecution) config.agent.toolExecution = toolExecution;
 }
 
 export function readRuntimeSettings(): RuntimeSettings {
@@ -133,6 +145,8 @@ export function readRuntimeSettings(): RuntimeSettings {
     cleanupPolicyDays: readCleanupPolicyDays(),
     autoModeLevel: config.autoMode.level as AutoModeLevel,
     autoModeSafetyEnabled: readAutoModeSafetyEnabled(),
+    agentThinkingLevel: config.agent.thinkingLevel,
+    agentToolExecution: config.agent.toolExecution,
     dbPath: config.dbPath,
     embedding: {
       provider: config.embedding.provider,
@@ -160,7 +174,7 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
       providerChanged = true;
     }
     if (body.llm.baseUrl !== undefined) {
-      config.llm.baseUrl = validateBaseUrl(body.llm.baseUrl);
+      config.llm.baseUrl = validateBaseUrl(body.llm.baseUrl, config.llm.provider === 'openai-compatible');
       settingsStore.set(SETTING_KEYS.llmBaseUrl, config.llm.baseUrl);
       providerChanged = true;
     }
@@ -231,6 +245,20 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     settingsStore.set(SETTING_KEYS.autoModeSafetyEnabled, String(body.autoModeSafetyEnabled));
   }
 
+  if (body.agentThinkingLevel !== undefined) {
+    const value = normalizeThinkingLevel(body.agentThinkingLevel);
+    if (!value) throw new Error('agentThinkingLevel 非法');
+    config.agent.thinkingLevel = value;
+    settingsStore.set(SETTING_KEYS.agentThinkingLevel, value);
+  }
+
+  if (body.agentToolExecution !== undefined) {
+    const value = normalizeToolExecution(body.agentToolExecution);
+    if (!value) throw new Error('agentToolExecution 非法');
+    config.agent.toolExecution = value;
+    settingsStore.set(SETTING_KEYS.agentToolExecution, value);
+  }
+
   if (body.mcpServersJson !== undefined) {
     const parsed = parseMcpServers(body.mcpServersJson);
     config.mcpServers = parsed;
@@ -299,7 +327,7 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     }
   }
 
-  if (providerChanged) resetProviderCache();
+  if (providerChanged) resetPiProviderCache();
   return { settings: readRuntimeSettings(), mcpChanged };
 }
 
@@ -340,20 +368,35 @@ function ensureCurrentModelEnabled(models: string[]): string[] {
   return models.includes(currentModel) ? models : [currentModel, ...models];
 }
 
-type NormalizedProvider = 'openai' | 'anthropic' | 'openai-response';
-
-function normalizeProvider(provider: string): NormalizedProvider {
+function normalizeProvider(provider: string): string {
   const value = provider.trim().toLowerCase();
-  if (value === 'openai' || value === 'openai-compatible') return 'openai';
-  if (value === 'anthropic') return 'anthropic';
-  if (value === 'openai-response') return 'openai-response';
-  throw new Error(
-    `不支持的 Provider: "${provider}"。支持: openai / openai-compatible / anthropic / openai-response`,
-  );
+  if (/^[a-z0-9][a-z0-9-]*$/.test(value)) return value;
+  throw new Error(`不支持的 Provider id: "${provider}"。仅允许小写字母、数字和连字符。`);
 }
 
-function validateBaseUrl(raw: string): string {
-  const value = requireNonEmpty(raw, 'baseUrl').replace(/\/$/, '');
+function normalizeThinkingLevel(value: unknown): AgentThinkingLevel | null {
+  return value === 'off' ||
+    value === 'minimal' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'xhigh'
+    ? value
+    : null;
+}
+
+function normalizeToolExecution(value: unknown): AgentToolExecutionMode | null {
+  return value === 'sequential' || value === 'parallel' ? value : null;
+}
+
+function validateBaseUrl(raw: string, required: boolean): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    if (required) throw new Error('openai-compatible provider 必须填写 baseUrl');
+    return '';
+  }
+
+  const value = trimmed.replace(/\/$/, '');
   try {
     const url = new URL(value);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('invalid protocol');

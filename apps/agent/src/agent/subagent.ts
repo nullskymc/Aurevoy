@@ -1,23 +1,10 @@
-/**
- * P7: 子代理（Sub-agent）执行模块。
- *
- * 允许 Agent 主循环通过 delegate_task 工具委托独立子任务给受限子代理。
- * 子代理拥有独立的 LLM 对话循环，但受严格约束：
- * - 默认仅 safe 只读工具
- * - 最大 5 轮
- * - 总超时 60s
- * - 不写 memory
- * - 结果截断到 20KB
- */
-
-import { randomUUID } from 'node:crypto';
-import type { Message, ToolCall } from '@aurevoy/shared';
-import { getProvider, type AccumulatedToolCall } from '../llm/provider.js';
-import { toolRegistry } from '../tools/registry.js';
+import { Agent, type AgentEvent, type AgentTool } from '@earendil-works/pi-agent-core';
 import { config } from '../config.js';
+import { createPiModel } from '../llm/pi-provider.js';
+import { unifiedToolRegistry, type UnifiedToolContext } from '../tool/unified-registry.js';
 
-/** 子代理默认可用工具（safe 只读）。 */
 const DEFAULT_READONLY_TOOLS = ['list_directory', 'open_file', 'scroll', 'search_grep', 'get_current_time'];
+const MAX_OUTPUT_CHARS = 20_000;
 
 export interface SubTask {
   goal: string;
@@ -34,212 +21,154 @@ export interface SubTaskResult {
   error?: string;
 }
 
-/**
- * 执行一个子代理任务。
- *
- * 使用简化 ReAct 循环：调用 LLM → 执行 safe 工具 → 回灌结果 → 重复，
- * 直到模型给出最终回复、达到轮次上限或超时。
- */
+/** 使用 Pi Agent 执行只读子任务，供 delegate_task 工具调用。 */
 export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
   const allowedTools = subTask.allowedTools ?? DEFAULT_READONLY_TOOLS;
-  const maxIterations = 5;
-  const totalTimeoutMs = 60000;
-  const outputCharCap = 20000;
-
-  const toolDescriptors = toolRegistry
-    .list()
-    .filter((t) => allowedTools.includes(t.name));
-
-  const messages: Message[] = [
-    {
-      id: randomUUID(),
-      role: 'system',
-      content:
-        '你是 Aurevoy 的子代理。你的任务是完成主代理委托给你的子任务。\n\n' +
-        `当前环境：${process.platform} ${process.arch}，工作区：${subTask.workspaceDir}\n` +
-        `当前日期：${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n\n` +
-        '约束：\n' +
-        '- 只能使用提供的只读工具\n' +
-        '- 不要修改任何文件\n' +
-        '- 简洁回复，不要过度分析\n' +
-        '- 完成任务后直接输出最终结果',
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: randomUUID(),
-      role: 'user',
-      content: `子任务目标：${subTask.goal}\n\n详细指令：${subTask.prompt}`,
-      createdAt: new Date().toISOString(),
-    },
-  ];
-
   const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), totalTimeoutMs);
-
+  const timeoutId = setTimeout(() => abortController.abort(), 60_000);
+  let content = '';
   let toolCallCount = 0;
   let iterations = 0;
+  let error: string | undefined;
 
   try {
-    for (; iterations < maxIterations; iterations++) {
-      if (abortController.signal.aborted) {
-        return {
-          ok: false,
-          content: '',
-          toolCallCount,
-          iterations,
-          error: '子代理超时或被取消',
-        };
-      }
-
-      let textBuffer = '';
-      let toolCalls: AccumulatedToolCall[] = [];
-
-      try {
-        const stream = getProvider().stream(messages, {
-          tools: toolDescriptors.length > 0 ? toolDescriptors : undefined,
-          toolChoice: 'auto',
-          signal: abortController.signal,
-        });
-        for await (const chunk of stream) {
-          if (chunk.textDelta) textBuffer += chunk.textDelta;
-          if (chunk.done) toolCalls = chunk.toolCallsSnapshot ?? [];
+    const agent = new Agent({
+      initialState: {
+        systemPrompt: buildSubagentSystemPrompt(subTask),
+        model: createPiModel(),
+        thinkingLevel: 'off',
+        tools: createReadonlyPiTools(allowedTools, subTask.workspaceDir, abortController.signal),
+        messages: [],
+      },
+      getApiKey: () => config.llm.apiKey,
+      toolExecution: 'parallel',
+      beforeToolCall: async ({ toolCall }) => {
+        if (!allowedTools.includes(toolCall.name)) {
+          return { block: true, reason: `子代理不允许使用工具：${toolCall.name}` };
         }
-      } catch (err) {
-        if ((err as { name?: string })?.name === 'AbortError') {
-          return {
-            ok: false,
-            content: textBuffer.slice(0, outputCharCap),
-            toolCallCount,
-            iterations,
-            error: '子代理超时',
-          };
+        if (unifiedToolRegistry.riskLevelOf(toolCall.name) !== 'safe') {
+          return { block: true, reason: `子代理只允许 safe 工具：${toolCall.name}` };
         }
-        return {
-          ok: false,
-          content: '',
-          toolCallCount,
-          iterations,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
+        return undefined;
+      },
+    });
 
-      // LLM 给出最终回复
-      if (toolCalls.length === 0 || textBuffer.trim()) {
-        const assistantMsg: Message = {
-          id: randomUUID(),
-          role: 'assistant',
-          content: textBuffer,
-          createdAt: new Date().toISOString(),
-        };
-        if (toolCalls.length > 0) {
-          assistantMsg.toolCalls = toolCalls.map((tc) => ({
-            id: tc.id,
-            type: 'function' as const,
-            function: { name: tc.function.name, arguments: tc.function.arguments },
-          }));
-        }
-        messages.push(assistantMsg);
-      }
+    agent.subscribe((event) => {
+      const captured = captureSubagentEvent(event);
+      if (captured.content) content = captured.content.slice(0, MAX_OUTPUT_CHARS);
+      toolCallCount += captured.toolCalls;
+      iterations += captured.turns;
+      if (captured.error) error = captured.error;
+    });
 
-      // 没有工具调用 → 返回最终结果
-      if (toolCalls.length === 0) {
-        return {
-          ok: true,
-          content: textBuffer.slice(0, outputCharCap),
-          toolCallCount,
-          iterations: iterations + 1,
-        };
-      }
+    await agent.prompt(`子任务目标：${subTask.goal}\n\n详细指令：${subTask.prompt}`);
 
-      // 有工具调用但无文本 → assistant 消息仍需添加
-      if (!textBuffer.trim() && toolCalls.length > 0) {
-        const assistantMsg: Message = {
-          id: randomUUID(),
-          role: 'assistant',
-          content: '',
-          createdAt: new Date().toISOString(),
-          toolCalls: toolCalls.map((tc) => ({
-            id: tc.id,
-            type: 'function' as const,
-            function: { name: tc.function.name, arguments: tc.function.arguments },
-          })),
-        };
-        messages.push(assistantMsg);
-      }
-
-      // 执行工具（仅 safe，无审批，并行）
-      const results: Array<{ callId: string; output: unknown }> = [];
-      const executePromises = toolCalls.map(async (tc) => {
-        const name = tc.function.name;
-
-        // 安全检查：只允许白名单工具
-        if (!allowedTools.includes(name)) {
-          return {
-            callId: tc.id,
-            output: { error: `子代理不允许使用工具：${name}` },
-          };
-        }
-
-        let args: Record<string, unknown>;
-        try {
-          args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-        } catch {
-          return {
-            callId: tc.id,
-            output: { error: '工具参数不是合法 JSON' },
-          };
-        }
-
-        const call: ToolCall = { id: tc.id, toolName: name, args };
-        try {
-          const result = await toolRegistry.invokeWithTimeout(
-            call,
-            {
-              taskId: undefined,
-              workspaceDir: subTask.workspaceDir,
-              abortSignal: abortController.signal,
-            },
-            config.agent.toolTimeoutMs,
-          );
-          toolCallCount++;
-          return {
-            callId: tc.id,
-            output: result.ok ? result.output : { error: result.error },
-          };
-        } catch (err) {
-          return {
-            callId: tc.id,
-            output: { error: err instanceof Error ? err.message : String(err) },
-          };
-        }
-      });
-
-      const settled = await Promise.all(executePromises);
-      results.push(...settled);
-
-      // 按原始顺序回填 tool result 消息
-      for (const tc of toolCalls) {
-        const r = results.find((x) => x.callId === tc.id);
-        if (r) {
-          messages.push({
-            id: randomUUID(),
-            role: 'tool',
-            content: JSON.stringify(r.output ?? null),
-            toolCallId: tc.id,
-            createdAt: new Date().toISOString(),
-          });
-        }
-      }
-    }
-
-    // 达到最大轮次
     return {
-      ok: true,
-      content: `子代理达到最大轮次 (${maxIterations})。最后 ${toolCallCount} 次工具调用已完成，但未生成最终摘要。`,
+      ok: !error && !abortController.signal.aborted,
+      content: content.slice(0, MAX_OUTPUT_CHARS),
       toolCallCount,
       iterations,
+      error: abortController.signal.aborted ? '子代理超时或被取消' : error,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      content: content.slice(0, MAX_OUTPUT_CHARS),
+      toolCallCount,
+      iterations,
+      error: err instanceof Error ? err.message : String(err),
     };
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function buildSubagentSystemPrompt(subTask: SubTask): string {
+  return [
+    '你是 Aurevoy 的子代理。你的任务是完成主代理委托给你的独立子任务。',
+    `工作区：${subTask.workspaceDir}`,
+    `当前环境：${process.platform} ${process.arch}`,
+    `当前时间：${new Date().toISOString()}`,
+    '',
+    '约束：',
+    '- 只能使用提供的只读 safe 工具',
+    '- 不要修改任何文件',
+    '- 简洁回复，不要过度分析',
+    '- 完成任务后直接输出最终结果',
+  ].join('\n');
+}
+
+function createReadonlyPiTools(
+  allowedTools: string[],
+  workspaceDir: string,
+  outerSignal: AbortSignal,
+): AgentTool[] {
+  // 使用统一工具框架获取工具，并注入工作区上下文
+  const agentTools = unifiedToolRegistry.toAgentTools(allowedTools);
+
+  return agentTools
+    .filter((tool) => unifiedToolRegistry.riskLevelOf(tool.name) === 'safe')
+    .map((agentTool) => {
+      const def = unifiedToolRegistry.get(agentTool.name)!;
+      return {
+        ...agentTool,
+        execute: async (toolCallId, params, signal) => {
+          const context: UnifiedToolContext = {
+            taskId: '',
+            workspaceDir,
+            abortSignal: signal ?? outerSignal,
+            callId: toolCallId,
+          };
+          try {
+            const result = await def.execute(params as Record<string, unknown>, context);
+            return {
+              content: [{ type: 'text', text: formatUnknown(result) }],
+              details: result,
+            };
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new Error(message);
+          }
+        },
+      };
+    });
+}
+
+function captureSubagentEvent(event: AgentEvent): { content?: string; toolCalls: number; turns: number; error?: string } {
+  if (event.type === 'tool_execution_end') {
+    return { toolCalls: 1, turns: 0 };
+  }
+  if (event.type === 'turn_end') {
+    const message = event.message;
+    if (message.role !== 'assistant') return { toolCalls: 0, turns: 1 };
+    return {
+      content: piContentToText(message.content),
+      toolCalls: 0,
+      turns: 1,
+      error: message.errorMessage,
+    };
+  }
+  return { toolCalls: 0, turns: 0 };
+}
+
+function piContentToText(content: unknown): string {
+  if (!Array.isArray(content)) return '';
+  return content.map((block) => {
+    if (isRecord(block) && block.type === 'text' && typeof block.text === 'string') return block.text;
+    if (isRecord(block) && block.type === 'thinking' && typeof block.thinking === 'string') return block.thinking;
+    return '';
+  }).join('');
+}
+
+function formatUnknown(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value ?? null);
+  } catch {
+    return String(value);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

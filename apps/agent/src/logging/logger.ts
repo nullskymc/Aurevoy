@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync } from 'node:fs';
 import { dirname } from 'node:path';
 import pino, { type Logger, transport, destination } from 'pino';
 
@@ -34,7 +34,7 @@ export function createLogger(cfg: LoggingConfig): Logger {
     targets.push({ target: 'pino/file', level: cfg.level, options: { destination: 1 } });
   }
 
-  if (cfg.file) {
+  if (cfg.file && canWriteLogFile(cfg.file)) {
     mkdirSync(dirname(cfg.file), { recursive: true });
     targets.push({
       target: 'pino-roll',
@@ -43,11 +43,29 @@ export function createLogger(cfg: LoggingConfig): Logger {
     });
   }
 
-  _root = targets.length > 1
-    ? pino({ level: cfg.level }, transport({ targets }))
-    : pino({ level: cfg.level }, destination(1));
+  if (targets.length > 1) {
+    const stream = transport({ targets });
+    stream.on('error', (err) => {
+      console.error('[logger] file transport disabled after error:', err);
+    });
+    _root = pino({ level: cfg.level }, stream);
+  } else {
+    _root = pino({ level: cfg.level }, destination(1));
+  }
 
   return _root;
+}
+
+function canWriteLogFile(file: string): boolean {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const fd = openSync(file, 'a');
+    closeSync(fd);
+    return true;
+  } catch (err) {
+    console.error('[logger] file logging disabled:', err);
+    return false;
+  }
 }
 
 export function getLogger(name: string): Logger {

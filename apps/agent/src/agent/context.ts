@@ -1,7 +1,6 @@
 import type { Citation, MemoryEntry, Message } from '@aurevoy/shared';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
-import { getProvider } from '../llm/provider.js';
 import { getEmbeddingProvider } from '../embedding/provider.js';
 import { searchMemoryVec, isVecLoaded, getMemorySummary, setMemorySummary } from '../store/db.js';
 import { skillRegistry } from '../skills/registry.js';
@@ -362,22 +361,7 @@ async function contextCollapse(
     return { messages, finalTokens: originalTokens };
   }
 
-  let summaryText = '';
-  try {
-    const promptMessages: Message[] = [{
-      id: randomUUID(),
-      role: 'user',
-      content:
-        `以下是 AI Agent 执行任务的历史记录。请将其压缩为一段简洁的摘要（300 字以内），` +
-        `保留：已完成的关键操作、做出的决策、遇到的重要错误。只输出摘要文本，不要加前缀：\n\n${transcript}`,
-      createdAt: new Date().toISOString(),
-    }];
-    for await (const chunk of getProvider().stream(promptMessages)) {
-      if (chunk.textDelta) summaryText += chunk.textDelta;
-    }
-  } catch {
-    return { messages, finalTokens: originalTokens };
-  }
+  const summaryText = deterministicContextSummary(transcript);
 
   if (!summaryText.trim() || summaryText.length < 20) {
     return { messages, finalTokens: originalTokens };
@@ -398,6 +382,15 @@ async function contextCollapse(
   const finalTokens = totalTokens(compactedMessages);
 
   return { messages: compactedMessages, finalTokens };
+}
+
+function deterministicContextSummary(transcript: string): string {
+  const normalized = transcript
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n');
+  return normalized.length > 1800 ? `${normalized.slice(0, 1800)}\n[摘要已截断]` : normalized;
 }
 
 // ---- 公共入口 ----

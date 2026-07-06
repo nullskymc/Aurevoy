@@ -204,6 +204,8 @@ export interface AggregatedTokenUsage {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /** 推理/思考 token 数；它通常已包含在 completionTokens 中。 */
+  reasoningTokens?: number;
   /** 命中 prompt cache 的 token 数。 */
   cacheReadTokens?: number;
   /** 写入 prompt cache 的 token 数。 */
@@ -216,9 +218,25 @@ export interface AggregatedTokenUsage {
 }
 
 /** 全库任务 token 使用汇总报告（用于设置页成本管理）。 */
-export interface TokenUsageReport {
-  /** 参与汇总的任务数量。 */
+export interface TokenUsageReportBreakdown {
+  provider: string;
+  model: string;
   tasks: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  estimatedCostUsd: number;
+  updatedAt?: string;
+}
+
+export interface TokenUsageReport {
+  /** 本地记录的任务总数。 */
+  tasks: number;
+  /** 返回过 usage 并参与汇总的任务数量。 */
+  measuredTasks: number;
   /** 是否有任一任务返回过 usage。 */
   available: boolean;
   /** 输入 token 总计。 */
@@ -227,12 +245,16 @@ export interface TokenUsageReport {
   completionTokens: number;
   /** token 总计。 */
   totalTokens: number;
+  /** 推理/思考 token 总计；它通常已包含在输出 token 中。 */
+  reasoningTokens: number;
   /** 命中 prompt cache 的 token 总计。 */
   cacheReadTokens: number;
   /** 写入 prompt cache 的 token 总计。 */
   cacheWriteTokens: number;
   /** 估算成本（USD）总计。 */
   estimatedCostUsd: number;
+  /** 按 provider/model 聚合的明细。 */
+  breakdown: TokenUsageReportBreakdown[];
 }
 
 export interface TaskCheckpoint {
@@ -268,8 +290,7 @@ export interface Task {
   artifacts?: TaskArtifact[];
   clarifications?: ClarificationRequest[];
   pendingApprovals?: PendingToolApproval[];
-  /** 已在本对话中批准的工具审批指纹；仅由“本次会话允许”写入。 */
-  approvedApprovalKeys?: string[];
+  /** Legacy: 旧会话级审批指纹；Pi runtime 不再写入或读取。 */
   checkpoints?: TaskCheckpoint[];
   tokenUsage?: AggregatedTokenUsage;
   /** 当前上下文窗口估算 token 数（后端 estimateTokens 计算） */
@@ -369,6 +390,8 @@ export interface TokenUsage {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /** 推理/思考 token 数；它通常已包含在 completionTokens 中。 */
+  reasoningTokens?: number;
   /** 命中 prompt cache 的 token 数（OpenAI/Anthropic 部分模型支持）。 */
   cacheReadTokens?: number;
   /** 写入 prompt cache 的 token 数（Anthropic 部分模型支持）。 */
@@ -443,6 +466,7 @@ export interface FileSnapshot {
 
 export type ToolSource =
   | { type: 'builtin' }
+  | { type: 'skill'; skillName: string }
   | { type: 'mcp'; serverName: string; originalName: string };
 
 /** 一次工具调用 */
@@ -462,6 +486,12 @@ export interface ToolResult {
   error?: string;
 }
 
+/** Pi runtime 暴露给前端的模型推理深度。 */
+export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+/** Pi runtime 的工具执行策略。 */
+export type AgentToolExecutionMode = 'sequential' | 'parallel';
+
 // ============================================================
 // Agent 事件流 (通过 SSE 推送给前端)
 // ============================================================
@@ -472,10 +502,17 @@ export interface ToolResult {
  */
 export type AgentEvent =
   | { type: 'task_created'; taskId: string; task: Task }
+  | {
+      type: 'agent_start';
+      taskId: string;
+      thinkingLevel: AgentThinkingLevel;
+      toolExecution: AgentToolExecutionMode;
+    }
   | { type: 'status'; taskId: string; status: TaskStatus }
   | { type: 'phase'; taskId: string; phase: TaskPhase; detail?: string }
   | { type: 'plan'; taskId: string; plan: PlanStep[] }
   | { type: 'step_update'; taskId: string; step: PlanStep }
+  | { type: 'message_start'; taskId: string; role: MessageRole | 'toolResult' }
   | { type: 'token'; taskId: string; delta: string } // LLM 流式 token
   | { type: 'reasoning'; taskId: string; delta: string } // 模型思考链（DeepSeek R1/V3 等）
   | { type: 'message'; taskId: string; message: Message } // 一条完整消息
@@ -609,8 +646,6 @@ export interface ApprovalDecisionRequest {
   callId: string;
   /** true=批准执行，false=拒绝 */
   approved: boolean;
-  /** 本次会话内对该工具自动批准，后续不再询问 */
-  sessionApprove?: boolean;
 }
 
 export interface ApprovalDecisionResponse {
@@ -675,6 +710,8 @@ export interface ContinueTaskRequest {
   /** 用户的后续追问/补充 */
   message: string;
   attachments?: MessageAttachment[];
+  /** 任务运行中追加消息时的投递方式；默认 steering，等当前工具批次后注入。 */
+  delivery?: 'steering' | 'follow_up';
 }
 
 export interface ContinueTaskResponse {
@@ -940,7 +977,8 @@ export interface SearchResultWithCitations {
 
 export interface RuntimeSettings {
   llm: {
-    provider: 'openai' | 'anthropic' | 'openai-response';
+    /** Pi provider id, e.g. openai / anthropic / deepseek / openrouter / google. */
+    provider: string;
     baseUrl: string;
     model: string;
   /** 视觉子模型：当消息带图片附件时自动切换此模型（空则用主模型） */
@@ -962,6 +1000,10 @@ export interface RuntimeSettings {
   autoModeLevel: AutoModeLevel;
   /** 是否启用 auto mode 安全规则（拦截 destroy/exfiltrate 等危险操作） */
   autoModeSafetyEnabled: boolean;
+  /** Pi runtime 推理深度。 */
+  agentThinkingLevel: AgentThinkingLevel;
+  /** Pi runtime 工具执行策略。 */
+  agentToolExecution: AgentToolExecutionMode;
   dbPath: string;
   /** M8: Embedding Provider 配置（OpenAI 兼容接口） */
   embedding: {
@@ -982,7 +1024,8 @@ export interface RuntimeSettings {
 
 export interface UpdateRuntimeSettingsRequest {
   llm?: Partial<{
-    provider: 'openai' | 'anthropic' | 'openai-response';
+    /** Pi provider id, e.g. openai / anthropic / deepseek / openrouter / google. */
+    provider: string;
     baseUrl: string;
     model: string;
   /** 视觉子模型：空字符串表示清除 */
@@ -1001,6 +1044,8 @@ export interface UpdateRuntimeSettingsRequest {
   cleanupPolicyDays?: number;
   autoModeLevel?: AutoModeLevel;
   autoModeSafetyEnabled?: boolean;
+  agentThinkingLevel?: AgentThinkingLevel;
+  agentToolExecution?: AgentToolExecutionMode;
   /** M8: Embedding Provider 配置（OpenAI 兼容接口） */
   embedding?: Partial<{
     provider: 'openai' | 'off';

@@ -2,7 +2,7 @@ import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { resolve } from 'node:path';
 import type { SkillDescriptor } from '@aurevoy/shared';
 import { skillRegistry } from './registry.js';
-import { toolRegistry } from '../tools/registry.js';
+import { unifiedToolRegistry } from '../tool/unified-registry.js';
 import { registerLoadSkillTool } from '../tools/load-skill.js';
 import { registerInstallSkillTool } from '../tools/install-skill.js';
 import { config } from '../config.js';
@@ -15,9 +15,9 @@ import { getLogger } from '../logging/logger.js';
  */
 export function reloadSkillsAndTools(): SkillDescriptor[] {
   skillRegistry.reload();
-  toolRegistry.unregister('load_skill');
+  unifiedToolRegistry.unregister('load_skill');
   registerLoadSkillTool();
-  toolRegistry.unregister('install_skill');
+  unifiedToolRegistry.unregister('install_skill');
   registerInstallSkillTool();
   return skillRegistry.listAll();
 }
@@ -31,20 +31,18 @@ function collectSkillDirs(): string[] {
 
   const dirs: string[] = [];
 
-  // 用户级路径
+  // 热监听只覆盖 Aurevoy 原生与通用 .agents 路径。
+  // Codex/Claude 用户目录可能包含插件缓存或大规模依赖树，递归 watch 会触发 EMFILE；
+  // 它们仍会被 skillRegistry.load() 读取，安装/设置页操作也会显式 reload。
   const userPaths = [
     config.skills.userDir,
     config.skills.agentsUserDir,
-    config.skills.claudeUserDir,
-    config.skills.codexUserDir,
   ];
 
-  // 工作区级路径
+  // 工作区级路径同样只监听 Aurevoy/.agents；其它外部客户端目录通过手动 reload 同步。
   const workspacePaths = [
     resolve(config.workspaceDir, config.skills.workspaceSubDir),
     resolve(config.workspaceDir, config.skills.agentsWorkspaceSubDir),
-    resolve(config.workspaceDir, config.skills.claudeWorkspaceSubDir),
-    resolve(config.workspaceDir, config.skills.codexWorkspaceSubDir),
   ];
 
   for (const p of [...userPaths, ...workspacePaths]) {
@@ -91,6 +89,10 @@ export function startSkillWatcher(): () => void {
 
         log.debug({ eventType, file: name }, 'skill 文件变更，触发热重载');
         debouncedReload();
+      });
+      w.on('error', (err) => {
+        log.warn({ dir, err }, 'skill 目录监听失败，已降级为手动重载');
+        try { w.close(); } catch { /* 忽略关闭错误 */ }
       });
       watchers.push(w);
       log.debug({ dir }, 'skill 目录监听已启动');

@@ -47,6 +47,46 @@ interface SettingsDraft {
   searchApiKey: string;
 }
 
+const PI_PROVIDER_OPTIONS = [
+  { value: "openai", label: "OpenAI" },
+  { value: "openai-compatible", label: "OpenAI-compatible / Custom" },
+  { value: "openai-response", label: "OpenAI Responses / Compatibility" },
+  { value: "azure-openai-responses", label: "Azure OpenAI Responses" },
+  { value: "anthropic", label: "Anthropic" },
+  { value: "ant-ling", label: "Ant Ling" },
+  { value: "deepseek", label: "DeepSeek" },
+  { value: "openrouter", label: "OpenRouter" },
+  { value: "google", label: "Google Gemini" },
+  { value: "google-vertex", label: "Google Vertex" },
+  { value: "xai", label: "xAI" },
+  { value: "groq", label: "Groq" },
+  { value: "cerebras", label: "Cerebras" },
+  { value: "mistral", label: "Mistral" },
+  { value: "moonshotai", label: "Moonshot AI" },
+  { value: "moonshotai-cn", label: "Moonshot AI CN" },
+  { value: "zai", label: "Z.ai" },
+  { value: "zai-coding-cn", label: "Z.ai Coding CN" },
+  { value: "xiaomi", label: "Xiaomi" },
+  { value: "xiaomi-token-plan-cn", label: "Xiaomi Token Plan CN" },
+  { value: "xiaomi-token-plan-ams", label: "Xiaomi Token Plan AMS" },
+  { value: "xiaomi-token-plan-sgp", label: "Xiaomi Token Plan SGP" },
+  { value: "minimax", label: "MiniMax" },
+  { value: "minimax-cn", label: "MiniMax CN" },
+  { value: "together", label: "Together AI" },
+  { value: "fireworks", label: "Fireworks" },
+  { value: "huggingface", label: "Hugging Face" },
+  { value: "nvidia", label: "NVIDIA" },
+  { value: "vercel-ai-gateway", label: "Vercel AI Gateway" },
+  { value: "github-copilot", label: "GitHub Copilot" },
+  { value: "openai-codex", label: "OpenAI Codex" },
+  { value: "amazon-bedrock", label: "Amazon Bedrock" },
+  { value: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway" },
+  { value: "cloudflare-workers-ai", label: "Cloudflare Workers AI" },
+  { value: "opencode", label: "OpenCode" },
+  { value: "opencode-go", label: "OpenCode Go" },
+  { value: "kimi-coding", label: "Kimi Coding" },
+] as const;
+
 interface SettingsPanelProps {
   settings: RuntimeSettings | null;
   mcpServers: McpServerStatus[];
@@ -801,9 +841,9 @@ function ProviderSettings({
             value={draft.provider}
             onChange={(event) => onDraftChange({ ...draft, provider: event.currentTarget.value })}
           >
-            <option value="openai">OpenAI Compatible</option>
-            <option value="anthropic">Anthropic Claude</option>
-            <option value="openai-response">OpenAI Responses API</option>
+            {PI_PROVIDER_OPTIONS.map((provider) => (
+              <option key={provider.value} value={provider.value}>{provider.label}</option>
+            ))}
           </select>
         }
       />
@@ -1190,6 +1230,7 @@ function UsageSettings() {
 
   const inputPct = report.totalTokens > 0 ? (report.promptTokens / report.totalTokens) * 100 : 0;
   const outputPct = report.totalTokens > 0 ? (report.completionTokens / report.totalTokens) * 100 : 0;
+  const reasoningPct = report.completionTokens > 0 ? (report.reasoningTokens / report.completionTokens) * 100 : 0;
   const cachePct = report.promptTokens > 0 ? (report.cacheReadTokens / report.promptTokens) * 100 : 0;
 
   return (
@@ -1199,7 +1240,9 @@ function UsageSettings() {
           <div className="usage-stat-card">
             <div className="usage-stat-label">{t("settings.tokenUsageTotal")}</div>
             <div className="usage-stat-value">{formatTokenCount(report.totalTokens)}</div>
-            <div className="usage-stat-sub">{report.tasks} {t("settings.tokenUsageTasks")}</div>
+            <div className="usage-stat-sub">
+              {report.measuredTasks}/{report.tasks} {t("settings.tokenUsageTasks")}
+            </div>
           </div>
           <div className="usage-stat-card">
             <div className="usage-stat-label">{t("settings.tokenUsagePrompt")}</div>
@@ -1211,6 +1254,13 @@ function UsageSettings() {
             <div className="usage-stat-value usage-stat-output">{formatTokenCount(report.completionTokens)}</div>
             <div className="usage-stat-sub">{outputPct.toFixed(1)}%</div>
           </div>
+          {report.reasoningTokens > 0 && (
+            <div className="usage-stat-card">
+              <div className="usage-stat-label">{t("settings.tokenUsageReasoning")}</div>
+              <div className="usage-stat-value usage-stat-reasoning">{formatTokenCount(report.reasoningTokens)}</div>
+              <div className="usage-stat-sub">{reasoningPct.toFixed(1)}% {t("settings.usageOfOutput")}</div>
+            </div>
+          )}
           {report.estimatedCostUsd > 0 && (
             <div className="usage-stat-card">
               <div className="usage-stat-label">{t("settings.tokenUsageEstimatedCost")}</div>
@@ -1250,8 +1300,45 @@ function UsageSettings() {
             <span className="usage-breakdown-value">{formatTokenCount(report.completionTokens)}</span>
           </div>
           <div className="usage-breakdown-desc">{t("settings.usageOutputDetail")}</div>
+          {report.reasoningTokens > 0 && (
+            <div className="usage-breakdown-sub">
+              <div className="usage-breakdown-header">
+                <span className="usage-breakdown-title">{t("settings.tokenUsageReasoning")}</span>
+                <span className="usage-breakdown-value">{formatTokenCount(report.reasoningTokens)}</span>
+              </div>
+              <div className="usage-breakdown-desc">
+                {reasoningPct.toFixed(1)}% {t("settings.usageOfOutput")}
+              </div>
+            </div>
+          )}
         </div>
       </SettingsGroup>
+
+      {report.breakdown.length > 0 && (
+        <SettingsGroup title={t("settings.usageByModel")}>
+          <div className="usage-model-table">
+            <div className="usage-model-row usage-model-head">
+              <span>{t("settings.usageProviderModel")}</span>
+              <span>{t("settings.tokenUsageTotal")}</span>
+              <span>{t("settings.tokenUsagePrompt")}</span>
+              <span>{t("settings.tokenUsageCompletion")}</span>
+              <span>{t("settings.tokenUsageTasks")}</span>
+            </div>
+            {report.breakdown.map((item) => (
+              <div className="usage-model-row" key={`${item.provider}:${item.model}`}>
+                <span className="usage-model-name">
+                  <strong>{item.model}</strong>
+                  <small>{item.provider}</small>
+                </span>
+                <span>{formatTokenCount(item.totalTokens)}</span>
+                <span>{formatTokenCount(item.promptTokens)}</span>
+                <span>{formatTokenCount(item.completionTokens)}</span>
+                <span>{item.tasks}</span>
+              </div>
+            ))}
+          </div>
+        </SettingsGroup>
+      )}
     </>
   );
 }

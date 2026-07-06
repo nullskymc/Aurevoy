@@ -1,4 +1,4 @@
-import { toolRegistry } from './registry.js';
+import { unifiedToolRegistry } from '../tool/unified-registry.js';
 import { installFromGit } from '../skills/installer.js';
 import { reloadSkillsAndTools } from '../skills/reload.js';
 import { config } from '../config.js';
@@ -6,43 +6,42 @@ import { resolve } from 'node:path';
 import { getLogger } from '../logging/logger.js';
 
 export function registerInstallSkillTool(): void {
-  toolRegistry.register({
-    descriptor: {
-      name: 'install_skill',
-      description:
-        '安装已经人工/工具检查确认过的 Agent Skill。这是最终安装动作，不是搜索或探测工具。\n' +
-        '调用前必须先读取用户给出的网页、GitHub 页面或仓库内容，确认其中确实存在 SKILL.md，并记录准确的 skill 目录路径。\n' +
-        '不要把普通网页、README、文章页、搜索结果页或未检查的仓库 URL 直接传给本工具；不确定时应先用 web_search/web_fetch 或询问用户。\n' +
-        '安装后 skill 立即生效，可通过 load_skill 工具加载。\n' +
-        '示例：install_skill({ repoUrl: "https://github.com/user/skill-collection", skillPaths: ["skills/report-design"], inspectionSummary: "已检查仓库树，skills/report-design/SKILL.md 存在且 frontmatter 含 name/description。" })',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          repoUrl: {
-            type: 'string',
-            description: '已确认的 Git 仓库地址（https/http/git@）。必须是仓库 URL，不是普通网页 URL。',
-          },
-          skillPaths: {
-            type: 'array',
-            items: { type: 'string' },
-            minItems: 1,
-            description: '调用前已经检查到的 skill 目录相对路径；可传 "path/to/skill" 或 "path/to/skill/SKILL.md"。根目录 skill 用 "."。',
-          },
-          inspectedSource: {
-            type: 'string',
-            description: '实际检查过的网页、仓库页面、README 或文件树 URL/路径。',
-          },
-          inspectionSummary: {
-            type: 'string',
-            description: '简要说明检查依据，例如检查到哪些 SKILL.md、frontmatter 是否包含 name/description、来源是否可信。',
-          },
+  unifiedToolRegistry.register({
+    name: 'install_skill',
+    description:
+      '安装已经人工/工具检查确认过的 Agent Skill。这是最终安装动作，不是搜索或探测工具。\n' +
+      '调用前必须先读取用户给出的网页、GitHub 页面或仓库内容，确认其中确实存在 SKILL.md，并记录准确的 skill 目录路径。\n' +
+      '不要把普通网页、README、文章页、搜索结果页或未检查的仓库 URL 直接传给本工具；不确定时应先用 web_search/web_fetch 或询问用户。\n' +
+      '安装后 skill 立即生效，可通过 load_skill 工具加载。\n' +
+      '示例：install_skill({ repoUrl: "https://github.com/user/skill-collection", skillPaths: ["skills/report-design"], inspectionSummary: "已检查仓库树，skills/report-design/SKILL.md 存在且 frontmatter 含 name/description。" })',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repoUrl: {
+          type: 'string',
+          description: '已确认的 Git 仓库地址（https/http/git@）。必须是仓库 URL，不是普通网页 URL。',
         },
-        required: ['repoUrl', 'skillPaths', 'inspectionSummary'],
-        additionalProperties: false,
+        skillPaths: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          description: '调用前已经检查到的 skill 目录相对路径；可传 "path/to/skill" 或 "path/to/skill/SKILL.md"。根目录 skill 用 "."。',
+        },
+        inspectedSource: {
+          type: 'string',
+          description: '实际检查过的网页、仓库页面、README 或文件树 URL/路径。',
+        },
+        inspectionSummary: {
+          type: 'string',
+          description: '简要说明检查依据，例如检查到哪些 SKILL.md、frontmatter 是否包含 name/description、来源是否可信。',
+        },
       },
-      riskLevel: 'caution',
-      executionPolicy: { parallelizable: false },
+      required: ['repoUrl', 'skillPaths', 'inspectionSummary'],
+      additionalProperties: false,
     },
+    riskLevel: 'caution',
+    executionPolicy: { parallelizable: false },
+    source: { type: 'builtin' },
 
     async execute(args) {
       const log = getLogger('tools/install-skill');

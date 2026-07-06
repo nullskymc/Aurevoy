@@ -10,7 +10,7 @@ describe("i18n", () => {
     setLocale("zh");
     expect(t("status.completed")).toBe("已完成");
     expect(t("action.retry")).toBe("重试");
-    expect(t("mode.artifacts")).toBe("产物");
+    expect(t("nav.conversations")).toBe("对话");
   });
 
   it("resolves known translation keys in en", () => {
@@ -18,7 +18,7 @@ describe("i18n", () => {
     expect(getLocale()).toBe("en");
     expect(t("status.completed")).toBe("Completed");
     expect(t("action.retry")).toBe("Retry");
-    expect(t("mode.artifacts")).toBe("Artifacts");
+    expect(t("nav.conversations")).toBe("Conversations");
   });
 
   it("resolves known translation keys in ko", () => {
@@ -26,7 +26,7 @@ describe("i18n", () => {
     expect(getLocale()).toBe("ko");
     expect(t("status.completed")).toBe("완료");
     expect(t("action.retry")).toBe("재시도");
-    expect(t("mode.artifacts")).toBe("산출물");
+    expect(t("nav.conversations")).toBe("대화");
   });
 
   it("resolves known translation keys in ja", () => {
@@ -34,6 +34,6 @@ describe("i18n", () => {
     expect(getLocale()).toBe("ja");
     expect(t("status.completed")).toBe("完了");
     expect(t("action.retry")).toBe("再試行");
-    expect(t("mode.artifacts")).toBe("成果物");
+    expect(t("nav.conversations")).toBe("会話");
   });
 });

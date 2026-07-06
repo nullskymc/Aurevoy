@@ -1,269 +1,50 @@
 import { promises as fs } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import type {
-  AgentEvent,
-  AutoModeLevel,
-  AutoModeState,
-  ContentBlock,
-  ContentBlockType,
-  FileSnapshot,
   Message,
   MessageAttachment,
-  MessageToolCall,
   PlanStep,
   RevertMode,
   Task,
+  TaskBudget,
   TaskErrorCategory,
   TaskPhase,
   TaskStatus,
-  TaskTraceEntry,
-  TaskBudget,
-  TokenUsage,
-  ToolCall,
-  ToolResult,
-  ToolRiskLevel,
+  TaskTraceKind,
 } from '@aurevoy/shared';
-import { taskEvents } from './events.js';
-import { getProvider, getProviderName, type AccumulatedToolCall } from '../llm/provider.js';
-import { compactContext, buildMemorySystemMessage, buildSkillCatalogMessage, buildSystemContextMessage, buildToolGuidanceMessage, totalTokens } from './context.js';
-import { toolRegistry } from '../tools/registry.js';
-import { assertRealPathInside, resolveInWorkspace } from '../tools/builtins.js';
-
-import { runPlanAgent } from './plan-agent.js';
-import { withRetry } from './retry.js';
-import { taskStore, memoryStore, projectStore } from '../store/db.js';
-import { createTaskLogger } from '../logging/trace.js';
 import { config } from '../config.js';
-import {
-  addTokenUsage,
-  assertBudgetWithinLimits,
-  BudgetExceededError,
-  createCheckpoint,
-  createClarification,
-  effectiveBudget,
-  initialBudgetUsage,
-  markArtifactApplied,
-  normalizeBudget,
-  resolveClarification,
-  updateWallTime,
-} from './m6-state.js';
+import { taskEvents } from './events.js';
+import { followUpPiTask, runPiTask, steerPiTask } from './pi-runtime.js';
+import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval, waitForPlanApproval } from './pi-approval.js';
+import { taskStore, projectStore } from '../store/db.js';
+import { createTaskLogger } from '../logging/trace.js';
+import { initialBudgetUsage, normalizeBudget } from './m6-state.js';
+import { getPiProviderName } from '../llm/pi-provider.js';
 
-/** 同一工具+相同参数最多重复调用次数，超过即注入纠正提示 */
-const DUPLICATE_CALL_LIMIT = 3;
-/** 单轮最多并行工具调用数 */
-const MAX_TOOL_CALLS_PER_TURN = 10;
-/** 流式生成期间单个 tool_call 参数的最大字符数（已提高至极大值——新写入原语由工具层做内容校验，不需要流式截断）。 */
-const MAX_TOOL_ARG_STREAM_CHARS = 1_000_000_000;
-/** P6: 写入类工具（需要执行前文件快照） */
-const WRITE_TOOLS = new Set(['apply_artifact', 'create_artifact', 'copy_file', 'move_file', 'rename_file', 'create_file', 'write_file', 'edit_lines', 'append_file', 'session_open', 'session_write', 'session_close']);
-/** 基础只读工具免审批；其余工具仅允许当前任务会话内临时批准。 */
-const APPROVAL_FREE_TOOLS = new Set(['list_directory', 'load_skill', 'open_file', 'scroll', 'search_grep']);
-
-/** plan 模式下允许自动批准的只读勘探工具 */
-const PLANMODE_TOOLS = new Set([
-  'list_directory', 'glob', 'get_current_time', 'load_skill',
-  'open_file', 'scroll', 'search_grep',
-]);
-
-/** auto-edit 等级下自动批准的安全文件工具（读写+搜索，不自动批准 shell/网络） */
-const AUTO_EDIT_TOOLS = new Set([
-  ...PLANMODE_TOOLS,
-  'apply_artifact', 'move_file', 'copy_file', 'rename_file',
-  'create_file', 'write_file', 'edit_lines', 'append_file',
-  'session_open', 'session_write', 'session_close',
-  'create_artifact',
-]);
-
-/** 获取当前有效的 auto mode level：全局 config 为准，任务级 plan mode 降级覆盖 */
-function getEffectiveAutoModeLevel(task: Task): AutoModeLevel {
-  const override = task.autoModeState?.level;
-  if (override && override !== (config.autoMode.level as AutoModeLevel)) return override;
-  const level = config.autoMode.level;
-  if (level === 'off' || level === 'plan' || level === 'auto-edit' || level === 'full') return level;
-  return 'off';
-}
-
-/**
- * 判断工具在 auto mode 下需要审批的原因。
- * - off/paused → 'paused' (auto mode 关闭或暂停)
- * - plan + 不在 PLANMODE_TOOLS → 'not_covered'（写工具被 plan mode 拦截）
- * - full → 始终自动批准，无原因
- * - auto-edit + 不在 AUTO_EDIT_TOOLS → 'not_covered'
- * - 否则自动批准，无原因
- */
-function autoModeApprovalReason(
-  level: AutoModeLevel,
-  paused: boolean,
-  toolName: string,
-): 'not_covered' | 'paused' | undefined {
-  if (level === 'off' || paused) return 'paused';
-  if (level === 'plan') {
-    if (PLANMODE_TOOLS.has(toolName)) return undefined;
-    return 'not_covered'; // 写工具在 plan mode 中被拦截
-  }
-  if (level === 'full') {
-    return undefined;
-  }
-  if (level === 'auto-edit') {
-    if (AUTO_EDIT_TOOLS.has(toolName)) return undefined;
-    return 'not_covered';
-  }
-  return undefined;
-}
-
-/** 根据 auto mode 等级注入差异化系统提示词 */
-function buildModeSystemMessage(level: AutoModeLevel): Message | null {
-  if (level === 'off' || level === 'plan') {
-    // plan mode: 只读勘探提示
-    if (level === 'plan') {
-      return {
-        id: `mode-${randomUUID()}`,
-        role: 'system',
-        content:
-          'You are in **Plan Mode** — a read-only exploration and planning phase.\n\n' +
-          'Rules:\n' +
-          '1. You can ONLY read files, search the codebase, list directories, and ask the user questions.\n' +
-          '2. You CANNOT write, edit, create, or delete any files — those tools are blocked until the plan is approved.\n' +
-          '3. Your goal is to understand the problem, explore the codebase, design a solution, and present a clear implementation plan.\n' +
-          '4. When you are ready to present your plan, describe the approach step by step. The user will approve it before execution begins.\n' +
-          '5. If you try to use a write tool, it will be rejected with a notification that you are in plan mode.\n\n' +
-          'Focus on: exploration, analysis, design, and clear planning.',
-        createdAt: new Date().toISOString(),
-      };
-    }
-    // off mode: 无需额外提示词
-    return null;
-  }
-
-  let modePrompt: string;
-  if (level === 'auto-edit') {
-    modePrompt =
-      'You are in **Auto-edit Mode**.\n\n' +
-      'Rules:\n' +
-      '1. File read, write, edit, search, and artifact operations are **auto-approved** — they execute immediately.\n' +
-      '2. Shell commands and network requests will **prompt for your approval** before they run.\n' +
-      '3. Use file operations freely to explore and edit the codebase. For shell commands, explain briefly so the user can approve quickly.\n' +
-      '4. When you need to run a command, first explain what it does and why, then call the tool.';
-  } else if (level === 'full') {
-    modePrompt =
-      'You are in **Full Auto Mode**.\n\n' +
-      'Rules:\n' +
-      '1. **All tools are auto-approved** and execute immediately — no approval prompts.\n' +
-      '2. Proceed autonomously: explore, edit, run commands, and iterate as needed.\n' +
-      '3. After long runs of auto-approved actions, the system may pause and ask you to confirm before continuing.\n\n' +
-      'Focus on: getting the job done efficiently.';
-  } else {
-    return null;
-  }
-
-  return {
-    id: `mode-${randomUUID()}`,
-    role: 'system',
-    content: modePrompt,
-    createdAt: new Date().toISOString(),
-  };
-}
-
-/**
- * 检测任务是否足够复杂，需要自动进入 Plan Mode。
- * 基于目标文本的启发式规则，配合可选的 Plan Agent scout 结果。
- */
-function shouldAutoPlan(goal: string): boolean {
-  if (!goal || goal.length < 80) return false;
-  // 关键词匹配
-  const complexKeywords = [
-    /design/i, /architecture/i, /refactor/i, /restructure/i,
-    /migrate/i, /redesign/i, /overhaul/i, /reorganize/i,
-    /multi[-\s]?(step|stage|phase|tier)/i, /cross[-\s]cutting/i,
-    /integration/i, /scaffold/i, /from\s+scratch/i,
-  ];
-  const matchCount = complexKeywords.filter((re) => re.test(goal)).length;
-  if (matchCount >= 2) return true;
-  if (goal.length >= 150 && matchCount >= 1) return true;
-  return false;
-}
-
-/** 初始化 AutoModeState */
-function initAutoModeState(level: AutoModeLevel, preMode?: AutoModeLevel): AutoModeState {
-  return {
-    level,
-    autoApprovedCalls: 0,
-    blockedByRules: 0,
-    paused: false,
-    consecutiveAutoCalls: 0,
-    fallbackCount: 0,
-    planReady: false,
-    planPreMode: preMode,
-  };
-}
-
-/** 全自动下连续批准上限（超过此值触发暂停降级） */
-const AUTO_MODE_MAX_CONSECUTIVE = 50;
 /** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
 const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'running', 'paused'];
-/** 进行中任务的取消句柄 */
+/** Pi runtime 的取消句柄。旧 ReAct 后端已移除，不再维护第二套执行循环。 */
 const activeAbortControllers = new Map<string, AbortController>();
 
-/** 等待中的工具审批：taskId → (callId → 决策回调) */
-const pendingApprovals = new Map<
-  string,
-  Map<string, (approved: boolean, sessionApprove?: boolean) => void>
->();
-/** 等待中的用户追问：taskId → (clarificationId → 回复回调) */
-const pendingClarifications = new Map<string, Map<string, (answer: string | null) => void>>();
 
-/** 等待中的计划审批：taskId → 决策回调（approved + 可选拒绝原因） */
-const pendingPlanApprovals = new Map<string, (approved: boolean, reason?: string) => void>();
-
-/** API 层调用：投递用户的计划审批决策到等待中的 Plan Agent 循环 */
-export function resolvePlanApproval(taskId: string, approved: boolean, reason?: string): boolean {
-  const resolve = pendingPlanApprovals.get(taskId);
-  if (!resolve) return false;
-  pendingPlanApprovals.delete(taskId);
-  resolve(approved, reason);
-  return true;
-}
-
-/** 等待用户对 Plan Agent 生成的计划做出审批决策 */
-function waitForPlanApproval(taskId: string, signal: AbortSignal): Promise<{ approved: boolean; reason?: string }> {
-  return new Promise((resolve) => {
-    const onAbort = () => {
-      pendingPlanApprovals.delete(taskId);
-      resolve({ approved: false, reason: 'cancelled' });
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    pendingPlanApprovals.set(taskId, (approved, reason) => {
-      signal.removeEventListener('abort', onAbort);
-      pendingPlanApprovals.delete(taskId);
-      resolve({ approved, reason });
-    });
-  });
-}
-
-/** 取消一个进行中的任务（hard cancel：中断 fetch 流） */
+/** 取消一个进行中的任务。 */
 export function cancelTask(taskId: string): boolean {
   const ac = activeAbortControllers.get(taskId);
   if (!ac) return false;
   ac.abort();
-  const clarifications = pendingClarifications.get(taskId);
-  for (const resolve of clarifications?.values() ?? []) resolve(null);
-  pendingClarifications.delete(taskId);
-  pendingApprovals.delete(taskId);
+  cancelPiApprovals(taskId);
   return true;
 }
 
-/** 该任务当前是否有正在执行的循环（用于续聊并发守卫）。 */
+/** 该任务当前是否有正在执行的 Pi runtime。 */
 export function isTaskRunning(taskId: string): boolean {
   return activeAbortControllers.has(taskId);
 }
 
 /**
  * 启动期恢复扫描：SQLite 里仍处于运行态/等待态的任务，说明上一次进程已中断。
- *
- * 这里不自动续跑，因为审批、外部工具副作用和用户意图都可能已经过期；
- * 先收敛为可解释的 failed，再由用户显式 resume。
+ * 不自动续跑，因为审批、外部工具副作用和用户意图都可能已经过期。
  */
 export function markInterruptedTasksAfterRestart(): Task[] {
   const recovered: Task[] = [];
@@ -273,6 +54,7 @@ export function markInterruptedTasksAfterRestart(): Task[] {
     const previousPhase = task.phase;
     task.status = 'failed';
     task.phase = 'failed';
+    task.pendingApprovals = [];
     task.plan = task.plan.map((step) =>
       step.status === 'completed' ? step : { ...step, status: 'failed' },
     );
@@ -289,12 +71,7 @@ export function markInterruptedTasksAfterRestart(): Task[] {
   return recovered;
 }
 
-/**
- * 恢复一个历史任务：不追加假用户输入，只修补协议层悬空工具结果后重新运行。
- *
- * 某些 LLM API 要求 assistant tool_calls 后必须紧跟 tool 结果；如果崩溃发生在
- * 工具调用与结果写入之间，直接续跑会被 Provider 拒绝，因此恢复前先写入可解释结果。
- */
+/** 恢复一个历史任务：修补悬空工具结果后交给 Pi runtime 继续。 */
 export function prepareTaskForResume(task: Task): Task {
   const now = new Date().toISOString();
   const previousStatus = task.status;
@@ -303,6 +80,7 @@ export function prepareTaskForResume(task: Task): Task {
   const lastCheckpoint = task.checkpoints?.at(-1);
   task.status = 'pending';
   task.phase = 'initializing';
+  task.pendingApprovals = [];
   task.plan = resumePlanFromCheckpoint(task.plan, lastCheckpoint?.stepId);
   task.updatedAt = now;
   taskStore.save(task);
@@ -310,23 +88,13 @@ export function prepareTaskForResume(task: Task): Task {
     ok: true,
     summary: lastCheckpoint
       ? `用户恢复历史任务，从 checkpoint 继续：${lastCheckpoint.label}`
-      : '用户恢复历史任务，使用持久消息历史重新进入 Agent 循环',
+      : '用户恢复历史任务，使用持久消息历史重新进入 Agent runtime',
     data: { previousStatus, previousPhase, patchedToolResults, checkpoint: lastCheckpoint },
   });
   return task;
 }
 
-/**
- * 编辑重跑（Claude Code Rewind 的对话截断语义）：
- * 把目标消息及其之后的所有消息从活跃历史移除，使任务回到该消息发送前的状态。
- * 不回滚已落盘文件（Aurevoy 当前无 per-tool 文件快照，且已 apply 的产物不应被静默回滚）。
- * 截断前将移除的消息归档到 archivedMessages（支持 unrevert）。
- *
- * - code_and_conv: 截断对话 + 清除 checkpoint/artifact/plan（完整重做）
- * - conv_only: 仅截断对话，保留 checkpoint/artifact/plan（文件没问题，只想重新推理）
- *
- * 截断后调用方通常再 addUserTurn(编辑后的文本) + runTask，实现"带上下文从该点重新生成"。
- */
+/** 编辑重跑：截断目标消息及其之后的对话，等待用户继续输入后由 Pi 重新生成。 */
 export function revertTask(
   task: Task,
   messageId: string,
@@ -344,35 +112,21 @@ export function revertTask(
 
   const removed = task.messages[index];
   const removedMessages = task.messages.slice(index);
-  const removedCount = removedMessages.length;
-
   task.archivedMessages = removedMessages;
   task.messages = task.messages.slice(0, index);
 
   if (mode === 'code_and_conv') {
     const revertTime = removed.createdAt;
     task.checkpoints = (task.checkpoints ?? []).filter((cp) => cp.createdAt < revertTime);
-    task.artifacts = (task.artifacts ?? []).filter((artifact) => {
-      if (artifact.status === 'applied') return true;
-      return artifact.createdAt < revertTime;
-    });
-    task.plan = task.plan.filter((step) => step.status === 'completed');
-
-    // P6: 回滚被截断消息关联的文件写入（从快照恢复）
-    const removedCallIds = new Set(
-      removedMessages.flatMap((m) => m.toolCalls ?? []).map((tc) => tc.id),
+    task.artifacts = (task.artifacts ?? []).filter((artifact) =>
+      artifact.status === 'applied' || artifact.createdAt < revertTime,
     );
-    const snapshotsToRestore = (task.fileSnapshots ?? [])
-      .filter((s) => removedCallIds.has(s.callId));
-    if (snapshotsToRestore.length > 0) {
-      restoreFilesFromSnapshots(task, snapshotsToRestore).catch(() => {
-        // 文件恢复失败不阻塞 revert 操作
-      });
-    }
+    task.plan = task.plan.filter((step) => step.status === 'completed');
   }
 
   task.status = 'paused';
   task.phase = null;
+  task.pendingApprovals = [];
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
 
@@ -380,120 +134,80 @@ export function revertTask(
     type: 'reverted',
     taskId: task.id,
     messageId,
-    removedCount,
+    removedCount: removedMessages.length,
     archivedCount: removedMessages.length,
   });
-
   writeTrace(task.id, 'phase', null, {
     ok: true,
-    summary: `编辑重跑(mode=${mode})：截断到消息 ${messageId} 之前，移除 ${removedCount} 条消息（已归档），不回滚已落盘文件`,
-    data: { messageId, mode, removedCount, archivedCount: removedMessages.length },
+    summary: `编辑重跑(mode=${mode})：截断到消息 ${messageId} 之前，移除 ${removedMessages.length} 条消息`,
+    data: { messageId, mode, removedCount: removedMessages.length },
   });
 
   return {
     task,
     removedContent: removed.role === 'user' ? removed.content : null,
     removedMessageId: removed.id,
-    removedCount,
+    removedCount: removedMessages.length,
   };
 }
 
-/**
- * 撤销上一次 revert：从 archivedMessages 恢复被截断的消息到活跃历史。
- * 仅在 revert 后尚未提交新的 continue 时可用（archivedMessages 非空且任务处于 paused）。
- */
+/** 撤销上一次 revert：从 archivedMessages 恢复被截断的消息。 */
 export function unrevertTask(task: Task): { task: Task; restoredCount: number } {
   const archived = task.archivedMessages ?? [];
-  if (archived.length === 0) {
-    return { task, restoredCount: 0 };
-  }
+  if (archived.length === 0) return { task, restoredCount: 0 };
 
   task.messages = [...task.messages, ...archived];
   task.archivedMessages = [];
-
-  const lastMessage = task.messages.at(-1);
-  task.status = lastMessage?.role === 'user' ? 'completed' : 'completed';
+  task.status = 'completed';
   task.phase = 'finalizing';
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
 
-  const restoredCount = archived.length;
-
-  taskEvents.publish({
-    type: 'unreverted',
-    taskId: task.id,
-    restoredCount,
-  });
-
+  taskEvents.publish({ type: 'unreverted', taskId: task.id, restoredCount: archived.length });
   writeTrace(task.id, 'phase', null, {
     ok: true,
-    summary: `撤销编辑重跑：恢复 ${restoredCount} 条归档消息到活跃历史`,
-    data: { restoredCount },
+    summary: `撤销编辑重跑：恢复 ${archived.length} 条归档消息到活跃历史`,
+    data: { restoredCount: archived.length },
   });
-
-  return { task, restoredCount };
+  return { task, restoredCount: archived.length };
 }
 
-/**
- * 从指定消息处分支出一个新任务（非破坏性 fork）。
- * 克隆父任务到目标消息（含）为止的所有消息，每条消息分配新 ID，
- * 新任务独立演进，原任务不受影响。
- */
+/** 从指定消息处分支出一个新任务。 */
 export function branchTask(
   parentTask: Task,
   messageId: string,
   goalOverride?: string,
 ): { task: Task; messageCount: number } {
   const index = parentTask.messages.findIndex((m) => m.id === messageId);
-  if (index < 0) {
-    const now = new Date().toISOString();
-    const task: Task = {
-      id: randomUUID(),
-      goal: goalOverride ?? parentTask.goal,
-      status: 'pending',
-      phase: 'initializing',
-      plan: [],
-      messages: [],
-      parentTaskId: parentTask.id,
-      projectId: parentTask.projectId,
-      createdAt: now,
-      updatedAt: now,
-    };
-    taskStore.save(task);
-    return { task, messageCount: 0 };
-  }
-
-  const sourceMessages = parentTask.messages.slice(0, index + 1);
+  const sourceMessages = index < 0 ? [] : parentTask.messages.slice(0, index + 1);
   const idMap = new Map<string, string>();
   for (const msg of sourceMessages) {
     idMap.set(msg.id, randomUUID());
+    for (const call of msg.toolCalls ?? []) idMap.set(call.id, randomUUID());
   }
 
-  const clonedMessages: Message[] = sourceMessages.map((msg) => {
-    const cloned: Message = {
-      ...msg,
-      id: idMap.get(msg.id)!,
-    };
-    if (cloned.toolCalls) {
-      cloned.toolCalls = cloned.toolCalls.map((tc) => ({
-        ...tc,
-        id: idMap.get(tc.id) ?? randomUUID(),
-      }));
-    }
-    if (cloned.toolCallId) {
-      cloned.toolCallId = idMap.get(cloned.toolCallId) ?? cloned.toolCallId;
-    }
-    return cloned;
-  });
+  const clonedMessages: Message[] = sourceMessages.map((msg) => ({
+    ...msg,
+    id: idMap.get(msg.id)!,
+    toolCalls: msg.toolCalls?.map((tc) => ({ ...tc, id: idMap.get(tc.id) ?? randomUUID() })),
+    toolCallId: msg.toolCallId ? (idMap.get(msg.toolCallId) ?? msg.toolCallId) : undefined,
+  }));
 
   const now = new Date().toISOString();
   const task: Task = {
     id: randomUUID(),
     goal: goalOverride ?? parentTask.goal,
-    status: 'completed',
-    phase: 'finalizing',
+    status: clonedMessages.length > 0 ? 'completed' : 'pending',
+    phase: clonedMessages.length > 0 ? 'finalizing' : 'initializing',
     plan: [],
     messages: clonedMessages,
+    artifacts: [],
+    clarifications: [],
+    pendingApprovals: [],
+    checkpoints: [],
+    budget: parentTask.budget,
+    budgetUsage: initialBudgetUsage(),
+    tokenUsage: { available: false, provider: getPiProviderName(), model: config.llm.model },
     parentTaskId: parentTask.id,
     projectId: parentTask.projectId,
     createdAt: now,
@@ -508,7 +222,6 @@ export function branchTask(
     messageId,
     messageCount: clonedMessages.length,
   });
-
   writeTrace(task.id, 'phase', null, {
     ok: true,
     summary: `从任务 ${parentTask.id} 分支，克隆 ${clonedMessages.length} 条消息到消息 ${messageId}`,
@@ -519,9 +232,8 @@ export function branchTask(
 }
 
 /**
- * 将指定消息范围压缩为 LLM 生成的摘要（上下文窗口管理）。
- * 替换原消息为一条 system 摘要消息，释放上下文空间。
- * 不截断对话，仅压缩旧消息。
+ * 本地压缩旧消息为 system 摘要。
+ * 旧后端的 LLM 摘要调用已删除，避免重新引入非 Pi 的 provider stream。
  */
 export async function compactTask(
   task: Task,
@@ -529,12 +241,8 @@ export async function compactTask(
   toMessageId?: string,
 ): Promise<{ task: Task; originalCount: number; summaryLength: number }> {
   const messages = task.messages;
-  const fromIndex = fromMessageId
-    ? messages.findIndex((m) => m.id === fromMessageId)
-    : 0;
-  const toIndex = toMessageId
-    ? messages.findIndex((m) => m.id === toMessageId)
-    : messages.length - 1;
+  const fromIndex = fromMessageId ? messages.findIndex((m) => m.id === fromMessageId) : 0;
+  const toIndex = toMessageId ? messages.findIndex((m) => m.id === toMessageId) : messages.length - 1;
 
   if (fromIndex < 0 || toIndex < 0 || fromIndex > toIndex) {
     return { task, originalCount: 0, summaryLength: 0 };
@@ -545,88 +253,33 @@ export async function compactTask(
     return { task, originalCount: toCompress.length, summaryLength: 0 };
   }
 
-  const transcript = toCompress
-    .map((m) => `[${m.role}]: ${m.content.slice(0, 800)}`)
-    .join('\n\n');
-
-  let summaryText = '';
-  try {
-    const promptMessages: Message[] = [
-      {
-        id: randomUUID(),
-        role: 'user',
-        content: `请将以下对话记录压缩为一段简洁的摘要（200字以内），保留关键信息、决策和结论。只输出摘要文本，不要加前缀：\n\n${transcript}`,
-        createdAt: new Date().toISOString(),
-      },
-    ];
-    for await (const chunk of getProvider().stream(promptMessages)) {
-      if (chunk.textDelta) summaryText += chunk.textDelta;
-    }
-  } catch (err) {
-    writeTrace(task.id, 'error', null, {
-      ok: false,
-      errorCategory: 'model',
-      errorMessage: err instanceof Error ? err.message : String(err),
-      summary: 'compact LLM 摘要调用失败',
-    });
-    return { task, originalCount: toCompress.length, summaryLength: 0 };
-  }
-
-  if (!summaryText.trim()) {
-    return { task, originalCount: toCompress.length, summaryLength: 0 };
-  }
-
+  const summaryText = summarizeMessages(toCompress);
   const summaryMessage: Message = {
     id: randomUUID(),
     role: 'system',
-    content: `[上下文摘要] ${summaryText.trim()}`,
+    content: `[上下文摘要] ${summaryText}`,
     createdAt: new Date().toISOString(),
   };
-
-  const before = messages.slice(0, fromIndex);
-  const after = messages.slice(toIndex + 1);
-  task.messages = [...before, summaryMessage, ...after];
-
-  const originalCount = toCompress.length;
-  const summaryLength = summaryText.trim().length;
-
+  task.messages = [...messages.slice(0, fromIndex), summaryMessage, ...messages.slice(toIndex + 1)];
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
 
   taskEvents.publish({
     type: 'compacted',
     taskId: task.id,
-    originalCount,
-    summaryLength,
+    originalCount: toCompress.length,
+    summaryLength: summaryText.length,
   });
-
   writeTrace(task.id, 'phase', null, {
     ok: true,
-    summary: `压缩 ${originalCount} 条消息为 ${summaryLength} 字符摘要`,
-    data: { fromIndex, toIndex, originalCount, summaryLength },
+    summary: `本地压缩 ${toCompress.length} 条消息为 ${summaryText.length} 字符摘要`,
+    data: { fromIndex, toIndex, originalCount: toCompress.length, summaryLength: summaryText.length },
   });
 
-  return { task, originalCount, summaryLength };
+  return { task, originalCount: toCompress.length, summaryLength: summaryText.length };
 }
 
-/** 解析用户输入中的斜杠命令前缀。/plan 只触发 Plan Agent，不作为 skill。 */
-function parseSlashCommand(content: string): { planRequested: boolean; text: string } {
-  const match = content.match(/^\/(\S+)(?:\s+(.*))?/s);
-  if (!match) return { planRequested: false, text: content };
-  const command = match[1];
-  if (command === 'compact') return { planRequested: false, text: content };
-  if (command === 'plan') {
-    return { planRequested: true, text: match[2]?.trim() || '' };
-  }
-  return { planRequested: false, text: content };
-}
-
-/**
- * 在同一任务内追加一轮用户输入（多轮对话）。
- *
- * 仅追加 user 消息并持久化、广播；调用方随后再 `runTask(task)`，
- * 循环会带着完整的历史 `task.messages` 作为上下文继续推进。
- */
+/** 在同一任务内追加一轮用户输入。 */
 export function addUserTurn(
   task: Task,
   content: string,
@@ -637,14 +290,10 @@ export function addUserTurn(
     taskEvents.publish({ type: 'message', taskId: task.id, message: patched });
   }
 
-  // Skill: 解析斜杠命令前缀
   const parsed = parseSlashCommand(content);
-  let messageContent = content;
+  const messageContent = parsed.planRequested ? (parsed.text || task.goal) : content;
   task.planMode = parsed.planRequested ? 'manual' : undefined;
-  if (parsed.planRequested) {
-    messageContent = parsed.text || task.goal;
-    task.goal = messageContent;
-  }
+  if (parsed.planRequested) task.goal = messageContent;
 
   const userMsg: Message = {
     id: randomUUID(),
@@ -654,24 +303,55 @@ export function addUserTurn(
     attachments,
   };
   task.messages.push(userMsg);
-  // 复用任务时，从终态回到待运行；phase 进入 initializing
   task.status = 'pending';
   task.phase = 'initializing';
+  task.pendingApprovals = [];
   task.updatedAt = userMsg.createdAt;
   taskStore.save(task);
   taskEvents.publish({ type: 'message', taskId: task.id, message: userMsg });
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
-    summary: '收到后续输入，继续任务',
+    summary: '收到后续输入，继续 Agent runtime',
     data: { message: messageContent, patchedToolResults: patchedToolResults.length },
   });
   return userMsg;
 }
 
-/**
- * 恢复已暂停的 auto mode（重置连续计数 + 取消暂停状态）。
- * 前端通过 API 调用，允许用户在一次安全暂停后继续自动执行。
- */
+/** 任务运行中追加用户消息，并投递到 Pi steering/follow-up 队列。 */
+export function queueRunningUserTurn(
+  task: Task,
+  content: string,
+  delivery: 'steering' | 'follow_up' = 'steering',
+  attachments?: MessageAttachment[],
+): { message: Message; delivered: boolean } {
+  const userMsg: Message = {
+    id: randomUUID(),
+    role: 'user',
+    content,
+    createdAt: new Date().toISOString(),
+    attachments,
+  };
+
+  const delivered = delivery === 'follow_up'
+    ? followUpPiTask(task.id, userMsg)
+    : steerPiTask(task.id, userMsg);
+  if (delivered) {
+    task.messages.push(userMsg);
+    task.updatedAt = userMsg.createdAt;
+    taskStore.save(task);
+    taskEvents.publish({ type: 'message', taskId: task.id, message: userMsg });
+  }
+  writeTrace(task.id, 'phase', task.phase ?? 'thinking', {
+    ok: delivered,
+    summary: delivered
+      ? `运行中追加用户消息已投递到 ${delivery} 队列`
+      : `运行中追加用户消息未投递：Pi runtime 不可用`,
+    data: { delivery, message: content },
+  });
+  return { message: userMsg, delivered };
+}
+
+/** Pi runtime 当前不维护旧 auto-mode 暂停态；保留端点兼容。 */
 export function resumeAutoMode(taskId: string): boolean {
   const task = taskStore.get(taskId);
   if (!task?.autoModeState?.paused) return false;
@@ -684,168 +364,33 @@ export function resumeAutoMode(taskId: string): boolean {
   return true;
 }
 
-/** 投递一次工具审批决策（由 server 的审批端点调用）。返回是否命中等待中的请求。 */
+/** 投递一次工具审批决策到 Pi 审批桥。 */
 export function resolveApproval(
   taskId: string,
   callId: string,
   approved: boolean,
-  sessionApprove?: boolean,
 ): boolean {
-  const resolve = pendingApprovals.get(taskId)?.get(callId);
-  if (!resolve) return false;
-  resolve(approved, sessionApprove);
-  return true;
+  return resolvePiApproval(taskId, callId, approved);
 }
 
-/** 投递一次用户追问回复；返回是否命中等待中的请求。 */
+/** 投递一次计划审批决策到 Pi 运行前的计划门禁。 */
+export function resolvePlanApprovalDecision(
+  taskId: string,
+  approved: boolean,
+): boolean {
+  return resolvePlanApproval(taskId, approved);
+}
+
+/** Pi-only 后端不再维护旧 ask_user 等待队列。 */
 export function resolveClarificationAnswer(
-  taskId: string,
-  clarificationId: string,
-  answer: string,
+  _taskId: string,
+  _clarificationId: string,
+  _answer: string,
 ): boolean {
-  const resolve = pendingClarifications.get(taskId)?.get(clarificationId);
-  if (!resolve) return false;
-  resolve(answer);
-  return true;
+  return false;
 }
 
-/** 等待用户对某次工具调用的审批；超时或任务取消视为拒绝。 */
-interface ApprovalResult {
-  approved: boolean;
-  sessionApprove?: boolean;
-  /** 命令前缀 key（如 cmd:rm），选中"允许本 session 内的 <cmd> 命令"时传入 */
-  prefixKey?: string;
-}
-
-function waitForApproval(
-  taskId: string,
-  callId: string,
-  signal: AbortSignal,
-): Promise<ApprovalResult> {
-  return new Promise<ApprovalResult>((resolve) => {
-    let settled = false;
-    const cleanup = () => {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', onAbort);
-      const map = pendingApprovals.get(taskId);
-      map?.delete(callId);
-      if (map && map.size === 0) pendingApprovals.delete(taskId);
-    };
-    const finish = (approved: boolean, sessionApprove?: boolean, prefixKey?: string) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve({ approved, sessionApprove, prefixKey });
-    };
-    const onAbort = () => finish(false);
-    const timer = setTimeout(() => finish(false), config.agent.approvalTimeoutMs);
-
-    if (signal.aborted) return finish(false);
-    signal.addEventListener('abort', onAbort, { once: true });
-    let map = pendingApprovals.get(taskId);
-    if (!map) {
-      map = new Map();
-      pendingApprovals.set(taskId, map);
-    }
-    map.set(callId, finish);
-  });
-}
-
-function approvalKeyForCall(call: ToolCall): string {
-  if (call.toolName !== 'execute_command') return `tool:${call.toolName}`;
-  const args = call.args as Record<string, unknown>;
-  const command = typeof args.command === 'string' ? args.command.trim() : '';
-  const commandArgs = Array.isArray(args.args)
-    ? args.args.map((item) => String(item))
-    : [];
-  const cwd = typeof args.cwd === 'string' ? args.cwd.trim() : '';
-  const envEntries =
-    args.env && typeof args.env === 'object' && !Array.isArray(args.env)
-      ? Object.entries(args.env as Record<string, unknown>)
-          .filter(([, value]) => typeof value === 'string')
-          .sort(([a], [b]) => a.localeCompare(b))
-      : [];
-  return JSON.stringify({
-    tool: call.toolName,
-    command,
-    args: commandArgs,
-    cwd,
-    env: envEntries,
-  });
-}
-
-function isApprovalFreeTool(toolName: string): boolean {
-  return APPROVAL_FREE_TOOLS.has(toolName);
-}
-
-/** 获取命令审批的 key（前缀匹配，如 cmd:rm、cmd:git）。仅对 execute_command 生效。 */
-function prefixApprovalKeyForCall(call: ToolCall): string {
-  if (call.toolName !== 'execute_command') return '';
-  const args = call.args as Record<string, unknown>;
-  const command = typeof args.command === 'string' ? args.command.trim() : '';
-  const prefix = command.split(/\s+/)[0] || command;
-  return prefix ? `cmd:${prefix}` : '';
-}
-
-function addPendingApproval(task: Task, call: ToolCall, riskLevel: ToolRiskLevel, autoModeReason?: 'blocked_by_rule' | 'not_covered' | 'paused'): void {
-  const next = (task.pendingApprovals ?? []).filter((item) => item.call.id !== call.id);
-  next.push({ call, riskLevel, createdAt: new Date().toISOString(), autoModeReason });
-  task.pendingApprovals = next;
-  task.updatedAt = new Date().toISOString();
-  taskStore.save(task);
-}
-
-function removePendingApproval(task: Task, callId: string): void {
-  const next = (task.pendingApprovals ?? []).filter((item) => item.call.id !== callId);
-  if (next.length === (task.pendingApprovals ?? []).length) return;
-  task.pendingApprovals = next;
-  task.updatedAt = new Date().toISOString();
-  taskStore.save(task);
-}
-
-function rememberSessionApproval(task: Task, key: string): void {
-  const next = [...new Set([...(task.approvedApprovalKeys ?? []), key])];
-  task.approvedApprovalKeys = next;
-  task.updatedAt = new Date().toISOString();
-  taskStore.save(task);
-}
-
-/** 等待用户回复追问；超时或任务取消返回 null，不伪造用户输入。 */
-function waitForClarification(
-  taskId: string,
-  clarificationId: string,
-  signal: AbortSignal,
-): Promise<string | null> {
-  return new Promise<string | null>((resolve) => {
-    let settled = false;
-    const cleanup = () => {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', onAbort);
-      const map = pendingClarifications.get(taskId);
-      map?.delete(clarificationId);
-      if (map && map.size === 0) pendingClarifications.delete(taskId);
-    };
-    const finish = (answer: string | null) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(answer);
-    };
-    const onAbort = () => finish(null);
-    const timer = setTimeout(() => finish(null), config.agent.approvalTimeoutMs);
-
-    if (signal.aborted) return finish(null);
-    signal.addEventListener('abort', onAbort, { once: true });
-    let map = pendingClarifications.get(taskId);
-    if (!map) {
-      map = new Map();
-      pendingClarifications.set(taskId, map);
-    }
-    map.set(clarificationId, finish);
-  });
-}
-
-/** 创建一个新任务并持久化（尚未开始执行） */
+/** 创建一个新任务并持久化（尚未开始执行）。 */
 export function createTask(
   goal: string,
   budget?: TaskBudget,
@@ -872,11 +417,10 @@ export function createTask(
     artifacts: [],
     clarifications: [],
     pendingApprovals: [],
-    approvedApprovalKeys: [],
     checkpoints: [],
     budget: normalizeBudget(budget),
     budgetUsage: initialBudgetUsage(),
-    tokenUsage: { available: false, provider: getProviderName(), model: config.llm.model },
+    tokenUsage: { available: false, provider: getPiProviderName(), model: config.llm.model },
     projectId: projectId ?? undefined,
     planMode: parsed.planRequested ? 'manual' : undefined,
     createdAt: now,
@@ -885,17 +429,13 @@ export function createTask(
   taskStore.save(task);
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
-    summary: '任务已创建',
+    summary: '任务已创建，等待 Agent runtime 执行',
     data: { goal: taskGoal, planMode: task.planMode },
   });
   return task;
 }
 
-/**
- * 解析任务的有效工作区目录。
- * - 有项目：使用项目目录
- * - 无项目：使用全局 workspace/.sessions/<taskId> 隔离
- */
+/** 解析任务的有效工作区目录。 */
 export async function resolveTaskWorkspace(task: Task): Promise<string> {
   if (task.projectId) {
     const project = projectStore.get(task.projectId);
@@ -906,1150 +446,126 @@ export async function resolveTaskWorkspace(task: Task): Promise<string> {
   return standaloneDir;
 }
 
-/** P6: 在写操作前捕获文件快照（用于 Rewind 回滚）。 */
-async function captureFileSnapshot(
-  filePath: string,
-  taskId: string,
-  workspaceDir: string,
-): Promise<string | null> {
-  const snapshotDir = join(workspaceDir, '.aurevoy-snapshots', taskId);
-  await fs.mkdir(snapshotDir, { recursive: true });
-  const snapshotId = randomUUID();
-  const snapshotPath = join(snapshotDir, snapshotId);
-
-  try {
-    await fs.copyFile(filePath, snapshotPath);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      // 文件不存在（即将创建），记录空快照
-      await fs.writeFile(snapshotPath, '', 'utf8');
-    } else {
-      return null; // 快照失败不阻塞操作
-    }
-  }
-
-  return snapshotId;
-}
-
-/** P6: 从快照恢复文件（Rewind 时调用）。 */
-async function restoreFilesFromSnapshots(
-  task: Task,
-  snapshots: FileSnapshot[],
-): Promise<void> {
-  const workspaceDir = await resolveTaskWorkspace(task);
-  for (const snapshot of snapshots) {
-    const snapshotPath = join(
-      workspaceDir,
-      '.aurevoy-snapshots',
-      task.id,
-      snapshot.id,
-    );
-    const targetPath = resolve(workspaceDir, snapshot.path);
-    try {
-      const stat = await fs.stat(snapshotPath);
-      if (stat.size === 0) {
-        // 空快照 = 文件在写入前不存在，删除目标文件
-        await fs.unlink(targetPath).catch(() => {});
-      } else {
-        await fs.copyFile(snapshotPath, targetPath);
-      }
-    } catch {
-      // 快照文件可能已被清理
-    }
-  }
-}
-
-/**
- * 从任务的所有用户消息附件中收集外部路径。
- * 这些路径由用户显式提供，应绕过工作区沙箱限制。
- */
-function collectExternalPaths(task: Task): string[] {
-  const paths: string[] = [];
-  for (const msg of task.messages) {
-    if (msg.role === 'user' && msg.attachments?.length) {
-      for (const att of msg.attachments) {
-        paths.push(att.path);
-      }
-    }
-  }
-  return [...new Set(paths)];
-}
-
-/** 已知的文本文件扩展名集合，用于判断附件是否可直接读入上下文。 */
-const TEXT_EXTENSIONS = new Set([
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
-  '.json', '.jsonc', '.json5',
-  '.css', '.scss', '.sass', '.less',
-  '.html', '.htm', '.xml', '.svg',
-  '.md', '.mdx', '.markdown',
-  '.txt', '.log', '.csv',
-  '.yaml', '.yml', '.toml', '.ini', '.cfg', '.env',
-  '.py', '.rb', '.go', '.rs', '.java', '.kt', '.swift',
-  '.c', '.h', '.cpp', '.hpp', '.cc', '.hh',
-  '.sh', '.bash', '.zsh', '.fish',
-  '.sql', '.graphql', '.gql',
-  '.vue', '.svelte', '.astro',
-  '.prisma', '.proto',
-  '.gitignore', '.gitattributes', '.editorconfig',
-  '.eslintrc', '.prettierrc',
-]);
-
-function isTextFile(mimeType: string, name: string): boolean {
-  if (mimeType.startsWith('text/')) return true;
-  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
-  return TEXT_EXTENSIONS.has(ext);
-}
-
-/** 最大注入到上下文中的单文件字符数（~8K tokens，防止单文件撑满窗口）。 */
-const MAX_ATTACHMENT_CONTENT_CHARS = 30_000;
-
-/**
- * 为任务中带附件的用户消息构建附加上下文。
- * 读取文本文件内容，合成为一条 system 消息，注入到 LLM 请求中。
- */
-async function buildAttachmentSystemMessage(task: Task): Promise<string | null> {
-  // 找到所有带附件的用户消息（取最新的那条，避免多轮重复注入）
-  const messagesWithAttachments = task.messages.filter(
-    (m) => m.role === 'user' && m.attachments && m.attachments.length > 0,
-  );
-  if (messagesWithAttachments.length === 0) return null;
-
-  // 只取最后一轮（最新）带附件的消息
-  const lastMsg = messagesWithAttachments[messagesWithAttachments.length - 1];
-  if (!lastMsg.attachments) return null;
-
-  const lines: string[] = [];
-  lines.push('[Attached Files]');
-  lines.push('');
-
-  for (const att of lastMsg.attachments) {
-    // 图片附件由 Provider 层以多模态 content block 注入，此处不处理
-    if (att.type === 'image') continue;
-
-    if (isTextFile(att.mimeType, att.name)) {
-      try {
-        let content = await fs.readFile(att.path, 'utf8');
-        if (content.length > MAX_ATTACHMENT_CONTENT_CHARS) {
-          content = content.slice(0, MAX_ATTACHMENT_CONTENT_CHARS) +
-            `\n\n[... 文件过长，已截断。使用 read_file 工具读取完整内容，路径: ${att.path}]`;
-        }
-        lines.push(`### ${att.name} (path: ${att.path})`);
-        lines.push('');
-        lines.push(content);
-        lines.push('');
-      } catch {
-        lines.push(`### ${att.name} (path: ${att.path})`);
-        lines.push(`[无法直接读取文件内容，使用 read_file 工具读取，路径: ${att.path}]`);
-        lines.push('');
-      }
-    } else {
-      lines.push(`### ${att.name} (path: ${att.path}, type: ${att.mimeType})`);
-      lines.push(`[非文本文件，使用 read_file 工具读取，路径: ${att.path}]`);
-      lines.push('');
-    }
-  }
-
-  return lines.join('\n');
-}
-
-/**
- * Agent 主循环（ReAct 工具调用循环）。
- *
- * 每轮调用 LLM：若模型请求工具，则执行并把结果作为 role:'tool' 消息回灌，再次请求；
- * 直到模型给出最终答案、达到最大轮次或被取消。
- * 含防死循环（指纹去重）、重试（指数退避）、取消（AbortController）与每轮持久化。
- */
+/** 主执行入口：只运行 Pi Agent，不保留 legacy 分支。 */
 export async function runTask(task: Task): Promise<void> {
   task.pendingApprovals = [];
+  if (task.plan.length === 0) {
+    task.plan = [{ id: 'exec', description: 'Agent 执行任务', status: 'running' }];
+  } else {
+    task.plan = task.plan.map((step, index) =>
+      step.status === 'completed' ? step : { ...step, status: index === 0 ? 'running' : 'pending' },
+    );
+  }
+  task.updatedAt = new Date().toISOString();
   taskStore.save(task);
+  taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
+  taskEvents.publish({ type: 'plan_generated', taskId: task.id, plan: task.plan, source: 'heuristic' });
 
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
-  const taskStartedAtMs = Date.now();
-  const taskWorkspace = await resolveTaskWorkspace(task);
-
-  // ---- db 增量写入（Patch 而非 Save） ----
-  // 避免每轮全量 JSON.stringify(task.messages)，只更新高频变更列。
-  // 仍保持同步写入（崩溃安全），但去掉 messages/plan/artifacts 的序列化。
-  const touch = () => {
-    task.updatedAt = new Date().toISOString();
-    taskStore.patch(task.id, {
-      status: task.status,
-      phase: task.phase,
-      budgetUsage: task.budgetUsage,
-      tokenUsage: task.tokenUsage,
-      contextTokens: task.contextTokens,
-      pendingApprovals: task.pendingApprovals,
-      approvedApprovalKeys: task.approvedApprovalKeys,
-    });
-  };
-  // 全量持久化（含 messages/plan），仅在关键变更点调用（计划生成/重放/分支等）
-  const saveFull = () => {
-    task.updatedAt = new Date().toISOString();
-    taskStore.save(task);
-  };
-
-  const patchedToolResults = patchDanglingToolResults(task.messages);
-  if (patchedToolResults.length > 0) {
-    saveFull();
-    for (const patched of patchedToolResults) {
-      taskEvents.publish({ type: 'message', taskId: task.id, message: patched });
-    }
-    writeTrace(task.id, 'phase', 'initializing', {
-      ok: true,
-      summary: `进入 Agent 循环前补齐 ${patchedToolResults.length} 条悬空工具结果`,
-      data: { patchedToolResults: patchedToolResults.length },
-    });
-  }
-
-  let activeStepIndex = task.plan.findIndex((step) => step.status === 'running');
-  if (activeStepIndex < 0) activeStepIndex = 0;
-
-  const updateStep = (description: string, status: PlanStep['status']) => {
-    const index = Math.max(0, Math.min(activeStepIndex, task.plan.length - 1));
-    const step = task.plan[index] ?? { id: 'exec', description, status };
-    const next = { ...step, description, status };
-    task.plan[index] = next;
-    touch();
-    taskEvents.publish({ type: 'step_update', taskId: task.id, step: { ...next } });
-  };
-  const completeCurrentStep = (label: string, data?: unknown) => {
-    const current = task.plan[activeStepIndex];
-    if (!current) return;
-    if (current.status !== 'completed') {
-      task.plan[activeStepIndex] = { ...current, status: 'completed' };
-      taskEvents.publish({ type: 'step_update', taskId: task.id, step: task.plan[activeStepIndex] });
-    }
-    const checkpoint = createCheckpoint({
-      label,
-      stepId: current.id,
-      message: `完成步骤：${current.description}`,
-      data,
-    });
-    task.checkpoints = [...(task.checkpoints ?? []), checkpoint];
-    taskEvents.publish({ type: 'checkpoint_created', taskId: task.id, checkpoint });
-    if (activeStepIndex < task.plan.length - 1) {
-      activeStepIndex += 1;
-      task.plan[activeStepIndex] = { ...task.plan[activeStepIndex], status: 'running' };
-      taskEvents.publish({ type: 'step_update', taskId: task.id, step: task.plan[activeStepIndex] });
-    }
-    touch();
-  };
-  const setRuntimePhase = (phase: TaskPhase, detail?: string, status?: TaskStatus) => {
-    if (status && task.status !== status) {
-      task.status = status;
-      taskEvents.publish({ type: 'status', taskId: task.id, status });
-    }
-    task.phase = phase;
-    touch();
-    writeTrace(task.id, 'phase', phase, { ok: true, summary: detail });
-    taskEvents.publish({ type: 'phase', taskId: task.id, phase, detail });
-  };
-
-  // 用户上传/拖拽的附件路径是用户显式授权的外部只读路径；
-  // 规划阶段和执行阶段都需要同一份白名单，避免 scout 先报工作区越界。
-  const externalPaths = collectExternalPaths(task);
-
-  // ---- 计划阶段：按需调用 Plan Agent ----
-  const hasApprovedPlan = task.plan.length > 1 && task.plan.some((s) => s.status === 'running');
-  if (!hasApprovedPlan) {
-    // 自动 Plan Mode：当 auto-edit/full 检测到任务复杂时，自动切入 plan mode
-    const prePlanMode = getEffectiveAutoModeLevel(task);
-    if ((prePlanMode === 'auto-edit' || prePlanMode === 'full') && !task.autoModeState?.paused && shouldAutoPlan(task.goal)) {
-      task.autoModeState = task.autoModeState ?? initAutoModeState(prePlanMode);
-      task.autoModeState.level = 'plan';
-      task.autoModeState.planReady = false;
-      task.autoModeState.planPreMode = prePlanMode;
-      touch();
-      writeTrace(task.id, 'phase', 'planning', {
-        ok: true,
-        summary: '检测到复杂任务，自动切入 Plan Mode',
-        data: { goal: task.goal, previousMode: prePlanMode },
-      });
-    }
-    if (task.planMode === 'manual') {
-      // 按需启动 Plan Agent：侦查 + LLM 生成计划
-      setRuntimePhase('planning', '用户通过 /plan 请求生成执行计划…', 'planning');
-      const planOutput = await runPlanAgent({
-        taskId: task.id,
-        goal: task.goal,
-        workspaceDir: taskWorkspace,
-        externalPaths,
-        signal: abortController.signal,
-      });
-
-      if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
-
-      // 生成步骤并标记为 'proposed'（待审批）
-      const proposedPlan: PlanStep[] = planOutput.steps.map((step, index) => ({
-        id: `step-${index + 1}`,
-        description: step.description,
-        status: 'proposed' as const,
-        toolsExpected: step.toolsExpected,
-        dependsOn: step.dependsOn,
-        verifiable: step.verifiable,
-        source: planOutput.source,
-      }));
-
-      // 推送计划审批卡片到前端
-      task.plan = proposedPlan;
-      saveFull();
-      taskEvents.publish({
-        type: 'plan_generated',
-        taskId: task.id,
-        plan: proposedPlan,
-        source: planOutput.source,
-      });
-      taskEvents.publish({
-        type: 'plan_approval_request',
-        taskId: task.id,
-        plan: proposedPlan,
-        reasoning: `Plan Agent（${planOutput.source}）生成 ${proposedPlan.length} 步计划，预估 ${planOutput.estimatedIterations} 轮`,
-        scoutReport: planOutput.scoutReport,
-      });
-
-      // 自动模式：plan/auto-edit/full 均跳过计划审批
-      const effectiveMode = getEffectiveAutoModeLevel(task);
-      if (effectiveMode !== 'off' && !task.autoModeState?.paused) {
-        task.plan = proposedPlan.map((step, index) => ({
-          ...step,
-          status: index === 0 ? 'running' : 'pending',
-        }));
-        taskEvents.publish({
-          type: 'plan_approval_resolved',
-          taskId: task.id,
-          approved: true,
-        });
-      } else {
-      // 等待用户审批
-      setRuntimePhase('waiting_approval', '等待审批执行计划…', 'paused');
-      const decision = await waitForPlanApproval(task.id, abortController.signal);
-
-      if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
-
-      if (decision.approved) {
-        // 批准：将 proposed → running / pending
-        task.plan = proposedPlan.map((step, index) => ({
-          ...step,
-          status: index === 0 ? 'running' : 'pending',
-        }));
-        taskEvents.publish({
-          type: 'plan_approval_resolved',
-          taskId: task.id,
-          approved: true,
-        });
-      } else {
-        // 拒绝：换单步 plan 直接执行，拒绝原因回灌给 Default Agent
-        task.plan = [{
-          id: 'exec',
-          description: decision.reason
-            ? `用户拒绝了计划（原因：${decision.reason}），直接执行任务`
-            : '用户拒绝了计划，直接执行任务',
-          status: 'running',
-        }];
-        taskEvents.publish({
-          type: 'plan_approval_resolved',
-          taskId: task.id,
-          approved: false,
-          reason: decision.reason,
-        });
-      }
-      }
-    } else {
-      // 默认任务：不自动调用 Plan Agent，单步直接进入 Default Agent。
-      task.plan = [{ id: 'exec', description: '执行任务', status: 'running' }];
-      taskEvents.publish({ type: 'plan_generated', taskId: task.id, plan: task.plan, source: 'heuristic' });
-    }
-    touch();
-  }
-
-  const handleAskUserTool = async (call: ToolCall, iteration: number): Promise<Message> => {
-    const question =
-      typeof call.args.question === 'string' && call.args.question.trim()
-        ? call.args.question.trim()
-        : '请补充完成任务所需的信息。';
-    const options = Array.isArray(call.args.options)
-      ? call.args.options.filter((item): item is string => typeof item === 'string')
-      : undefined;
-    const context = typeof call.args.context === 'string' ? call.args.context : undefined;
-    const clarification = createClarification({ callId: call.id, question, options, context });
-    task.clarifications = [...(task.clarifications ?? []), clarification];
-    touch();
-    taskEvents.publish({ type: 'clarification_request', taskId: task.id, clarification });
-    writeTrace(task.id, 'tool_call', 'waiting_clarification', {
-      iteration,
-      callId: call.id,
-      toolName: 'ask_user',
-      riskLevel: 'safe',
-      ok: true,
-      summary: 'Agent 发起追问',
-      data: { question, options, context },
-    });
-    updateStep('等待用户补充信息', 'paused');
-    setRuntimePhase('waiting_clarification', question, 'paused');
-
-    const answer = await waitForClarification(task.id, clarification.id, abortController.signal);
-    if (abortController.signal.aborted) {
-      resolveClarification(task, clarification.id, 'cancelled');
-      touch();
-      return makeToolResult(call.id, { error: '任务已取消，追问未完成' });
-    }
-
-    const resolved = answer == null
-      ? resolveClarification(task, clarification.id, 'timeout')
-      : resolveClarification(task, clarification.id, 'answered', answer);
-    touch();
-    if (resolved) {
-      taskEvents.publish({ type: 'clarification_resolved', taskId: task.id, clarification: resolved });
-    }
-    const result: ToolResult =
-      answer == null
-        ? { callId: call.id, ok: false, error: '用户未回复追问，等待已超时' }
-        : { callId: call.id, ok: true, output: { answer } };
-    taskEvents.publish({ type: 'tool_result', taskId: task.id, result });
-    writeTrace(task.id, 'tool_result', 'waiting_clarification', {
-      iteration,
-      callId: call.id,
-      toolName: 'ask_user',
-      riskLevel: 'safe',
-      ok: result.ok,
-      errorCategory: result.ok ? undefined : 'timeout',
-      errorMessage: result.error,
-      summary: result.ok ? '用户已回复追问' : '追问等待超时',
-      data: result.ok ? { answer } : undefined,
-    });
-    return makeToolResult(
-      call.id,
-      result.ok ? result.output : { error: '用户未回复追问，不能假定答案；请降级、改问或解释无法继续。' },
-    );
-  };
-
-  const messages = task.messages;
-  const callFingerprints = new Map<string, number>();
-
-  // prompt cache 前缀边界：上次成功发送的消息数。Snip/Microcompact 不修改缓存前缀，
-  // Context Collapse 修改时设置 collapsed=true → 此值重置为 0。
-  let lastCachedIndex = 0;
-
-  // 构建附件上下文（仅在任务首次运行时构建一次）
-  const attachmentContext = await buildAttachmentSystemMessage(task);
-  const attachmentSystemMessage: Message | null = attachmentContext
-    ? { id: `att-${randomUUID()}`, role: 'system', content: attachmentContext, createdAt: new Date().toISOString() }
-    : null;
-
   try {
-    setRuntimePhase('initializing', '准备运行任务', 'running');
-    taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
-
-    for (let iteration = 0; ; iteration++) {
-      if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
-      task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
-      task.budgetUsage.iterations = iteration;
-      updateWallTime(task, taskStartedAtMs);
-      assertBudgetWithinLimits(task);
-      task.budgetUsage.iterations = iteration + 1;
-      taskEvents.publish({
-        type: 'budget_usage',
-        taskId: task.id,
-        usage: task.budgetUsage,
-        budget: effectiveBudget(task),
-      });
-      setRuntimePhase('thinking', `第 ${iteration + 1} 轮模型思考`, 'running');
-      const currentAutoModeLevel = getEffectiveAutoModeLevel(task);
-      const currentAutoModePaused = !!task.autoModeState?.paused;
-
-      let textBuffer = '';
-      let reasoningContent = '';
-      let finishReason: string | undefined;
-      let tokenUsage: TokenUsage | null | undefined;
-      let toolCalls: AccumulatedToolCall[] = [];
-      const llmStartedAt = Date.now();
-
-      // ---- 上下文压缩管线：Snip → Microcompact → Collapse（cache-aware） ----
-      const compactResult = await compactContext(messages, lastCachedIndex);
-      if (compactResult.collapsed) {
-        // Context Collapse 修改了旧消息 → 缓存前缀无效
-        lastCachedIndex = 0;
-      }
-      if (compactResult.stats.snipped > 0 || compactResult.stats.microcompacted > 0) {
-        writeTrace(task.id, 'phase', 'thinking', {
-          iteration: iteration + 1,
-          ok: true,
-          summary: `Snip ${compactResult.stats.snipped} 条空结果，Microcompact ${compactResult.stats.microcompacted} 条工具输出，释放 ~${compactResult.stats.savedTokens} tokens` +
-            (compactResult.stats.cachedPrefixPreserved ? '（缓存前缀未破坏）' : '（缓存已失效）'),
-          data: compactResult.stats,
-        });
-      }
-      const ctxMessages = compactResult.messages;
-
-      // P5 + M8: 长期记忆——混合评分（关键词 + 向量）+ [[link]] 展开后注入（禁用的不注入）
-      const recentTopics = messages
-        .filter((m) => m.role === 'user')
-        .slice(-3)
-        .map((m) => m.content);
-      const { message: memoryMessage } = await buildMemorySystemMessage(
-        memoryStore.listEnabled(),
-        task.goal,
-        recentTopics,
-      );
-
-      // Skill: 注入 skill catalog（轻量注册表，无状态）
-      const toolDescriptors = toolRegistry.list();
-      const skillCatalogMessage = buildSkillCatalogMessage();
-
-      // 环境上下文：日期、平台、工作区、配置目录、项目信息（始终注入，放在最前面）
-      const projectInfo = task.projectId
-        ? projectStore.get(task.projectId)
-        : undefined;
-      const envContextMessage = buildSystemContextMessage(
-        taskWorkspace,
-        dirname(config.dbPath),
-        projectInfo ? { name: projectInfo.name, path: projectInfo.path } : undefined,
-      );
-
-      // 按 auto mode 等级注入差异化系统提示词
-      const modeMessage = currentAutoModePaused
-        ? null
-        : buildModeSystemMessage(currentAutoModeLevel);
-
-      // 工具使用引导（始终注入）
-      const toolGuidanceMessage = buildToolGuidanceMessage();
-
-      const requestMessages = [
-        envContextMessage,
-        toolGuidanceMessage,
-        modeMessage,
-        memoryMessage,
-        skillCatalogMessage,
-        attachmentSystemMessage,
-        ...ctxMessages,
-      ].filter(Boolean) as Message[];
-
-      // 估算当前上下文 token 数并推送前端
-      const contextTokenEstimate = totalTokens(requestMessages);
-      task.contextTokens = contextTokenEstimate;
-      taskEvents.publish({ type: 'context_snapshot', taskId: task.id, tokens: contextTokenEstimate });
-
-      let oversizedToolCall: { id: string; name: string; argChars: number } | null = null;
-
-      // ---------- 调用 LLM（带重试） ----------
-      try {
-        await withRetry(
-          async () => {
-            // 重试时重置本轮累积
-            textBuffer = '';
-            reasoningContent = '';
-            finishReason = undefined;
-            tokenUsage = undefined;
-            toolCalls = [];
-            oversizedToolCall = null as typeof oversizedToolCall;
-            const announcedStreamingToolCallIds = new Set<string>();
-            let announcedStreamingToolPhase = false;
-            const stream = getProvider().stream(requestMessages, {
-              tools: toolDescriptors.length > 0 ? toolDescriptors : undefined,
-              toolChoice: 'auto',
-              signal: abortController.signal,
-            });
-            for await (const chunk of stream) {
-              if (chunk.textDelta) {
-                textBuffer += chunk.textDelta;
-                task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
-                task.budgetUsage.outputBytes += Buffer.byteLength(chunk.textDelta);
-                assertBudgetWithinLimits(task);
-                taskEvents.publish({ type: 'token', taskId: task.id, delta: chunk.textDelta }); // 前端已弃用打字机效果，仅保留字符累积供历史回看
-              }
-              if (chunk.reasoningContentDelta) {
-                reasoningContent += chunk.reasoningContentDelta;
-              }
-              if (chunk.toolCallsSnapshot) {
-                for (const tc of chunk.toolCallsSnapshot) {
-                  if (tc.id && tc.function.name && !announcedStreamingToolCallIds.has(tc.id)) {
-                    if (!announcedStreamingToolPhase) {
-                      setRuntimePhase('calling_tool', '准备调用工具', 'running');
-                      announcedStreamingToolPhase = true;
-                    }
-                    announcedStreamingToolCallIds.add(tc.id);
-                    // 参数仍在流式拼接时先发占位工具事件；完整参数会在预校验后用同一 call id 覆盖。
-                    taskEvents.publish({
-                      type: 'tool_call',
-                      taskId: task.id,
-                      call: {
-                        id: tc.id,
-                        toolName: tc.function.name,
-                        args: parseToolArgsOrEmpty(tc.function.arguments),
-                        planStepId: task.plan[activeStepIndex]?.id,
-                      },
-                    });
-                  }
-                  if (tc.function.arguments.length > MAX_TOOL_ARG_STREAM_CHARS) {
-                    oversizedToolCall = { id: tc.id, name: tc.function.name, argChars: tc.function.arguments.length };
-                  }
-                }
-              }
-              if (oversizedToolCall) break;
-              if (chunk.done) {
-                finishReason = chunk.finishReason;
-                toolCalls = chunk.toolCallsSnapshot ?? [];
-                tokenUsage = chunk.tokenUsage;
-              }
-            }
-          },
-          abortController.signal,
-        );
-        const aggregatedUsage = addTokenUsage(task, tokenUsage);
-        taskEvents.publish({ type: 'token_usage', taskId: task.id, usage: aggregatedUsage });
-        writeTrace(task.id, 'llm', 'thinking', {
-          iteration: iteration + 1,
-          startedAtMs: llmStartedAt,
-          tokenUsage,
-          ok: true,
-          finishReason,
-          summary: finishReason === 'tool_calls' ? '模型请求工具调用' : '模型返回回复',
-          data: {
-            outputChars: textBuffer.length,
-            reasoningChars: reasoningContent.length,
-            toolCallCount: toolCalls.length,
-          },
-        });
-      } catch (err) {
-        writeTrace(task.id, 'llm', 'thinking', {
-          iteration: iteration + 1,
-          startedAtMs: llmStartedAt,
-          ok: false,
-          errorCategory: classifyError(err),
-          errorMessage: err instanceof Error ? err.message : String(err),
-          summary: '模型调用失败',
-        });
-        throw err;
-      }
-
-      // LLM 调用成功 → 更新 prompt cache 边界为当前消息数
-      // 下次迭代 Snip+Microcompact 只会处理此边界后的新增消息
-      lastCachedIndex = messages.length;
-
-      // ---------- 流式截断：tool_call 参数过大 ----------
-      type OversizedInfo = { id: string; name: string; argChars: number };
-      const oc = oversizedToolCall as OversizedInfo | null;
-      if (oc) {
-        const estimatedLines = Math.round(oc.argChars / 40);
-        writeTrace(task.id, 'llm', 'thinking', {
-          iteration: iteration + 1,
-          startedAtMs: llmStartedAt,
-          ok: false,
-          errorCategory: 'tool',
-          summary: `工具 ${oc.name} 参数流式生成超限（${oc.argChars} 字符 ≈ ${estimatedLines} 行），已中断`,
-        });
-        const errorMsg =
-          `工具 "${oc.name}" 的参数过大（已生成 ${oc.argChars} 字符，约 ${estimatedLines} 行），流式生成已中断。` +
-          `请将内容拆分后分批写入。`;
-        const assistantMsg = makeAssistantWithToolCalls(
-          textBuffer, reasoningContent,
-          [{ id: oc.id, index: 0, function: { name: oc.name, arguments: '{}' } }],
-        );
-        messages.push(assistantMsg);
-        taskEvents.publish({ type: 'message', taskId: task.id, message: assistantMsg });
-        const errorResult = { callId: oc.id, ok: false, error: errorMsg };
-        taskEvents.publish({ type: 'tool_result', taskId: task.id, result: errorResult });
-        messages.push(makeToolResult(oc.id, { error: errorMsg }));
-        touch();
-        continue;
-      }
-
-      // ---------- 情况 A：输出被截断 ----------
-      if (finishReason === 'length') {
-        setRuntimePhase('finalizing', '模型输出达到长度上限，整理已有内容', 'running');
-        const msg = makeAssistant(
-          textBuffer + '\n\n[提示：回复因达到长度上限被截断，可能不完整。]',
-          reasoningContent,
-        );
-        messages.push(msg);
-        taskEvents.publish({ type: 'message', taskId: task.id, message: msg });
-        return finishCompleted(task, updateStep, saveFull);
-      }
-
-      // ---------- 情况 B：模型直接给出最终回复 ----------
-      if (finishReason !== 'tool_calls' || toolCalls.length === 0) {
-        // Plan Mode: 捕获计划内容，请求审批后自动切换执行模式
-        if (currentAutoModeLevel === 'plan' && task.autoModeState && !task.autoModeState.planReady) {
-          const planContent = textBuffer || reasoningContent || '(empty plan)';
-          task.autoModeState.planReady = true;
-          task.autoModeState.planContent = planContent;
-          touch();
-
-          const msg = makeAssistant(textBuffer, reasoningContent);
-          messages.push(msg);
-          taskEvents.publish({ type: 'message', taskId: task.id, message: msg });
-
-          setRuntimePhase('waiting_approval', 'Agent 已完成勘探，等待用户审批计划', 'paused');
-          taskEvents.publish({
-            type: 'plan_approval_request',
-            taskId: task.id,
-            plan: [{ id: 'plan', description: planContent.slice(0, 500), status: 'proposed', source: 'llm' }],
-            reasoning: 'Plan Mode 完成勘探，请审阅计划并批准以开始执行',
-          });
-
-          await waitForPlanApproval(task.id, abortController.signal);
-          if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
-
-          // 从 plan 模式切换到执行模式：清除 autoModeState 覆盖，回退到全局 config
-          const targetMode = task.autoModeState.planPreMode ?? 'auto-edit';
-          task.autoModeState.level = targetMode;
-          task.autoModeState.planPreMode = undefined;
-          task.autoModeState.planContent = undefined;
-          touch();
-
-          // 批准后继续执行循环（下一轮使用执行模式提示词）
-          setRuntimePhase('thinking', `计划已批准，以 ${targetMode} 模式开始执行`, 'running');
-          continue;
-        }
-
-        setRuntimePhase('finalizing', '模型给出最终回复', 'running');
-        const msg = makeAssistant(textBuffer, reasoningContent);
-        messages.push(msg);
-        taskEvents.publish({ type: 'message', taskId: task.id, message: msg });
-        return finishCompleted(task, updateStep, saveFull);
-      }
-
-      // ---------- 情况 C：模型请求调用工具 ----------
-      if (toolCalls.length > MAX_TOOL_CALLS_PER_TURN) {
-        toolCalls = toolCalls.slice(0, MAX_TOOL_CALLS_PER_TURN);
-      }
-
-      // 先把 assistant（含 tool_calls）加入上下文
-      // 记录本次迭代中所有 tool call 关联的 planStepId（用于 timeline 分组）
-      const planStepIdByCallId = new Map<string, string>();
-      const currentPsId = task.plan[activeStepIndex]?.id;
-      if (currentPsId) toolCalls.forEach(tc => planStepIdByCallId.set(tc.id, currentPsId));
-      const assistantMsg = makeAssistantWithToolCalls(textBuffer, reasoningContent, toolCalls, planStepIdByCallId);
-      messages.push(assistantMsg);
-      taskEvents.publish({ type: 'message', taskId: task.id, message: assistantMsg });
-
-      // P2: 并行工具执行 —— 预校验 → 分区 → 并行/并发审批
-      // Step 1: 预校验所有 tool calls（指纹去重 + JSON 解析 + 风险查询）
-      interface ValidatedCall {
-        tc: AccumulatedToolCall;
-        call: ToolCall;
-        risk: ToolRiskLevel;
-        skipReason?: string;
-      }
-      const validatedCalls: ValidatedCall[] = [];
-      for (const tc of toolCalls) {
-        const name = tc.function.name;
-        const fingerprint = `${name}:${tc.function.arguments}`;
-        const count = (callFingerprints.get(fingerprint) ?? 0) + 1;
-        callFingerprints.set(fingerprint, count);
-
-        let skipReason: string | undefined;
-        if (count > DUPLICATE_CALL_LIMIT) {
-          skipReason = `工具 "${name}" 已用相同参数被调用 ${count} 次。请换一种方式，或直接给出最终答案。`;
-        }
-
-        // plan 模式：写工具直接跳过，不询问用户
-        if (!skipReason && currentAutoModeLevel === 'plan' && !PLANMODE_TOOLS.has(name)) {
-          skipReason = `工具 "${name}" 在 Plan Mode 中不可用。请先退出 Plan Mode（提交计划并等待审批进入执行阶段）后才能使用此工具。建议：完成勘探和计划后，用最终回复输出你的计划。`;
-        }
-
-        let args: Record<string, unknown> = {};
-        if (!skipReason) {
-          try {
-            args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-          } catch {
-            skipReason = `工具参数不是合法 JSON：${tc.function.arguments}`;
-          }
-        }
-
-        validatedCalls.push({
-          tc,
-          call: { id: tc.id, toolName: name, args },
-          risk: toolRegistry.riskLevelOf(name),
-          skipReason,
-        });
-      }
-
-      // Step 2: 发布 tool_call 事件 + 批量更新预算
-      const currentPlanStepId = task.plan[activeStepIndex]?.id;
-      for (const v of validatedCalls) {
-        if (v.skipReason) continue;
-        (v.call as ToolCall & { planStepId?: string }).planStepId = currentPlanStepId;
-        taskEvents.publish({ type: 'tool_call', taskId: task.id, call: v.call });
-        writeToolCallTrace(task.id, v.call, v.risk, iteration + 1);
-      }
-      task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
-      task.budgetUsage.toolCalls += validatedCalls.filter((v) => !v.skipReason).length;
-      updateWallTime(task, taskStartedAtMs);
-      taskEvents.publish({
-        type: 'budget_usage',
-        taskId: task.id,
-        usage: task.budgetUsage,
-        budget: effectiveBudget(task),
-      });
-      assertBudgetWithinLimits(task);
-
-      // Step 3: ask_user 特殊处理（阻塞等待用户输入，不能并行）
-      const askUserItem = validatedCalls.find(
-        (v) => v.call.toolName === 'ask_user' && !v.skipReason,
-      );
-      if (askUserItem) {
-        setRuntimePhase('calling_tool', '等待用户补充信息', 'running');
-        const toolMessage = await handleAskUserTool(askUserItem.call, iteration + 1);
-        messages.push(toolMessage);
-        if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
-        setRuntimePhase('thinking', '已收到追问回复，继续推理', 'running');
-      }
-
-      // Step 4: 收集所有执行结果（按 callId 索引）
-      const resultByCallId = new Map<string, { callId: string; output: unknown }>();
-
-      // Step 5: 分区 —— 免批+可并行 / 免批+串行 / 需审批
-      const toExecute = validatedCalls.filter(
-        (v) => !v.skipReason && v.call.toolName !== 'ask_user',
-      );
-      // 审批规则：read_file/list_directory/load_skill 免审批；autoMode 下按等级自动批准
-      const sessionApprovedApprovalKeys = new Set(task.approvedApprovalKeys ?? []);
-
-      // 自动批准检查：等级 + 安全规则 + 会话批准
-      const isAutoApproved = (v: ValidatedCall): boolean => {
-        if (isApprovalFreeTool(v.call.toolName)) return true;
-        if (sessionApprovedApprovalKeys.has(approvalKeyForCall(v.call))) return true;
-        if (sessionApprovedApprovalKeys.has(prefixApprovalKeyForCall(v.call))) return true;
-        if (currentAutoModePaused || currentAutoModeLevel === 'off') return false;
-        // plan 模式：只允许只读勘探工具，写工具被拦截
-        if (currentAutoModeLevel === 'plan') {
-          return PLANMODE_TOOLS.has(v.call.toolName);
-        }
-        // 等级检查
-        if (currentAutoModeLevel === 'full') {
-          return true;
-        }
-        if (currentAutoModeLevel === 'auto-edit') {
-          return AUTO_EDIT_TOOLS.has(v.call.toolName);
-        }
-        return false;
-      };
-
-      const isParallelSafe = (v: ValidatedCall) =>
-        isAutoApproved(v) &&
-        toolRegistry.executionPolicyOf(v.call.toolName).parallelizable !== false;
-      const safeOnes = toExecute.filter(isParallelSafe);
-      const approvedSequential = toExecute.filter(
-        (v) => isAutoApproved(v) && toolRegistry.executionPolicyOf(v.call.toolName).parallelizable === false,
-      );
-      const needsApproval = toExecute.filter((v) => !isAutoApproved(v));
-
-      // 执行单个工具的共享逻辑（不含审批门——审批在外部处理）
-      const executeOne = async (
-        v: ValidatedCall,
-        approved = true,
-      ): Promise<{ callId: string; output: unknown }> => {
-        if (!approved) {
-          const denied = {
-            callId: v.call.id,
-            ok: false,
-            error: '用户拒绝了该工具调用',
-          };
-          taskEvents.publish({ type: 'tool_result', taskId: task.id, result: denied });
-          writeTrace(task.id, 'tool_result', 'calling_tool', {
-            iteration: iteration + 1,
-            callId: v.call.id,
-            toolName: v.call.toolName,
-            riskLevel: v.risk,
-            ok: false,
-            errorCategory: 'permission' as TaskErrorCategory,
-            errorMessage: denied.error,
-            summary: `工具被拒绝：${v.call.toolName}`,
-          });
-          return {
-            callId: v.call.id,
-            output: {
-              error: '用户拒绝执行该工具。请改用其他方式，或直接给出最终答案。',
-            },
-          };
-        }
-
-        updateStep(`调用工具：${v.call.toolName}`, 'running');
-        const toolStartedAt = Date.now();
-
-        // P6: 写入类工具执行前捕获文件快照（用于 Rewind 回滚）
-        if (WRITE_TOOLS.has(v.call.toolName) && typeof v.call.args.path === 'string') {
-          try {
-            const absPath = resolve(taskWorkspace, v.call.args.path);
-            const snapshotId = await captureFileSnapshot(absPath, task.id, taskWorkspace);
-            if (snapshotId) {
-              const snapshot: FileSnapshot = {
-                id: snapshotId,
-                path: v.call.args.path,
-                callId: v.call.id,
-                createdAt: new Date().toISOString(),
-              };
-              task.fileSnapshots = [...(task.fileSnapshots ?? []), snapshot];
-            }
-          } catch {
-            // 快照失败不阻塞工具执行
-          }
-        }
-
-        const result = await toolRegistry.invokeWithTimeout(
-          v.call,
-          {
-            callId: v.call.id,
-            taskId: task.id,
-            taskGoal: task.goal,
-            task,
-            abortSignal: abortController.signal,
-            workspaceDir: taskWorkspace,
-            externalPaths,
-            publishEvent: (event) => {
-              taskEvents.publish(event as AgentEvent);
-            },
-          },
-          config.agent.toolTimeoutMs,
-        );
-
-        // P6: 失败时附加 fallback 建议
-        const rawResult = !result.ok
-          ? { ...result, fallback: toolRegistry.fallbackFor(v.call.toolName) }
-          : result;
-        const enrichedResult = await handleToolSideEffects(task, v.call, rawResult, taskWorkspace, externalPaths);
-        task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
-        task.budgetUsage.outputBytes += estimatePayloadBytes(
-          enrichedResult.output ?? enrichedResult.error ?? '',
-        );
-        assertBudgetWithinLimits(task);
-        taskEvents.publish({ type: 'tool_result', taskId: task.id, result: enrichedResult });
-        writeTrace(task.id, 'tool_result', 'calling_tool', {
-          iteration: iteration + 1,
-          startedAtMs: toolStartedAt,
-          callId: v.call.id,
-          toolName: v.call.toolName,
-          riskLevel: v.risk,
-          ok: enrichedResult.ok,
-          errorCategory: enrichedResult.ok ? undefined : 'tool',
-          errorMessage: enrichedResult.error,
-          summary: enrichedResult.ok
-            ? `工具成功：${v.call.toolName}`
-            : `工具失败：${v.call.toolName}`,
-          data: enrichedResult.ok
-            ? { output: summarizePayload(enrichedResult.output) }
-            : undefined,
-        });
-        if (enrichedResult.ok) {
-          completeCurrentStep(`工具完成：${v.call.toolName}`, {
-            toolName: v.call.toolName,
-            callId: v.call.id,
-            output: summarizePayload(enrichedResult.output),
-          });
-        }
-
-        return {
-          callId: v.call.id,
-          output: enrichedResult.ok
-            ? enrichedResult.output
-            : { error: enrichedResult.error },
-        };
-      };
-
-
-      // 5c: 免批+串行工具 → 逐个执行，无需审批
-      for (const v of approvedSequential) {
-        setRuntimePhase('calling_tool', `执行：${v.call.toolName}`, 'running');
-        const execResult = await executeOne(v, true);
-        resultByCallId.set(execResult.callId, execResult);
-      }
-
-      // 5d: 需审批工具 → 分区处理：非命令工具按序审批，命令工具保持并行
-      if (needsApproval.length > 0) {
-        const cmdApproval = needsApproval.filter(v => v.call.toolName === 'execute_command');
-        const sequentialApproval = needsApproval.filter(v => v.call.toolName !== 'execute_command');
-
-        // 非命令工具——每次只弹一个确认，审批后立即执行
-        for (const v of sequentialApproval) {
-          const approvalReason = autoModeApprovalReason(currentAutoModeLevel, currentAutoModePaused, v.call.toolName);
-          addPendingApproval(task, v.call, v.risk, approvalReason);
-          taskEvents.publish({
-            type: 'approval_request',
-            taskId: task.id,
-            call: v.call,
-            riskLevel: v.risk,
-            autoModeReason: approvalReason,
-          });
-          setRuntimePhase('waiting_approval', `等待确认：${v.call.toolName}`, 'paused');
-          updateStep(`等待确认：${v.call.toolName}`, 'paused');
-
-          const result = await waitForApproval(task.id, v.tc.id, abortController.signal);
-          if (result.approved && result.sessionApprove) {
-            rememberSessionApproval(task, approvalKeyForCall(v.call));
-          }
-          if (result.approved && result.prefixKey) {
-            rememberSessionApproval(task, result.prefixKey);
-          }
-          removePendingApproval(task, v.call.id);
-          writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
-
-          if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
-
-          // 人工审批重置连续自动批准计数（auto mode 安全机制）
-          if (result.approved && task.autoModeState?.consecutiveAutoCalls) {
-            task.autoModeState.consecutiveAutoCalls = 0;
-            touch();
-          }
-
-          setRuntimePhase('calling_tool', `执行：${v.call.toolName}`, 'running');
-          const execResult = await executeOne(v, result.approved);
-          resultByCallId.set(execResult.callId, execResult);
-        }
-
-        // execute_command 保持并行
-        if (cmdApproval.length > 0) {
-          for (const v of cmdApproval) {
-            const approvalReason = autoModeApprovalReason(currentAutoModeLevel, currentAutoModePaused, v.call.toolName);
-            addPendingApproval(task, v.call, v.risk, approvalReason);
-            taskEvents.publish({
-              type: 'approval_request',
-              taskId: task.id,
-              call: v.call,
-              riskLevel: v.risk,
-              autoModeReason: approvalReason,
-            });
-          }
-          setRuntimePhase('waiting_approval', `等待确认 ${cmdApproval.length} 个命令`, 'paused');
-
-          const approvalResults = await Promise.all(
-            cmdApproval.map(async (v) => {
-              const result = await waitForApproval(task.id, v.tc.id, abortController.signal);
-              if (result.approved && result.sessionApprove) {
-                rememberSessionApproval(task, approvalKeyForCall(v.call));
-              }
-              if (result.approved && result.prefixKey) {
-                rememberSessionApproval(task, result.prefixKey);
-              }
-              removePendingApproval(task, v.call.id);
-              writeApprovalTrace(task.id, v.call, v.risk, result.approved, iteration + 1);
-              // 人工审批重置连续自动批准计数
-              if (result.approved && task.autoModeState?.consecutiveAutoCalls) {
-                task.autoModeState.consecutiveAutoCalls = 0;
-                touch();
-              }
-              return { v, approved: result.approved };
-            }),
-          );
-
-          if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
-
-          setRuntimePhase('calling_tool', '执行已批准的命令', 'running');
-          const cmdResults = await Promise.all(
-            approvalResults.map(({ v, approved }) => executeOne(v, approved)),
-          );
-          for (const r of cmdResults) resultByCallId.set(r.callId, r);
-        }
-      }
-      // 5a: 跳过项 → 错误结果
-      for (const v of validatedCalls.filter((v) => v.skipReason)) {
-        resultByCallId.set(v.tc.id, {
-          callId: v.tc.id,
-          output: { error: v.skipReason },
-        });
-      }
-
-      // 5b: safe 工具 → 全并行，各自独立超时
-      if (safeOnes.length > 0) {
-        setRuntimePhase(
-          'calling_tool',
-          `并行执行 ${safeOnes.length} 个工具`,
-          'running',
-        );
-        const safeResults = await Promise.all(safeOnes.map((v) => executeOne(v)));
-        for (const r of safeResults) resultByCallId.set(r.callId, r);
-      }
-
-      // 更新 AutoModeState：在 auto mode 中追踪统计并检查是否需要暂停
-      const publishAutoModeState = () => {
-        if (task.autoModeState) {
-          taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...task.autoModeState } });
-        }
-      };
-      const ams = task.autoModeState;
-      if (ams && !ams.paused) {
-        // 统计本轮自动批准数（safe + approvedSequential 中非免批工具部分）
-        const autoThisTurn = safeOnes.length + approvedSequential.length;
-        if (autoThisTurn > 0) {
-          ams.autoApprovedCalls = (ams.autoApprovedCalls ?? 0) + autoThisTurn;
-          ams.consecutiveAutoCalls = (ams.consecutiveAutoCalls ?? 0) + autoThisTurn;
-          publishAutoModeState();
-        }
-        if (currentAutoModeLevel !== 'full') {
-          if ((ams.consecutiveAutoCalls ?? 0) >= AUTO_MODE_MAX_CONSECUTIVE) {
-            ams.paused = true;
-            ams.pausedReason = `auto mode 已连续自动批准 ${ams.consecutiveAutoCalls} 次工具调用，已暂停。请确认继续运行。`;
-            ams.fallbackCount = (ams.fallbackCount ?? 0) + 1;
-            publishAutoModeState();
-            taskEvents.publish({
-              type: 'phase',
-              taskId: task.id,
-              phase: 'waiting_approval',
-              detail: ams.pausedReason,
-            });
-            writeTrace(task.id, 'phase', 'waiting_approval', {
-              ok: true,
-              summary: ams.pausedReason,
-              data: { autoModeState: { ...ams } },
-            });
-          }
-        }
-        touch();
-      }
-
-      // Step 6: 按原始 toolCalls 顺序将结果回填到 messages，并发布 message 事件
-      // 前端之前仅通过 done → getTask() HTTP 拉取工具结果；现在同时推送 SSE message
-      // 事件，确保工具结果在 SSE 流中实时可见（不再依赖 HTTP round-trip）。
-      for (const tc of toolCalls) {
-        const result = resultByCallId.get(tc.id);
-        if (result) {
-          const toolMsg = makeToolResult(tc.id, result.output);
-          messages.push(toolMsg);
-          taskEvents.publish({ type: 'message', taskId: task.id, message: toolMsg });
-        }
-        // ask_user 的结果已在 Step 3 由 handleAskUserTool 推送
-      }
-
-      // 每轮结束持久化，保证崩溃可恢复
-      saveFull();
-      if (abortController.signal.aborted) return finishCancelled(task, updateStep, saveFull);
+    if (task.planMode === 'manual') {
+      const approved = await requestManualPlanApproval(task, abortController.signal);
+      if (!approved) return;
     }
-
-  } catch (err) {
-    if ((err as { name?: string })?.name === 'AbortError') {
-      return finishCancelled(task, updateStep, saveFull);
-    }
-    task.status = 'failed';
-    task.phase = 'failed';
-    updateStep('任务失败', 'failed');
-    const message = err instanceof Error ? err.message : String(err);
-    const patchedToolResults = patchDanglingToolResults(task.messages);
-    const failureMessage = makeFailureMessage(message, classifyError(err));
-    task.messages.push(failureMessage);
-    saveFull();
-    for (const patched of patchedToolResults) {
-      taskEvents.publish({ type: 'message', taskId: task.id, message: patched });
-    }
-    writeTrace(task.id, 'error', 'failed', {
-      ok: false,
-      errorCategory: classifyError(err),
-      errorMessage: message,
-      summary: '任务失败',
-      data: { patchedToolResults: patchedToolResults.length },
+    await runPiTask(task, {
+      workspaceDir: await resolveTaskWorkspace(task),
+      signal: abortController.signal,
+      taskStartedAtMs: Date.now(),
     });
-    taskEvents.publish({ type: 'status', taskId: task.id, status: 'failed' });
-    taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'failed', detail: message });
-    taskEvents.publish({ type: 'message', taskId: task.id, message: failureMessage });
-    taskEvents.publish({ type: 'error', taskId: task.id, message });
-    taskEvents.publish({ type: 'done', taskId: task.id, status: 'failed' });
   } finally {
     activeAbortControllers.delete(task.id);
   }
 }
 
-// ---------------- 内部辅助 ----------------
+async function requestManualPlanApproval(task: Task, signal: AbortSignal): Promise<boolean> {
+  task.status = 'paused';
+  task.phase = 'waiting_approval';
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+  taskEvents.publish({ type: 'status', taskId: task.id, status: 'paused' });
+  taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'waiting_approval', detail: '等待确认执行计划' });
+  taskEvents.publish({
+    type: 'plan_approval_request',
+    taskId: task.id,
+    plan: task.plan,
+    reasoning: '用户通过 /plan 请求先确认执行计划。',
+  });
 
+  const decision = await waitForPlanApproval(task.id, signal, config.agent.approvalTimeoutMs);
+  taskEvents.publish({
+    type: 'plan_approval_resolved',
+    taskId: task.id,
+    approved: decision.approved,
+    reason: decision.approved ? undefined : '用户拒绝或超时未确认执行计划',
+  });
+
+  if (!decision.approved) {
+    task.status = 'cancelled';
+    task.phase = 'cancelled';
+    task.updatedAt = new Date().toISOString();
+    taskStore.save(task);
+    taskEvents.publish({ type: 'status', taskId: task.id, status: task.status });
+    taskEvents.publish({ type: 'phase', taskId: task.id, phase: task.phase });
+    taskEvents.publish({ type: 'done', taskId: task.id, status: task.status });
+    writeTrace(task.id, 'approval', 'cancelled', {
+      ok: false,
+      errorCategory: 'permission',
+      summary: '执行计划未获批准，任务已取消',
+    });
+    return false;
+  }
+
+  task.status = 'running';
+  task.phase = 'initializing';
+  task.plan = task.plan.map((step, index) => ({
+    ...step,
+    status: index === 0 ? 'running' : 'pending',
+  }));
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+  taskEvents.publish({ type: 'status', taskId: task.id, status: task.status });
+  taskEvents.publish({ type: 'phase', taskId: task.id, phase: task.phase, detail: '计划已确认，启动 Agent runtime' });
+  taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
+  writeTrace(task.id, 'approval', 'initializing', {
+    ok: true,
+    summary: '执行计划已批准，继续进入 Pi runtime',
+  });
+  return true;
+}
+
+function parseSlashCommand(content: string): { planRequested: boolean; text: string } {
+  const match = content.match(/^\/(\S+)(?:\s+(.*))?/s);
+  if (!match) return { planRequested: false, text: content };
+  if (match[1] === 'plan') return { planRequested: true, text: match[2]?.trim() || '' };
+  return { planRequested: false, text: content };
+}
+
+function patchDanglingToolResults(messages: Message[]): Message[] {
+  const patched: Message[] = [];
+  const resultIds = new Set(messages.filter((m) => m.role === 'tool' && m.toolCallId).map((m) => m.toolCallId!));
+  const knownCallNames = new Map<string, string>();
+  for (const message of messages) {
+    for (const call of message.toolCalls ?? []) {
+      knownCallNames.set(call.id, call.function.name);
+    }
+  }
+  for (const [callId, toolName] of knownCallNames) {
+    if (resultIds.has(callId)) continue;
+    const msg: Message = {
+      id: randomUUID(),
+      role: 'tool',
+      content: JSON.stringify({
+        error: `上次运行在工具 ${toolName} 返回前中断；该调用结果不可用。`,
+      }),
+      toolCallId: callId,
+      createdAt: new Date().toISOString(),
+    };
+    messages.push(msg);
+    patched.push(msg);
+  }
+  return patched;
+}
 
 function resumePlanFromCheckpoint(plan: PlanStep[], checkpointStepId?: string): PlanStep[] {
   if (plan.length === 0) return plan;
@@ -2061,347 +577,32 @@ function resumePlanFromCheckpoint(plan: PlanStep[], checkpointStepId?: string): 
   }
   const checkpointIndex = plan.findIndex((step) => step.id === checkpointStepId);
   return plan.map((step, index) => {
-    if (index <= checkpointIndex) return { ...step, status: 'completed' };
-    return { ...step, status: index === checkpointIndex + 1 ? 'running' : 'pending' };
+    if (checkpointIndex >= 0 && index <= checkpointIndex) return { ...step, status: 'completed' };
+    return { ...step, status: index === Math.max(0, checkpointIndex + 1) ? 'running' : 'pending' };
   });
 }
 
-function finishCompleted(
-  task: Task,
-  updateStep: (d: string, s: PlanStep['status']) => void,
-  saveFull: () => void,
-): void {
-  task.status = 'completed';
-  task.phase = 'finalizing';
-  task.plan = task.plan.map((step) =>
-    step.status === 'completed' ? step : { ...step, status: 'completed' },
-  );
-  updateStep('任务完成', 'completed');
-  saveFull();
-  writeTrace(task.id, 'done', 'finalizing', { ok: true, summary: '任务完成' });
-  taskEvents.publish({ type: 'status', taskId: task.id, status: 'completed' });
-  taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'finalizing', detail: '任务完成' });
-  taskEvents.publish({ type: 'done', taskId: task.id, status: 'completed' });
-
-  // M8: 任务完成后触发一轮 Dreams 后台维护（fire-and-forget）
-  void import('../memory/dreams.js').then(({ runDreams }) => runDreams());
-}
-
-function finishCancelled(
-  task: Task,
-  updateStep: (d: string, s: PlanStep['status']) => void,
-  saveFull: () => void,
-): void {
-  task.status = 'cancelled';
-  task.phase = 'cancelled';
-  task.plan = task.plan.map((step) =>
-    step.status === 'completed' ? step : { ...step, status: 'cancelled' },
-  );
-  updateStep('任务已取消', 'cancelled');
-  saveFull();
-  writeTrace(task.id, 'done', 'cancelled', {
-    ok: false,
-    errorCategory: 'cancelled',
-    summary: '任务已取消',
+function summarizeMessages(messages: Message[]): string {
+  const lines = messages.map((message) => {
+    const content = message.content.replace(/\s+/g, ' ').trim();
+    const suffix = content.length > 500 ? `${content.slice(0, 500)}...` : content;
+    return `${message.role}: ${suffix}`;
   });
-  taskEvents.publish({ type: 'status', taskId: task.id, status: 'cancelled' });
-  taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'cancelled', detail: '用户取消任务' });
-  taskEvents.publish({ type: 'done', taskId: task.id, status: 'cancelled' });
+  const summary = lines.join('\n');
+  return summary.length > 4000 ? `${summary.slice(0, 4000)}\n[摘要已截断]` : summary;
 }
-
-async function handleToolSideEffects(
-  task: Task,
-  call: ToolCall,
-  result: ToolResult,
-  workspaceDir: string,
-  externalPaths?: string[],
-): Promise<ToolResult> {
-  if (!result.ok) return result;
-  if (call.toolName === 'create_artifact' || call.toolName === 'apply_artifact') {
-    const output = result.output as { artifactId?: unknown; path?: unknown } | undefined;
-    const artifactId = typeof output?.artifactId === 'string' ? output.artifactId : undefined;
-    const path = typeof output?.path === 'string' ? output.path : undefined;
-    if (artifactId && path) {
-      const artifact = markArtifactApplied(task, artifactId, path);
-      if (artifact) taskEvents.publish({ type: 'artifact_updated', taskId: task.id, artifact });
-    }
-  }
-  if (call.toolName === 'attach_content') {
-    const blockData = extractContentBlockData(result.output);
-    if (blockData) {
-      const block: ContentBlock = {
-        id: randomUUID(),
-        type: blockData.type,
-        content: await normalizeContentBlockPath(blockData, workspaceDir, externalPaths),
-        name: blockData.name,
-        mimeType: blockData.mimeType,
-        size: blockData.size,
-      };
-      // 找到最近一条 assistant 消息并附加 content block
-      const assistantMsg = [...task.messages].reverse().find(m => m.role === 'assistant');
-      if (assistantMsg) {
-        assistantMsg.contentBlocks = [...(assistantMsg.contentBlocks ?? []), block];
-        taskEvents.publish({
-          type: 'content_blocks_added',
-          taskId: task.id,
-          messageId: assistantMsg.id,
-          blocks: [block],
-        });
-      }
-      return { callId: call.id, ok: true, output: { ok: true, block } };
-    }
-    return { callId: call.id, ok: false, error: 'attach_content 返回格式非法' };
-  }
-  return result;
-}
-
-async function normalizeContentBlockPath(
-  block: { type: ContentBlockType; content: string },
-  workspaceDir: string,
-  externalPaths?: string[],
-): Promise<string> {
-  if (block.type === 'link') return block.content;
-  if (looksLikeRemoteUrl(block.content)) return block.content;
-
-  try {
-    const rawPath = block.content.startsWith('file://')
-      ? fileURLToPath(block.content)
-      : block.content;
-    const resolved = resolveInWorkspace(rawPath, workspaceDir, externalPaths);
-    await assertRealPathInside(resolved, workspaceDir, externalPaths);
-    await fs.stat(resolved);
-    return resolved;
-  } catch {
-    return block.content;
-  }
-}
-
-function looksLikeRemoteUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value);
-}
-
-function extractContentBlockData(output: unknown): {
-  type: ContentBlockType;
-  content: string;
-  name?: string;
-  mimeType?: string;
-  size?: number;
-} | null {
-  if (!output || typeof output !== 'object') return null;
-  const data = (output as { contentBlock?: unknown }).contentBlock;
-  if (!data || typeof data !== 'object') return null;
-  const record = data as Record<string, unknown>;
-  if (typeof record.type !== 'string' || typeof record.content !== 'string') return null;
-  if (!['file_reference', 'image', 'link'].includes(record.type)) return null;
-  return {
-    type: record.type as ContentBlockType,
-    content: record.content,
-    name: typeof record.name === 'string' ? record.name : undefined,
-    mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
-    size: typeof record.size === 'number' ? record.size : undefined,
-  };
-}
-
-function writeToolCallTrace(
-  taskId: string,
-  call: ToolCall,
-  riskLevel: ToolRiskLevel,
-  iteration: number,
-): void {
-  writeTrace(taskId, 'tool_call', 'calling_tool', {
-    iteration,
-    callId: call.id,
-    toolName: call.toolName,
-    riskLevel,
-    ok: true,
-    summary: `请求工具：${call.toolName}`,
-    data: { args: summarizePayload(call.args) },
-  });
-}
-
-function writeApprovalTrace(
-  taskId: string,
-  call: ToolCall,
-  riskLevel: ToolRiskLevel,
-  approved: boolean,
-  iteration: number,
-): void {
-  writeTrace(taskId, 'approval', 'waiting_approval', {
-    iteration,
-    callId: call.id,
-    toolName: call.toolName,
-    riskLevel,
-    ok: approved,
-    errorCategory: approved ? undefined : 'permission',
-    errorMessage: approved ? undefined : '用户拒绝或审批超时',
-    summary: approved ? `审批通过：${call.toolName}` : `审批未通过：${call.toolName}`,
-  });
-}
-
-function classifyError(err: unknown): TaskErrorCategory {
-  if (err instanceof BudgetExceededError) return 'timeout';
-  const name = (err as { name?: string })?.name;
-  const status = (err as { status?: number })?.status;
-  const message = err instanceof Error ? err.message : String(err);
-  if (name === 'AbortError') return 'cancelled';
-  if (name === 'TimeoutError' || /timeout|timed out|超时/i.test(message)) return 'timeout';
-  if (/未配置|Provider|API Key|配置/i.test(message)) return 'configuration';
-  if (/JSON|parse|解析/i.test(message)) return 'parse';
-  if (typeof status === 'number') return status >= 400 && status < 500 ? 'configuration' : 'model';
-  if (/工具|tool/i.test(message)) return 'tool';
-  return 'unknown';
-}
-
-function summarizePayload(value: unknown): unknown {
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
-  if (!text || text.length <= 1200) return value;
-  return {
-    truncated: true,
-    chars: text.length,
-    preview: text.slice(0, 1200),
-  };
-}
-
-function estimatePayloadBytes(value: unknown): number {
-  if (typeof value === 'string') return Buffer.byteLength(value);
-  try {
-    return Buffer.byteLength(JSON.stringify(value ?? null));
-  } catch {
-    return Buffer.byteLength(String(value));
-  }
-}
-
-function makeAssistant(content: string, reasoningContent: string): Message {
-  const msg: Message = {
-    id: randomUUID(),
-    role: 'assistant',
-    content,
-    createdAt: new Date().toISOString(),
-  };
-  if (reasoningContent) msg.reasoningContent = reasoningContent;
-  return msg;
-}
-
-function makeAssistantWithToolCalls(
-  content: string,
-  reasoningContent: string,
-  toolCalls: AccumulatedToolCall[],
-  planStepIdByCallId?: ReadonlyMap<string, string>,
-): Message {
-  const msg = makeAssistant(content, reasoningContent);
-  msg.toolCalls = toolCalls.map(
-    (tc): MessageToolCall => ({
-      id: tc.id,
-      type: 'function',
-      function: { name: tc.function.name, arguments: tc.function.arguments, planStepId: planStepIdByCallId?.get(tc.id) } as MessageToolCall['function'],
-    }),
-  );
-  return msg;
-}
-
-function parseToolArgsOrEmpty(argumentsJson: string): Record<string, unknown> {
-  if (!argumentsJson) return {};
-  try {
-    const parsed = JSON.parse(argumentsJson);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-function makeToolResult(toolCallId: string, payload: unknown): Message {
-  return {
-    id: randomUUID(),
-    role: 'tool',
-    content: JSON.stringify(payload ?? null),
-    toolCallId,
-    createdAt: new Date().toISOString(),
-  };
-}
-
-function makeFailureMessage(message: string, category: TaskErrorCategory): Message {
-  return {
-    id: randomUUID(),
-    role: 'assistant',
-    content: '',
-    failure: { message, category },
-    createdAt: new Date().toISOString(),
-  };
-}
-
-function patchDanglingToolResults(messages: Message[]): Message[] {
-  const patched: Message[] = [];
-  for (let i = 0; i < messages.length; i += 1) {
-    const message = messages[i];
-    if (message.role !== 'assistant' || !message.toolCalls?.length) continue;
-
-    const existing = new Set<string>();
-    let insertAt = i + 1;
-    while (insertAt < messages.length && messages[insertAt].role === 'tool') {
-      const toolCallId = messages[insertAt].toolCallId;
-      if (toolCallId) existing.add(toolCallId);
-      insertAt += 1;
-    }
-
-    const missing = message.toolCalls.filter((toolCall) => !existing.has(toolCall.id));
-    if (missing.length === 0) continue;
-
-    const results = missing.map((toolCall) =>
-      makeToolResult(toolCall.id, {
-        error: '上次执行在该工具返回前中断；恢复任务时已关闭这次悬空工具调用，请重新规划或改用其他方式。',
-      }),
-    );
-    messages.splice(insertAt, 0, ...results);
-    patched.push(...results);
-    i = insertAt + results.length - 1;
-  }
-  return patched;
-}
-
-// ---- 内部辅助 ----
-
-type TracePatch = Partial<
-  Pick<
-    TaskTraceEntry,
-    | 'iteration'
-    | 'callId'
-    | 'toolName'
-    | 'riskLevel'
-    | 'finishReason'
-    | 'ok'
-    | 'errorCategory'
-    | 'errorMessage'
-    | 'summary'
-    | 'data'
-    | 'tokenUsage'
-  >
-> & {
-  startedAtMs?: number;
-};
 
 function writeTrace(
   taskId: string,
-  kind: TaskTraceEntry['kind'],
+  kind: TaskTraceKind,
   phase: TaskPhase | null,
-  patch: TracePatch = {},
+  entry: {
+    ok?: boolean;
+    errorCategory?: TaskErrorCategory;
+    errorMessage?: string;
+    summary?: string;
+    data?: unknown;
+  } = {},
 ): void {
-  const taskLog = createTaskLogger(taskId);
-  const endedAtMs = Date.now();
-  const startedAtMs = patch.startedAtMs ?? endedAtMs;
-  taskLog.trace(kind, phase, {
-    iteration: patch.iteration,
-    callId: patch.callId,
-    toolName: patch.toolName,
-    riskLevel: patch.riskLevel,
-    finishReason: patch.finishReason,
-    tokenUsage: patch.tokenUsage ?? null,
-    startedAtMs,
-    ok: patch.ok,
-    errorCategory: patch.errorCategory,
-    errorMessage: patch.errorMessage,
-    summary: patch.summary,
-    data: patch.data,
-  });
+  createTaskLogger(taskId).trace(kind, phase, entry);
 }

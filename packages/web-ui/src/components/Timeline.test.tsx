@@ -24,6 +24,31 @@ describe("buildLiveAgentRoundData", () => {
     expect(round.planStepGroups[0]?.planStepId).toBe("missing-plan-step");
     expect(steps.map((step) => step.id)).toEqual(["live-search-unmatched-plan-step"]);
   });
+
+  it("maps SSE phase detail and tool progress into the live timeline", () => {
+    const round = buildLiveAgentRoundData({
+      plan: [{ id: "exec", description: "执行任务", status: "running" }],
+      phase: "calling_tool",
+      phaseDetail: "调用工具 web_search",
+      liveToolActivity: [
+        {
+          id: "call-search",
+          name: "web_search",
+          args: { query: "sse timeline" },
+          status: "running",
+          planStepId: "exec",
+          progress: { message: "正在搜索", percent: 45 },
+        },
+      ],
+    });
+    const step = round.planStepGroups[0]?.steps[0];
+
+    expect(round.summary).toBe("执行了 1 个搜索");
+    expect(round.phaseDetail).toBe("调用工具 web_search");
+    expect(round.planStepGroups[0]?.planStepId).toBe("exec");
+    expect(step?.status).toBe("running");
+    expect(step?.progress).toEqual({ message: "正在搜索", percent: 45 });
+  });
 });
 
 describe("buildAgentRoundFromMessage", () => {

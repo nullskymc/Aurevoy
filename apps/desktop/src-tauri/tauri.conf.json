@@ -4,7 +4,7 @@
   "version": "0.5.13-dev",
   "identifier": "com.aurevoy.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev -w @aurevoy/desktop",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
@@ -56,7 +56,6 @@
     "resources": {
       "../../agent/dist": "agent-dist",
       "../../agent/package.json": "agent-pkg",
-      "../../agent/node_modules": "agent-dist/node_modules",
       "../../agent/skills/builtin": "skills/builtin",
       "node-runtime": "node-runtime"
     }

@@ -200,6 +200,7 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 { "taskId": "<id>", "callId": "<id>", "delivered": true }
 ```
 - `delivered=false`：无对应的待审批项（已超时/已决策/不存在）。
+- 审批只作用于当前这一次工具调用，不产生会话级或命令前缀级自动批准。
 - 字段缺失或类型错误 → `400`；任务不存在 → `404`。
 
 ### POST `/api/tasks/:id/auto-mode-resume`
@@ -211,7 +212,7 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 - 任务不存在 → `404`。
 
 ### POST `/api/tasks/:id/plan-approval`
-审批 Plan Agent 生成的执行计划（响应 `plan_approval_request` 事件）。
+历史兼容端点。主 Agent loop 已固定为 Pi runtime，当前后端不再生成独立 Plan Agent 审批请求。
 ```json
 // 请求体 PlanApprovalRequest
 { "approved": true }
@@ -316,6 +317,8 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 ### 数据管理 `/api/data`  (M5)
 
 - `GET /api/data` → `DataStatusResponse`：返回 SQLite 路径、工作区目录、清理策略、任务/轨迹/记忆计数。
+- `GET /api/data/token-usage` → `TokenUsageReport`：汇总所有任务的 Provider usage，包含总览、参与统计的任务数、
+  reasoning/cache/cost 字段，以及按 provider/model 分组的 `breakdown`。
 - `POST /api/data/cleanup`（`CleanupDataRequest { olderThanDays? }`）→
   `CleanupDataResponse`：删除指定天数以前的终态任务（completed/failed/cancelled）及其轨迹。
 
@@ -328,11 +331,11 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `task_created` | `task: Task` | 任务已创建 |
 | `status` | `status: TaskStatus` | 任务状态变化 |
 | `phase` | `phase: TaskPhase`, `detail?` | Agent runtime 细粒度阶段变化 |
-| `scout_started` | — | P1：开始侦查工作区以制定计划 |
-| `scout_report` | `report: ScoutReport` | P1：侦查完成，产出关键文件与约束摘要 |
-| `plan_generated` | `plan: PlanStep[]`, `source` | Plan Agent 生成执行计划（`llm` 或 `heuristic`） |
-| `plan_approval_request` | `plan`, `reasoning`, `scoutReport?` | 计划推送前端等待用户审批 |
-| `plan_approval_resolved` | `approved`, `reason?` | 用户审批决策（批准/拒绝） |
+| `scout_started` | — | 历史兼容事件；Pi runtime 当前不主动发送 |
+| `scout_report` | `report: ScoutReport` | 历史兼容事件；Pi runtime 当前不主动发送 |
+| `plan_generated` | `plan: PlanStep[]`, `source` | 历史兼容事件；Pi runtime 当前主要发送 `plan` 单步执行计划 |
+| `plan_approval_request` | `plan`, `reasoning`, `scoutReport?` | 历史兼容事件；Pi runtime 当前不主动发送 |
+| `plan_approval_resolved` | `approved`, `reason?` | 历史兼容事件；Pi runtime 当前不主动发送 |
 | `skill_activated` | `skillName`, `allowedTools?`, `description?`, `compatibility?` | Skill：用户或 LLM 通过 `/skill-name` 或 `activate_skill` 工具激活了某个技能 |
 | `skill_deactivated` | `previousSkill?` | Skill：当前技能已停用（含上一技能名） |
 | `plan` | `plan: PlanStep[]` | 给出/更新完整计划 |
@@ -367,36 +370,34 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 无需工具（直接回答）：
 ```
 status(running) → phase(initializing)
-  → phase(planning) → scout_started → scout_report → plan_generated
-  → [可选: skill_activated]           (用户输入 /skill-name 或 LLM 调用 activate_skill)
+  → plan
   → phase(thinking) → token × N
   → phase(finalizing) → message → status(completed) → done(completed)
 ```
 
-ReAct 工具调用循环（含侦查/规划/并行工具执行）：
+Pi 工具调用循环：
 ```
 status(running)
   → phase(initializing)
-  → phase(planning)                 (P1: Scout → LLM 规划)
-  → scout_started → scout_report → plan_generated
+  → plan
   → phase(thinking)
-  → token × N                       (模型本轮的文本/思考)
+  → token × N                       (Pi 模型本轮的文本/思考)
   → phase(calling_tool)
-  → tool_call × N                   (P2: 模型请求调用工具，safe 并行执行)
+  → tool_call × N                   (Pi 请求调用工具，safe 并行执行)
   → tool_result × N                 (工具执行结果，回灌给模型)
   → phase(thinking)
   → token × N                       (下一轮，带着工具结果)
   → phase(finalizing) → message → status(completed) → done(completed)
 ```
 - P1: 任务启动时先侦查工作区（仅 safe 只读工具，最多 3 轮），再用 LLM 生成结构化计划。
-- P2: 同一轮内 safe 工具 `Promise.all` 全并行执行，risky 工具并发审批后并行执行。
+- P2: Pi runtime 依据工具 executionPolicy 选择并行或顺序执行；执行前由 `beforeToolCall` 统一套用 auto mode 策略。
   每个工具有独立 `invokeWithTimeout`（默认 30s）。
 - 计划以降级优先方式呈现：LLM 规划失败时回退到正则启发式。
 - 一轮可能有多个并行 `tool_call`（各带独立 `id`），对应多个 `tool_result`。
 - 取消时以 `status(cancelled)` + `done(cancelled)` 收尾。
 - `phase` 是诊断和 UI 解释用的细粒度阶段，必须来自后端真实状态转换，不能由前端猜测。
 
-非 safe 工具（`caution`/`dangerous`，如 `web_fetch`/`write_file`）需审批：
+未被当前 auto mode 放行的工具需一次性审批：
 ```
 … → tool_call → approval_request          (等待用户)
   → phase(waiting_approval)
@@ -405,7 +406,8 @@ status(running)
   → token × N → message → done
 ```
 工具的风险等级由 `ToolDescriptor.riskLevel`（`safe`|`caution`|`dangerous`，缺省 `safe`）声明，
-`safe` 工具自动放行；审批超时（5 分钟）或任务取消视为拒绝。
+`safe` 工具始终自动放行；`plan` 只放行 safe，`auto-edit` 放行 safe/caution 和工作区写入类工具，
+`full` 放行全部工具。审批超时（5 分钟）或任务取消视为拒绝。
 
 结构化追问（`ask_user`）：
 ```
@@ -496,7 +498,19 @@ interface TaskBudget { maxIterations?: number; maxToolCalls?: number; maxWallTim
 interface BudgetUsage { iterations: number; toolCalls: number; wallTimeMs: number; outputBytes: number; }
 interface AggregatedTokenUsage {
   available: boolean; provider?: string; model?: string; updatedAt?: string;
-  promptTokens?: number; completionTokens?: number; totalTokens?: number; estimatedCostUsd?: number;
+  promptTokens?: number; completionTokens?: number; totalTokens?: number; reasoningTokens?: number;
+  cacheReadTokens?: number; cacheWriteTokens?: number; estimatedCostUsd?: number;
+}
+interface TokenUsageReportBreakdown {
+  provider: string; model: string; tasks: number;
+  promptTokens: number; completionTokens: number; totalTokens: number; reasoningTokens: number;
+  cacheReadTokens: number; cacheWriteTokens: number; estimatedCostUsd: number; updatedAt?: string;
+}
+interface TokenUsageReport {
+  tasks: number; measuredTasks: number; available: boolean;
+  promptTokens: number; completionTokens: number; totalTokens: number; reasoningTokens: number;
+  cacheReadTokens: number; cacheWriteTokens: number; estimatedCostUsd: number;
+  breakdown: TokenUsageReportBreakdown[];
 }
 interface TaskTraceEntry {
   id: string; taskId: string; kind: 'llm'|'tool_call'|'tool_result'|'approval'|'error'|'done'|'phase';
@@ -522,24 +536,27 @@ interface TaskTraceEntry {
 - **鉴权**：当前为本机单用户、无鉴权。若未来引擎需被其它客户端访问，必须先加鉴权（token/本地 socket 校验），不可裸暴露。
 - **真实能力**：API 不提供 Mock 成功响应；配置缺失、工具不可用、模型失败等情况必须返回明确错误或事件。
 
-## 5. LLM Provider 配置
+## 5. Agent Runtime 与 LLM Provider 配置
 
 引擎通过环境变量选择 LLM Provider（开发期写在**项目根目录** `.env`，已 gitignore；
 模板见根目录 `.env.example`）。Provider 抽象在 `apps/agent/src/llm/`。
 
-支持三种协议：
+主 Agent loop 固定使用 `@earendil-works/pi-agent-core`；旧 ReAct loop 已移除，不再提供 runtime 回退开关。
+
+Provider 以 Pi provider id 配置；常用值：
 
 | Provider | 端点 | 说明 |
 |---|---|---|
-| `openai` / `openai-compatible` | `/chat/completions` | OpenAI Chat Completions 兼容协议（OpenAI / DeepSeek / Ollama / vLLM / LM Studio 等） |
-| `anthropic` | `/v1/messages` | Anthropic Claude Messages API（`x-api-key` 认证，system prompt 独立参数） |
-| `openai-response` | `/v1/responses` | OpenAI Responses API v2（input/instructions 模式） |
+| `openai` | Pi 内置 OpenAI provider | OpenAI 官方模型 |
+| `anthropic` | Pi 内置 Anthropic provider | Claude 模型 |
+| `deepseek` / `openrouter` / `google` / `xai` / `groq` / `mistral` 等 | Pi 内置 provider | 由 Pi provider catalog 映射 |
+| `openai-compatible` | 自定义 `/v1` base URL | Ollama / vLLM / LM Studio / 私有 OpenAI 兼容网关 |
 
 通用环境变量：
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `AUREVOY_LLM_PROVIDER` | `openai` | Provider 类型：`openai`、`anthropic` 或 `openai-response` |
+| `AUREVOY_LLM_PROVIDER` | `openai` | Pi provider id，如 `openai`、`anthropic`、`deepseek`、`openrouter`、`google`、`openai-compatible` |
 | `AUREVOY_LLM_API_KEY` | 空 | API Key，**必填**；缺失时执行任务会明确报错 |
 | `AUREVOY_LLM_MODEL` | `gpt-4o-mini` | 模型名（Anthropic 默认 `claude-sonnet-4-20250514`） |
 | `AUREVOY_LLM_TEMPERATURE` | `0.7` | 采样温度 |
@@ -550,25 +567,10 @@ OpenAI 兼容专用：
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `AUREVOY_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容端点基础地址（不含 `/chat/completions`） |
+| `AUREVOY_LLM_BASE_URL` | `https://api.openai.com/v1` | 主要用于 `openai-compatible` 或自定义 provider；Pi 内置 provider 默认使用自身端点 |
 
-Anthropic 专用：
-
-| 环境变量 | 默认值 | 说明 |
-|---|---|---|
-| `AUREVOY_ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Anthropic API 基础地址 |
-| `AUREVOY_ANTHROPIC_MAX_TOKENS` | `8192` | 单次响应最大 token 数 |
-
-OpenAI Responses API 专用：
-
-| 环境变量 | 默认值 | 说明 |
-|---|---|---|
-| `AUREVOY_LLM_BASE_URL` | `https://api.openai.com/v1` | Responses API 基础地址（共用同一 Base URL） |
-
-- `openai` 走标准 Chat Completions 流式协议（`stream: true`，SSE），
-  兼容 OpenAI / DeepSeek / Moonshot / 本地 Ollama(`/v1`) / vLLM / LM Studio 等。
-- `anthropic` 走 `/v1/messages` 端点，原生 fetch + SSE 解析，`x-api-key` 认证。
-- `openai-response` 走 `/v1/responses` 端点，input/instructions 替代 messages/system 角色。
+- `AUREVOY_LLM_PROVIDER` 会被映射成 Pi `Model`。
+- 主 Agent loop 由 `@earendil-works/pi-agent-core` 执行；Aurevoy 负责本地工具、审批、事件和持久化适配。
 - 未配置 API Key 或 provider 不支持时，执行任务会通过 `error` 事件明确报错，
   **不再有占位/Mock 回退**，避免污染真实结果。
 - 当前生效的 Provider 名通过 `GET /api/health` 的 `provider` 字段暴露给前端。
@@ -597,7 +599,7 @@ M7 文件与网络工具边界：
 - `copy_file` / `move_file` / `rename_file`：`caution`，工作区内路径校验，目标存在默认拒绝覆盖。
 - `delete_file`：`dangerous`，默认禁用；启用后仍需审批，当前移入工作区 `.aurevoy-trash`。
 - `read_file`：`safe`，大文件返回截断预览和建议；UTF-8 解码异常会返回诊断，不伪装为可靠文本。
-- `web_fetch`：`caution`，拒绝本机/私网/metadata 地址，最多 3 次重定向且每跳重新校验；
+- `web_fetch`：`safe`，拒绝本机/私网/metadata 地址，最多 3 次重定向且每跳重新校验；
   二进制响应只返回元信息，HTML 会清洗 `script/style/noscript/iframe/object/embed` 后输出可读 `content` 和链接。
 
 ## 7. MCP server 配置

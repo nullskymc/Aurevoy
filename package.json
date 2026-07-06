@@ -8,12 +8,14 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run build:shared && npm run prepare-agent-deps && npm run build -w @aurevoy/agent && concurrently -n agent,desktop -c blue,green \"npm:dev:agent\" \"npm:dev:desktop\"",
-    "dev:agent": "npm run dev -w @aurevoy/agent",
+    "dev": "npm run build:shared && npm run prepare-agent-dev && concurrently -n shared,desktop -c magenta,green \"npm:dev:shared\" \"npm:dev:desktop\"",
+    "dev:shared": "npm run dev -w @aurevoy/shared",
+    "dev:agent": "npm run prepare-agent-dev && npm run build:shared && npm run dev -w @aurevoy/agent",
     "dev:desktop": "npm run tauri:dev -w @aurevoy/desktop",
     "build": "npm run build:shared && npm run build:web-ui && npm run build -w @aurevoy/agent && npm run prepare-agent-deps && npm run build -w @aurevoy/desktop",
     "build:shared": "npm run build -w @aurevoy/shared",
     "prepare-agent-deps": "node scripts/prepare-agent-deps.mjs",
+    "prepare-agent-dev": "node scripts/prepare-agent-dev.mjs",
     "regression:m3": "node scripts/m3-regression.mjs",
     "regression:m4": "node scripts/m4-regression.mjs",
     "regression:m5": "node scripts/m5-regression.mjs",
@@ -35,7 +37,7 @@
     "vitest": "^4.1.8"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19.0"
   },
   "allowScripts": {
     "better-sqlite3@12.10.1": true

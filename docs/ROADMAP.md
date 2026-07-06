@@ -27,7 +27,7 @@
 | Line-oriented File Tools | 行级文件工具统一 | ✅ |
 | Timeline Format | planStepId 关联的 timeline 分组渲染 | ✅ |
 | ThinkingCard | 替 ReasoningBlock，干净的思考过程卡片 | ✅ |
-| Approval 3-way Partition | safe/approved-sequential/needs-approval 三分区 | ✅ |
+| Pi Approval Gate | Pi `beforeToolCall` 单点门禁 + auto mode 核心策略 | ✅ |
 | Multi-Provider LLM | Anthropic / OpenAI 兼容 / OpenAI Responses v2 | ✅ |
 | Auto Mode | 4 级自动模式 + 安全暂停 + 自动规划 | ✅ |
 | Plan Mode | 自动复杂度检测 + Scout + LLM 规划 | ✅ |
@@ -59,7 +59,7 @@ npm run regression:m8   # 知识库/RAG、嵌入 provider、混合检索
 npm workspaces monorepo；HTTP + SSE 通信；`@aurevoy/shared` 类型契约；Fastify + 事件总线 + 工具注册表 + SQLite；Tauri + React。
 
 ### M1 — 真实 LLM 与单 Agent 工具循环
-OpenAI 兼容 Provider + ReAct 循环 + 流式 tool_calls + 指数退避重试 + 防死循环 + AbortController 取消贯穿。
+历史阶段最初使用自研 ReAct/provider loop；当前主 Agent loop 已迁移到 Pi runtime，Aurevoy 保留 HTTP/SSE、工具、审批与持久化控制面。
 
 ### M2 — 工具能力、审批闭环与 MCP
 内置基础工具 + 路径/symlink 校验 + 三级风险模型 + 审批门 + MCP stdio 发现与注册。
@@ -176,4 +176,4 @@ GitHub Actions 多平台(macOS/Windows/Linux) typecheck + tag 触发 DMG 构建�
 3. 动 LLM/工具/存储/审批/任务状态时，保持抽象接口清晰。
 4. 接口/类型变动 → 先改 `packages/shared` → 再联动 agent 与 desktop。
 5. 多 Agent、后训练、复杂推理框架不是近期目标；先把单 Agent 做扎实。
-6. **不做大重构**——现有 ReAct loop、ToolRegistry、SQLite、HTTP+SSE 继续作为主线。
+6. 主 Agent runtime 统一走 Pi；ToolRegistry、SQLite、HTTP+SSE 继续作为 Aurevoy 控制面主线。

@@ -309,7 +309,11 @@ async function startLlmFixture(httpUrl) {
       return;
     }
     const body = JSON.parse(await readRequestBody(req));
-    const userText = body.messages.find((message) => message.role === 'user')?.content ?? '';
+    const userMessage = body.messages.find((message) => message.role === 'user');
+    const rawUserContent = userMessage?.content ?? '';
+    const userText = Array.isArray(rawUserContent)
+      ? rawUserContent.map((block) => (typeof block === 'object' && block !== null ? block.text ?? '' : '')).join('')
+      : String(rawUserContent);
     const hasToolResult = body.messages.some((message) => message.role === 'tool');
 
     if (userText.includes('M3_CANCEL')) {
@@ -357,21 +361,21 @@ async function startLlmFixture(httpUrl) {
 }
 
 function chooseTool(userText, httpUrl) {
-  if (userText.includes('M3_READ')) return { id: 'call_read', name: 'read_file', args: { path: 'note.txt' } };
+  if (userText.includes('M3_READ')) return { id: 'call_read', name: 'read', args: { path: 'note.txt' } };
   if (userText.includes('M3_WRITE_APPROVE')) {
-    return { id: 'call_write_ok', name: 'write_file', args: { path: 'approved.txt', content: 'approved write' } };
+    return { id: 'call_write_ok', name: 'write', args: { path: 'approved.txt', content: 'approved write' } };
   }
-  if (userText.includes('M3_HTTP_APPROVE')) return { id: 'call_http', name: 'http_fetch', args: { url: httpUrl } };
+  if (userText.includes('M3_HTTP_APPROVE')) return { id: 'call_http', name: 'web_fetch', args: { url: httpUrl } };
   if (userText.includes('M3_MCP')) return { id: 'call_mcp', name: 'mcp_fixture_echo', args: { text: 'hello' } };
-  if (userText.includes('M3_TRAVERSAL')) return { id: 'call_traversal', name: 'read_file', args: { path: '../outside/secret.txt' } };
-  if (userText.includes('M3_SYMLINK')) return { id: 'call_symlink', name: 'read_file', args: { path: 'outside-link' } };
+  if (userText.includes('M3_TRAVERSAL')) return { id: 'call_traversal', name: 'open_file', args: { path: '../outside/secret.txt' } };
+  if (userText.includes('M3_SYMLINK')) return { id: 'call_symlink', name: 'open_file', args: { path: 'outside-link' } };
   if (userText.includes('M3_WRITE_REJECT')) {
-    return { id: 'call_write_reject', name: 'write_file', args: { path: 'rejected.txt', content: 'must not write' } };
+    return { id: 'call_write_reject', name: 'write', args: { path: 'rejected.txt', content: 'must not write' } };
   }
   if (userText.includes('M3_APPROVAL_TIMEOUT')) {
-    return { id: 'call_write_timeout', name: 'write_file', args: { path: 'timeout.txt', content: 'must time out' } };
+    return { id: 'call_write_timeout', name: 'write', args: { path: 'timeout.txt', content: 'must time out' } };
   }
-  if (userText.includes('M3_BAD_URL')) return { id: 'call_bad_url', name: 'http_fetch', args: { url: 'file:///etc/passwd' } };
+  if (userText.includes('M3_BAD_URL')) return { id: 'call_bad_url', name: 'web_fetch', args: { url: 'file:///etc/passwd' } };
   return null;
 }
 

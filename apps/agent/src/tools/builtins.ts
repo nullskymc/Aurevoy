@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { MemoryCategory, MemoryEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
-import { toolRegistry } from './registry.js';
+import { unifiedToolRegistry } from '../tool/unified-registry.js';
 import { memoryStore } from '../store/db.js';
 import { upsertMemoryVec } from '../store/db.js';
 import { invalidateMemorySummary } from '../store/db.js';
@@ -169,17 +169,16 @@ async function pathExists(path: string): Promise<boolean> {
 
 
 // ---- list_directory（safe）：ls -1p ----
-toolRegistry.register({
-  descriptor: {
-    name: 'list_directory',
-    description: '列出工作区内某个目录的条目（文件/子目录）。path 相对工作区根，缺省为根。',
-    inputSchema: {
-      type: 'object',
-      properties: { path: { type: 'string', description: '相对工作区的目录路径，缺省为根目录' } },
-      additionalProperties: false,
-    },
-    riskLevel: 'safe',
+unifiedToolRegistry.register({
+  name: 'list_directory',
+  description: '列出工作区内某个目录的条目（文件/子目录）。path 相对工作区根，缺省为根。',
+  inputSchema: {
+    type: 'object',
+    properties: { path: { type: 'string', description: '相对工作区的目录路径，缺省为根目录' } },
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  source: { type: 'builtin' },
   async execute(args, context) {
     const { root, externalPaths: extPaths } = rootAndExternals(context);
     await ensureWorkspace(root);
@@ -199,22 +198,21 @@ toolRegistry.register({
 // search_files 已移除，由 file-basics 原语替代：search_grep
 
 // ---- copy_file（caution）----
-toolRegistry.register({
-  descriptor: {
-    name: 'copy_file',
-    description: '在工作区内复制文件。目标存在时默认拒绝覆盖，除非 overwrite=true。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        sourcePath: { type: 'string', description: '相对工作区的源文件路径' },
-        targetPath: { type: 'string', description: '相对工作区的目标文件路径' },
-        overwrite: { type: 'boolean', description: '是否覆盖已有目标文件，默认 false' },
-      },
-      required: ['sourcePath', 'targetPath'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  name: 'copy_file',
+  description: '在工作区内复制文件。目标存在时默认拒绝覆盖，除非 overwrite=true。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      sourcePath: { type: 'string', description: '相对工作区的源文件路径' },
+      targetPath: { type: 'string', description: '相对工作区的目标文件路径' },
+      overwrite: { type: 'boolean', description: '是否覆盖已有目标文件，默认 false' },
     },
-    riskLevel: 'caution',
+    required: ['sourcePath', 'targetPath'],
+    additionalProperties: false,
   },
+  riskLevel: 'caution',
+  source: { type: 'builtin' },
   async execute(args, context) {
     const { root, externalPaths: extPaths } = rootAndExternals(context);
     const source = resolveInWorkspace(args.sourcePath, root, extPaths);
@@ -232,21 +230,20 @@ toolRegistry.register({
 
 // ---- move_file / rename_file（caution）----
 const moveFileTool = {
-  descriptor: {
-    name: 'move_file',
-    description: '在工作区内移动或重命名文件。目标存在时默认拒绝覆盖，除非 overwrite=true。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        sourcePath: { type: 'string', description: '相对工作区的源文件路径' },
-        targetPath: { type: 'string', description: '相对工作区的目标文件路径' },
-        overwrite: { type: 'boolean', description: '是否覆盖已有目标文件，默认 false' },
-      },
-      required: ['sourcePath', 'targetPath'],
-      additionalProperties: false,
+  name: 'move_file',
+  description: '在工作区内移动或重命名文件。目标存在时默认拒绝覆盖，除非 overwrite=true。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      sourcePath: { type: 'string', description: '相对工作区的源文件路径' },
+      targetPath: { type: 'string', description: '相对工作区的目标文件路径' },
+      overwrite: { type: 'boolean', description: '是否覆盖已有目标文件，默认 false' },
     },
-    riskLevel: 'caution' as const,
+    required: ['sourcePath', 'targetPath'],
+    additionalProperties: false,
   },
+  riskLevel: 'caution' as const,
+  source: { type: 'builtin' as const },
   async execute(args: Record<string, unknown>, context?: { workspaceDir?: string }) {
     const { root, externalPaths: extPaths } = rootAndExternals(context);
     const source = resolveInWorkspace(args.sourcePath, root, extPaths);
@@ -261,27 +258,27 @@ const moveFileTool = {
     return { sourcePath: relative(root, source), targetPath: relative(root, target), bytesMoved: sourceStat.size };
   },
 };
-toolRegistry.register(moveFileTool);
-toolRegistry.register({
+unifiedToolRegistry.register(moveFileTool);
+unifiedToolRegistry.register({
   ...moveFileTool,
-  descriptor: { ...moveFileTool.descriptor, name: 'rename_file', description: 'move_file 的别名：在工作区内重命名文件。' },
+  name: 'rename_file',
+  description: 'move_file 的别名：在工作区内重命名文件。',
 });
 
 // edit_file 已移除，统一走 search_grep → replace_lines 路径
 
 // ---- delete_file（dangerous，默认禁用）----
-toolRegistry.register({
-  descriptor: {
-    name: 'delete_file',
-    description: '把工作区内文件移入工作区 .aurevoy-trash 回收区，不做永久删除。默认禁用，启用后仍需审批。',
-    inputSchema: {
-      type: 'object',
-      properties: { path: { type: 'string', description: '相对工作区的待删除文件路径' } },
-      required: ['path'],
-      additionalProperties: false,
-    },
-    riskLevel: 'dangerous',
+unifiedToolRegistry.register({
+  name: 'delete_file',
+  description: '把工作区内文件移入工作区 .aurevoy-trash 回收区，不做永久删除。默认禁用，启用后仍需审批。',
+  inputSchema: {
+    type: 'object',
+    properties: { path: { type: 'string', description: '相对工作区的待删除文件路径' } },
+    required: ['path'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
   async execute(args, context) {
     const { root, externalPaths: extPaths } = rootAndExternals(context);
     const file = resolveInWorkspace(args.path, root, extPaths);
@@ -297,7 +294,7 @@ toolRegistry.register({
     return { path: relative(root, file), trashedPath: relative(root, trashPath), bytesMoved: stat.size };
   },
 });
-toolRegistry.setEnabled('delete_file', false);
+unifiedToolRegistry.setEnabled('delete_file', false);
 
 
 // ---- remember（safe）----
@@ -352,29 +349,28 @@ function findDuplicateMemory(
   return null;
 }
 
-toolRegistry.register({
-  descriptor: {
-    name: 'remember',
-    description:
-      '把一条关于用户的长期事实记下来，跨会话保留（如偏好、常用目录、工作习惯）。' +
-      '使用 [[name-slug]] 语法引用其他记忆。' +
-      '仅在信息明确且对将来有用时使用；不要记录临时上下文或敏感隐私。' +
-      '用户可随时在记忆面板查看、编辑、停用或删除你记下的内容。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        content: { type: 'string', description: '要长期记住的内容（一句自然语言）。可使用 [[name-slug]] 引用其他记忆。' },
-        category: { type: 'string', enum: [...MEMORY_CATEGORIES], description: '分类：preference/directory/model/habit/fact/other' },
-        confidence: { type: 'number', description: '你对这条记忆的置信度 0~1（默认 0.7）' },
-        nameSlug: { type: 'string', description: 'URL slug，用于被其他记忆通过 [[slug]] 引用' },
-        why: { type: 'string', description: '为什么记录这条记忆' },
-        howToApply: { type: 'string', description: '什么情况下应该使用这条记忆' },
-      },
-      required: ['content'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  name: 'remember',
+  description:
+    '把一条关于用户的长期事实记下来，跨会话保留（如偏好、常用目录、工作习惯）。' +
+    '使用 [[name-slug]] 语法引用其他记忆。' +
+    '仅在信息明确且对将来有用时使用；不要记录临时上下文或敏感隐私。' +
+    '用户可随时在记忆面板查看、编辑、停用或删除你记下的内容。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      content: { type: 'string', description: '要长期记住的内容（一句自然语言）。可使用 [[name-slug]] 引用其他记忆。' },
+      category: { type: 'string', enum: [...MEMORY_CATEGORIES], description: '分类：preference/directory/model/habit/fact/other' },
+      confidence: { type: 'number', description: '你对这条记忆的置信度 0~1（默认 0.7）' },
+      nameSlug: { type: 'string', description: 'URL slug，用于被其他记忆通过 [[slug]] 引用' },
+      why: { type: 'string', description: '为什么记录这条记忆' },
+      howToApply: { type: 'string', description: '什么情况下应该使用这条记忆' },
     },
-    riskLevel: 'safe',
+    required: ['content'],
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  source: { type: 'builtin' },
   async execute(args, context) {
     const content = typeof args.content === 'string' ? args.content.trim() : '';
     if (!content) throw new Error('content 必须是非空字符串');
@@ -435,24 +431,23 @@ toolRegistry.register({
 });
 
 // ---- create_artifact（dangerous）：直接写入工作区文件，同时记录产物 ----
-toolRegistry.register({
-  descriptor: {
-    name: 'create_artifact',
-    description: '创建文件并写入工作区，同时生成产物记录（可在产物面板预览）。一次性完成创建+写入，无需额外确认或二次调用 apply_artifact。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: '产物名称，例如 SUMMARY.md' },
-        content: { type: 'string', description: '文件正文内容' },
-        path: { type: 'string', description: '相对工作区的写入路径，例如 output/report.md' },
-        type: { type: 'string', enum: ['text', 'file', 'diff', 'url'], description: '产物类型，默认 file' },
-        mimeType: { type: 'string', description: 'MIME 类型，例如 text/markdown' },
-      },
-      required: ['name', 'content', 'path'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  name: 'create_artifact',
+  description: '创建文件并写入工作区，同时生成产物记录（可在产物面板预览）。一次性完成创建+写入，无需额外确认或二次调用 apply_artifact。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: '产物名称，例如 SUMMARY.md' },
+      content: { type: 'string', description: '文件正文内容' },
+      path: { type: 'string', description: '相对工作区的写入路径，例如 output/report.md' },
+      type: { type: 'string', enum: ['text', 'file', 'diff', 'url'], description: '产物类型，默认 file' },
+      mimeType: { type: 'string', description: 'MIME 类型，例如 text/markdown' },
     },
-    riskLevel: 'dangerous',
+    required: ['name', 'content', 'path'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
   async execute(args, context) {
     const { root, externalPaths: extPaths } = rootAndExternals(context);
     const name = readNonEmptyString(args.name, 'name');
@@ -498,43 +493,41 @@ toolRegistry.register({
 });
 
 // ---- ask_user（safe）：由 loop 接管 ----
-toolRegistry.register({
-  descriptor: {
-    name: 'ask_user',
-    description: '当目标信息不足、路径不存在、格式或选择不明确时，向用户提出一个结构化追问并等待回复。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        question: { type: 'string', description: '要问用户的具体问题' },
-        options: { type: 'array', items: { type: 'string' }, description: '可选答案列表；没有明确选项时可省略' },
-        context: { type: 'string', description: '为什么需要追问的简短上下文' },
-      },
-      required: ['question'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  name: 'ask_user',
+  description: '当目标信息不足、路径不存在、格式或选择不明确时，向用户提出一个结构化追问并等待回复。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      question: { type: 'string', description: '要问用户的具体问题' },
+      options: { type: 'array', items: { type: 'string' }, description: '可选答案列表；没有明确选项时可省略' },
+      context: { type: 'string', description: '为什么需要追问的简短上下文' },
     },
-    riskLevel: 'safe',
+    required: ['question'],
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  source: { type: 'builtin' },
   async execute() {
     throw new Error('ask_user 由 Agent 循环接管，不能直接执行');
   },
 });
 
 // ---- apply_artifact（dangerous）：将已有 artifact 写入工作区文件 ----
-toolRegistry.register({
-  descriptor: {
-    name: 'apply_artifact',
-    description: '将已有 artifact 写入工作区内的目标文件（覆盖）。通常 create_artifact 已直接写入文件；仅在需要将已有产物写入不同路径时使用此工具。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        artifactId: { type: 'string', description: '要应用的 artifact id' },
-        path: { type: 'string', description: '相对工作区的写入路径' },
-      },
-      required: ['artifactId', 'path'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  name: 'apply_artifact',
+  description: '将已有 artifact 写入工作区内的目标文件（覆盖）。通常 create_artifact 已直接写入文件；仅在需要将已有产物写入不同路径时使用此工具。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      artifactId: { type: 'string', description: '要应用的 artifact id' },
+      path: { type: 'string', description: '相对工作区的写入路径' },
     },
-    riskLevel: 'dangerous',
+    required: ['artifactId', 'path'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
   async execute(args, context) {
     const { root, externalPaths: extPaths } = rootAndExternals(context);
     const artifactId = readNonEmptyString(args.artifactId, 'artifactId');
@@ -552,28 +545,27 @@ toolRegistry.register({
 });
 
 // ---- attach_content（safe：Agent 在对话框中附加文件引用/图片/超链接）----
-toolRegistry.register({
-  descriptor: {
-    name: 'attach_content',
-    description: '在对话中附加文件引用、图片或超链接，使用户可以直观地访问文件或查看内容。通过此工具向用户展示文件位置、显示图片或提供重要链接。附加的内容会内联显示在对话消息中。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        type: {
-          type: 'string',
-          enum: ['file_reference', 'image', 'link'],
-          description: '内容类型：file_reference 文件路径引用 / image 内联显示图片 / link 超链接',
-        },
-        content: { type: 'string', description: '文件路径、图片路径或 URL' },
-        name: { type: 'string', description: '显示名称（可选，缺省用文件名或 URL）' },
-        mimeType: { type: 'string', description: 'MIME 类型（可选，自动推断时可不传）' },
-        size: { type: 'number', description: '文件大小（可选，仅文件引用类型建议传）' },
+unifiedToolRegistry.register({
+  name: 'attach_content',
+  description: '在对话中附加文件引用、图片或超链接，使用户可以直观地访问文件或查看内容。通过此工具向用户展示文件位置、显示图片或提供重要链接。附加的内容会内联显示在对话消息中。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      type: {
+        type: 'string',
+        enum: ['file_reference', 'image', 'link'],
+        description: '内容类型：file_reference 文件路径引用 / image 内联显示图片 / link 超链接',
       },
-      required: ['type', 'content'],
-      additionalProperties: false,
+      content: { type: 'string', description: '文件路径、图片路径或 URL' },
+      name: { type: 'string', description: '显示名称（可选，缺省用文件名或 URL）' },
+      mimeType: { type: 'string', description: 'MIME 类型（可选，自动推断时可不传）' },
+      size: { type: 'number', description: '文件大小（可选，仅文件引用类型建议传）' },
     },
-    riskLevel: 'safe',
+    required: ['type', 'content'],
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  source: { type: 'builtin' },
   async execute(args) {
     const type = args.type as string;
     if (!['file_reference', 'image', 'link'].includes(type)) {
@@ -592,23 +584,22 @@ toolRegistry.register({
 });
 
 // ---- execute_command（dangerous，默认禁用）----
-toolRegistry.register({
-  descriptor: {
-    name: 'execute_command',
-    description: '在工作区内执行一个基础命令。使用 shell=false，不支持管道/重定向；默认禁用，需设置页显式开启。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        command: { type: 'string', description: '可执行文件名或绝对路径，例如 node' },
-        args: { type: 'array', items: { type: 'string' }, description: '命令参数数组，不经过 shell 解析' },
-        cwd: { type: 'string', description: '相对工作区的执行目录，缺省为工作区根' },
-        env: { type: 'object', additionalProperties: { type: 'string' }, description: '额外环境变量，只允许 envAllowlist 中的键' },
-      },
-      required: ['command'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  name: 'execute_command',
+  description: '在工作区内执行一个基础命令。使用 shell=false，不支持管道/重定向；默认禁用，需设置页显式开启。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      command: { type: 'string', description: '可执行文件名或绝对路径，例如 node' },
+      args: { type: 'array', items: { type: 'string' }, description: '命令参数数组，不经过 shell 解析' },
+      cwd: { type: 'string', description: '相对工作区的执行目录，缺省为工作区根' },
+      env: { type: 'object', additionalProperties: { type: 'string' }, description: '额外环境变量，只允许 envAllowlist 中的键' },
     },
-    riskLevel: 'dangerous',
+    required: ['command'],
+    additionalProperties: false,
   },
+  riskLevel: 'dangerous',
+  source: { type: 'builtin' },
   async execute(args, context) {
     const command = readNonEmptyString(args.command, 'command');
     const rawArgs = Array.isArray(args.args) ? args.args : [];
@@ -624,36 +615,35 @@ toolRegistry.register({
     );
   },
 });
-toolRegistry.setEnabled('execute_command', config.sandbox.commandExecutionEnabled);
+unifiedToolRegistry.setEnabled('execute_command', config.sandbox.commandExecutionEnabled);
 
 // ---- delegate_task（safe）：P7 子代理委托 ----
 const DEFAULT_SUBAGENT_TOOLS = ['list_directory', 'open_file', 'scroll', 'search_grep', 'get_current_time'];
 
-toolRegistry.register({
-  descriptor: {
-    name: 'delegate_task',
-    description:
-      '将独立子任务委托给另一个 Agent 执行。适用于：' +
-      '同时搜索多个目录、并发读取多个文件、独立子分析。' +
-      '子代理默认只有只读权限，无权写入文件。' +
-      '可同时发起多个 delegate_task 调用实现并行子代理。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        goal: { type: 'string', description: '子任务的简要目标（一句话）' },
-        prompt: { type: 'string', description: '给子代理的详细指令' },
-        tools: {
-          type: 'array',
-          items: { type: 'string' },
-          description: `允许子代理使用的工具（默认只有只读工具：${DEFAULT_SUBAGENT_TOOLS.join(', ')}）`,
-        },
+unifiedToolRegistry.register({
+  name: 'delegate_task',
+  description:
+    '将独立子任务委托给另一个 Agent 执行。适用于：' +
+    '同时搜索多个目录、并发读取多个文件、独立子分析。' +
+    '子代理默认只有只读权限，无权写入文件。' +
+    '可同时发起多个 delegate_task 调用实现并行子代理。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      goal: { type: 'string', description: '子任务的简要目标（一句话）' },
+      prompt: { type: 'string', description: '给子代理的详细指令' },
+      tools: {
+        type: 'array',
+        items: { type: 'string' },
+        description: `允许子代理使用的工具（默认只有只读工具：${DEFAULT_SUBAGENT_TOOLS.join(', ')}）`,
       },
-      required: ['goal', 'prompt'],
-      additionalProperties: false,
     },
-    riskLevel: 'safe',
-    executionPolicy: { parallelizable: true },
+    required: ['goal', 'prompt'],
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  executionPolicy: { parallelizable: true },
+  source: { type: 'builtin' },
   async execute(args, context) {
     const goal = typeof args.goal === 'string' ? args.goal.trim() : '';
     const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
@@ -684,23 +674,22 @@ toolRegistry.register({
   },
 });
 // ---- index_files（safe）----
-toolRegistry.register({
-  descriptor: {
-    name: 'index_files',
-    description:
-      '索引指定目录中的代码/文档文件到知识库，支持语义搜索。' +
-      '对新增/变更文件做分块 + 向量化，已删除文件自动清理。' +
-      '需要先配置 embedding provider（如 Ollama/nomic-embed-text）。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        dirs: { type: 'array', items: { type: 'string' }, description: '待索引目录列表（默认使用已配置目录）' },
-        force: { type: 'boolean', description: '是否强制重新索引所有文件（默认 false，仅增量）' },
-      },
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  name: 'index_files',
+  description:
+    '索引指定目录中的代码/文档文件到知识库，支持语义搜索。' +
+    '对新增/变更文件做分块 + 向量化，已删除文件自动清理。' +
+    '需要先配置 embedding provider（如 Ollama/nomic-embed-text）。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      dirs: { type: 'array', items: { type: 'string' }, description: '待索引目录列表（默认使用已配置目录）' },
+      force: { type: 'boolean', description: '是否强制重新索引所有文件（默认 false，仅增量）' },
     },
-    riskLevel: 'safe',
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  source: { type: 'builtin' },
   async execute(args) {
     const { indexKbDirs } = await import('../knowledge-base/index.js');
     const dirs = Array.isArray(args.dirs) ? args.dirs.filter((d) => typeof d === 'string') : undefined;
@@ -722,24 +711,23 @@ toolRegistry.register({
 });
 
 // ---- recall（safe）----
-toolRegistry.register({
-  descriptor: {
-    name: 'recall',
-    description:
-      '从知识库中语义搜索与当前任务相关的文件片段。' +
-      '使用向量相似度匹配，需要先配置 embedding provider 并索引文件。' +
-      '返回结果包含文件路径、内容片段和相关度评分。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: '搜索关键词或自然语言描述' },
-        topK: { type: 'number', description: '返回结果数（默认 5）' },
-      },
-      required: ['query'],
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  name: 'recall',
+  description:
+    '从知识库中语义搜索与当前任务相关的文件片段。' +
+    '使用向量相似度匹配，需要先配置 embedding provider 并索引文件。' +
+    '返回结果包含文件路径、内容片段和相关度评分。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: '搜索关键词或自然语言描述' },
+      topK: { type: 'number', description: '返回结果数（默认 5）' },
     },
-    riskLevel: 'safe',
+    required: ['query'],
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  source: { type: 'builtin' },
   async execute(args) {
     const { recallKb } = await import('../knowledge-base/index.js');
     const query = typeof args.query === 'string' ? args.query.trim() : '';
@@ -768,23 +756,22 @@ toolRegistry.register({
 });
 
 // ---- run_dreams（safe）----
-toolRegistry.register({
-  descriptor: {
-    name: 'run_dreams',
-    description:
-      '执行记忆后台维护：补全向量索引、合并重复记忆、自动禁用低置信度记忆。' +
-      '通常在任务结束后自动触发，也可手动调用查看维护报告。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        backfillEmbeddings: { type: 'boolean', description: '是否补全缺失的向量索引（默认 true）' },
-        dedupMerge: { type: 'boolean', description: '是否合并相似重复记忆（默认 true）' },
-        lowConfidenceSweep: { type: 'boolean', description: '是否禁用低置信度记忆（默认 true）' },
-      },
-      additionalProperties: false,
+unifiedToolRegistry.register({
+  name: 'run_dreams',
+  description:
+    '执行记忆后台维护：补全向量索引、合并重复记忆、自动禁用低置信度记忆。' +
+    '通常在任务结束后自动触发，也可手动调用查看维护报告。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      backfillEmbeddings: { type: 'boolean', description: '是否补全缺失的向量索引（默认 true）' },
+      dedupMerge: { type: 'boolean', description: '是否合并相似重复记忆（默认 true）' },
+      lowConfidenceSweep: { type: 'boolean', description: '是否禁用低置信度记忆（默认 true）' },
     },
-    riskLevel: 'safe',
+    additionalProperties: false,
   },
+  riskLevel: 'safe',
+  source: { type: 'builtin' },
   async execute(args) {
     const { runDreams } = await import('../memory/dreams.js');
     const options = {

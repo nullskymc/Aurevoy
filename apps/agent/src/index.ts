@@ -14,6 +14,7 @@ import { skillRegistry } from './skills/registry.js';
 import { startSkillWatcher } from './skills/reload.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { initializeUnifiedToolFramework } from './tool/index.js';
 
 async function main() {
   // 提前确保数据目录存在（安装版 app bundle 内 cwd 只读，数据在 ~/.aurevoy/）
@@ -28,6 +29,11 @@ async function main() {
   loadPersistedSettings();
 
   skillRegistry.load();
+  
+  // 初始化统一工具框架
+  initializeUnifiedToolFramework();
+  log.info('统一工具框架已初始化');
+  
   registerLoadSkillTool();
   registerInstallSkillTool();
   log.info({ count: skillRegistry.list().length }, 'skill 模块已加载');

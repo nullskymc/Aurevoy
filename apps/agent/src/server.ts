@@ -10,8 +10,6 @@ import type {
   ApprovalDecisionResponse,
   BranchTaskRequest,
   BranchTaskResponse,
-  ClarificationAnswerRequest,
-  ClarificationAnswerResponse,
   CleanupDataRequest,
   CleanupDataResponse,
   CompactTaskRequest,
@@ -42,7 +40,6 @@ import type {
   SkillUninstallResponse,
   UnrevertTaskResponse,
   TaskArtifactContentResponse,
-  TaskArtifactListResponse,
   TaskTraceListResponse,
   TokenUsageReport,
   UpdateProjectRequest,
@@ -61,21 +58,22 @@ import {
   isTaskRunning,
   markInterruptedTasksAfterRestart,
   prepareTaskForResume,
+  queueRunningUserTurn,
   resolveApproval,
-  resolveClarificationAnswer,
-  resolvePlanApproval,
+  resolvePlanApprovalDecision,
   resumeAutoMode,
   revertTask,
   runTask,
   unrevertTask,
 } from './agent/loop.js';
 import { taskEvents } from './agent/events.js';
+import { buildTokenUsageReport } from './agent/token-usage.js';
 import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore, invalidateMemorySummary } from './store/db.js';
-import { toolRegistry } from './tools/registry.js';
+import { unifiedToolRegistry } from './tool/unified-registry.js';
 import { skillRegistry } from './skills/registry.js';
 import { installFromGit, uninstallSkill } from './skills/installer.js';
 import { reloadSkillsAndTools } from './skills/reload.js';
-import { getProviderName, listProviderModels } from './llm/provider.js';
+import { getPiProviderName, listPiProviderModels } from './llm/pi-provider.js';
 import { getMcpStatuses, reloadMcpTools } from './tools/mcp.js';
 import {
   readCleanupPolicyDays,
@@ -93,8 +91,12 @@ export async function buildServer(externalLogger?: Logger) {
     (req.raw as unknown as Record<string, unknown>).requestId = randomUUID();
   });
 
-  toolRegistry.applySettings(toolSettingsStore.list());
-  toolRegistry.setEnabled('execute_command', config.sandbox.commandExecutionEnabled);
+  // 应用工具设置
+  const toolSettings = toolSettingsStore.list();
+  for (const [name, enabled] of toolSettings) {
+    unifiedToolRegistry.setEnabled(name, enabled);
+  }
+  unifiedToolRegistry.setEnabled('execute_command', config.sandbox.commandExecutionEnabled);
   const recoveredTasks = markInterruptedTasksAfterRestart();
   if (recoveredTasks.length > 0) {
     log.warn(`启动恢复：${recoveredTasks.length} 个未完成任务已标记为可恢复失败`);
@@ -108,14 +110,14 @@ export async function buildServer(externalLogger?: Logger) {
       status: 'ok',
       version: '0.5.13-dev',
       uptimeMs: Date.now() - startedAt,
-      provider: getProviderName(),
+      provider: getPiProviderName(),
       contextCharBudget: config.agent.contextCharBudget,
       contextTokenBudget: config.agent.contextTokenBudget,
     };
   });
 
   // 已注册工具列表（调试/前端展示用）
-  app.get('/api/tools', async () => toolRegistry.listAll());
+  app.get('/api/tools', async () => unifiedToolRegistry.listDescriptors());
 
   app.get('/api/skills', async (): Promise<SkillListResponse> => {
     return { skills: skillRegistry.listAll() };
@@ -165,6 +167,7 @@ export async function buildServer(externalLogger?: Logger) {
       const parentDir = resolve(entry.skillDir, '..');
       await uninstallSkill(name, parentDir);
       reloadSkillsAndTools();
+      publishSkillDeactivated(name);
 
       const response: SkillUninstallResponse = { name, deleted: true };
       return reply.send(response);
@@ -187,6 +190,7 @@ export async function buildServer(externalLogger?: Logger) {
       skillSettingsStore.setEnabled(name, enabled);
       // 刷新 load_skill / install_skill 工具注册以同步 catalog
       reloadSkillsAndTools();
+      if (!enabled) publishSkillDeactivated(name);
       const updated = skillRegistry.listAll().find((s) => s.name === name);
       return reply.send(updated as SkillDescriptor);
     },
@@ -199,10 +203,10 @@ export async function buildServer(externalLogger?: Logger) {
       if (typeof enabled !== 'boolean') {
         return reply.code(400).send({ error: 'enabled(boolean) 必填' });
       }
-      const updated = toolRegistry.setEnabled(req.params.name, enabled);
+      const updated = unifiedToolRegistry.setEnabled(req.params.name, enabled);
       if (!updated) return reply.code(404).send({ error: 'tool not found' });
       toolSettingsStore.setEnabled(req.params.name, enabled);
-      const tool = toolRegistry.listAll().find((item) => item.name === req.params.name);
+      const tool = unifiedToolRegistry.listDescriptors().find((item) => item.name === req.params.name);
       return reply.send(tool);
     },
   );
@@ -215,7 +219,7 @@ export async function buildServer(externalLogger?: Logger) {
 
   app.get('/api/settings/models', async (_req, reply): Promise<ModelListResponse | unknown> => {
     try {
-      return { models: await listProviderModels() };
+      return { models: await listPiProviderModels() };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return reply.code(400).send({ error: message });
@@ -225,11 +229,15 @@ export async function buildServer(externalLogger?: Logger) {
   app.patch<{ Body: UpdateRuntimeSettingsRequest }>('/api/settings', async (req, reply) => {
     try {
       const result = updateRuntimeSettings(req.body ?? {});
-      toolRegistry.setEnabled('execute_command', result.settings.commandExecutionEnabled);
+      unifiedToolRegistry.setEnabled('execute_command', result.settings.commandExecutionEnabled);
       if (result.mcpChanged) {
         await reloadMcpTools();
-        toolRegistry.applySettings(toolSettingsStore.list());
-        toolRegistry.setEnabled('execute_command', result.settings.commandExecutionEnabled);
+        // 应用工具设置
+        const toolSettings = toolSettingsStore.list();
+        for (const [name, enabled] of toolSettings) {
+          unifiedToolRegistry.setEnabled(name, enabled);
+        }
+        unifiedToolRegistry.setEnabled('execute_command', result.settings.commandExecutionEnabled);
       }
       return reply.send(result.settings);
     } catch (err) {
@@ -253,35 +261,7 @@ export async function buildServer(externalLogger?: Logger) {
   });
 
   app.get('/api/data/token-usage', async (): Promise<TokenUsageReport> => {
-    const tasks = taskStore.list();
-    let available = false;
-    let promptTokens = 0;
-    let completionTokens = 0;
-    let totalTokens = 0;
-    let cacheReadTokens = 0;
-    let cacheWriteTokens = 0;
-    let estimatedCostUsd = 0;
-    for (const task of tasks) {
-      const usage = task.tokenUsage;
-      if (!usage || !usage.available) continue;
-      available = true;
-      promptTokens += usage.promptTokens ?? 0;
-      completionTokens += usage.completionTokens ?? 0;
-      totalTokens += usage.totalTokens ?? 0;
-      cacheReadTokens += usage.cacheReadTokens ?? 0;
-      cacheWriteTokens += usage.cacheWriteTokens ?? 0;
-      estimatedCostUsd += usage.estimatedCostUsd ?? 0;
-    }
-    return {
-      tasks: tasks.length,
-      available,
-      promptTokens,
-      completionTokens,
-      totalTokens,
-      cacheReadTokens,
-      cacheWriteTokens,
-      estimatedCostUsd,
-    };
+    return buildTokenUsageReport(taskStore.list());
   });
 
   app.post<{ Body: CleanupDataRequest }>('/api/data/cleanup', async (req): Promise<CleanupDataResponse> => {
@@ -345,11 +325,20 @@ export async function buildServer(externalLogger?: Logger) {
     async (req, reply) => {
       const task = taskStore.get(req.params.id);
       if (!task) return reply.code(404).send({ error: 'task not found' });
-      if (isTaskRunning(req.params.id)) {
-        return reply.code(409).send({ error: '任务正在运行，请等待当前轮结束后再追问' });
-      }
       const message = req.body?.message?.trim();
       if (!message) return reply.code(400).send({ error: 'message is required' });
+      if (isTaskRunning(req.params.id)) {
+        const delivery = req.body?.delivery === 'follow_up' ? 'follow_up' : 'steering';
+        const queued = queueRunningUserTurn(task, message, delivery, req.body?.attachments);
+        if (!queued.delivered) {
+          return reply.code(409).send({ error: '任务正在运行，但 Pi runtime 队列不可用，请等待当前轮结束后再追问' });
+        }
+        const body: ContinueTaskResponse = {
+          task,
+          streamUrl: `/api/tasks/${task.id}/stream`,
+        };
+        return reply.code(202).send(body);
+      }
 
       addUserTurn(task, message, req.body?.attachments);
       // 异步带完整历史重跑循环；前端通过同一 SSE 地址订阅这一轮
@@ -521,59 +510,32 @@ export async function buildServer(externalLogger?: Logger) {
     async (req, reply) => {
       const task = taskStore.get(req.params.id);
       if (!task) return reply.code(404).send({ error: 'task not found' });
-      const { callId, approved, sessionApprove } = req.body ?? {};
+      const { callId, approved } = req.body ?? {};
       if (typeof callId !== 'string' || typeof approved !== 'boolean') {
         return reply.code(400).send({ error: 'callId(string) 与 approved(boolean) 必填' });
       }
-      const delivered = resolveApproval(req.params.id, callId, approved, sessionApprove);
+      const delivered = resolveApproval(req.params.id, callId, approved);
       const body: ApprovalDecisionResponse = { taskId: req.params.id, callId, delivered };
       return reply.send(body);
     },
   );
 
-  // 审批 Plan Agent 生成的执行计划（批准/拒绝）
+  // 审批 /plan 触发的执行计划。Pi runtime 只在批准后进入模型调用。
   app.post<{ Params: { id: string }; Body: PlanApprovalRequest }>(
     '/api/tasks/:id/plan-approval',
     async (req, reply) => {
       const task = taskStore.get(req.params.id);
       if (!task) return reply.code(404).send({ error: 'task not found' });
-      const { approved, reason } = req.body ?? {};
+      const { approved } = req.body ?? {};
       if (typeof approved !== 'boolean') {
         return reply.code(400).send({ error: 'approved(boolean) 必填' });
       }
-      const delivered = resolvePlanApproval(req.params.id, approved, reason);
+      const delivered = resolvePlanApprovalDecision(req.params.id, approved);
       const body: PlanApprovalResponse = { taskId: req.params.id, delivered };
       return reply.send(body);
     },
   );
 
-  // 回复 Agent 的结构化追问，同一任务从暂停点继续。
-  app.post<{ Params: { id: string; clarificationId: string }; Body: ClarificationAnswerRequest }>(
-    '/api/tasks/:id/clarifications/:clarificationId',
-    async (req, reply) => {
-      const task = taskStore.get(req.params.id);
-      if (!task) return reply.code(404).send({ error: 'task not found' });
-      const answer = req.body?.answer?.trim();
-      if (!answer) return reply.code(400).send({ error: 'answer is required' });
-      const delivered = resolveClarificationAnswer(req.params.id, req.params.clarificationId, answer);
-      const body: ClarificationAnswerResponse = {
-        taskId: req.params.id,
-        clarificationId: req.params.clarificationId,
-        delivered,
-      };
-      return reply.send(body);
-    },
-  );
-
-  app.get<{ Params: { id: string } }>('/api/tasks/:id/artifacts', async (req, reply) => {
-    const task = taskStore.get(req.params.id);
-    if (!task) return reply.code(404).send({ error: 'task not found' });
-    const body: TaskArtifactListResponse = {
-      taskId: req.params.id,
-      artifacts: task.artifacts ?? [],
-    };
-    return reply.send(body);
-  });
 
   app.get<{ Params: { id: string; artifactId: string } }>(
     '/api/tasks/:id/artifacts/:artifactId/content',
@@ -761,7 +723,9 @@ export async function buildServer(externalLogger?: Logger) {
     /** 需要立即刷入的事件类型 */
     const DRAIN_EVENTS = new Set([
       'done', 'task_deleted', 'error', 'status',
+      'agent_start', 'message_start',
       'plan_approval_request', 'plan_approval_resolved',
+      'context_snapshot',
       'clarification_request', 'clarification_resolved',
       'approval_request',
       'tool_call', 'tool_result', 'message',
@@ -805,7 +769,7 @@ export async function buildServer(externalLogger?: Logger) {
       send(event);
     };
 
-    // 先订阅实时事件，再补发数据库快照。
+    // 先订阅实时事件，再补发任务持久状态快照。
     // 这样快照期间发生的新 message/tool_result 不会落入“快照之后、订阅之前”的空窗。
     // 快照发送期间的实时事件先缓冲，等快照完整发完后再按原顺序补发。
     unsubscribe = taskEvents.subscribe(id, sendLive);
@@ -813,7 +777,7 @@ export async function buildServer(externalLogger?: Logger) {
     sendSnapshot({ type: 'task_created', taskId: task.id, task });
     sendSnapshot({ type: 'status', taskId: task.id, status: task.status });
     if (task.phase) {
-      sendSnapshot({ type: 'phase', taskId: task.id, phase: task.phase, detail: '数据库快照' });
+      sendSnapshot({ type: 'phase', taskId: task.id, phase: task.phase });
     }
     if (task.plan.length > 0) {
       sendSnapshot({ type: 'plan', taskId: task.id, plan: task.plan });
@@ -823,6 +787,9 @@ export async function buildServer(externalLogger?: Logger) {
     }
     if (task.tokenUsage) {
       sendSnapshot({ type: 'token_usage', taskId: task.id, usage: task.tokenUsage });
+    }
+    if (task.contextTokens !== undefined) {
+      sendSnapshot({ type: 'context_snapshot', taskId: task.id, tokens: task.contextTokens });
     }
     for (const message of task.messages) {
       sendSnapshot({ type: 'message', taskId: task.id, message });
@@ -923,4 +890,11 @@ export async function buildServer(externalLogger?: Logger) {
   });
 
   return app;
+}
+
+function publishSkillDeactivated(skillName: string): void {
+  for (const task of taskStore.list()) {
+    if (task.status !== 'running' && task.status !== 'paused') continue;
+    taskEvents.publish({ type: 'skill_deactivated', taskId: task.id, previousSkill: skillName });
+  }
 }

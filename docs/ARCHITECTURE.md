@@ -8,10 +8,10 @@
 1. **前后端分离**：UI（桌面壳）与 Agent 引擎是两个独立进程，通过本地 HTTP + SSE 通信。
    好处是从 macOS 扩展到 Windows 时，引擎代码几乎不动，只需重新打包桌面壳。
 2. **契约集中**：所有跨进程数据结构定义在 `packages/shared`，前后端共用，杜绝类型漂移。
-3. **能力可插拔**：LLM Provider、工具（Tool/MCP）、存储都在抽象接口之后，
-   Agent 主循环不感知具体实现。
-4. **可插拔 Provider**：LLM 支持三种协议——OpenAI 兼容（OpenAI/DeepSeek/Ollama 等）、
-   Anthropic（Claude Messages API）、OpenAI Responses API v2。通过 `.env` 或设置界面配置；
+3. **能力可插拔**：Agent runtime、LLM Provider、工具（Tool/MCP）、存储都在抽象接口之后，
+   主控制面不感知具体实现。
+4. **可插拔 Provider**：LLM 配置以 Pi provider id 为准（OpenAI、Anthropic、DeepSeek、OpenRouter、
+   Google、OpenAI-compatible 自定义端点等）。通过 `.env` 或设置界面配置；
    未配置即明确报错。
 5. **本地优先**：数据默认存本地 SQLite；引擎只监听 `127.0.0.1`，不对外暴露。
 6. **交付真实能力**：不允许用 Mock、占位事件或前端假状态替代真实运行链路。
@@ -46,14 +46,11 @@ Aurevoy/  (npm workspaces monorepo)
 │        │ createTask / runTask                                     │
 │        ▼                                                          │
 │   agent/loop.ts  ──emit──▶  agent/events.ts (TaskEventBus)        │
-│        │  Default Agent（ReAct 循环）    │ subscribe                │
+│        │  Default Agent（默认委托 Pi runtime） │ subscribe           │
 │        │                          └──▶ SSE 推送回前端              │
-│        ├──▶ agent/plan-agent.ts         (Plan Agent：按需侦查+规划)  │
-│        ├──▶ agent/subagent.ts           (子代理：受限委托执行)       │
-│        ├──▶ agent/approval.ts           (Auto Mode 审批策略)        │
-│        ├──▶ llm/providers/              (多 Provider: OpenAI 兼容 / │
-│        │       Anthropic / OpenAI Response v2)                     │
-│        ├──▶ agent/tool-call-accumulator (流式 tool_calls 累积)     │
+│        ├──▶ agent/pi-runtime.ts         (Pi Agent 事件/工具适配层)  │
+│        ├──▶ agent/subagent.ts           (Pi 子代理：受限委托执行)    │
+│        ├──▶ llm/pi-provider.ts          (Pi model/provider 映射)    │
 │        ├──▶ tool/tools/  (新一代 Effect-TS 工具系统, P0-P4)         │
 │        ├──▶ tools/registry.ts          (旧工具注册表，兼容过渡)     │
 │        ├──▶ sandbox/command-executor.ts (命令执行边界，默认关闭)     │
@@ -87,19 +84,13 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/index.ts` | 进程入口，启动 Fastify |
 | `src/config.ts` | 运行时配置（host/port/dbPath/cors/provider/sandbox/network/MCP），全部可被环境变量覆盖 |
 | `src/server.ts` | HTTP 路由 + SSE 端点（见 `docs/API.md`） |
-| `src/agent/loop.ts` | **Default Agent 主循环**：`createTask` 建任务；`runTask` 跑 **ReAct 工具调用循环**。 按需调用 Plan Agent（`assessComplexity`→复杂任务推 `plan_approval_request` 等待审批→批准后分步执行）。 简单对话单步直接执行。 P2: 并行工具执行（safe 工具 `Promise.all`，risky 工具并发审批→并行执行，`invokeWithTimeout` 独立超时）。 含显式 runtime phase、多步计划、checkpoint、防死循环、重试、取消、恢复、每轮持久化。 P6: 写入前文件快照 + Rewind 文件回滚 + 失败结果 fallback 附加。 **Auto Mode**: 4 级自动模式（off/plan/auto-edit/full），运行时切换，安全暂停，自动规划降级 |
-| `src/agent/approval.ts` | **审批策略引擎**：4 级自动模式审批决策；工具白名单（APPROVAL_FREE / PLANMODE / AUTO_EDIT）；`computeAutoApproval()` 判断自动批准；`approvalKeyForCall()` 命令前缀匹配审批；安全暂停阈值（连续 50 次自动批准后要求确认） |
-| `src/agent/plan-agent.ts` | **Plan Agent**：Default Agent 按需调用的规划引擎。 Scout 阶段快速侦查工作区（仅 safe 只读工具）；LLM 生成 2-8 步 JSON 结构化计划；失败回退正则启发式。 返回结构化计划供用户审批 |
-| `src/agent/subagent.ts` | **P7: 子代理执行引擎**。受限 ReAct 循环：仅 safe 只读工具、max 5 轮、60s 超时、不写 memory、结果 20KB 截断 |
-| `src/agent/context.ts` | **上下文窗口 + 记忆注入**。 P4: `estimateTokens()` 轻量 token 估算；`autoCompactIfNeeded()` token 预算超 85% 时 LLM 语义摘要。 P5: `scoreMemories()` 相关性评分（关键词+分类+置信度+时间衰减）；`parseMemoryLinks()`/`expandLinkedMemories()` 解析 `[[link]]` 引用；`buildMemorySystemMessage()` 按目标评分排序注入 top-20 |
+| `src/agent/loop.ts` | **Pi-only 控制器**：`createTask` 建任务；`runTask` 只委托 `pi-runtime.ts`，保留任务恢复、取消、revert/branch/compact 和 SSE 事件桥接，不再维护第二套 ReAct 后端 |
+| `src/agent/pi-runtime.ts` | **Pi runtime 适配层**：把 Aurevoy task/messages/tools/approval 映射到 `@earendil-works/pi-agent-core`，并把 Pi 事件转换回现有 SSE 契约 |
+| `src/agent/subagent.ts` | **Pi 子代理执行引擎**：`delegate_task` 使用 Pi Agent；仅 safe 只读工具，60s 超时，结果 20KB 截断 |
+| `src/agent/context.ts` | **上下文窗口 + 记忆注入**。 P4: `estimateTokens()` 轻量 token 估算；预算超限时做本地确定性摘要。 P5/M8: 记忆相关性评分、缓存与注入 |
 | `src/agent/m6-state.ts` | Agent 交付状态辅助：预算、token usage、追问、artifact、checkpoint 的创建与状态更新 |
 | `src/agent/events.ts` | `TaskEventBus`：按 `taskId` 发布/订阅 `AgentEvent`，桥接执行与 SSE |
-| `src/agent/tool-call-accumulator.ts` | 流式 `tool_calls` 累积器：按 `index` 跨 chunk 拼接 `id`/`name`/`arguments`，处理并行调用与截断 |
-| `src/llm/types.ts` | **LLMProvider 接口**：`stream(messages, options)` 返回 `AsyncIterable<LLMChunk>`。 所有 Provider 实现统一的 `LLMChunk` 结构（`textDelta` / `reasoningContentDelta` / `toolCallsSnapshot` / `tokenUsage`），Agent 循环不感知具体厂商 |
-| `src/llm/provider.ts` | **Provider 工厂**：`getProvider()` 按配置路由到 4 种 provider——`openai`/`openai-compatible`（Chat Completions）、`anthropic`（Claude Messages API）、`openai-response`（Responses API v2）。带进程内缓存，`resetProviderCache()` 清空 |
-| `src/llm/openai-compatible.ts` | **OpenAI 兼容 Provider**：`/chat/completions` 端点，支持 OpenAI / DeepSeek（`reasoning_content`）/ Ollama / vLLM 等。多模态 base64 图片支持 |
-| `src/llm/anthropic.ts` | **Anthropic Provider**：`/v1/messages` 端点（原生 fetch），system prompt 独立参数，tool_use/tool_result 以 content block 表达，认证走 `x-api-key` |
-| `src/llm/openai-response.ts` | **OpenAI Responses API v2 Provider**：`/v1/responses` 端点，input 替代 messages，instructions 替代 system 角色，function_call 以 output item 表达 |
+| `src/llm/pi-provider.ts` | Pi model/provider 映射：保留 `AUREVOY_LLM_*` 配置入口，生成 Pi `Model` 并提供模型列表/健康展示 |
 | `src/tools/registry.ts` | **旧工具注册表**（兼容过渡期）：`ToolRegistry` 类，注册/列举/调用工具；JSON Schema 子集校验。 P2: `invokeWithTimeout()` 独立超时；`executionPolicyOf()` 并行策略。 P3: `truncateToolOutput()` 50K 字符截断。 P6: `fallbackFor()` 替代方案查询 |
 | `src/tools/builtins.ts` | 内置基础工具。 文件：目录/读写/搜索/复制/移动/删除。 **P6**: `edit_file` 精确替换（唯一匹配校验）。 记忆：`remember`（**P5**: Jaccard 去重+`[[link]]` 引用）。 交互：`ask_user`、`create_artifact`/`apply_artifact`。 沙箱：`execute_command`（默认禁用）。 **P7**: `delegate_task` 子代理委托 |
 | `src/tool/` | **新一代 Effect-TS 工具系统**（P0-P4）：Schema 驱动输入输出、作用域注册、审批引擎、文件快照、并行执行管线。见下方独立模块 |
@@ -139,12 +130,12 @@ API 请求响应、运行时常量（默认地址端口）。
 3. 前端拿到 `task.id` → `EventSource(streamUrl)` 订阅 SSE。
 4. `runTask` 先执行 **侦查阶段**（P1: `runScoutPhase`——最多 3 轮 LLM、仅 safe 只读工具），产出 `ScoutReport`（关键文件、技术栈、约束）。
 5. 根据侦查报告调用 LLM 生成 **结构化计划**（P1: `generatePlanViaLLM`——JSON 输出 2-8 步、含依赖和验证标记）；失败时回退正则启发式（`inferStructuredPlan`）。
-6. `runTask` 跑 **ReAct 工具调用循环**，逐步 emit 事件到 `TaskEventBus`：
+6. `runTask` 委托 **Pi runtime**，逐步 emit 事件到 `TaskEventBus`：
    - 每轮开始前执行 **自动语义压缩**（P4: `autoCompactIfNeeded`——token 预算超 85% 时 LLM 摘要旧消息）和 **字符级上下文窗口压缩**（`buildContextWindow`）
    - 注入 **相关性评分记忆**（P5: 关键词+分类+置信度+时间衰减排序，`[[link]]` 引用展开，top-20）
    - `status(running)` → `phase(initializing/thinking)` →（每轮）流式 `token` →
-   - 若模型请求工具则进入 **并行工具执行**（P2：safe 工具 `Promise.all`，risky 工具并发审批→并行执行，`invokeWithTimeout` 独立超时，工具输出 50K 截断 P3）
-   - 非 safe 工具进入 `phase(waiting_approval)` 等待审批；失败工具附加 **fallback 建议**（P6）
+   - 若模型请求工具则进入 **Pi 工具执行管线**：Pi 根据 executionPolicy 并行/顺序执行，Aurevoy 在 `beforeToolCall` 套用 auto mode 策略，`invokeWithTimeout` 独立超时，工具输出 50K 截断 P3
+   - 未被当前 auto mode 放行的工具进入 `phase(waiting_approval)`，等待用户对单次调用审批；失败工具附加 **fallback 建议**（P6）
    - 写入类工具执行前 **捕获文件快照**（P6: Rewind 时回滚文件）
    - 把工具结果作为 `role:'tool'` 消息回灌、再请求 LLM →…直到模型给出最终答案 →
    - `phase(finalizing)` → `message` → `status(completed|failed|cancelled)` → `done`。
@@ -161,9 +152,9 @@ API 请求响应、运行时常量（默认地址端口）。
 
 | 想做的事 | 改哪里 | 不要碰 |
 |---|---|---|
-| 接真实大模型 | 在 `llm/` 新增 `LLMProvider` 实现，改 `getProvider()` | Agent 循环、前端 |
+| 接真实大模型 | 扩展 Pi model/provider 映射，保持 `AUREVOY_LLM_*` 配置入口 | Agent 循环、前端 |
 | 加一个工具 | 新工具放 `tool/tools/`（新框架，推荐）或 `tools/`（旧框架，兼容）；注册到对应注册表 | Agent 循环内联逻辑 |
-| 加自动模式规则 | `agent/approval.ts` 扩展 `computeAutoApproval()` + 工具白名单 | Agent 循环直接放行工具 |
+| 加自动模式规则 | `agent/approval.ts` 扩展 `decideToolPermission()`，保持 Pi `beforeToolCall` 为唯一门禁 | Agent 循环里新增工具特例 |
 | 接 MCP server | 配置 `AUREVOY_MCP_SERVERS_JSON`，或扩展 `tools/mcp.ts` 的 transport 支持 | 工具调用协议 / Agent 循环 |
 | 改网络抓取边界 | `tools/web-content.ts` 的 `web_fetch` 策略 + `config.network` + `docs/API.md` | 绕过 SSRF/重定向校验直接 fetch |
 | 加轨迹日志/审计 | `store/` 新增结构化记录，`agent/` 在状态边界写入 | 前端临时数组、console-only 日志 |
@@ -176,7 +167,7 @@ API 请求响应、运行时常量（默认地址端口）。
 | 加记忆引用/评分 | `agent/context.ts` 的 `scoreMemories`/`parseMemoryLinks`；`store/db.ts` 的 `findByNameSlug` | 直接改评分公式不跑回归 |
 | 加 Diff 编辑 | `tools/builtins.ts` 的 `edit_file` 工具 | 绕过唯一性校验直接写文件 |
 | 加记忆向量/RAG | `memory/` 或 `knowledge-base/` + `store/db.ts` 加表 + `embedding/` Provider | 混合评分参数不跑回归 |
-| 加新 LLM Provider | `llm/` 实现 `LLMProvider` 接口 + `provider.ts` 路由 | Agent 循环感知具体厂商 |
+| 加新 LLM Provider | 扩展 `llm/pi-provider.ts` 的 Pi model/provider 映射 | 在 Agent 循环里直接接厂商 SDK |
 | 调上下文压缩策略 | `config.ts` 的 `contextTokenBudget`/`compactThreshold`/`compactKeepRecentTurns` | 把阈值设到 1.0 永不压缩 |
 | 加界面 | `apps/desktop/src` | 后端业务逻辑 |
 | 换存储/加表 | `store/db.ts` | 其它模块直接访问 DB |

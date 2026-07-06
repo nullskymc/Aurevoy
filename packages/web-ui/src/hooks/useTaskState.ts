@@ -1,20 +1,48 @@
-import { useState } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import type { PlanStep, Task, TaskPhase, TaskStatus, TaskTraceEntry } from "@aurevoy/shared";
+
+function sanitizeTaskForDisplay(task: Task): Task {
+  const messages = task.messages.filter((message) => message.role !== "system");
+  return messages.length === task.messages.length ? task : { ...task, messages };
+}
+
+function sanitizeNullableTaskForDisplay(task: Task | null): Task | null {
+  return task ? sanitizeTaskForDisplay(task) : task;
+}
 
 export function useTaskState() {
   const [busy, setBusy] = useState(false);
-  const [currentTask, setCurrentTask] = useState<Task | null>(null);
+  const [currentTask, setCurrentTaskState] = useState<Task | null>(null);
   const [output, setOutput] = useState("");
   const [phase, setPhase] = useState<TaskPhase | null>(null);
   const [plan, setPlan] = useState<PlanStep[]>([]);
   const [status, setStatus] = useState<TaskStatus | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasksState] = useState<Task[]>([]);
   const [traces, setTraces] = useState<TaskTraceEntry[]>([]);
 
+  const setCurrentTask: Dispatch<SetStateAction<Task | null>> = (value) => {
+    if (typeof value === "function") {
+      setCurrentTaskState((previous) =>
+        sanitizeNullableTaskForDisplay((value as (previous: Task | null) => Task | null)(previous)),
+      );
+      return;
+    }
+    setCurrentTaskState(sanitizeNullableTaskForDisplay(value));
+  };
+
+  const setTasks: Dispatch<SetStateAction<Task[]>> = (value) => {
+    if (typeof value === "function") {
+      setTasksState((previous) => (value as (previous: Task[]) => Task[])(previous).map(sanitizeTaskForDisplay));
+      return;
+    }
+    setTasksState(value.map(sanitizeTaskForDisplay));
+  };
+
   function updateTaskList(task: Task): void {
-    setTasks((previous) => {
-      const withoutTask = previous.filter((item) => item.id !== task.id);
-      return [task, ...withoutTask].sort(
+    const displayTask = sanitizeTaskForDisplay(task);
+    setTasksState((previous) => {
+      const withoutTask = previous.filter((item) => item.id !== displayTask.id);
+      return [displayTask, ...withoutTask].sort(
         (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       );
     });
@@ -31,9 +59,9 @@ export function useTaskState() {
   ];
 
   function patchCurrentTask(patch: Partial<Task>): void {
-    setCurrentTask((previous) => {
+    setCurrentTaskState((previous) => {
       if (!previous) return previous;
-      const nextTask = { ...previous, ...patch };
+      const nextTask = sanitizeTaskForDisplay({ ...previous, ...patch });
       const shouldReorder = REORDER_TASK_KEYS.some((key) => key in patch);
       if (shouldReorder) {
         updateTaskList(nextTask);

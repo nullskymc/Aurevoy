@@ -152,15 +152,10 @@ toolRegistry.register({
 然后在引擎启动路径 import 一次该文件以触发注册。
 
 ### 新增一个 LLM Provider
-```ts
-// apps/agent/src/llm/openai.ts
-import type { LLMProvider, LLMChunk } from './provider.js';
-export class OpenAIProvider implements LLMProvider {
-  readonly name = 'openai';
-  async *stream(messages): AsyncIterable<LLMChunk> { /* 调 SDK，逐 token yield */ }
-}
-// 在 provider.ts 的 getProvider() 里按 process.env.AUREVOY_LLM_PROVIDER 返回
-```
+
+主 Agent loop 固定使用 `@earendil-works/pi-agent-core`。新增模型或 Provider 时，优先扩展
+`apps/agent/src/llm/pi-provider.ts` 的 Pi model/provider 映射，并继续复用 `AUREVOY_LLM_*`
+配置入口；不要恢复旧 `LLMProvider` / ReAct stream 抽象。
 
 ### 改一个跨进程类型
 1. 改 `packages/shared/src/index.ts`。
