@@ -12,24 +12,26 @@ import {
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node';
 import { Type } from 'typebox';
 import {
-  complete,
-  completeSimple,
+  anthropicMessagesApi,
+  azureOpenAIResponsesApi,
+  bedrockConverseStreamApi,
+  googleGenerativeAIApi,
+  googleVertexApi,
+  mistralConversationsApi,
+  openAICodexResponsesApi,
+  openAICompletionsApi,
+  openAIResponsesApi,
   type AssistantMessageEvent as PiAssistantMessageEvent,
   type AssistantMessage as PiAssistantMessage,
-  type AssistantMessageEventStream as PiAssistantMessageEventStream,
   type ImageContent as PiImageContent,
   type Message as PiMessage,
   type Model as PiModel,
   type Models as PiModels,
-  type Provider as PiProvider,
-  type ProviderStreamOptions as PiProviderStreamOptions,
-  type SimpleStreamOptions as PiSimpleStreamOptions,
-  stream,
-  streamSimple,
   type TextContent as PiTextContent,
   type ToolResultMessage as PiToolResultMessage,
   type Usage as PiUsage,
 } from '@earendil-works/pi-ai/compat';
+import { createModels, createProvider } from '@earendil-works/pi-ai';
 import type {
   AgentEvent,
   AggregatedTokenUsage,
@@ -302,34 +304,7 @@ async function createPiHarness(
 }
 
 export function createAurevoyPiModels(selectedModel: PiModel<any>): PiModels {
-  const provider = createAurevoyPiProvider(selectedModel);
-  return {
-    getProviders: () => [provider],
-    getProvider: (id) => id === provider.id ? provider : undefined,
-    getModels: (providerId) => !providerId || providerId === provider.id ? [selectedModel] : [],
-    getModel: (providerId, modelId) =>
-      providerId === selectedModel.provider && modelId === selectedModel.id ? selectedModel : undefined,
-    refresh: async () => undefined,
-    getAuth: async () => ({
-      auth: {
-        apiKey: config.llm.apiKey,
-        baseUrl: selectedModel.baseUrl,
-      },
-      source: 'AUREVOY_LLM_API_KEY',
-    }),
-    stream: (model, context, streamOptions) =>
-      stream(model, context, withAurevoyStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
-    complete: async (model, context, streamOptions) =>
-      await complete(model, context, withAurevoyStreamOptions(streamOptions)),
-    streamSimple: (model, context, streamOptions) =>
-      streamSimple(model, context, withAurevoySimpleStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
-    completeSimple: async (model, context, streamOptions) =>
-      await completeSimple(model, context, withAurevoySimpleStreamOptions(streamOptions)),
-  };
-}
-
-function createAurevoyPiProvider(selectedModel: PiModel<any>): PiProvider {
-  return {
+  const provider = createProvider({
     id: selectedModel.provider,
     name: selectedModel.provider,
     baseUrl: selectedModel.baseUrl,
@@ -339,37 +314,32 @@ function createAurevoyPiProvider(selectedModel: PiModel<any>): PiProvider {
         resolve: async () => ({
           auth: {
             apiKey: config.llm.apiKey,
-            baseUrl: selectedModel.baseUrl,
+            baseUrl: selectedModel.baseUrl ?? config.llm.baseUrl,
           },
           source: 'AUREVOY_LLM_API_KEY',
         }),
       },
     },
-    getModels: () => [selectedModel],
-    stream: (model, context, streamOptions) =>
-      stream(model, context, withAurevoyStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
-    streamSimple: (model, context, streamOptions) =>
-      streamSimple(model, context, withAurevoySimpleStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
-  };
+    models: [selectedModel],
+    api: getApiForApiName(selectedModel.api),
+  });
+  const models = createModels();
+  models.setProvider(provider);
+  return models;
 }
 
-function withAurevoyStreamOptions(options: object | undefined): PiProviderStreamOptions {
-  return withAurevoyApiKey(options) as PiProviderStreamOptions;
-}
-
-function withAurevoySimpleStreamOptions(options: PiSimpleStreamOptions | undefined): PiSimpleStreamOptions {
-  return withAurevoyApiKey(options) as PiSimpleStreamOptions;
-}
-
-function withAurevoyApiKey<TOptions extends object | undefined>(
-  options: TOptions,
-): NonNullable<TOptions> & { apiKey: string } {
-  const base = (options ?? {}) as NonNullable<TOptions>;
-  const currentApiKey = (base as { apiKey?: unknown }).apiKey;
-  return {
-    ...base,
-    apiKey: typeof currentApiKey === 'string' && currentApiKey.trim() ? currentApiKey : config.llm.apiKey,
-  };
+function getApiForApiName(api: string) {
+  switch (api) {
+    case 'anthropic-messages': return anthropicMessagesApi();
+    case 'azure-openai-responses': return azureOpenAIResponsesApi();
+    case 'bedrock-converse-stream': return bedrockConverseStreamApi();
+    case 'google-generative-ai': return googleGenerativeAIApi();
+    case 'google-vertex': return googleVertexApi();
+    case 'mistral-conversations': return mistralConversationsApi();
+    case 'openai-codex-responses': return openAICodexResponsesApi();
+    case 'openai-responses': return openAIResponsesApi();
+    default: return openAICompletionsApi();
+  }
 }
 
 function isPiAgentEvent(event: { type: string }): event is PiAgentEvent {
