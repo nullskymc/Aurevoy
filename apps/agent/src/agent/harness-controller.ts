@@ -15,7 +15,12 @@ import type {
 } from '@aurevoy/shared';
 import { config } from '../config.js';
 import { taskEvents } from './events.js';
-import { followUpPiTask, resolvePiClarificationAnswer, runPiTask, steerPiTask } from './pi-runtime.js';
+import {
+  followUpPiHarnessTask,
+  resolvePiHarnessClarificationAnswer,
+  runPiHarnessTask,
+  steerPiHarnessTask,
+} from './pi-harness.js';
 import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval, waitForPlanApproval } from './pi-approval.js';
 import { taskStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
@@ -24,7 +29,7 @@ import { getPiProviderName } from '../llm/pi-provider.js';
 
 /** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
 const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'running', 'paused'];
-/** Pi runtime 的取消句柄。旧 ReAct 后端已移除，不再维护第二套执行循环。 */
+/** Pi harness 的取消句柄。 */
 const activeAbortControllers = new Map<string, AbortController>();
 
 
@@ -37,7 +42,7 @@ export function cancelTask(taskId: string): boolean {
   return true;
 }
 
-/** 该任务当前是否有正在执行的 Pi runtime。 */
+/** 该任务当前是否有正在执行的 Pi harness。 */
 export function isTaskRunning(taskId: string): boolean {
   return activeAbortControllers.has(taskId);
 }
@@ -71,7 +76,7 @@ export function markInterruptedTasksAfterRestart(): Task[] {
   return recovered;
 }
 
-/** 恢复一个历史任务：修补悬空工具结果后交给 Pi runtime 继续。 */
+/** 恢复一个历史任务：修补悬空工具结果后交给 Pi harness 继续。 */
 export function prepareTaskForResume(task: Task): Task {
   const now = new Date().toISOString();
   const previousStatus = task.status;
@@ -88,7 +93,7 @@ export function prepareTaskForResume(task: Task): Task {
     ok: true,
     summary: lastCheckpoint
       ? `用户恢复历史任务，从 checkpoint 继续：${lastCheckpoint.label}`
-      : '用户恢复历史任务，使用持久消息历史重新进入 Agent runtime',
+      : '用户恢复历史任务，使用持久消息历史重新进入 Pi harness',
     data: { previousStatus, previousPhase, patchedToolResults, checkpoint: lastCheckpoint },
   });
   return task;
@@ -231,10 +236,7 @@ export function branchTask(
   return { task, messageCount: clonedMessages.length };
 }
 
-/**
- * 本地压缩旧消息为 system 摘要。
- * 旧后端的 LLM 摘要调用已删除，避免重新引入非 Pi 的 provider stream。
- */
+/** 本地压缩历史消息为 system 摘要，供下一次 Pi harness 运行读取。 */
 export async function compactTask(
   task: Task,
   fromMessageId?: string,
@@ -310,7 +312,7 @@ export function addUserTurn(
   taskEvents.publish({ type: 'message', taskId: task.id, message: userMsg });
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
-    summary: '收到后续输入，继续 Agent runtime',
+    summary: '收到后续输入，继续 Pi harness',
     data: { message: messageContent, patchedToolResults: patchedToolResults.length },
   });
   return userMsg;
@@ -333,8 +335,8 @@ export function queueRunningUserTurn(
   };
 
   const delivered = delivery === 'follow_up'
-    ? followUpPiTask(task.id, userMsg)
-    : steerPiTask(task.id, userMsg);
+    ? followUpPiHarnessTask(task.id, userMsg)
+    : steerPiHarnessTask(task.id, userMsg);
   if (delivered) {
     task.messages.push(userMsg);
     task.updatedAt = userMsg.createdAt;
@@ -345,7 +347,7 @@ export function queueRunningUserTurn(
     ok: delivered,
     summary: delivered
       ? `运行中追加用户消息已投递到 ${delivery} 队列`
-      : `运行中追加用户消息未投递：Pi runtime 不可用`,
+      : `运行中追加用户消息未投递：Pi harness 不可用`,
     data: { delivery, message: content },
   });
   return { message: userMsg, delivered };
@@ -380,13 +382,13 @@ export function resolvePlanApprovalDecision(
   return resolvePlanApproval(taskId, approved);
 }
 
-/** Pi-only 后端不再维护旧 ask_user 等待队列。 */
+/** 投递 ask_user 工具的用户补充答案。 */
 export function resolveClarificationAnswer(
   taskId: string,
   clarificationId: string,
   answer: string,
 ): boolean {
-  return resolvePiClarificationAnswer(taskId, clarificationId, answer);
+  return resolvePiHarnessClarificationAnswer(taskId, clarificationId, answer);
 }
 
 /** 创建一个新任务并持久化（尚未开始执行）。 */
@@ -427,7 +429,7 @@ export function createTask(
   taskStore.save(task);
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
-    summary: '任务已创建，等待 Agent runtime 执行',
+    summary: '任务已创建，等待 Pi harness 执行',
     data: { goal: taskGoal },
   });
   return task;
@@ -444,8 +446,8 @@ export async function resolveTaskWorkspace(task: Task): Promise<string> {
   return standaloneDir;
 }
 
-/** 主执行入口：只运行 Pi Agent，不保留 legacy 分支。 */
-export async function runTask(task: Task): Promise<void> {
+/** 主执行入口：任务控制只委托 Pi harness。 */
+export async function runHarnessTask(task: Task): Promise<void> {
   task.pendingApprovals = [];
   if (task.plan.length === 0) {
     task.plan = createInitialPlan(task);
@@ -466,7 +468,7 @@ export async function runTask(task: Task): Promise<void> {
       const approved = await requestManualPlanApproval(task, abortController.signal);
       if (!approved) return;
     }
-    await runPiTask(task, {
+    await runPiHarnessTask(task, {
       workspaceDir: await resolveTaskWorkspace(task),
       signal: abortController.signal,
       taskStartedAtMs: Date.now(),
@@ -538,11 +540,11 @@ async function requestManualPlanApproval(task: Task, signal: AbortSignal): Promi
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
   taskEvents.publish({ type: 'status', taskId: task.id, status: task.status });
-  taskEvents.publish({ type: 'phase', taskId: task.id, phase: task.phase, detail: '计划已确认，启动 Agent runtime' });
+  taskEvents.publish({ type: 'phase', taskId: task.id, phase: task.phase, detail: '计划已确认，启动 Pi harness' });
   taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
   writeTrace(task.id, 'approval', 'initializing', {
     ok: true,
-    summary: '执行计划已批准，继续进入 Pi runtime',
+    summary: '执行计划已批准，继续进入 Pi harness',
   });
   return true;
 }

@@ -416,7 +416,7 @@ export function buildLiveAgentRoundData(params: {
     const renderedPlanStepIds = new Set<string>();
     for (const ps of plan) {
       const stepsInGroup = stepsByPlanStepId.get(ps.id) ?? [];
-      if (stepsInGroup.length === 0 && !unnamedSteps.length) continue;
+      if (stepsInGroup.length === 0) continue;
       renderedPlanStepIds.add(ps.id);
       planStepGroups.push({
         planStepId: ps.id,
@@ -1103,7 +1103,9 @@ export function AgentRound({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
+  const phaseLabel = phaseDetail?.trim();
   const shouldShowWorkflow = showWorkflow && (data.planStepGroups.length > 0 || busy);
+  const shouldLeadWithWorkflow = busy && data.planStepGroups.length === 0;
   const autoOpenRunningTools = true;
   const outputNode = showOutput && data.markdownOutput ? (
     <article className="timeline-output">
@@ -1128,6 +1130,38 @@ export function AgentRound({
       ))}
     </div>
   ) : null;
+  const workflowNode = shouldShowWorkflow ? (
+    <LayoutGroup>
+      {/* Summary 行 */}
+      <AgentRoundSummary
+        summary={data.summary}
+        status={data.status}
+        stepCount={stepCount}
+      />
+
+      {/* 时间线区域 */}
+      <motion.div className="timeline-body" layout>
+        {data.planStepGroups.length > 0 ? (
+          data.planStepGroups.map((group, i) => (
+            <PlanStepGroup
+              key={group.planStepId}
+              group={group}
+              index={i}
+              isLast={i === data.planStepGroups.length - 1}
+              defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
+              autoOpenRunningTools={autoOpenRunningTools}
+            />
+          ))
+        ) : (
+          /* 无分组时仅实时阶段显示空占位 */
+          <div className="timeline-empty">
+            <span className="timeline-step-icon is-pending" />
+            <span>{phaseLabel || "思考中…"}</span>
+          </div>
+        )}
+      </motion.div>
+    </LayoutGroup>
+  ) : null;
 
   return (
     <MotionConfig reducedMotion="user">
@@ -1136,48 +1170,11 @@ export function AgentRound({
         className={`timeline-agent-round ${busy ? "is-live" : ""} ${data.status === "failed" ? "is-failed" : ""}`}
         data-status={data.status}
       >
-        {phaseDetail && busy && (
-          <div className="timeline-phase-bar">
-            <span className="timeline-step-icon is-pending" />
-            <span className="timeline-phase-text">{phaseDetail}</span>
-          </div>
-        )}
+        {shouldLeadWithWorkflow && workflowNode}
         {/* 同一轮里模型正文先于工具调用产生，展示顺序也保持正文在前、工具过程在后。 */}
         {outputNode}
         {contentBlocksNode}
-
-        {shouldShowWorkflow && (
-          <LayoutGroup>
-            {/* Summary 行 */}
-            <AgentRoundSummary
-              summary={data.summary}
-              status={data.status}
-              stepCount={stepCount}
-            />
-
-            {/* 时间线区域 */}
-            <motion.div className="timeline-body" layout>
-              {data.planStepGroups.length > 0 ? (
-                data.planStepGroups.map((group, i) => (
-                  <PlanStepGroup
-                    key={group.planStepId}
-                    group={group}
-                    index={i}
-                    isLast={i === data.planStepGroups.length - 1}
-                    defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
-                    autoOpenRunningTools={autoOpenRunningTools}
-                  />
-                ))
-              ) : (
-                /* 无分组时仅实时阶段显示空占位 */
-                <div className="timeline-empty">
-                  <span className="timeline-step-icon is-pending" />
-                  <span>{phaseDetail || "思考中…"}</span>
-                </div>
-              )}
-            </motion.div>
-          </LayoutGroup>
-        )}
+        {!shouldLeadWithWorkflow && workflowNode}
       </div>
     </MotionConfig>
   );

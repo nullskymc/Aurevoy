@@ -2,20 +2,30 @@ import { promises as fs } from 'node:fs';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
-  runAgentLoopContinue,
-  type AgentContext as PiAgentContext,
+  AgentHarness,
+  InMemorySessionRepo,
   type AgentEvent as PiAgentEvent,
-  type AgentLoopConfig as PiAgentLoopConfig,
   type AgentMessage,
   type AgentTool,
+  type Skill as PiHarnessSkill,
 } from '@earendil-works/pi-agent-core';
+import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node';
 import { Type } from 'typebox';
 import {
+  complete,
+  completeSimple,
   type AssistantMessageEvent as PiAssistantMessageEvent,
   type AssistantMessage as PiAssistantMessage,
+  type AssistantMessageEventStream as PiAssistantMessageEventStream,
   type ImageContent as PiImageContent,
   type Message as PiMessage,
   type Model as PiModel,
+  type Models as PiModels,
+  type Provider as PiProvider,
+  type ProviderStreamOptions as PiProviderStreamOptions,
+  type SimpleStreamOptions as PiSimpleStreamOptions,
+  stream,
+  streamSimple,
   type TextContent as PiTextContent,
   type ToolResultMessage as PiToolResultMessage,
   type Usage as PiUsage,
@@ -49,13 +59,17 @@ import {
   buildSystemContextMessage,
   buildToolGuidanceMessage,
   totalTokens,
+  TOOLS_WITH_LARGE_OUTPUT,
+  TOOLS_KEEP_VERBATIM,
+  compactToolResult,
 } from './context.js';
 import { createCheckpoint, createClarification, effectiveBudget, initialBudgetUsage, resolveClarification, updateWallTime } from './m6-state.js';
 import { waitForPiApproval } from './pi-approval.js';
 import { assertPiLLMConfigured, createPiModel } from '../llm/pi-provider.js';
 import { decideToolPermission } from './approval.js';
+import { skillRegistry } from '../skills/registry.js';
 
-interface PiRuntimeOptions {
+interface PiHarnessOptions {
   workspaceDir: string;
   signal: AbortSignal;
   taskStartedAtMs: number;
@@ -79,6 +93,13 @@ const activePiControllers = new Map<string, ActivePiTaskController>();
 const pendingClarificationResolvers = new Map<string, Map<string, (answer: string) => void>>();
 const budgetStopReasons = new Map<string, string>();
 const invalidPiToolCallErrors = new Map<string, Map<string, string>>();
+
+/**
+ * 每个任务的 prompt cache 前缀长度追踪。
+ * key = taskId, value = 已发送给 LLM 并被缓存的 Pi 消息条数。
+ * convertToLlm 时，[0..cachePrefix) 的消息已缓存不动，[cachePrefix..) 的新消息做 Snip+Microcompact。
+ */
+const cachePrefixByTask = new Map<string, number>();
 const SEARCH_FILES_INPUT_SCHEMA = {
   type: 'object',
   properties: {
@@ -92,51 +113,72 @@ const SEARCH_FILES_INPUT_SCHEMA = {
 } as const;
 
 class ActivePiTaskController {
-  private steeringQueue: Message[] = [];
-  private followUpQueue: Message[] = [];
+  private harness?: AgentHarness;
+  private pendingSteering: Message[] = [];
+  private pendingFollowUp: Message[] = [];
 
   constructor(
     private readonly modelForNextTurn: () => PiModel<any>,
   ) {}
 
+  attach(harness: AgentHarness): void {
+    this.harness = harness;
+    const steering = this.pendingSteering.splice(0);
+    const followUps = this.pendingFollowUp.splice(0);
+    for (const message of steering) this.enqueueSteering(message);
+    for (const message of followUps) this.enqueueFollowUp(message);
+  }
+
+  abort(): void {
+    void this.harness?.abort();
+  }
+
   enqueueSteering(message: Message): void {
-    this.steeringQueue.push(message);
+    if (!this.harness) {
+      this.pendingSteering.push(message);
+      return;
+    }
+    void this.deliverQueuedMessage('steer', message);
   }
 
   enqueueFollowUp(message: Message): void {
-    this.followUpQueue.push(message);
+    if (!this.harness) {
+      this.pendingFollowUp.push(message);
+      return;
+    }
+    void this.deliverQueuedMessage('followUp', message);
   }
 
-  async drainSteering(): Promise<AgentMessage[]> {
-    return await this.drainOne(this.steeringQueue);
-  }
-
-  async drainFollowUp(): Promise<AgentMessage[]> {
-    return await this.drainOne(this.followUpQueue);
-  }
-
-  private async drainOne(queue: Message[]): Promise<AgentMessage[]> {
-    const next = queue.shift();
-    if (!next) return [];
-    return [await toPiUserMessage(next, this.modelForNextTurn())];
+  private async deliverQueuedMessage(kind: 'steer' | 'followUp', message: Message): Promise<void> {
+    if (!this.harness) return;
+    const input = await toHarnessPromptInput(message, this.modelForNextTurn());
+    try {
+      if (kind === 'steer') {
+        await this.harness.steer(input.text, input.images.length > 0 ? { images: input.images } : undefined);
+      } else {
+        await this.harness.followUp(input.text, input.images.length > 0 ? { images: input.images } : undefined);
+      }
+    } catch {
+      // 运行已结束或正在收敛时，队列投递失败不应打断 HTTP 请求线程。
+    }
   }
 }
 
-export function steerPiTask(taskId: string, message: Message): boolean {
+export function steerPiHarnessTask(taskId: string, message: Message): boolean {
   const controller = activePiControllers.get(taskId);
   if (!controller) return false;
   controller.enqueueSteering(message);
   return true;
 }
 
-export function followUpPiTask(taskId: string, message: Message): boolean {
+export function followUpPiHarnessTask(taskId: string, message: Message): boolean {
   const controller = activePiControllers.get(taskId);
   if (!controller) return false;
   controller.enqueueFollowUp(message);
   return true;
 }
 
-export function resolvePiClarificationAnswer(taskId: string, clarificationId: string, answer: string): boolean {
+export function resolvePiHarnessClarificationAnswer(taskId: string, clarificationId: string, answer: string): boolean {
   const byTask = pendingClarificationResolvers.get(taskId);
   const resolve = byTask?.get(clarificationId);
   if (!resolve) return false;
@@ -146,14 +188,14 @@ export function resolvePiClarificationAnswer(taskId: string, clarificationId: st
   return true;
 }
 
-export async function runPiTask(task: Task, options: PiRuntimeOptions): Promise<void> {
+export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): Promise<void> {
   task.pendingApprovals = [];
   task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
   setTaskState(task, 'running', 'initializing');
   updateContextSnapshot(task);
   saveTask(task);
   publish({ type: 'status', taskId: task.id, status: 'running' });
-  publish({ type: 'phase', taskId: task.id, phase: 'initializing', detail: '准备 Agent runtime' });
+  publish({ type: 'phase', taskId: task.id, phase: 'initializing', detail: '准备 Pi harness' });
   publish({ type: 'context_snapshot', taskId: task.id, tokens: task.contextTokens ?? 0 });
   await publishScoutReport(task, options.workspaceDir);
 
@@ -162,59 +204,24 @@ export async function runPiTask(task: Task, options: PiRuntimeOptions): Promise<
     const selectedModel = selectPiModelForTask(task);
     assertPiModelSupportsAttachments(task, selectedModel);
     const controller = new ActivePiTaskController(() => selectPiModelForTask(task));
-    const context: PiAgentContext = {
-      systemPrompt: await buildPiSystemPrompt(task, options.workspaceDir),
-      tools: createPiTools(task, options),
-      messages: await toPiMessages(task.messages, selectedModel),
-    };
-    const initialThinkingLevel = runtimeThinkingLevel();
-    const loopConfig: PiAgentLoopConfig = {
-      model: selectedModel,
-      reasoning: initialThinkingLevel === 'off' ? undefined : initialThinkingLevel,
-      getApiKey: () => config.llm.apiKey,
-      toolExecution: runtimeToolExecution(),
-      convertToLlm: (messages) => messages.filter((message): message is PiMessage =>
-        message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult',
-      ),
-      prepareNextTurn: async () => {
-        const model = selectPiModelForTask(task);
-        assertPiModelSupportsAttachments(task, model);
-        const thinkingLevel = runtimeThinkingLevel();
-        return {
-          model,
-          ...(thinkingLevel === 'off' ? {} : { thinkingLevel }),
-        };
-      },
-      beforeToolCall: async ({ toolCall, args }, signal) => {
-        const call = toAurevoyToolCall(task, toolCall.id, toolCall.name, args);
-        return await gatePiToolCall(task, call, signal ?? options.signal);
-      },
-      getSteeringMessages: async () => await controller.drainSteering(),
-      getFollowUpMessages: async () => await controller.drainFollowUp(),
-      shouldStopAfterTurn: async () => shouldStopAfterTurn(task, options.taskStartedAtMs),
-    };
+    const harness = await createPiHarness(task, options, selectedModel, controller);
 
     publish({ type: 'phase', taskId: task.id, phase: 'thinking', detail: 'Agent 正在思考' });
-    const abortPromise = new Promise<never>((_, reject) => {
-      if (options.signal.aborted) return reject(new Error('cancelled'));
-      options.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
-    });
     activePiControllers.set(task.id, controller);
+    const onAbort = () => controller.abort();
+    options.signal.addEventListener('abort', onAbort, { once: true });
     try {
-      await Promise.race([
-        runAgentLoopContinue(
-          context,
-          loopConfig,
-          async (event) => {
-            await handlePiEvent(task, event, options.signal, options.taskStartedAtMs, options.workspaceDir);
-          },
-          options.signal,
-        ),
-        abortPromise,
-      ]);
+      if (options.signal.aborted) throw new Error('cancelled');
+      const promptInput = await buildHarnessRunInput(task, selectedModel);
+      await harness.prompt(
+        promptInput.text,
+        promptInput.images.length > 0 ? { images: promptInput.images } : undefined,
+      );
     } finally {
+      options.signal.removeEventListener('abort', onAbort);
       activePiControllers.delete(task.id);
       invalidPiToolCallErrors.delete(task.id);
+      cachePrefixByTask.delete(task.id);
     }
 
     if (options.signal.aborted) {
@@ -242,12 +249,192 @@ export async function runPiTask(task: Task, options: PiRuntimeOptions): Promise<
   }
 }
 
-async function toPiUserMessage(message: Message, model: PiModel<any>): Promise<AgentMessage> {
+async function createPiHarness(
+  task: Task,
+  options: PiHarnessOptions,
+  selectedModel: PiModel<any>,
+  controller: ActivePiTaskController,
+): Promise<AgentHarness> {
+  const env = new NodeExecutionEnv({ cwd: options.workspaceDir, shellEnv: process.env });
+  const session = await new InMemorySessionRepo().create({ id: task.id });
+  const seedMessages = await buildHarnessSeedMessages(task, selectedModel);
+  for (const message of seedMessages) {
+    await session.appendMessage(message);
+  }
+
+  const harness = new AgentHarness({
+    env,
+    session,
+    models: createAurevoyPiModels(selectedModel),
+    tools: createPiTools(task, options),
+    resources: { skills: createHarnessSkills() },
+    systemPrompt: async () => await buildPiSystemPrompt(task, options.workspaceDir),
+    model: selectedModel,
+    thinkingLevel: runtimeThinkingLevel() === 'off' ? 'off' : runtimeThinkingLevel(),
+    steeringMode: 'one-at-a-time',
+    followUpMode: 'one-at-a-time',
+    streamOptions: {
+      maxRetries: 2,
+      maxRetryDelayMs: 60_000,
+      cacheRetention: 'short',
+    },
+  });
+
+  controller.attach(harness);
+  harness.subscribe(async (event) => {
+    if (!isPiAgentEvent(event)) return;
+    await handlePiEvent(task, event, options.signal, options.taskStartedAtMs, options.workspaceDir, controller);
+  });
+  harness.on('context', (event) => {
+    const filtered = event.messages.filter((message): message is PiMessage =>
+      message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult',
+    );
+    const cachedUpTo = cachePrefixByTask.get(task.id) ?? 0;
+    const compacted = compactPiMessagesCacheAware(filtered, cachedUpTo);
+    cachePrefixByTask.set(task.id, compacted.length);
+    return { messages: compacted as AgentMessage[] };
+  });
+  harness.on('tool_call', async (event) => {
+    const call = toAurevoyToolCall(task, event.toolCallId, event.toolName, event.input);
+    return await gatePiToolCall(task, call, options.signal);
+  });
+  return harness;
+}
+
+export function createAurevoyPiModels(selectedModel: PiModel<any>): PiModels {
+  const provider = createAurevoyPiProvider(selectedModel);
   return {
-    role: 'user',
-    content: await userMessageContentToPi(message, model),
-    timestamp: new Date(message.createdAt).getTime(),
+    getProviders: () => [provider],
+    getProvider: (id) => id === provider.id ? provider : undefined,
+    getModels: (providerId) => !providerId || providerId === provider.id ? [selectedModel] : [],
+    getModel: (providerId, modelId) =>
+      providerId === selectedModel.provider && modelId === selectedModel.id ? selectedModel : undefined,
+    refresh: async () => undefined,
+    getAuth: async () => ({
+      auth: {
+        apiKey: config.llm.apiKey,
+        baseUrl: selectedModel.baseUrl,
+      },
+      source: 'AUREVOY_LLM_API_KEY',
+    }),
+    stream: (model, context, streamOptions) =>
+      stream(model, context, withAurevoyStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
+    complete: async (model, context, streamOptions) =>
+      await complete(model, context, withAurevoyStreamOptions(streamOptions)),
+    streamSimple: (model, context, streamOptions) =>
+      streamSimple(model, context, withAurevoySimpleStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
+    completeSimple: async (model, context, streamOptions) =>
+      await completeSimple(model, context, withAurevoySimpleStreamOptions(streamOptions)),
   };
+}
+
+function createAurevoyPiProvider(selectedModel: PiModel<any>): PiProvider {
+  return {
+    id: selectedModel.provider,
+    name: selectedModel.provider,
+    baseUrl: selectedModel.baseUrl,
+    auth: {
+      apiKey: {
+        name: 'Aurevoy API Key',
+        resolve: async () => ({
+          auth: {
+            apiKey: config.llm.apiKey,
+            baseUrl: selectedModel.baseUrl,
+          },
+          source: 'AUREVOY_LLM_API_KEY',
+        }),
+      },
+    },
+    getModels: () => [selectedModel],
+    stream: (model, context, streamOptions) =>
+      stream(model, context, withAurevoyStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
+    streamSimple: (model, context, streamOptions) =>
+      streamSimple(model, context, withAurevoySimpleStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
+  };
+}
+
+function withAurevoyStreamOptions(options: object | undefined): PiProviderStreamOptions {
+  return withAurevoyApiKey(options) as PiProviderStreamOptions;
+}
+
+function withAurevoySimpleStreamOptions(options: PiSimpleStreamOptions | undefined): PiSimpleStreamOptions {
+  return withAurevoyApiKey(options) as PiSimpleStreamOptions;
+}
+
+function withAurevoyApiKey<TOptions extends object | undefined>(
+  options: TOptions,
+): NonNullable<TOptions> & { apiKey: string } {
+  const base = (options ?? {}) as NonNullable<TOptions>;
+  const currentApiKey = (base as { apiKey?: unknown }).apiKey;
+  return {
+    ...base,
+    apiKey: typeof currentApiKey === 'string' && currentApiKey.trim() ? currentApiKey : config.llm.apiKey,
+  };
+}
+
+function isPiAgentEvent(event: { type: string }): event is PiAgentEvent {
+  return (
+    event.type === 'agent_start' ||
+    event.type === 'agent_end' ||
+    event.type === 'turn_start' ||
+    event.type === 'turn_end' ||
+    event.type === 'message_start' ||
+    event.type === 'message_update' ||
+    event.type === 'message_end' ||
+    event.type === 'tool_execution_start' ||
+    event.type === 'tool_execution_update' ||
+    event.type === 'tool_execution_end'
+  );
+}
+
+async function buildHarnessSeedMessages(task: Task, model: PiModel<any>): Promise<AgentMessage[]> {
+  const promptIndex = findHarnessPromptMessageIndex(task.messages);
+  const seedSource = promptIndex >= 0 ? task.messages.slice(0, promptIndex) : task.messages;
+  return await toPiMessages(seedSource, model);
+}
+
+async function buildHarnessRunInput(task: Task, model: PiModel<any>): Promise<{ text: string; images: PiImageContent[] }> {
+  const promptIndex = findHarnessPromptMessageIndex(task.messages);
+  const promptMessage = promptIndex >= 0 ? task.messages[promptIndex] : undefined;
+  if (!promptMessage || promptMessage.role !== 'user') {
+    return { text: 'Continue the task from the existing conversation state.', images: [] };
+  }
+  return await toHarnessPromptInput(promptMessage, model);
+}
+
+function findHarnessPromptMessageIndex(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].role === 'user') return index;
+  }
+  return -1;
+}
+
+async function toHarnessPromptInput(message: Message, model: PiModel<any>): Promise<{ text: string; images: PiImageContent[] }> {
+  const imageAttachments = (message.attachments ?? []).filter((attachment) => attachment.type === 'image');
+  const images: PiImageContent[] = [];
+  for (const attachment of imageAttachments) {
+    if (!model.input?.includes('image')) {
+      throw new Error(`模型 ${model.provider}:${model.id} 不支持图片附件：${attachment.name}`);
+    }
+    images.push(await imageAttachmentToPiContent(attachment));
+  }
+  return { text: message.content, images };
+}
+
+function createHarnessSkills(): PiHarnessSkill[] {
+  return skillRegistry.listAll()
+    .filter((skill) => skill.enabled)
+    .flatMap((descriptor): PiHarnessSkill[] => {
+      const entry = skillRegistry.get(descriptor.name);
+      const content = skillRegistry.getContent(descriptor.name);
+      if (!entry || !content) return [];
+      return [{
+        name: descriptor.name,
+        description: descriptor.description,
+        content: content.body,
+        filePath: entry.location,
+      }];
+    });
 }
 
 function shouldStopAfterTurn(task: Task, taskStartedAtMs: number): boolean {
@@ -411,12 +598,12 @@ async function imageAttachmentToPiContent(attachment: MessageAttachment): Promis
   }
 }
 
-function createPiTools(task: Task, options: PiRuntimeOptions): AgentTool[] {
+function createPiTools(task: Task, options: PiHarnessOptions): AgentTool[] {
   // 初始化统一工具框架（如果尚未初始化）
   initializeUnifiedToolFramework();
 
   // 获取所有可用工具，并注入带任务上下文的执行器
-  return withPiCompatibilityAliases(getAgentToolsForPi()).map((agentTool) => {
+  const tools: AgentTool[] = withPiCompatibilityAliases(getAgentToolsForPi()).map((agentTool): AgentTool => {
     const executionToolName = executionToolNameForPiTool(agentTool.name);
     const def = unifiedToolRegistry.get(executionToolName)!;
     return {
@@ -429,7 +616,7 @@ function createPiTools(task: Task, options: PiRuntimeOptions): AgentTool[] {
         if (agentTool.name === 'ask_user') {
           const result = await executeAskUserTool(task, toolCallId, params, signal ?? options.signal);
           return {
-            content: [{ type: 'text', text: formatUnknown(result) }],
+            content: [{ type: 'text' as const, text: formatUnknown(result) }],
             details: result,
           };
         }
@@ -450,7 +637,7 @@ function createPiTools(task: Task, options: PiRuntimeOptions): AgentTool[] {
               const message = typeof event.message === 'string' ? event.message : '';
               if (message) {
                 onUpdate?.({
-                  content: [{ type: 'text', text: message }],
+                  content: [{ type: 'text' as const, text: message }],
                   details: event,
                 });
               }
@@ -461,7 +648,7 @@ function createPiTools(task: Task, options: PiRuntimeOptions): AgentTool[] {
         try {
           const result = await def.execute(executionParams as Record<string, unknown>, context);
           return {
-            content: [{ type: 'text', text: formatUnknown(result) }],
+            content: [{ type: 'text' as const, text: formatUnknown(result) }],
             details: result,
             terminate: isRecord(result) && result.terminate === true ? true : undefined,
           };
@@ -472,6 +659,8 @@ function createPiTools(task: Task, options: PiRuntimeOptions): AgentTool[] {
       },
     };
   });
+  if (runtimeToolExecution() !== 'sequential') return tools;
+  return tools.map((tool) => ({ ...tool, executionMode: 'sequential' }));
 }
 
 function withPiCompatibilityAliases(tools: AgentTool[]): AgentTool[] {
@@ -619,7 +808,6 @@ async function gatePiToolCall(
   const validationError = validatePiToolCallInput(call);
   if (validationError) {
     const message = `schema_validation_failed: ${validationError}`;
-    appendToolResult(task, call.id, call.toolName, { error: message }, true, '');
     return { block: true, reason: message };
   }
 
@@ -698,6 +886,7 @@ async function handlePiEvent(
   signal: AbortSignal,
   taskStartedAtMs: number,
   workspaceDir: string,
+  controller: ActivePiTaskController,
 ): Promise<void> {
   if (signal.aborted) return;
   switch (event.type) {
@@ -767,6 +956,9 @@ async function handlePiEvent(
       saveTask(task);
       publish({ type: 'budget_usage', taskId: task.id, usage: task.budgetUsage, budget: task.budget });
       publish({ type: 'context_snapshot', taskId: task.id, tokens: task.contextTokens ?? 0 });
+      if (shouldStopAfterTurn(task, taskStartedAtMs)) {
+        controller.abort();
+      }
       break;
     case 'agent_end':
       break;
@@ -887,7 +1079,7 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
   });
 
   // 当 attach_content 工具成功返回时，提取 contentBlock 并推送给前端。
-  // Pi runtime 会把工具原始返回值放到 AgentToolResult.details，不能只看最外层 result。
+  // Pi harness 会把工具原始返回值放到 AgentToolResult.details，不能只看最外层 result。
   if (!isError && toolName === 'attach_content') {
     const raw = extractAttachContentBlock(result, details);
     if (isRecord(raw) && typeof raw.type === 'string' && typeof raw.content === 'string') {
@@ -1142,7 +1334,7 @@ async function formatAttachment(attachment: MessageAttachment): Promise<string> 
 
 function extractToolErrorMessage(result: unknown, details: unknown): string {
   if (result instanceof Error) return result.message;
-  // Pi runtime 可能把错误包装成 AgentToolResult，错误文本在 content 数组里
+  // Pi harness 可能把错误包装成 AgentToolResult，错误文本在 content 数组里
   if (isRecord(result) && Array.isArray(result.content)) {
     const texts = result.content
       .filter((block: unknown) => isRecord(block) && block.type === 'text' && typeof block.text === 'string')
@@ -1250,6 +1442,134 @@ function emptyPiUsage(): PiUsage {
     totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
+}
+
+// ---- Cache-aware Pi 消息压缩（零成本 Snip + Microcompact） ----
+
+/**
+ * 从 PiMessage[] 中提取 toolCallId → toolName 映射。
+ */
+function buildPiToolNameMap(messages: PiMessage[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (isRecord(block) && block.type === 'toolCall' && typeof block.id === 'string' && typeof block.name === 'string') {
+          map.set(block.id, block.name);
+        }
+      }
+    }
+  }
+  return map;
+}
+
+/**
+ * 从 PiMessage 的 content 数组中提取纯文本。
+ */
+function piMessageText(content: unknown): string {
+  if (!Array.isArray(content)) return '';
+  return content.map((block) => {
+    if (isRecord(block) && block.type === 'text' && typeof block.text === 'string') return block.text;
+    return '';
+  }).join('');
+}
+
+/**
+ * Snip：移除空/无意义的 toolResult 消息及其配对的 assistant。
+ * 只操作 cachedUpTo 之后的消息，不破坏 prompt cache 前缀。
+ */
+function snipPiToolResults(messages: PiMessage[], cachedUpTo: number): PiMessage[] {
+  const toolNameMap = buildPiToolNameMap(messages);
+
+  const snipToolResultIndices = new Set<number>();
+  for (let i = cachedUpTo; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== 'toolResult') continue;
+    const toolName = msg.toolName ?? toolNameMap.get(msg.toolCallId ?? '');
+    if (toolName && TOOLS_KEEP_VERBATIM.has(toolName)) continue;
+
+    const text = piMessageText(msg.content).trim();
+    if (!text || text === '{}' || text === '{"ok":true}' || text === 'null' || text === 'undefined') {
+      snipToolResultIndices.add(i);
+    }
+  }
+
+  if (snipToolResultIndices.size === 0) return messages;
+
+  // 如果某 assistant 的所有 toolCall 结果都被 snip，也移除该 assistant
+  const snipAssistantIndices = new Set<number>();
+  for (let i = cachedUpTo; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+
+    const callIds: string[] = [];
+    for (const block of msg.content) {
+      if (isRecord(block) && block.type === 'toolCall' && typeof block.id === 'string') {
+        callIds.push(block.id);
+      }
+    }
+    if (callIds.length === 0) continue;
+
+    const callIdSet = new Set(callIds);
+    let allSnipped = true;
+    let anyFound = false;
+    for (let j = i + 1; j < messages.length; j++) {
+      const tr = messages[j];
+      if (tr.role !== 'toolResult') break;
+      if (tr.toolCallId && callIdSet.has(tr.toolCallId)) {
+        anyFound = true;
+        if (!snipToolResultIndices.has(j)) {
+          allSnipped = false;
+          break;
+        }
+      }
+    }
+    if (anyFound && allSnipped) {
+      snipAssistantIndices.add(i);
+    }
+  }
+
+  const remove = new Set([...snipToolResultIndices, ...snipAssistantIndices]);
+  return messages.filter((_, i) => !remove.has(i));
+}
+
+/**
+ * Microcompact：对大输出工具的 toolResult 做结构化压缩。
+ * 只操作 cachedUpTo 之后的消息，不破坏 prompt cache 前缀。
+ */
+function microcompactPiToolResults(messages: PiMessage[], cachedUpTo: number): PiMessage[] {
+  let changed = false;
+  const result = messages.map((msg, i) => {
+    if (i < cachedUpTo) return msg;
+    if (msg.role !== 'toolResult') return msg;
+    const toolName = msg.toolName ?? '';
+    if (!TOOLS_WITH_LARGE_OUTPUT.has(toolName)) return msg;
+
+    const text = piMessageText(msg.content);
+    if (!text || text.includes('"_compacted":true')) return msg;
+
+    const compacted = compactToolResult(toolName, text);
+    if (compacted === null || compacted === text) return msg;
+
+    changed = true;
+    return {
+      ...msg,
+      content: [{ type: 'text' as const, text: compacted }],
+    };
+  });
+
+  return changed ? result : messages;
+}
+
+/**
+ * Cache-aware 零成本压缩：在 convertToLlm 阶段对未缓存的新消息做 Snip + Microcompact。
+ * 已缓存的前缀 [0..cachedUpTo) 保持不变，避免破坏 prompt cache。
+ */
+function compactPiMessagesCacheAware(messages: PiMessage[], cachedUpTo: number): PiMessage[] {
+  if (messages.length <= cachedUpTo) return messages;
+  const afterSnip = snipPiToolResults(messages, cachedUpTo);
+  const afterMc = microcompactPiToolResults(afterSnip, cachedUpTo);
+  return afterMc;
 }
 
 function formatUnknown(value: unknown): string {

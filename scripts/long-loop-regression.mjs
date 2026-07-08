@@ -358,7 +358,7 @@ async function startLlmFixture() {
       return;
     }
     const body = JSON.parse(await readRequestBody(req));
-    const userText = body.messages.find((message) => message.role === 'user')?.content ?? '';
+    const userText = messageContentToText(body.messages.find((message) => message.role === 'user')?.content);
 
     if (!userText.includes('LONG_LOOP')) {
       return sendFinal(res, `unexpected:${userText}`);
@@ -442,6 +442,16 @@ async function readRequestBody(req) {
   let body = '';
   for await (const chunk of req) body += chunk;
   return body;
+}
+
+function messageContentToText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((part) => {
+    if (typeof part === 'string') return part;
+    if (part && typeof part === 'object' && typeof part.text === 'string') return part.text;
+    return '';
+  }).join('');
 }
 
 function callIdForIteration(iteration) {

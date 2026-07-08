@@ -1,7 +1,13 @@
-import { Agent, type AgentEvent, type AgentTool } from '@earendil-works/pi-agent-core';
-import { config } from '../config.js';
+import {
+  AgentHarness,
+  InMemorySessionRepo,
+  type AgentEvent,
+  type AgentTool,
+} from '@earendil-works/pi-agent-core';
+import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node';
 import { createPiModel } from '../llm/pi-provider.js';
 import { unifiedToolRegistry, type UnifiedToolContext } from '../tool/unified-registry.js';
+import { createAurevoyPiModels } from './pi-harness.js';
 
 const DEFAULT_READONLY_TOOLS = ['list_directory', 'open_file', 'scroll', 'search_grep', 'get_current_time'];
 const MAX_OUTPUT_CHARS = 20_000;
@@ -21,54 +27,57 @@ export interface SubTaskResult {
   error?: string;
 }
 
-/** 使用 Pi Agent 执行只读子任务，供 delegate_task 工具调用。 */
+/** 使用 Pi AgentHarness 执行只读子任务，供 delegate_task 工具调用。 */
 export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
   const allowedTools = subTask.allowedTools ?? DEFAULT_READONLY_TOOLS;
-  const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), 60_000);
   let content = '';
   let toolCallCount = 0;
   let iterations = 0;
   let error: string | undefined;
+  let harness: AgentHarness | undefined;
+  const timeoutId = setTimeout(() => {
+    void harness?.abort();
+  }, 60_000);
 
   try {
-    const agent = new Agent({
-      initialState: {
-        systemPrompt: buildSubagentSystemPrompt(subTask),
-        model: createPiModel(),
-        thinkingLevel: 'off',
-        tools: createReadonlyPiTools(allowedTools, subTask.workspaceDir, abortController.signal),
-        messages: [],
-      },
-      getApiKey: () => config.llm.apiKey,
-      toolExecution: 'parallel',
-      beforeToolCall: async ({ toolCall }) => {
-        if (!allowedTools.includes(toolCall.name)) {
-          return { block: true, reason: `子代理不允许使用工具：${toolCall.name}` };
-        }
-        if (unifiedToolRegistry.riskLevelOf(toolCall.name) !== 'safe') {
-          return { block: true, reason: `子代理只允许 safe 工具：${toolCall.name}` };
-        }
-        return undefined;
-      },
+    const model = createPiModel();
+    const session = await new InMemorySessionRepo().create();
+    harness = new AgentHarness({
+      env: new NodeExecutionEnv({ cwd: subTask.workspaceDir, shellEnv: process.env }),
+      session,
+      models: createAurevoyPiModels(model),
+      systemPrompt: buildSubagentSystemPrompt(subTask),
+      model,
+      thinkingLevel: 'off',
+      tools: createReadonlyPiTools(allowedTools, subTask.workspaceDir),
     });
 
-    agent.subscribe((event) => {
+    harness.subscribe((event) => {
+      if (!isPiAgentEvent(event)) return;
       const captured = captureSubagentEvent(event);
       if (captured.content) content = captured.content.slice(0, MAX_OUTPUT_CHARS);
       toolCallCount += captured.toolCalls;
       iterations += captured.turns;
       if (captured.error) error = captured.error;
     });
+    harness.on('tool_call', (event) => {
+      if (!allowedTools.includes(event.toolName)) {
+        return { block: true, reason: `子代理不允许使用工具：${event.toolName}` };
+      }
+      if (unifiedToolRegistry.riskLevelOf(event.toolName) !== 'safe') {
+        return { block: true, reason: `子代理只允许 safe 工具：${event.toolName}` };
+      }
+      return undefined;
+    });
 
-    await agent.prompt(`子任务目标：${subTask.goal}\n\n详细指令：${subTask.prompt}`);
+    await harness.prompt(`子任务目标：${subTask.goal}\n\n详细指令：${subTask.prompt}`);
 
     return {
-      ok: !error && !abortController.signal.aborted,
+      ok: !error,
       content: content.slice(0, MAX_OUTPUT_CHARS),
       toolCallCount,
       iterations,
-      error: abortController.signal.aborted ? '子代理超时或被取消' : error,
+      error,
     };
   } catch (err) {
     return {
@@ -101,14 +110,13 @@ function buildSubagentSystemPrompt(subTask: SubTask): string {
 function createReadonlyPiTools(
   allowedTools: string[],
   workspaceDir: string,
-  outerSignal: AbortSignal,
 ): AgentTool[] {
   // 使用统一工具框架获取工具，并注入工作区上下文
   const agentTools = unifiedToolRegistry.toAgentTools(allowedTools);
 
   return agentTools
     .filter((tool) => unifiedToolRegistry.riskLevelOf(tool.name) === 'safe')
-    .map((agentTool) => {
+    .map((agentTool): AgentTool => {
       const def = unifiedToolRegistry.get(agentTool.name)!;
       return {
         ...agentTool,
@@ -116,13 +124,13 @@ function createReadonlyPiTools(
           const context: UnifiedToolContext = {
             taskId: '',
             workspaceDir,
-            abortSignal: signal ?? outerSignal,
+            abortSignal: signal,
             callId: toolCallId,
           };
           try {
             const result = await def.execute(params as Record<string, unknown>, context);
             return {
-              content: [{ type: 'text', text: formatUnknown(result) }],
+              content: [{ type: 'text' as const, text: formatUnknown(result) }],
               details: result,
             };
           } catch (err) {
@@ -132,6 +140,21 @@ function createReadonlyPiTools(
         },
       };
     });
+}
+
+function isPiAgentEvent(event: { type: string }): event is AgentEvent {
+  return (
+    event.type === 'agent_start' ||
+    event.type === 'agent_end' ||
+    event.type === 'turn_start' ||
+    event.type === 'turn_end' ||
+    event.type === 'message_start' ||
+    event.type === 'message_update' ||
+    event.type === 'message_end' ||
+    event.type === 'tool_execution_start' ||
+    event.type === 'tool_execution_update' ||
+    event.type === 'tool_execution_end'
+  );
 }
 
 function captureSubagentEvent(event: AgentEvent): { content?: string; toolCalls: number; turns: number; error?: string } {

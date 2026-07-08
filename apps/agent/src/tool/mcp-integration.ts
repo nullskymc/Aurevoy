@@ -43,7 +43,7 @@ const connections: McpConnection[] = [];
 const statuses = new Map<string, McpServerStatus>();
 
 /**
- * 启动期连接已配置的 MCP servers，并把它们暴露的 tools 注册到统一 ToolRegistry。
+ * 启动期连接已配置的 MCP servers，并把它们暴露的 tools 注册到统一工具注册表。
  * 单个 MCP server 失败不会阻断 Agent 引擎启动，避免可选外部能力拖垮基础功能。
  */
 export async function initializeMcpTools(): Promise<McpInitSummary> {

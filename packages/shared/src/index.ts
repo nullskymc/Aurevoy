@@ -290,7 +290,6 @@ export interface Task {
   artifacts?: TaskArtifact[];
   clarifications?: ClarificationRequest[];
   pendingApprovals?: PendingToolApproval[];
-  /** Legacy: 旧会话级审批指纹；Pi runtime 不再写入或读取。 */
   checkpoints?: TaskCheckpoint[];
   tokenUsage?: AggregatedTokenUsage;
   /** 当前上下文窗口估算 token 数（后端 estimateTokens 计算） */
@@ -301,8 +300,6 @@ export interface Task {
   parentTaskId?: string;
   /** 所属项目 ID（缺省为独立对话） */
   projectId?: string;
-  /** P6: 文件快照列表（用于 Rewind 回滚文件）。 */
-  fileSnapshots?: FileSnapshot[];
   /** 自动模式运行时统计与状态 */
   autoModeState?: AutoModeState;
   createdAt: string;
@@ -445,16 +442,6 @@ export interface ToolDescriptor {
   };
 }
 
-/** P6: 文件快照记录（用于 Rewind 回滚文件）。 */
-export interface FileSnapshot {
-  id: string;
-  /** 相对工作区的文件路径 */
-  path: string;
-  /** 关联的 tool_call id */
-  callId: string;
-  createdAt: string;
-}
-
 export type ToolSource =
   | { type: 'builtin' }
   | { type: 'skill'; skillName: string }
@@ -478,10 +465,10 @@ export interface ToolResult {
   errorCode?: 'schema_validation_failed' | 'approval_denied' | 'execution_failed';
 }
 
-/** Pi runtime 暴露给前端的模型推理深度。 */
+/** Pi harness 暴露给前端的模型推理深度。 */
 export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
-/** Pi runtime 的工具执行策略。 */
+/** Pi harness 的工具执行策略。 */
 export type AgentToolExecutionMode = 'sequential' | 'parallel';
 
 // ============================================================
@@ -991,9 +978,9 @@ export interface RuntimeSettings {
   autoModeLevel: AutoModeLevel;
   /** 是否启用 auto mode 安全规则（拦截 destroy/exfiltrate 等危险操作） */
   autoModeSafetyEnabled: boolean;
-  /** Pi runtime 推理深度。 */
+  /** Pi harness 推理深度。 */
   agentThinkingLevel: AgentThinkingLevel;
-  /** Pi runtime 工具执行策略。 */
+  /** Pi harness 工具执行策略。 */
   agentToolExecution: AgentToolExecutionMode;
   dbPath: string;
   /** M8: Embedding Provider 配置（OpenAI 兼容接口） */

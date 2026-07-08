@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { config } from '../config.js';
 import { unifiedToolRegistry } from './unified-registry.js';
 
-// ---- 路径安全工具（从旧 tools/builtins.ts 迁移）----
+// ---- 路径安全工具 ----
 
 function resolveInWorkspace(input: unknown, workspaceRoot: string, externalPaths?: string[]): string {
   if (typeof input !== 'string' || input.trim() === '') throw new Error('path 必须是非空字符串');
