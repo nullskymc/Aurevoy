@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { decideToolPermission } from "./approval.js"
 
 const baseConfig = {
-  autoModeLevel: "off" as const,
+  autoModeLevel: "auto" as const,
   autoModePaused: false,
 }
 
@@ -13,13 +13,13 @@ describe("decideToolPermission", () => {
     expect(result.allowed).toBe(true)
   })
 
-  it("requires one-time approval for non-safe tools when auto mode is off", () => {
+  it("auto-approves all non-safe tools in auto mode", () => {
     const result = decideToolPermission(baseConfig, "bash", "dangerous")
 
-    expect(result.allowed).toBe(false)
+    expect(result.allowed).toBe(true)
   })
 
-  it("keeps plan mode read-only by blocking non-safe tools", () => {
+  it("blocks non-safe tools in plan mode before plan approval", () => {
     const result = decideToolPermission(
       { ...baseConfig, autoModeLevel: "plan" },
       "write",
@@ -27,47 +27,23 @@ describe("decideToolPermission", () => {
     )
 
     expect(result.allowed).toBe(false)
-    expect(result.reason).toContain("Plan mode")
+    expect(result.reason).toContain("plan approval")
   })
 
-  it("allows workspace file edits in auto-edit mode", () => {
+  it("respects paused state even in auto mode", () => {
     const result = decideToolPermission(
-      { ...baseConfig, autoModeLevel: "auto-edit" },
-      "edit",
-      "dangerous",
-    )
-
-    expect(result.allowed).toBe(true)
-  })
-
-  it("does not allow shell commands in auto-edit mode", () => {
-    const result = decideToolPermission(
-      { ...baseConfig, autoModeLevel: "auto-edit" },
+      { ...baseConfig, autoModePaused: true },
       "bash",
       "dangerous",
     )
 
     expect(result.allowed).toBe(false)
+    expect(result.reason).toContain("paused")
   })
 
-  it("allows dangerous tools in full auto mode", () => {
-    const result = decideToolPermission(
-      { ...baseConfig, autoModeLevel: "full" },
-      "bash",
-      "dangerous",
-    )
+  it("allows caution-risk tools in auto mode", () => {
+    const result = decideToolPermission(baseConfig, "web_fetch", "caution")
 
     expect(result.allowed).toBe(true)
-  })
-
-  it("respects paused auto mode before non-safe tools", () => {
-    const result = decideToolPermission(
-      { ...baseConfig, autoModeLevel: "full", autoModePaused: true },
-      "bash",
-      "dangerous",
-    )
-
-    expect(result.allowed).toBe(false)
   })
 })
-

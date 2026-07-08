@@ -15,13 +15,12 @@ apps/
     index.ts            进程入口
     config.ts           配置
     server.ts           路由层（只做 HTTP/SSE，不写业务）
-    agent/              Agent 循环、事件总线、审批引擎
+    agent/              Pi harness 控制器、事件总线、审批引擎
     llm/                LLM Provider 抽象与实现（三协议）
     tool/               新一代 Effect-TS 工具系统（推荐）
       framework/        工具框架（定义/注册/执行/权限）
       tools/            领域工具（read/write/edit/grep/...）
       filesystem/       Effect 文件系统服务
-    tools/              旧工具注册表（兼容过渡）
     skills/             技能系统
     memory/             长期记忆（向量检索 + Dreams）
     knowledge-base/     知识库 RAG（索引 + 语义召回）
@@ -51,9 +50,9 @@ packages/
 - 所有可变运行参数走 `config.ts`（读环境变量并给默认值），不要散落 `process.env`。
 - Agent 执行中向前端传递的一切，必须经 `taskEvents.publish(event)` → SSE，不要另开通道。
 - 错误处理：循环里 `try/catch`，失败时 emit `error` + `done(failed)`，不要让进程崩。
-- 长任务用 `void runTask(task)` 异步触发，HTTP 请求立即返回。
+- 长任务用 `void runHarnessTask(task)` 异步触发，HTTP 请求立即返回。
 - 禁止把 Mock LLM、固定工具结果或演示数据接入生产路径；测试替身只能放在测试代码或显式 smoke 脚本中。
-- 新增工具必须走 `toolRegistry.register()`，声明 `riskLevel` 和 `inputSchema`，并说明失败路径。
+- 新增工具必须走统一工具注册表，声明 `riskLevel` 和 `inputSchema`，并说明失败路径。
 - 新增高风险能力（写文件、网络、命令、系统操作）必须先接入审批和审计，再开放给 Agent。
 - Agent 状态变化要可持久化、可恢复；不要只维护内存变量或前端临时状态。
 - 轨迹日志写入 `traceStore`，不要只写 console；Provider 不支持 token/cost 时记录为 `null`。
@@ -136,20 +135,7 @@ export const myTool = make({
 });
 ```
 
-然后在 `apps/agent/src/tool/builtins.ts` 中注册，或在 `register-new-tools.ts` 中桥接到旧注册表。
-
-**旧框架（兼容）**：
-
-```ts
-// apps/agent/src/tools/myTool.ts
-import { toolRegistry } from './registry.js';
-toolRegistry.register({
-  descriptor: { name: 'read_file', description: '读取文本文件',
-    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
-  async execute(args) { /* ... */ return { content: '...' }; },
-});
-```
-然后在引擎启动路径 import 一次该文件以触发注册。
+然后在 `apps/agent/src/tool/builtins.ts` 中注册，让统一工具框架暴露给 Pi AgentHarness。
 
 ### 新增一个 LLM Provider
 

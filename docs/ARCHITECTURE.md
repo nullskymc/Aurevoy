@@ -43,16 +43,15 @@ Aurevoy/  (npm workspaces monorepo)
 ┌──────────────────────────────────┼───────────────────────────────┐
 │  Agent 引擎进程 (Node + Fastify)   ▼                               │
 │   server.ts (路由/SSE)                                            │
-│        │ createTask / runTask                                     │
+│        │ createTask / runHarnessTask                              │
 │        ▼                                                          │
-│   agent/loop.ts  ──emit──▶  agent/events.ts (TaskEventBus)        │
-│        │  Default Agent（默认委托 Pi runtime） │ subscribe           │
+│   agent/harness-controller.ts ──emit──▶ agent/events.ts           │
+│        │  Pi AgentHarness 控制器        │ subscribe                 │
 │        │                          └──▶ SSE 推送回前端              │
-│        ├──▶ agent/pi-runtime.ts         (Pi Agent 事件/工具适配层)  │
+│        ├──▶ agent/pi-harness.ts         (Pi AgentHarness 适配层)    │
 │        ├──▶ agent/subagent.ts           (Pi 子代理：受限委托执行)    │
 │        ├──▶ llm/pi-provider.ts          (Pi model/provider 映射)    │
 │        ├──▶ tool/tools/  (新一代 Effect-TS 工具系统, P0-P4)         │
-│        ├──▶ tools/registry.ts          (旧工具注册表，兼容过渡)     │
 │        ├──▶ sandbox/command-executor.ts (命令执行边界，默认关闭)     │
 │        ├──▶ memory/                     (向量检索 + Dreams 管道)    │
 │        ├──▶ knowledge-base/             (RAG: 索引 + KNN 召回)      │
@@ -84,15 +83,13 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/index.ts` | 进程入口，启动 Fastify |
 | `src/config.ts` | 运行时配置（host/port/dbPath/cors/provider/sandbox/network/MCP），全部可被环境变量覆盖 |
 | `src/server.ts` | HTTP 路由 + SSE 端点（见 `docs/API.md`） |
-| `src/agent/loop.ts` | **Pi-only 控制器**：`createTask` 建任务；`runTask` 只委托 `pi-runtime.ts`，保留任务恢复、取消、revert/branch/compact 和 SSE 事件桥接，不再维护第二套 ReAct 后端 |
-| `src/agent/pi-runtime.ts` | **Pi runtime 适配层**：把 Aurevoy task/messages/tools/approval 映射到 `@earendil-works/pi-agent-core`，并把 Pi 事件转换回现有 SSE 契约 |
+| `src/agent/harness-controller.ts` | **Pi harness 控制器**：`createTask` 建任务；`runHarnessTask` 委托 `pi-harness.ts`，保留任务恢复、取消、revert/branch/compact 和 SSE 事件桥接 |
+| `src/agent/pi-harness.ts` | **Pi AgentHarness 适配层**：把 Aurevoy task/messages/tools/approval 映射到 `@earendil-works/pi-agent-core` 的 `AgentHarness`，并把 Pi 事件转换回现有 SSE 契约 |
 | `src/agent/subagent.ts` | **Pi 子代理执行引擎**：`delegate_task` 使用 Pi Agent；仅 safe 只读工具，60s 超时，结果 20KB 截断 |
 | `src/agent/context.ts` | **上下文窗口 + 记忆注入**。 P4: `estimateTokens()` 轻量 token 估算；预算超限时做本地确定性摘要。 P5/M8: 记忆相关性评分、缓存与注入 |
 | `src/agent/m6-state.ts` | Agent 交付状态辅助：预算、token usage、追问、artifact、checkpoint 的创建与状态更新 |
 | `src/agent/events.ts` | `TaskEventBus`：按 `taskId` 发布/订阅 `AgentEvent`，桥接执行与 SSE |
 | `src/llm/pi-provider.ts` | Pi model/provider 映射：保留 `AUREVOY_LLM_*` 配置入口，生成 Pi `Model` 并提供模型列表/健康展示 |
-| `src/tools/registry.ts` | **旧工具注册表**（兼容过渡期）：`ToolRegistry` 类，注册/列举/调用工具；JSON Schema 子集校验。 P2: `invokeWithTimeout()` 独立超时；`executionPolicyOf()` 并行策略。 P3: `truncateToolOutput()` 50K 字符截断。 P6: `fallbackFor()` 替代方案查询 |
-| `src/tools/builtins.ts` | 内置基础工具。 文件：目录/读写/搜索/复制/移动/删除。 **P6**: `edit_file` 精确替换（唯一匹配校验）。 记忆：`remember`（**P5**: Jaccard 去重+`[[link]]` 引用）。 交互：`ask_user`、`create_artifact`/`apply_artifact`。 沙箱：`execute_command`（默认禁用）。 **P7**: `delegate_task` 子代理委托 |
 | `src/tool/` | **新一代 Effect-TS 工具系统**（P0-P4）：Schema 驱动输入输出、作用域注册、审批引擎、文件快照、并行执行管线。见下方独立模块 |
 | `src/tool/framework/definition.ts` | **工具定义**：`ToolConfig<I,O>` 接口 + `make()` 工厂。输入/输出用 Effect `Schema` 定义，自动生成 JSON Schema。支持 `toModelOutput` 多部分输出（文本/文件） |
 | `src/tool/framework/registry.ts` | **作用域注册表**：Effect Tag + Layer，`register()` 作用域内自动清理。同名单栈（最新覆盖），`materialize()` 快照当前注册集合 |
@@ -100,11 +97,10 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/tool/framework/permission.ts` | **权限服务**：`PermissionService` 允许/拒绝规则引擎，last-match-wins，支持 `*` 通配符 |
 | `src/tool/tools/` | **14 个领域工具**：`read`/`write`/`edit`/`glob`/`grep`/`bash`/`web-search`/`web-fetch`/`ask-user`/`artifact`/`delegate`/`memory` 等，每个工具独立目录 |
 | `src/tool/filesystem/` | **Effect 文件系统服务**：`read-filesystem` 只读操作 + `file-mutation` 文件写入/快照/回滚抽象 |
-| `src/tool/builtins.ts` | **工具注册入口**：P4 将新工具集成到 Agent 循环，通过 Effect Layer 提供 `ToolRegistry` |
-| `src/agent/register-new-tools.ts` | **新旧桥接**：将新框架的 8 个工具映射到旧 `ToolRegistry`，确保两套框架共存 |
-| `src/tools/activate-skill.ts` | **Skill**: `activate_skill` 工具（Agent Skills 标准）——LLM 可调用激活/停用 skill，返回 `<skill_content>` 结构化标签 + 资源列表，发布 `skill_activated`/`skill_deactivated` SSE 事件 |
-| `src/tools/web-content.ts` | **网页抓取共享模块**：`web_fetch` 的 SSRF/重定向边界、文本读取、HTML 正文提取与链接抽取；同时为搜索结果清洗复用 HTML 解码工具 |
-| `src/tools/mcp.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到 `ToolRegistry`；MCP 描述会截断/净化，本地风险覆盖优先于 annotations |
+| `src/tool/builtins.ts` | **工具注册入口**：P4 将 Effect 工具注册进统一工具框架 |
+| `src/tool/skill-integration.ts` | **Skill**: `load_skill` 工具（Agent Skills 标准）——LLM 可调用加载 skill，返回 `<skill_content>` 结构化标签 + 资源列表 |
+| `src/tool/web-content.ts` | **网页抓取共享模块**：`web_fetch` 的 SSRF/重定向边界、文本读取、HTML 正文提取与链接抽取；同时为搜索结果清洗复用 HTML 解码工具 |
+| `src/tool/mcp-integration.ts` | MCP TypeScript SDK 客户端：启动期连接 `AUREVOY_MCP_SERVERS_JSON` 配置的 stdio servers，发现 tools 并注册到统一工具注册表；MCP 描述会截断/净化，本地风险覆盖优先于 annotations |
 | `src/skills/types.ts` | **Skill 类型**（Agent Skills 标准）：`SkillFrontmatter`（含 license/compatibility/metadata）、`SkillCatalogEntry`（Tier 1 catalog）、`SkillContent`（Tier 2 body+resources）、`SkillResource` |
 | `src/skills/loader.ts` | **Skill 加载器**（Agent Skills 标准）：`discoverSkills()` 扫描目录发现 SKILL.md（标准格式）+ flat .md（向后兼容）；`loadSkillContent()` 激活时懒加载 body + 资源枚举 |
 | `src/skills/registry.ts` | **Skill 注册表**（渐进披露）：Tier 1 `load()` 仅加载 name+description；Tier 2 `getContent()` 激活时加载 body+resources。发现路径含 `.aurevoy/skills/` 和 `.agents/skills/` |
@@ -126,15 +122,13 @@ API 请求响应、运行时常量（默认地址端口）。
 
 1. 用户在 UI 输入目标 → `POST /api/tasks {goal}`。
 2. `server.ts` 调 `createTask()` 建 `Task` 存库 → 立即 `201` 返回 `{task, streamUrl}`；
-   同时 `void runTask(task)` 异步执行（不阻塞响应）。
+   同时 `void runHarnessTask(task)` 异步执行（不阻塞响应）。
 3. 前端拿到 `task.id` → `EventSource(streamUrl)` 订阅 SSE。
-4. `runTask` 先执行 **侦查阶段**（P1: `runScoutPhase`——最多 3 轮 LLM、仅 safe 只读工具），产出 `ScoutReport`（关键文件、技术栈、约束）。
-5. 根据侦查报告调用 LLM 生成 **结构化计划**（P1: `generatePlanViaLLM`——JSON 输出 2-8 步、含依赖和验证标记）；失败时回退正则启发式（`inferStructuredPlan`）。
-6. `runTask` 委托 **Pi runtime**，逐步 emit 事件到 `TaskEventBus`：
-   - 每轮开始前执行 **自动语义压缩**（P4: `autoCompactIfNeeded`——token 预算超 85% 时 LLM 摘要旧消息）和 **字符级上下文窗口压缩**（`buildContextWindow`）
+4. `runHarnessTask` 发布轻量计划和 scout 报告，随后委托 **Pi AgentHarness**，逐步 emit 事件到 `TaskEventBus`：
+   - 每轮上下文通过 harness `context` hook 做 cache-aware Snip + Microcompact
    - 注入 **相关性评分记忆**（P5: 关键词+分类+置信度+时间衰减排序，`[[link]]` 引用展开，top-20）
    - `status(running)` → `phase(initializing/thinking)` →（每轮）流式 `token` →
-   - 若模型请求工具则进入 **Pi 工具执行管线**：Pi 根据 executionPolicy 并行/顺序执行，Aurevoy 在 `beforeToolCall` 套用 auto mode 策略，`invokeWithTimeout` 独立超时，工具输出 50K 截断 P3
+   - 若模型请求工具则进入 **Pi 工具执行管线**：Pi 根据 executionPolicy 并行/顺序执行，Aurevoy 在 harness `tool_call` hook 套用 auto mode 策略
    - 未被当前 auto mode 放行的工具进入 `phase(waiting_approval)`，等待用户对单次调用审批；失败工具附加 **fallback 建议**（P6）
    - 写入类工具执行前 **捕获文件快照**（P6: Rewind 时回滚文件）
    - 把工具结果作为 `role:'tool'` 消息回灌、再请求 LLM →…直到模型给出最终答案 →
@@ -153,7 +147,7 @@ API 请求响应、运行时常量（默认地址端口）。
 | 想做的事 | 改哪里 | 不要碰 |
 |---|---|---|
 | 接真实大模型 | 扩展 Pi model/provider 映射，保持 `AUREVOY_LLM_*` 配置入口 | Agent 循环、前端 |
-| 加一个工具 | 新工具放 `tool/tools/`（新框架，推荐）或 `tools/`（旧框架，兼容）；注册到对应注册表 | Agent 循环内联逻辑 |
+| 加一个工具 | 新工具放 `tool/tools/` 并注册到 `tool/builtins.ts` | Agent 循环内联逻辑 |
 | 加自动模式规则 | `agent/approval.ts` 扩展 `decideToolPermission()`，保持 Pi `beforeToolCall` 为唯一门禁 | Agent 循环里新增工具特例 |
 | 接 MCP server | 配置 `AUREVOY_MCP_SERVERS_JSON`，或扩展 `tools/mcp.ts` 的 transport 支持 | 工具调用协议 / Agent 循环 |
 | 改网络抓取边界 | `tools/web-content.ts` 的 `web_fetch` 策略 + `config.network` + `docs/API.md` | 绕过 SSRF/重定向校验直接 fetch |
@@ -162,10 +156,10 @@ API 请求响应、运行时常量（默认地址端口）。
 | 加评测 | 新增可复现用例和脚本，覆盖工具/状态/安全路径 | 只靠手工试一次 |
 | 加运行设置 | `runtime/settings.ts` + `store/db.ts` + `packages/shared` API 类型 | 前端静态表单、只改 `.env.example` |
 | 改任务/事件结构 | 改 `packages/shared` 并 `build:shared` | 前后端各自重定义 |
-| 加编辑重跑/分支 | `agent/loop.ts` 的 `revertTask`/`branchTask`/`compactTask`，`store/db.ts` 加列，`shared` 加类型 | 前端直接操作消息数组 |
-| 加子代理能力 | `agent/subagent.ts` 修改约束/轮次/超时；`tools/builtins.ts` 的 `delegate_task` 描述 | 在子代理中开放写入工具 |
+| 加编辑重跑/分支 | `agent/harness-controller.ts` 的 `revertTask`/`branchTask`/`compactTask`，`store/db.ts` 加列，`shared` 加类型 | 前端直接操作消息数组 |
+| 加子代理能力 | `agent/subagent.ts` 修改约束/轮次/超时；`tool/simple-tools.ts` 的 `delegate_task` 描述 | 在子代理中开放写入工具 |
 | 加记忆引用/评分 | `agent/context.ts` 的 `scoreMemories`/`parseMemoryLinks`；`store/db.ts` 的 `findByNameSlug` | 直接改评分公式不跑回归 |
-| 加 Diff 编辑 | `tools/builtins.ts` 的 `edit_file` 工具 | 绕过唯一性校验直接写文件 |
+| 加 Diff 编辑 | `tool/tools/edit/` 的 `edit` 工具 | 绕过唯一性校验直接写文件 |
 | 加记忆向量/RAG | `memory/` 或 `knowledge-base/` + `store/db.ts` 加表 + `embedding/` Provider | 混合评分参数不跑回归 |
 | 加新 LLM Provider | 扩展 `llm/pi-provider.ts` 的 Pi model/provider 映射 | 在 Agent 循环里直接接厂商 SDK |
 | 调上下文压缩策略 | `config.ts` 的 `contextTokenBudget`/`compactThreshold`/`compactKeepRecentTurns` | 把阈值设到 1.0 永不压缩 |

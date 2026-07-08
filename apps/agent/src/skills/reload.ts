@@ -3,8 +3,8 @@ import { resolve } from 'node:path';
 import type { SkillDescriptor } from '@aurevoy/shared';
 import { skillRegistry } from './registry.js';
 import { unifiedToolRegistry } from '../tool/unified-registry.js';
-import { registerLoadSkillTool } from '../tools/load-skill.js';
-import { registerInstallSkillTool } from '../tools/install-skill.js';
+import { registerLoadSkillTool } from '../tool/skill-integration.js';
+import { registerInstallSkillTool } from '../tool/install-skill.js';
 import { config } from '../config.js';
 import { getLogger } from '../logging/logger.js';
 

@@ -69,9 +69,9 @@ export const config = {
   agent: {
     /** 等待用户审批的超时（毫秒）；测试可通过环境变量缩短。 */
     approvalTimeoutMs: parseNumber(process.env.AUREVOY_APPROVAL_TIMEOUT_MS, 5 * 60 * 1000),
-    /** Pi runtime 推理深度。 */
+    /** Pi harness 推理深度。 */
     thinkingLevel: parseAgentThinkingLevel(process.env.AUREVOY_AGENT_THINKING_LEVEL),
-    /** Pi runtime 工具执行策略。 */
+    /** Pi harness 工具执行策略。 */
     toolExecution: parseAgentToolExecution(process.env.AUREVOY_AGENT_TOOL_EXECUTION),
     /**
      * 会话级短期记忆的上下文字符预算（M4.2）。
@@ -79,11 +79,11 @@ export const config = {
      */
     /**
      * 会话级短期记忆的上下文字符预算。
-     * 默认值已调高以与 contextTokenBudget（128K tokens）匹配，避免此值太低导致
+     * 默认值已调高以与 contextTokenBudget（400K tokens）匹配，避免此值太低导致
      * buildContextWindow 每轮都做粗暴截断，而 autoCompactIfNeeded（LLM 语义摘要）闲置。
      * 此压缩仅作为兜底——autoCompactIfNeeded 才是主要压缩手段。
      */
-    contextCharBudget: parseNumber(process.env.AUREVOY_CONTEXT_CHAR_BUDGET, 320_000),
+    contextCharBudget: parseNumber(process.env.AUREVOY_CONTEXT_CHAR_BUDGET, 1_000_000),
     /** 压缩时保留逐字的最近消息条数（边界：近窗口逐字，旧内容压缩）。 */
     recentMessageWindow: parseNumber(process.env.AUREVOY_RECENT_MESSAGE_WINDOW, 8),
     /** 被压缩消息的单条内容字符上限（保留可读摘要，引用而非全文）。 */
@@ -99,14 +99,16 @@ export const config = {
       process.env.AUREVOY_TOOL_OUTPUT_MAX_CHARS,
       50000,
     ),
-    /** P4: 上下文 token 预算（优先于 contextCharBudget）。未设置时用字符预算/2.5 估算。 */
+    /** P4: 上下文 token 预算（优先于 contextCharBudget）。未设置时用字符预算/2.5 估算。
+     *  默认 400000，适配 Claude 200K（留余量）/ Gemini 1M / GPT-4o 128K 等模型的实际窗口。
+     *  实际发送时仍受 Pi SDK 内置模型 contextWindow 约束——此值仅用于压缩触发阈值和自定义模型回退。 */
     contextTokenBudget: parseNumber(
       process.env.AUREVOY_CONTEXT_TOKEN_BUDGET,
       process.env.AUREVOY_CONTEXT_CHAR_BUDGET
         ? Math.round(
             parseNumber(process.env.AUREVOY_CONTEXT_CHAR_BUDGET, 24000) / 2.5,
           )
-        : 128000,
+        : 400000,
     ),
     /** P4: 超过 token 预算的多少比例时自动触发语义压缩（0-1）。默认 0.85。 */
     compactThreshold: parseNumber(
@@ -156,7 +158,7 @@ export const config = {
   },
 
   autoMode: {
-    level: 'off' as string,
+    level: 'auto' as string,
   },
 
   network: {

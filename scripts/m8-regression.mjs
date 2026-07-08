@@ -303,7 +303,7 @@ process.env.AUREVOY_SKILLS_BUILTIN_DIR = join(tempRoot, 'skills', 'builtin');
 
 // 确保编译产物存在
 try {
-  await import('../apps/agent/dist/tools/builtins.js');
+  await import('../apps/agent/dist/tool/index.js').then(m => m.initializeUnifiedToolFramework());
 } catch {
   console.error('请先运行 npm run build (在 agent 目录)');
   process.exit(1);

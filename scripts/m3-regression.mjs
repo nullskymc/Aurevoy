@@ -37,9 +37,10 @@ process.env.AUREVOY_MCP_SERVERS_JSON = JSON.stringify({
   },
 });
 
-await import('../apps/agent/dist/tools/builtins.js');
+const { initializeUnifiedToolFramework } = await import('../apps/agent/dist/tool/index.js');
+initializeUnifiedToolFramework();
 const { buildServer } = await import('../apps/agent/dist/server.js');
-const { closeMcpTools, initializeMcpTools } = await import('../apps/agent/dist/tools/mcp.js');
+const { closeMcpTools, initializeMcpTools } = await import('../apps/agent/dist/tool/mcp-integration.js');
 
 const mcpSummary = await initializeMcpTools();
 const app = await buildServer();
@@ -190,10 +191,10 @@ async function caseUnconfiguredProvider() {
     process.env.AUREVOY_DB_PATH = ${JSON.stringify(join(tempRoot, 'unconfigured.sqlite'))};
     process.env.AUREVOY_WORKSPACE_DIR = ${JSON.stringify(workspaceDir)};
     process.env.AUREVOY_LLM_API_KEY = '';
-    const { createTask, runTask } = await import(${JSON.stringify(new URL('../apps/agent/dist/agent/loop.js', import.meta.url).href)});
+    const { createTask, runHarnessTask } = await import(${JSON.stringify(new URL('../apps/agent/dist/agent/harness-controller.js', import.meta.url).href)});
     const { taskStore, traceStore } = await import(${JSON.stringify(new URL('../apps/agent/dist/store/db.js', import.meta.url).href)});
     const task = createTask('M3_UNCONFIGURED provider');
-    await runTask(task);
+    await runHarnessTask(task);
     const saved = taskStore.get(task.id);
     const traces = traceStore.list(task.id);
     console.log(JSON.stringify({ status: saved.status, hasConfigError: traces.some((t) => t.errorCategory === 'configuration') }));
@@ -367,8 +368,8 @@ function chooseTool(userText, httpUrl) {
   }
   if (userText.includes('M3_HTTP_APPROVE')) return { id: 'call_http', name: 'web_fetch', args: { url: httpUrl } };
   if (userText.includes('M3_MCP')) return { id: 'call_mcp', name: 'mcp_fixture_echo', args: { text: 'hello' } };
-  if (userText.includes('M3_TRAVERSAL')) return { id: 'call_traversal', name: 'open_file', args: { path: '../outside/secret.txt' } };
-  if (userText.includes('M3_SYMLINK')) return { id: 'call_symlink', name: 'open_file', args: { path: 'outside-link' } };
+  if (userText.includes('M3_TRAVERSAL')) return { id: 'call_traversal', name: 'read', args: { path: '../outside/secret.txt' } };
+  if (userText.includes('M3_SYMLINK')) return { id: 'call_symlink', name: 'read', args: { path: 'outside-link' } };
   if (userText.includes('M3_WRITE_REJECT')) {
     return { id: 'call_write_reject', name: 'write', args: { path: 'rejected.txt', content: 'must not write' } };
   }

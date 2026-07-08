@@ -1,12 +1,7 @@
 import './load-env.js';
 import { buildServer } from './server.js';
 import { config } from './config.js';
-import './tools/builtins.js'; // 副作用导入：注册旧注册表基础工具（文件/记忆/交互/命令）
-import './tools/file-basics.js'; // 副作用导入：注册行级视口文件工具
-import './tools/new-tools.js'; // 副作用导入：注册新架构工具 (read/write/edit/grep/glob/bash/web_search/web_fetch)
-import { registerLoadSkillTool } from './tools/load-skill.js';
-import { registerInstallSkillTool } from './tools/install-skill.js';
-import { closeMcpTools, initializeMcpTools } from './tools/mcp.js';
+import { closeMcpTools, initializeMcpTools } from './tool/mcp-integration.js';
 import { loadPersistedSettings } from './runtime/settings.js';
 import { ensurePythonReady, getPythonPath, getPythonVersion, isPythonInstalled, findSystemPython } from './runtime/python-runtime.js';
 import { createLogger, getLogger } from './logging/logger.js';
@@ -17,7 +12,6 @@ import { dirname } from 'node:path';
 import { initializeUnifiedToolFramework } from './tool/index.js';
 
 async function main() {
-  // 提前确保数据目录存在（安装版 app bundle 内 cwd 只读，数据在 ~/.aurevoy/）
   mkdirSync(dirname(config.dbPath), { recursive: true });
   mkdirSync(config.workspaceDir, { recursive: true });
 
@@ -27,23 +21,18 @@ async function main() {
   log.info({ provider: config.llm.provider, model: config.llm.model, host: config.host, port: config.port, db: config.dbPath }, '加载配置完成');
 
   loadPersistedSettings();
-
   skillRegistry.load();
-  
-  // 初始化统一工具框架
+
+  // 初始化统一工具框架（Effect-TS + 基础工具 + Skill 工具）
   initializeUnifiedToolFramework();
   log.info('统一工具框架已初始化');
-  
-  registerLoadSkillTool();
-  registerInstallSkillTool();
+
   log.info({ count: skillRegistry.list().length }, 'skill 模块已加载');
   const stopSkillWatcher = startSkillWatcher();
 
   log.info(
     {
-      provider: config.llm.provider,
-      model: config.llm.model,
-      baseUrl: config.llm.baseUrl,
+      provider: config.llm.provider, model: config.llm.model, baseUrl: config.llm.baseUrl,
       apiKeyConfigured: config.llm.apiKey.trim().length > 0,
       apiKeySource: process.env.AUREVOY_LLM_API_KEY?.trim() ? 'env' : 'sqlite',
     },
@@ -61,33 +50,24 @@ async function main() {
     await closeMcpTools();
     await app.close();
   };
-  process.once('SIGINT', () => {
-    void shutdown().finally(() => process.exit(0));
-  });
-  process.once('SIGTERM', () => {
-    void shutdown().finally(() => process.exit(0));
-  });
+  process.once('SIGINT', () => { void shutdown().finally(() => process.exit(0)); });
+  process.once('SIGTERM', () => { void shutdown().finally(() => process.exit(0)); });
 
   try {
     await app.listen({ host: config.host, port: config.port });
     log.info(`Aurevoy Agent 引擎已启动: http://${config.host}:${config.port}`);
 
-    // 后台异步准备 Python 环境（检测系统 Python、创建 venv）
     if (isPythonInstalled()) {
       log.info({ python: getPythonPath(), version: getPythonVersion() }, 'Python 运行时就绪');
     } else {
       log.info('Python venv 未就绪，正在后台准备...');
       ensurePythonReady()
         .then((pyPath) => {
-          if (pyPath) {
-            log.info({ python: pyPath, version: getPythonVersion() }, 'Python 运行时就绪');
-          } else {
+          if (pyPath) { log.info({ python: pyPath, version: getPythonVersion() }, 'Python 运行时就绪'); }
+          else {
             const sysPy = findSystemPython();
-            if (sysPy) {
-              log.warn({ systemPython: sysPy }, '检测到系统 Python 但 venv 创建失败');
-            } else {
-              log.info('未检测到系统 Python，请在设置中配置 Python 解释器路径');
-            }
+            if (sysPy) { log.warn({ systemPython: sysPy }, '检测到系统 Python 但 venv 创建失败'); }
+            else { log.info('未检测到系统 Python，请在设置中配置 Python 解释器路径'); }
           }
         })
         .catch((err: unknown) => {
@@ -96,7 +76,6 @@ async function main() {
         });
     }
 
-    // M8: 启动后延迟执行一轮 Dreams 维护（不阻塞启动）
     setTimeout(async () => {
       try {
         const { runDreams } = await import('./memory/dreams.js');
@@ -106,6 +85,7 @@ async function main() {
         }
       } catch { /* 维护失败不影响引擎运行 */ }
     }, 30_000);
+
     if (mcp.configuredServers > 0) {
       log.info(
         { connected: mcp.connectedServers, configured: mcp.configuredServers, tools: mcp.registeredTools },

@@ -1,7 +1,24 @@
 import { Schema } from "effect"
 import { readFile, readdir, stat } from "node:fs/promises"
-import { resolve, extname } from "node:path"
+import { isAbsolute, relative, resolve, extname } from "node:path"
 import { make, type ContentPart } from "../../framework/definition.js"
+
+const resolveInWorkspace = async (input: string, workspaceRoot: string): Promise<string> => {
+  const target = isAbsolute(input) ? resolve(input) : resolve(workspaceRoot, input)
+  const rel = relative(workspaceRoot, target)
+  if (rel !== "" && (rel.startsWith("..") || isAbsolute(rel))) throw new Error("路径越界：只允许访问工作区目录内")
+  try {
+    const { realpath } = await import("node:fs/promises")
+    const realRoot = await realpath(workspaceRoot)
+    const realTarget = await realpath(target)
+    if (!realTarget.startsWith(realRoot + "/") && realTarget !== realRoot)
+      throw new Error("符号链接指向工作区外")
+    return realTarget
+  } catch (err: any) {
+    if (err?.message?.includes("路径越界") || err?.message?.includes("符号链接")) throw err
+    throw new Error(`Unable to access ${input}`)
+  }
+}
 
 const MAX_READ_LINES = 2000
 const MAX_READ_BYTES = 50 * 1024
@@ -55,8 +72,8 @@ export const readTool = make({
   description: `Read a text file or image, page through a large text file by line offset, or list a directory. Supports PNG/JPEG/GIF/WebP images (base64, max ${MAX_MEDIA_INGEST_BYTES / 1024 / 1024}MB).`,
   input: Input,
   output: Output,
-  execute: async (input) => {
-    const path = resolve(process.cwd(), input.path)
+  execute: async (input, ctx) => {
+    const path = await resolveInWorkspace(input.path, ctx.workspaceDir)
 
     let info
     try { info = await stat(path) } catch { throw new Error(`Unable to access ${input.path}`) }

@@ -16,7 +16,7 @@ export const askUserTool = make({
   input: Input,
   output: Output,
   execute: async () => {
-    return { answered: true, answer: "User response will be handled by the agent loop" }
+    return { answered: true, answer: "User response will be handled by the Pi harness adapter" }
   },
   toModelOutput: (_in, out): ReadonlyArray<ContentPart> => [
     { type: "text", text: out.answered ? `Answer: ${out.answer}` : "No answer received" },

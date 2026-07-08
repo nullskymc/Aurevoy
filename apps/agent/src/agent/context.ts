@@ -50,13 +50,13 @@ export function buildSkillCatalogMessage(): Message | null {
 // ---- 工具类型分类 ----
 
 /** 输出较大的工具（内容会被 Microcompact 结构化压缩） */
-const TOOLS_WITH_LARGE_OUTPUT = new Set([
+export const TOOLS_WITH_LARGE_OUTPUT = new Set([
   'open_file', 'scroll', 'search_grep', 'web_fetch', 'web_search',
   'execute_command', 'edit_lines', 'replace_lines',
 ]);
 
 /** 写入/确认类工具（输出简短，不压缩） */
-const TOOLS_KEEP_VERBATIM = new Set([
+export const TOOLS_KEEP_VERBATIM = new Set([
   'write_file', 'create_file', 'append_file', 'copy_file', 'move_file', 'rename_file',
   'delete_file', 'session_open', 'session_write', 'session_close', 'session_abort',
   'apply_artifact', 'create_artifact', 'remember', 'index_files', 'recall',
@@ -152,7 +152,7 @@ function buildToolNameMap(messages: Message[]): Map<string, string> {
 }
 
 /** 按工具类型对单个 tool_result 的 content 做结构化压缩。返回 null = 不需要压缩。 */
-function compactToolResult(toolName: string, rawContent: string): string | null {
+export function compactToolResult(toolName: string, rawContent: string): string | null {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(rawContent) as Record<string, unknown>;
@@ -487,7 +487,7 @@ export function estimateTokens(text: string): number {
 
 function messageTokens(message: Message): number {
   let n = estimateTokens(message.content ?? '');
-  if (message.reasoningContent) n += estimateTokens(message.reasoningContent);
+
   if (message.toolCalls?.length) {
     for (const tc of message.toolCalls) {
       n += estimateTokens(tc.function.arguments ?? '');
@@ -937,9 +937,13 @@ export function buildSystemContextMessage(
     day: 'numeric',
   });
 
+  // 时间戳降为分钟级精度（截断秒/毫秒），减少跨任务恢复和连续调用时的 cache miss。
+  // prompt cache 按前缀精确匹配，秒级时间戳会让整个 system prompt 每次都 cache miss。
+  const stableTimestamp = now.toISOString().replace(/:\d{2}\.\d{3}Z$/, ':00Z');
+
   const lines: string[] = [];
   lines.push('<system_context>');
-  lines.push(`Current time: ${now.toISOString()}`);
+  lines.push(`Current time: ${stableTimestamp}`);
   lines.push(`Today: ${timeStr}`);
   lines.push(`Platform: ${process.platform} ${process.arch}`);
   lines.push(`Shell: ${process.env.SHELL ?? 'unknown'}`);

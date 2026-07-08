@@ -46,4 +46,17 @@ describe("createPiModel", () => {
       expect(compat.thinkingFormat).toBe("deepseek")
     })
   })
+
+  it("uses an explicit model override for vision routing", () => {
+    withLlmConfig({
+      provider: "openai-compatible",
+      baseUrl: "https://example.test/v1",
+      model: "text-model",
+    }, () => {
+      const model = createPiModel("vision-model")
+
+      expect(model.id).toBe("vision-model")
+      expect(model.name).toBe("vision-model")
+    })
+  })
 })

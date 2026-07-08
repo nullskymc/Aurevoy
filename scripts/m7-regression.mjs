@@ -27,8 +27,9 @@ process.env.AUREVOY_MCP_SERVERS_JSON = JSON.stringify({
   },
 });
 
-await import('../apps/agent/dist/tools/builtins.js');
-const { initializeMcpTools, closeMcpTools } = await import('../apps/agent/dist/tools/mcp.js');
+const { initializeUnifiedToolFramework } = await import('../apps/agent/dist/tool/index.js');
+initializeUnifiedToolFramework();
+const { initializeMcpTools, closeMcpTools } = await import('../apps/agent/dist/tool/mcp-integration.js');
 await initializeMcpTools();
 const { buildServer } = await import('../apps/agent/dist/server.js');
 

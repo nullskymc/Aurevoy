@@ -57,8 +57,8 @@ export const editTool = make({
     "Use replaceAll=true to replace all occurrences. Relative paths resolve from the workspace root.",
   input: Input,
   output: Output,
-  execute: async (input) => {
-    const path = resolve(process.cwd(), input.path)
+  execute: async (input, ctx) => {
+    const path = resolve(ctx.workspaceDir, input.path)
 
     if (input.oldString === input.newString) {
       throw new Error("No changes: oldString and newString are identical.")

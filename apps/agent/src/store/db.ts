@@ -277,7 +277,6 @@ function rowToTask(row: TaskRow): Task {
     archivedMessages: (parseJsonColumn(row.archived_messages) as Task['archivedMessages']) ?? [],
     parentTaskId: row.parent_task_id ?? undefined,
     projectId: row.project_id ?? undefined,
-    planMode: row.plan_mode === 'manual' ? 'manual' : undefined,
     contextTokens: row.context_tokens ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -364,7 +363,7 @@ export const taskStore = {
       archivedMessages: JSON.stringify(task.archivedMessages ?? []),
       parentTaskId: task.parentTaskId ?? null,
       projectId: task.projectId ?? null,
-      planMode: task.planMode ?? null,
+      planMode: null,
       contextTokens: task.contextTokens ?? null,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
@@ -543,7 +542,7 @@ function rowToMemory(row: MemoryRow): MemoryEntry {
     nameSlug: row.name_slug ?? undefined,
     why: row.why ?? undefined,
     howToApply: row.how_to_apply ?? undefined,
-    embeddingUpdatedAt: row.embedding_updated_at ?? undefined,
+    embeddingUpdatedAt: row.embedding_updated_at ?? null,
     // linkedMemoryIds 从 content 中的 [[link]] 动态解析，不持久化独立列
   };
 }

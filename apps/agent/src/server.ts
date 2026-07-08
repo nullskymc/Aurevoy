@@ -12,6 +12,8 @@ import type {
   BranchTaskResponse,
   CleanupDataRequest,
   CleanupDataResponse,
+  ClarificationAnswerRequest,
+  ClarificationAnswerResponse,
   CompactTaskRequest,
   CompactTaskResponse,
   ContinueTaskRequest,
@@ -60,12 +62,13 @@ import {
   prepareTaskForResume,
   queueRunningUserTurn,
   resolveApproval,
+  resolveClarificationAnswer,
   resolvePlanApprovalDecision,
   resumeAutoMode,
   revertTask,
-  runTask,
+  runHarnessTask,
   unrevertTask,
-} from './agent/loop.js';
+} from './agent/harness-controller.js';
 import { taskEvents } from './agent/events.js';
 import { buildTokenUsageReport } from './agent/token-usage.js';
 import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore, invalidateMemorySummary } from './store/db.js';
@@ -74,7 +77,7 @@ import { skillRegistry } from './skills/registry.js';
 import { installFromGit, uninstallSkill } from './skills/installer.js';
 import { reloadSkillsAndTools } from './skills/reload.js';
 import { getPiProviderName, listPiProviderModels } from './llm/pi-provider.js';
-import { getMcpStatuses, reloadMcpTools } from './tools/mcp.js';
+import { getMcpStatuses, reloadMcpTools } from './tool/mcp-integration.js';
 import {
   readCleanupPolicyDays,
   readRuntimeSettings,
@@ -108,7 +111,7 @@ export async function buildServer(externalLogger?: Logger) {
   app.get('/api/health', async (): Promise<HealthResponse> => {
     return {
       status: 'ok',
-      version: '0.6.0',
+      version: '0.6.1',
       uptimeMs: Date.now() - startedAt,
       provider: getPiProviderName(),
       contextCharBudget: config.agent.contextCharBudget,
@@ -308,7 +311,7 @@ export async function buildServer(externalLogger?: Logger) {
 
     const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments);
     // 异步执行，立即返回；前端通过 SSE 订阅进度
-    void runTask(task);
+    void runHarnessTask(task);
 
     taskEvents.publish({ type: 'task_created', taskId: task.id, task });
 
@@ -331,7 +334,7 @@ export async function buildServer(externalLogger?: Logger) {
         const delivery = req.body?.delivery === 'follow_up' ? 'follow_up' : 'steering';
         const queued = queueRunningUserTurn(task, message, delivery, req.body?.attachments);
         if (!queued.delivered) {
-          return reply.code(409).send({ error: '任务正在运行，但 Pi runtime 队列不可用，请等待当前轮结束后再追问' });
+          return reply.code(409).send({ error: '任务正在运行，但 Pi harness 队列不可用，请等待当前轮结束后再追问' });
         }
         const body: ContinueTaskResponse = {
           task,
@@ -342,7 +345,7 @@ export async function buildServer(externalLogger?: Logger) {
 
       addUserTurn(task, message, req.body?.attachments);
       // 异步带完整历史重跑循环；前端通过同一 SSE 地址订阅这一轮
-      void runTask(task);
+      void runHarnessTask(task);
 
       const body: ContinueTaskResponse = {
         task,
@@ -364,7 +367,7 @@ export async function buildServer(externalLogger?: Logger) {
     }
 
     const resumed = prepareTaskForResume(task);
-    void runTask(resumed);
+    void runHarnessTask(resumed);
 
     const body: ResumeTaskResponse = {
       task: resumed,
@@ -520,7 +523,26 @@ export async function buildServer(externalLogger?: Logger) {
     },
   );
 
-  // 审批 /plan 触发的执行计划。Pi runtime 只在批准后进入模型调用。
+  app.post<{ Params: { id: string; clarificationId: string }; Body: ClarificationAnswerRequest }>(
+    '/api/tasks/:id/clarifications/:clarificationId',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      const { answer } = req.body ?? {};
+      if (typeof answer !== 'string') {
+        return reply.code(400).send({ error: 'answer(string) 必填' });
+      }
+      const delivered = resolveClarificationAnswer(req.params.id, req.params.clarificationId, answer);
+      const body: ClarificationAnswerResponse = {
+        taskId: req.params.id,
+        clarificationId: req.params.clarificationId,
+        delivered,
+      };
+      return reply.send(body);
+    },
+  );
+
+  // 审批 /plan 触发的执行计划。Pi harness 只在批准后进入模型调用。
   app.post<{ Params: { id: string }; Body: PlanApprovalRequest }>(
     '/api/tasks/:id/plan-approval',
     async (req, reply) => {
@@ -806,6 +828,9 @@ export async function buildServer(externalLogger?: Logger) {
           ? { type: 'clarification_request', taskId: task.id, clarification }
           : { type: 'clarification_resolved', taskId: task.id, clarification },
       );
+    }
+    for (const approval of task.pendingApprovals ?? []) {
+      sendSnapshot({ type: 'approval_request', taskId: task.id, call: approval.call, riskLevel: approval.riskLevel });
     }
     if (['completed', 'failed', 'cancelled'].includes(task.status)) {
       replayingSnapshot = false;

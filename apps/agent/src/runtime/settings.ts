@@ -116,8 +116,20 @@ export function loadPersistedSettings(): void {
   if (mcpJson !== undefined) config.mcpServers = parseMcpServers(mcpJson);
 
   const autoModeStored = entries[SETTING_KEYS.autoModeLevel];
-  if (autoModeStored === 'off' || autoModeStored === 'plan' || autoModeStored === 'auto-edit' || autoModeStored === 'full') {
+  if (autoModeStored === 'auto' || autoModeStored === 'plan') {
     config.autoMode.level = autoModeStored;
+  } else if (autoModeStored === 'off' || autoModeStored === 'auto-edit' || autoModeStored === 'full') {
+    config.autoMode.level = 'auto';
+    settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
+  } else if (autoModeStored !== undefined) {
+    config.autoMode.level = 'auto';
+    settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
+  }
+
+  if (!settingsStore.get('autoMode.migratedV2')) {
+    config.autoMode.level = 'auto';
+    settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
+    settingsStore.set('autoMode.migratedV2', 'true');
   }
   const thinkingLevel = normalizeThinkingLevel(entries[SETTING_KEYS.agentThinkingLevel]);
   if (thinkingLevel) config.agent.thinkingLevel = thinkingLevel;
@@ -234,7 +246,7 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   }
 
   if (body.autoModeLevel !== undefined) {
-    const valid = (['off', 'plan', 'auto-edit', 'full'] as const).includes(body.autoModeLevel as never);
+    const valid = (['auto', 'plan'] as const).includes(body.autoModeLevel as never);
     if (valid) {
       settingsStore.set(SETTING_KEYS.autoModeLevel, body.autoModeLevel);
       config.autoMode.level = body.autoModeLevel;

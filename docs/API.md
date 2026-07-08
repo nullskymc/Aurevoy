@@ -212,7 +212,7 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 - 任务不存在 → `404`。
 
 ### POST `/api/tasks/:id/plan-approval`
-历史兼容端点。主 Agent loop 已固定为 Pi runtime，当前后端不再生成独立 Plan Agent 审批请求。
+历史兼容端点。主 Agent 执行链已固定为 Pi AgentHarness，当前后端不再生成独立 Plan Agent 审批请求。
 ```json
 // 请求体 PlanApprovalRequest
 { "approved": true }
@@ -330,12 +330,12 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 |---|---|---|
 | `task_created` | `task: Task` | 任务已创建 |
 | `status` | `status: TaskStatus` | 任务状态变化 |
-| `phase` | `phase: TaskPhase`, `detail?` | Agent runtime 细粒度阶段变化 |
-| `scout_started` | — | 历史兼容事件；Pi runtime 当前不主动发送 |
-| `scout_report` | `report: ScoutReport` | 历史兼容事件；Pi runtime 当前不主动发送 |
-| `plan_generated` | `plan: PlanStep[]`, `source` | 历史兼容事件；Pi runtime 当前主要发送 `plan` 单步执行计划 |
-| `plan_approval_request` | `plan`, `reasoning`, `scoutReport?` | 历史兼容事件；Pi runtime 当前不主动发送 |
-| `plan_approval_resolved` | `approved`, `reason?` | 历史兼容事件；Pi runtime 当前不主动发送 |
+| `phase` | `phase: TaskPhase`, `detail?` | Pi harness 细粒度阶段变化 |
+| `scout_started` | — | 工作区侦查开始 |
+| `scout_report` | `report: ScoutReport` | 工作区侦查报告 |
+| `plan_generated` | `plan: PlanStep[]`, `source` | 当前任务计划已生成 |
+| `plan_approval_request` | `plan`, `reasoning`, `scoutReport?` | `/plan` 模式请求用户确认计划 |
+| `plan_approval_resolved` | `approved`, `reason?` | `/plan` 模式计划审批已完成 |
 | `skill_activated` | `skillName`, `allowedTools?`, `description?`, `compatibility?` | Skill：用户或 LLM 通过 `/skill-name` 或 `activate_skill` 工具激活了某个技能 |
 | `skill_deactivated` | `previousSkill?` | Skill：当前技能已停用（含上一技能名） |
 | `plan` | `plan: PlanStep[]` | 给出/更新完整计划 |
@@ -390,7 +390,7 @@ status(running)
   → phase(finalizing) → message → status(completed) → done(completed)
 ```
 - P1: 任务启动时先侦查工作区（仅 safe 只读工具，最多 3 轮），再用 LLM 生成结构化计划。
-- P2: Pi runtime 依据工具 executionPolicy 选择并行或顺序执行；执行前由 `beforeToolCall` 统一套用 auto mode 策略。
+- P2: Pi AgentHarness 依据工具 executionPolicy 选择并行或顺序执行；执行前由 harness `tool_call` hook 统一套用 auto mode 策略。
   每个工具有独立 `invokeWithTimeout`（默认 30s）。
 - 计划以降级优先方式呈现：LLM 规划失败时回退到正则启发式。
 - 一轮可能有多个并行 `tool_call`（各带独立 `id`），对应多个 `tool_result`。
@@ -541,7 +541,7 @@ interface TaskTraceEntry {
 引擎通过环境变量选择 LLM Provider（开发期写在**项目根目录** `.env`，已 gitignore；
 模板见根目录 `.env.example`）。Provider 抽象在 `apps/agent/src/llm/`。
 
-主 Agent loop 固定使用 `@earendil-works/pi-agent-core`；旧 ReAct loop 已移除，不再提供 runtime 回退开关。
+主 Agent 执行链固定使用 `@earendil-works/pi-agent-core` 的 `AgentHarness`，不再提供独立 loop 回退开关。
 
 Provider 以 Pi provider id 配置；常用值：
 
@@ -605,7 +605,7 @@ M7 文件与网络工具边界：
 ## 7. MCP server 配置
 
 `AUREVOY_MCP_SERVERS_JSON` 用 JSON 配置可选 MCP servers。当前支持 stdio transport，
-启动时连接 server，调用 `listTools()` 发现工具并注册到 Aurevoy 的 `ToolRegistry`；
+启动时连接 server，调用 `listTools()` 发现工具并注册到 Aurevoy 的统一工具注册表；
 工具执行时再通过 MCP `callTool()` 转发。
 
 支持 Claude Desktop 风格：

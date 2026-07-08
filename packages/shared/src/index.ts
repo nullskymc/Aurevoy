@@ -96,10 +96,10 @@ export interface Message {
   toolCalls?: MessageToolCall[];
   /** 仅 role='tool'：该结果关联的 tool_call id */
   toolCallId?: string;
-  /** DeepSeek 思考模式的 reasoning_content 透传；多轮须原样回传，否则 API 报 400 */
-  reasoningContent?: string;
   /** 用户消息携带的文件附件（路径引用）；Agent 据此注入文件上下文 */
   attachments?: MessageAttachment[];
+  /** 运行中追加用户消息时的 Pi 队列投递方式。首轮/非运行中消息为空。 */
+  delivery?: 'steering' | 'follow_up';
   /** Agent 主动附加的富内容块（文件引用、图片、超链接），由 attach_content 工具生成 */
   contentBlocks?: ContentBlock[];
 }
@@ -290,7 +290,6 @@ export interface Task {
   artifacts?: TaskArtifact[];
   clarifications?: ClarificationRequest[];
   pendingApprovals?: PendingToolApproval[];
-  /** Legacy: 旧会话级审批指纹；Pi runtime 不再写入或读取。 */
   checkpoints?: TaskCheckpoint[];
   tokenUsage?: AggregatedTokenUsage;
   /** 当前上下文窗口估算 token 数（后端 estimateTokens 计算） */
@@ -301,10 +300,6 @@ export interface Task {
   parentTaskId?: string;
   /** 所属项目 ID（缺省为独立对话） */
   projectId?: string;
-  /** P6: 文件快照列表（用于 Rewind 回滚文件）。 */
-  fileSnapshots?: FileSnapshot[];
-  /** Plan Agent 触发方式；manual 表示用户通过 /plan 显式请求规划。 */
-  planMode?: 'manual';
   /** 自动模式运行时统计与状态 */
   autoModeState?: AutoModeState;
   createdAt: string;
@@ -334,12 +329,11 @@ export interface Project {
 export type ToolRiskLevel = 'safe' | 'caution' | 'dangerous';
 
 /**
- * Auto Mode 等级。
- * - off: 每次工具调用都需要用户审批（缺省）
- * - auto-edit: 文件读写编辑等安全工具自动批准；shell/网络等需要审批
- * - full: 所有工具自动批准，受安全规则约束
+ * Auto Mode 等级（Pi 对齐：原语而非特性）。
+ * - auto: 全自动执行，所有工具自动批准，无弹出式审批。安全由沙箱/工具层保障。
+ * - plan: 计划优先，Agent 先输出计划，用户批准后自动执行，执行期不再审批单个工具。
  */
-export type AutoModeLevel = 'off' | 'plan' | 'auto-edit' | 'full';
+export type AutoModeLevel = 'auto' | 'plan';
 
 /** Auto Mode 在运行时中的统计与状态 */
 export interface AutoModeState {
@@ -348,20 +342,14 @@ export interface AutoModeState {
   autoApprovedCalls: number;
   /** 被安全规则拦截的次数 */
   blockedByRules: number;
-  /** 当前是否因安全限制被暂停 */
+  /** 当前是否因外部事件暂停 */
   paused: boolean;
   /** 暂停原因（paused 时有效） */
   pausedReason?: string;
-  /** 连续自动批准数（达到阈值后会暂停） */
-  consecutiveAutoCalls: number;
-  /** 自动模式降级回退的累计次数 */
-  fallbackCount: number;
-  /** Plan Mode: Agent 是否已完成勘探并输出了计划 */
+  /** Plan Mode: Agent 是否已输出计划待审批 */
   planReady?: boolean;
   /** Plan Mode: Agent 输出的计划内容 */
   planContent?: string;
-  /** Plan Mode: 自动切入前的原始 auto mode（用于批准后恢复） */
-  planPreMode?: AutoModeLevel;
 }
 
 /** 任务轨迹记录类型，用于审计、诊断和回放。 */
@@ -454,16 +442,6 @@ export interface ToolDescriptor {
   };
 }
 
-/** P6: 文件快照记录（用于 Rewind 回滚文件）。 */
-export interface FileSnapshot {
-  id: string;
-  /** 相对工作区的文件路径 */
-  path: string;
-  /** 关联的 tool_call id */
-  callId: string;
-  createdAt: string;
-}
-
 export type ToolSource =
   | { type: 'builtin' }
   | { type: 'skill'; skillName: string }
@@ -484,12 +462,13 @@ export interface ToolResult {
   ok: boolean;
   output?: unknown;
   error?: string;
+  errorCode?: 'schema_validation_failed' | 'approval_denied' | 'execution_failed';
 }
 
-/** Pi runtime 暴露给前端的模型推理深度。 */
+/** Pi harness 暴露给前端的模型推理深度。 */
 export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
-/** Pi runtime 的工具执行策略。 */
+/** Pi harness 的工具执行策略。 */
 export type AgentToolExecutionMode = 'sequential' | 'parallel';
 
 // ============================================================
@@ -514,7 +493,6 @@ export type AgentEvent =
   | { type: 'step_update'; taskId: string; step: PlanStep }
   | { type: 'message_start'; taskId: string; role: MessageRole | 'toolResult' }
   | { type: 'token'; taskId: string; delta: string } // LLM 流式 token
-  | { type: 'reasoning'; taskId: string; delta: string } // 模型思考链（DeepSeek R1/V3 等）
   | { type: 'message'; taskId: string; message: Message } // 一条完整消息
   | { type: 'tool_call'; taskId: string; call: ToolCall }
   | { type: 'tool_result'; taskId: string; result: ToolResult }
@@ -877,7 +855,7 @@ export interface MemoryEntry {
   /** P5: 关联的记忆 ID 列表 */
   linkedMemoryIds?: string[];
   /** M8: 向量索引更新时间（有值表示已向量化，可用于语义搜索） */
-  embeddingUpdatedAt?: string;
+  embeddingUpdatedAt?: string | null;
 }
 
 /** Skill: 暴露给前端的 skill 摘要（Agent Skills 标准格式，不含 body）。 */
@@ -1000,9 +978,9 @@ export interface RuntimeSettings {
   autoModeLevel: AutoModeLevel;
   /** 是否启用 auto mode 安全规则（拦截 destroy/exfiltrate 等危险操作） */
   autoModeSafetyEnabled: boolean;
-  /** Pi runtime 推理深度。 */
+  /** Pi harness 推理深度。 */
   agentThinkingLevel: AgentThinkingLevel;
-  /** Pi runtime 工具执行策略。 */
+  /** Pi harness 工具执行策略。 */
   agentToolExecution: AgentToolExecutionMode;
   dbPath: string;
   /** M8: Embedding Provider 配置（OpenAI 兼容接口） */

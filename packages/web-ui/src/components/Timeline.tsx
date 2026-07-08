@@ -7,6 +7,7 @@
  * 支持历史回看与实时执行两种模式。
  */
 import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence, LayoutGroup, MotionConfig } from "framer-motion";
 import type {
   ContentBlock,
   Message,
@@ -66,7 +67,6 @@ export interface AgentRoundData {
   summary: string;
   markdownOutput?: string;
   contentBlocks?: ContentBlock[];
-  phaseDetail?: string;
   status: "pending" | "running" | "completed" | "failed";
 }
 
@@ -363,10 +363,9 @@ export function buildLiveAgentRoundData(params: {
   liveToolActivity: { id: string; name: string; args: unknown; status: string; planStepId?: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
   output?: string;
   phase?: string | null;
-  phaseDetail?: string;
   contentBlocks?: ContentBlock[];
 }): AgentRoundData {
-  const { plan, liveToolActivity, output, phase, phaseDetail, contentBlocks } = params;
+  const { plan, liveToolActivity, output, phase, contentBlocks } = params;
   const steps: TimelineStepData[] = liveToolActivity.filter((act) => !shouldHideToolFromWorkflow(act.name)).map((act) => {
     const kind = detectStepKind(act.name);
     const args = typeof act.args === "object" && act.args !== null
@@ -394,7 +393,7 @@ export function buildLiveAgentRoundData(params: {
     };
   });
 
-  const summary = computeSummaryFromSteps(steps) || phaseDetail || "";
+  const summary = computeSummaryFromSteps(steps) || "";
 
   // 优先按 per-tool planStepId 分组，无 planStepId 时回退到按活跃 step 分组
   const stepsByPlanStepId = new Map<string, TimelineStepData[]>();
@@ -417,7 +416,7 @@ export function buildLiveAgentRoundData(params: {
     const renderedPlanStepIds = new Set<string>();
     for (const ps of plan) {
       const stepsInGroup = stepsByPlanStepId.get(ps.id) ?? [];
-      if (stepsInGroup.length === 0 && !unnamedSteps.length) continue;
+      if (stepsInGroup.length === 0) continue;
       renderedPlanStepIds.add(ps.id);
       planStepGroups.push({
         planStepId: ps.id,
@@ -449,17 +448,7 @@ export function buildLiveAgentRoundData(params: {
         steps: unnamedSteps,
       });
     }
-  } else if (steps.length === 0) {
-    for (const ps of plan) {
-      if (isActivePhase && (ps.status === "completed" || ps.status === "failed")) continue;
-      planStepGroups.push({
-        planStepId: ps.id,
-        description: ps.description,
-        status: ps.status as PlanStepGroupData["status"],
-        steps: [],
-      });
-    }
-  } else {
+  } else if (steps.length > 0) {
     const activeIndex = plan.findIndex((s) => s.status === "running");
     const activeStepId = activeIndex >= 0 ? plan[activeIndex]?.id : undefined;
     const currentPlanDesc = activeStepId
@@ -479,7 +468,6 @@ export function buildLiveAgentRoundData(params: {
     summary,
     markdownOutput: output,
     contentBlocks,
-    phaseDetail,
     status: isFailed ? "failed" : (steps.some((s) => s.status === "running") || isActivePhase) ? "running" : "completed",
   };
 }
@@ -549,15 +537,6 @@ function AgentRoundSummary({ summary, status, stepCount }: {
       <span className="timeline-summary-text">
         {summary || `${stepCount} 个步骤`}
       </span>
-      {status === "running" && (
-        <span className="timeline-summary-badge is-running">
-          <svg viewBox="0 0 12 12" width="10" height="10" className="step-spinner-sm" aria-hidden="true">
-            <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5"
-              strokeDasharray="14" strokeLinecap="round" />
-          </svg>
-          执行中
-        </span>
-      )}
       {status === "failed" && (
         <span className="timeline-summary-badge is-failed">失败</span>
       )}
@@ -671,10 +650,16 @@ function TimelineStepNode({
   const searchPreview = buildSearchPreview(step);
 
   return (
-    <div
+    <motion.div
       className="timeline-step"
       data-status={step.status}
       onContextMenu={handleStepContextMenu}
+      variants={{
+        hidden: { opacity: 0, y: -8 },
+        show: { opacity: 1, y: 0 },
+      }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
+      layout
     >
       <div className="timeline-step-header">
         <StepGlyph step={step} />
@@ -697,44 +682,52 @@ function TimelineStepNode({
         </button>
       </div>
 
-      {open && hasDetails && (
-        <div className="timeline-step-details">
-          {searchPreview ? (
-            <SearchPreviewView preview={searchPreview} />
-          ) : step.logs ? (
-            <div className="timeline-step-log">
-              <pre>{step.logs}</pre>
-            </div>
-          ) : step.output ? (
-            <div className="timeline-step-log">
-              <pre>{step.output}</pre>
-            </div>
-          ) : null}
-          {step.error && (
-            <div className="timeline-step-error">
-              <svg viewBox="0 0 14 14" width="12" height="12" fill="none" aria-hidden="true">
-                <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M7 4.5v3M7 9.5v.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-              <span>{step.error}</span>
-            </div>
-          )}
-          {step.status === "running" && step.progress && (
-            <div className="timeline-step-log is-running">
-              <div className="timeline-step-progress">
-                {step.progress.percent != null ? (
-                  <div className="progress-bar">
-                    <div className="progress-bar-fill" style={{ width: `${step.progress.percent}%` }} />
-                  </div>
-                ) : (
-                  <span className="stream-caret" />
-                )}
-                <span className="progress-text">{step.progress.message}</span>
+      <AnimatePresence initial={false}>
+        {open && hasDetails && (
+          <motion.div
+            className="timeline-step-details"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ height: { duration: 0.2, ease: "easeOut" }, opacity: { duration: 0.12 } }}
+          >
+            {searchPreview ? (
+              <SearchPreviewView preview={searchPreview} />
+            ) : step.logs ? (
+              <div className="timeline-step-log">
+                <pre>{step.logs}</pre>
               </div>
-            </div>
-          )}
-        </div>
-      )}
+            ) : step.output ? (
+              <div className="timeline-step-log">
+                <pre>{step.output}</pre>
+              </div>
+            ) : null}
+            {step.error && (
+              <div className="timeline-step-error">
+                <svg viewBox="0 0 14 14" width="12" height="12" fill="none" aria-hidden="true">
+                  <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
+                  <path d="M7 4.5v3M7 9.5v.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+                <span>{step.error}</span>
+              </div>
+            )}
+            {step.status === "running" && step.progress && (
+              <div className="timeline-step-log is-running">
+                <div className="timeline-step-progress">
+                  {step.progress.percent != null ? (
+                    <div className="progress-bar">
+                      <div className="progress-bar-fill" style={{ width: `${step.progress.percent}%` }} />
+                    </div>
+                  ) : (
+                    <span className="stream-caret" />
+                  )}
+                  <span className="progress-text">{step.progress.message}</span>
+                </div>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <ContextMenu
         items={ctxMenu.items}
@@ -742,7 +735,7 @@ function TimelineStepNode({
         anchorPoint={ctxMenu.point}
         onClose={() => setCtxMenu((p) => ({ ...p, open: false }))}
       />
-    </div>
+    </motion.div>
   );
 }
 
@@ -877,8 +870,20 @@ function PlanStepGroup({
   const failedCount = group.steps.filter((s) => s.status === "failed").length;
   const doneCount = group.steps.filter((s) => s.status === "success").length;
 
+  const stepContainerVariants = {
+    hidden: {},
+    show: { transition: { staggerChildren: 0.06 } },
+  };
+
   return (
-    <div className="timeline-plan-group" data-status={group.status}>
+    <motion.div
+      className="timeline-plan-group"
+      data-status={group.status}
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      layout
+    >
       {/* 计划步骤描述行 */}
       <div className="timeline-plan-head">
         <span className="timeline-plan-connector" />
@@ -902,7 +907,12 @@ function PlanStepGroup({
 
       {/* 步骤列表 */}
       {group.steps.length > 0 && (
-        <div className="timeline-plan-steps">
+        <motion.div
+          className="timeline-plan-steps"
+          variants={stepContainerVariants}
+          initial="hidden"
+          animate="show"
+        >
           {group.steps.map((step) => (
             <TimelineStepNode
               key={step.id}
@@ -912,12 +922,12 @@ function PlanStepGroup({
               onAutoCollapse={onStepAutoCollapse}
             />
           ))}
-        </div>
+        </motion.div>
       )}
 
       {/* 分组尾部连接线 */}
       {!isLast && <div className="timeline-plan-trail" />}
-    </div>
+    </motion.div>
   );
 }
 
@@ -1082,16 +1092,20 @@ export function AgentRound({
   defaultToolDetailsOpen = false,
   showWorkflow = true,
   showOutput = true,
+  phaseDetail,
 }: {
   data: AgentRoundData;
   busy?: boolean;
   defaultToolDetailsOpen?: boolean;
   showWorkflow?: boolean;
   showOutput?: boolean;
+  phaseDetail?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
+  const phaseLabel = phaseDetail?.trim();
   const shouldShowWorkflow = showWorkflow && (data.planStepGroups.length > 0 || busy);
+  const shouldLeadWithWorkflow = busy && data.planStepGroups.length === 0;
   const autoOpenRunningTools = true;
   const outputNode = showOutput && data.markdownOutput ? (
     <article className="timeline-output">
@@ -1116,49 +1130,52 @@ export function AgentRound({
       ))}
     </div>
   ) : null;
+  const workflowNode = shouldShowWorkflow ? (
+    <LayoutGroup>
+      {/* Summary 行 */}
+      <AgentRoundSummary
+        summary={data.summary}
+        status={data.status}
+        stepCount={stepCount}
+      />
+
+      {/* 时间线区域 */}
+      <motion.div className="timeline-body" layout>
+        {data.planStepGroups.length > 0 ? (
+          data.planStepGroups.map((group, i) => (
+            <PlanStepGroup
+              key={group.planStepId}
+              group={group}
+              index={i}
+              isLast={i === data.planStepGroups.length - 1}
+              defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
+              autoOpenRunningTools={autoOpenRunningTools}
+            />
+          ))
+        ) : (
+          /* 无分组时仅实时阶段显示空占位 */
+          <div className="timeline-empty">
+            <span className="timeline-step-icon is-pending" />
+            <span>{phaseLabel || "思考中…"}</span>
+          </div>
+        )}
+      </motion.div>
+    </LayoutGroup>
+  ) : null;
 
   return (
-    <div
-      ref={containerRef}
-      className={`timeline-agent-round ${busy ? "is-live" : ""} ${data.status === "failed" ? "is-failed" : ""}`}
-      data-status={data.status}
-    >
-      {/* 同一轮里模型正文先于工具调用产生，展示顺序也保持正文在前、工具过程在后。 */}
-      {outputNode}
-      {contentBlocksNode}
-
-      {shouldShowWorkflow && (
-        <>
-          {/* Summary 行 */}
-          <AgentRoundSummary
-            summary={data.summary}
-            status={data.status}
-            stepCount={stepCount}
-          />
-
-          {/* 时间线区域 */}
-          <div className="timeline-body">
-            {data.planStepGroups.length > 0 ? (
-              data.planStepGroups.map((group, i) => (
-                <PlanStepGroup
-                  key={group.planStepId}
-                  group={group}
-                  index={i}
-                  isLast={i === data.planStepGroups.length - 1}
-                  defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
-                  autoOpenRunningTools={autoOpenRunningTools}
-                />
-              ))
-            ) : (
-              /* 无分组时仅实时阶段显示空占位 */
-              <div className="timeline-empty">
-                <span className="timeline-step-icon is-pending" />
-                <span>{data.phaseDetail || "思考中…"}</span>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
+    <MotionConfig reducedMotion="user">
+      <div
+        ref={containerRef}
+        className={`timeline-agent-round ${busy ? "is-live" : ""} ${data.status === "failed" ? "is-failed" : ""}`}
+        data-status={data.status}
+      >
+        {shouldLeadWithWorkflow && workflowNode}
+        {/* 同一轮里模型正文先于工具调用产生，展示顺序也保持正文在前、工具过程在后。 */}
+        {outputNode}
+        {contentBlocksNode}
+        {!shouldLeadWithWorkflow && workflowNode}
+      </div>
+    </MotionConfig>
   );
 }

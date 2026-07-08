@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { make, type ContentPart } from "../../framework/definition.js"
-import { fetchWebContent } from "../../../tools/web-content.js"
+import { fetchWebContent } from "../../web-content.js"
 
 const Input = Schema.Struct({
   url: Schema.String.annotations({ description: "URL to fetch." }),

@@ -2,65 +2,47 @@
  * 统一工具框架入口。
  *
  * 本文件负责：
- * 1. 初始化统一工具注册表
- * 2. 桥接旧框架工具
- * 3. 集成 Skill 工具
- * 4. 为 Pi Runtime 提供工具获取接口
+ * 1. 初始化统一工具注册表（Effect-TS 工具 + 简单工具 + Skill 工具）
+ * 2. 为 Pi Runtime 提供工具获取接口
  */
 
 import { unifiedToolRegistry, type UnifiedToolContext } from './unified-registry.js';
-import { initializeToolBridge } from './bridge.js';
 import { initializeSkillIntegration, filterToolsBySkill } from './skill-integration.js';
-
-// 副作用导入：确保所有内置工具在统一注册表中可用
-import '../tools/builtins.js';
-import '../tools/file-basics.js';
-import '../tools/new-tools.js';
+import { registerEffectTools } from './effect-bridge.js';
+import { registerSimpleTools } from './simple-tools.js';
+import { registerInstallSkillTool } from './install-skill.js';
+import { allTools } from './builtins.js';
 import { getLogger } from '../logging/logger.js';
 
 export { unifiedToolRegistry, type UnifiedToolDef, type UnifiedToolContext } from './unified-registry.js';
-export { initializeToolBridge } from './bridge.js';
 export { initializeSkillIntegration, filterToolsBySkill } from './skill-integration.js';
 
-/**
- * 初始化统一工具框架。
- *
- * 调用顺序：
- * 1. 桥接旧注册表工具
- * 2. 集成 Skill 工具
- */
+let initialized = false;
+
 export function initializeUnifiedToolFramework(): void {
+  if (initialized) return;
+  initialized = true;
   const log = getLogger('tool/index');
 
-  // 1. 桥接旧注册表工具
-  initializeToolBridge();
-  log.info({ count: unifiedToolRegistry.listNames().length }, '旧框架工具已桥接');
+  registerEffectTools(allTools);
+  log.info({ count: allTools.length }, 'Effect-TS 工具已注册');
 
-  // 2. 集成 Skill 工具
+  registerSimpleTools();
+  log.info('基础工具已注册');
+
   initializeSkillIntegration();
-  log.info({ count: unifiedToolRegistry.listNames().length }, 'Skill 工具已集成');
+  registerInstallSkillTool();
+  log.info('Skill 工具已集成');
 
   log.info({ tools: unifiedToolRegistry.listNames() }, '统一工具框架初始化完成');
 }
 
-/**
- * 获取 Pi Agent 可用的工具列表。
- *
- * @param activeSkill 当前激活的 Skill 名称（可选）
- * @returns Pi Agent 工具数组
- */
 export function getAgentToolsForPi(activeSkill?: string) {
   const allToolNames = unifiedToolRegistry.listNames();
   const filteredToolNames = filterToolsBySkill(allToolNames, activeSkill);
-
   return unifiedToolRegistry.toAgentTools(filteredToolNames);
 }
 
-/**
- * 获取工具执行上下文工厂函数。
- *
- * 用于为每个工具调用创建上下文。
- */
 export function createToolContext(
   taskId: string,
   workspaceDir: string,

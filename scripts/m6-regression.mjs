@@ -23,7 +23,7 @@ process.env.AUREVOY_ENABLE_COMMAND_EXECUTION = 'true';
 process.env.AUREVOY_COMMAND_TIMEOUT_MS = '2000';
 process.env.AUREVOY_COMMAND_OUTPUT_LIMIT_BYTES = '64';
 
-await import('../apps/agent/dist/tools/builtins.js');
+await import('../apps/agent/dist/tool/index.js').then(m => m.initializeUnifiedToolFramework());
 const { buildServer } = await import('../apps/agent/dist/server.js');
 
 const app = await buildServer();
@@ -119,7 +119,7 @@ async function caseExecuteCommand() {
   const result = await runTask('M6_COMMAND execute echo', { approve: true });
   assert(result.task.status === 'completed', '命令执行任务未完成');
   assert(
-    result.traces.some((trace) => trace.toolName === 'execute_command' && trace.ok === true),
+    result.traces.some((trace) => trace.toolName === 'bash' && trace.ok === true),
     '命令执行缺少成功 trace',
   );
 }
@@ -127,7 +127,7 @@ async function caseExecuteCommand() {
 async function caseExecuteCommandSandbox() {
   const result = await runTask('M6_COMMAND_SANDBOX reject outside cwd', { approve: true });
   assert(
-    result.traces.some((trace) => trace.toolName === 'execute_command' && trace.ok === false),
+    result.traces.some((trace) => trace.toolName === 'bash' && trace.ok === false),
     '命令 cwd 越界缺少失败 trace',
   );
 }
@@ -256,10 +256,10 @@ function chooseFirstTool(userText) {
     return { id: 'call_budget', name: 'get_current_time', args: {} };
   }
   if (userText.includes('M6_COMMAND_SANDBOX')) {
-    return { id: 'call_cmd_sandbox', name: 'execute_command', args: { command: process.execPath, args: ['--version'], cwd: '..' } };
+    return { id: 'call_cmd_sandbox', name: 'bash', args: { command: `${process.execPath} --version`, workdir: '..' } };
   }
   if (userText.includes('M6_COMMAND')) {
-    return { id: 'call_cmd', name: 'execute_command', args: { command: process.execPath, args: ['-e', 'console.log("hello")'] } };
+    return { id: 'call_cmd', name: 'bash', args: { command: `${process.execPath} -e console.log("hello")` } };
   }
   return null;
 }

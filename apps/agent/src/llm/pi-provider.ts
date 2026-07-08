@@ -25,11 +25,12 @@ export function assertPiLLMConfigured(): void {
   }
 }
 
-export function createPiModel(): PiModel<any> {
+export function createPiModel(modelOverride?: string): PiModel<any> {
   const provider = normalizePiProvider(config.llm.provider);
+  const modelId = modelOverride?.trim() || config.llm.model;
   const builtin = (getModel as (provider: string, model: string) => PiModel<any> | undefined)(
     provider,
-    config.llm.model,
+    modelId,
   );
   if (builtin) {
     const withBaseUrl = config.llm.provider === 'openai-compatible'
@@ -55,11 +56,11 @@ export function createPiModel(): PiModel<any> {
   }
   const api = fallbackApiForProvider(provider);
   const openAICompat = api === 'openai-completions'
-    ? openAICompletionsFallbackCompat(provider, config.llm.baseUrl, config.llm.model)
+    ? openAICompletionsFallbackCompat(provider, config.llm.baseUrl, modelId)
     : undefined;
   return {
-    id: config.llm.model,
-    name: config.llm.model,
+    id: modelId,
+    name: modelId,
     api,
     provider,
     baseUrl: config.llm.baseUrl,

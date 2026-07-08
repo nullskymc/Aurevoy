@@ -3965,6 +3965,20 @@ textarea:focus-visible,
   word-break: break-word;
 }
 
+.user-bubble-delivery {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 2px 7px;
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--surface-muted, var(--surface-subtle));
+  font-size: 11px;
+  line-height: 1;
+}
+
 /* 用户消息中的附件 */
 .user-bubble-attachments {
   display: flex;
@@ -5469,6 +5483,7 @@ button.user-bubble-attachment {
   width: 1px;
   border-radius: 2px;
   background: var(--border);
+  transition: background 0.4s ease;
 }
 
 .workflow-drawer-body .timeline-body::before {
@@ -5598,6 +5613,7 @@ button.user-bubble-attachment {
   border-radius: 50%;
   background: var(--bg);
   color: var(--text-tertiary);
+  transition: background 0.25s ease, color 0.25s ease, border-color 0.2s ease;
 }
 
 .timeline-step-glyph.is-running {
@@ -5702,7 +5718,7 @@ button.user-bubble-attachment {
   padding: 0;
   border-radius: 0;
   background: transparent;
-  overflow-x: auto;
+  overflow: hidden;
 }
 
 .timeline-step-log {
@@ -6039,6 +6055,26 @@ button.user-bubble-attachment {
 @keyframes timeline-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Timeline 无障碍：尊重系统减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .timeline-step,
+  .timeline-plan-group,
+  .timeline-step-details,
+  .timeline-step-glyph,
+  .timeline-step-caret {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .timeline-body::before {
+    transition: none !important;
+  }
+
+  .step-spinner-sm {
+    animation: none !important;
   }
 }
 

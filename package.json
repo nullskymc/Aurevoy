@@ -1,6 +1,6 @@
 {
   "name": "aurevoy",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "Aurevoy — 让每个人都拥有属于自己的 AI Agent。通用个人 AI Agent 桌面产品。",
   "workspaces": [
@@ -34,6 +34,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "concurrently": "^9.1.0",
+    "puppeteer": "^25.3.0",
     "rimraf": "^6.0.1",
     "typescript": "^5.7.2",
     "vitest": "^4.1.8"
