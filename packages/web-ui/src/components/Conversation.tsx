@@ -41,6 +41,7 @@ export interface ToolActivity {
   planStepId?: string;
   output?: unknown;
   error?: string;
+  errorCode?: string;
   progress?: {
     message: string;
     chunk?: { current: number; total: number };
@@ -90,6 +91,7 @@ interface ToolResultInfo {
   ok: boolean;
   output?: unknown;
   error?: string;
+  errorCode?: string;
 }
 
 function parseToolResultContent(content: string): ToolResultInfo {
@@ -100,9 +102,11 @@ function parseToolResultContent(content: string): ToolResultInfo {
     /* 保留原文 */
   }
   if (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)) {
+    const record = parsed as Record<string, unknown>;
     return {
       ok: false,
-      error: String((parsed as Record<string, unknown>).error),
+      error: String(record.error),
+      errorCode: typeof record.errorCode === "string" ? record.errorCode : undefined,
     };
   }
   return { ok: true, output: parsed };
@@ -128,6 +132,7 @@ function standaloneToolActivityFromMessage(message: Message): ToolActivity {
     status: result.ok ? "ok" : "error",
     output: result.output,
     error: result.error,
+    errorCode: result.errorCode,
   };
 }
 
@@ -153,6 +158,7 @@ function toolActivitiesFromAssistant(
       planStepId: tc.function.planStepId,
       output: result?.output,
       error: result?.error,
+      errorCode: result?.errorCode,
     };
   });
 }
@@ -182,7 +188,6 @@ function collectApprovalItems(
 
 export function Conversation({
   task,
-  status,
   phase,
   phaseDetail,
   plan,
@@ -205,7 +210,6 @@ export function Conversation({
   const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const previousTaskIdRef = useRef<string | null>(null);
-  const hasScrolledToTail = useRef(false);
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
@@ -232,44 +236,28 @@ export function Conversation({
     .map((item) => `${item.id}:${item.status}:${item.progress?.message ?? ""}:${item.progress?.percent ?? ""}`)
     .join("|");
 
-  // 只在实时运行/等待审批时跟随最新输出；历史回看保持自然阅读位置。
+  // SSE 流式过程中统一滚动到底部
   useEffect(() => {
-    const shouldTrackTail = hasLiveTail || phase === "waiting_approval";
-    if (!shouldTrackTail) {
-      hasScrolledToTail.current = false;
-      return;
-    }
+    if (!hasLiveTail && phase !== "waiting_approval") return;
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [hasLiveTail, output, phase, liveScrollSignature, task.messages.length, liveContentBlocks.length]);
 
-    const scrollParent = bottomRef.current?.closest(".main-scroll");
-    const distanceFromBottom = scrollParent instanceof HTMLElement
-      ? scrollParent.scrollHeight - scrollParent.scrollTop - scrollParent.clientHeight
-      : 0;
-    const userIsNearTail = distanceFromBottom < 180;
-    const shouldFollow = !hasScrolledToTail.current || userIsNearTail;
-
-    hasScrolledToTail.current = true;
-    if (shouldFollow) {
-      window.requestAnimationFrame(() => {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-      });
-    }
-  }, [hasLiveTail, output, phase, plan, status, liveScrollSignature, task.messages.length, liveContentBlocks.length]);
-
-  // 切换历史任务时回到任务顶部，避免复用滚动容器导致摘要被顶栏遮住。
+  // 切换到历史任务：滚动到最后一条消息开头；SSE 激活时不干预（由流式效果接棒）
   useEffect(() => {
+    if (hasLiveTail || phase === "waiting_approval") return;
     if (previousTaskIdRef.current === task.id) return;
     previousTaskIdRef.current = task.id;
-    const resetScroll = () => {
-      const scrollParent = topRef.current?.closest(".main-scroll");
-      if (scrollParent instanceof HTMLElement) {
-        scrollParent.scrollTo({ top: 0, behavior: "auto" });
-      } else {
-        topRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+
+    requestAnimationFrame(() => {
+      const thread = document.querySelector(".conversation .conversation-thread");
+      if (!thread) return;
+      const turns = thread.querySelectorAll(":scope > .conversation-turn");
+      const lastTurn = turns[turns.length - 1];
+      if (lastTurn) {
+        lastTurn.scrollIntoView({ behavior: "auto", block: "start" });
       }
-    };
-    resetScroll();
-    window.requestAnimationFrame(resetScroll);
-  }, [task.id]);
+    });
+  }, [task.id, hasLiveTail, phase]);
 
   const messages = task.messages;
   const resultMap = buildToolResultMap(messages);
@@ -285,12 +273,11 @@ export function Conversation({
         liveToolActivity: viewModel.liveToolActivity,
         output: viewModel.liveOutput,
         phase,
-        phaseDetail,
         contentBlocks: liveContentBlocks,
       })
     : null;
   const approvalItems = collectApprovalItems(viewModel.liveToolActivity, task.pendingApprovals ?? []);
-  const showPlanApproval = task.planMode === "manual" && phase === "waiting_approval" && approvalItems.length === 0 && plan.length > 0;
+  const showPlanApproval = phase === "waiting_approval" && approvalItems.length === 0 && plan.length > 0;
 
   return (
     <div className="conversation">
@@ -310,6 +297,7 @@ export function Conversation({
             onUserMessageEdit={onUserMessageEdit}
             onBranch={onBranch}
             liveRoundData={hasLiveTail && index === viewModel.turns.length - 1 ? liveRoundData : null}
+            phaseDetail={hasLiveTail && index === viewModel.turns.length - 1 ? phaseDetail : undefined}
           />
         ))}
 
@@ -385,6 +373,7 @@ function ConversationTurnView({
   onUserMessageEdit,
   onBranch,
   liveRoundData,
+  phaseDetail,
 }: {
   turn: ConversationTurn;
   isLiveTurn: boolean;
@@ -396,6 +385,7 @@ function ConversationTurnView({
   onUserMessageEdit?: (messageId: string, content: string, mode: RevertMode) => void;
   onBranch?: (messageId: string) => void;
   liveRoundData?: AgentRoundData | null;
+  phaseDetail?: string;
 }) {
   const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
   const attachContentToolCallIds = collectAttachContentToolCallIds(turn.agentMessages);
@@ -424,6 +414,7 @@ function ConversationTurnView({
           content={turn.user.content}
           messageId={turn.user.id}
           attachments={turn.user.attachments}
+          delivery={turn.user.delivery}
           onEdit={onUserMessageEdit}
           onBranch={onBranch}
         />
@@ -437,6 +428,7 @@ function ConversationTurnView({
               presentationMessageIds={presentationMessageIds}
               standaloneToolMessages={standaloneToolMessages}
               liveRoundData={liveRoundData}
+              phaseDetail={phaseDetail}
               resultMap={resultMap}
               plan={plan}
               defaultToolDetailsOpen={defaultToolDetailsOpen}
@@ -466,15 +458,17 @@ function ConversationTurnView({
               className="agent-final-response"
               onContextMenu={(event) => onAgentContextMenu(event, message)}
             >
-              {getFailureInfo(message) ? (
-                <AgentFailureCard message={message} />
-              ) : (
-                <AgentRound
-                  data={buildAgentRoundFromMessage(message, resultMap, plan)}
-                  busy={false}
-                  defaultToolDetailsOpen={defaultToolDetailsOpen}
-                  showWorkflow={false}
-                />
+                  {getFailureInfo(message) ? (
+                    <AgentFailureCard message={message} />
+                  ) : (
+                    <>
+                  <AgentRound
+                    data={buildAgentRoundFromMessage(message, resultMap, plan)}
+                    busy={false}
+                    defaultToolDetailsOpen={defaultToolDetailsOpen}
+                    showWorkflow={false}
+                  />
+                </>
               )}
             </div>
           ))}
@@ -561,6 +555,7 @@ function AgentWorkflowDrawer({
   presentationMessageIds,
   standaloneToolMessages,
   liveRoundData,
+  phaseDetail,
   resultMap,
   plan,
   defaultToolDetailsOpen,
@@ -571,6 +566,7 @@ function AgentWorkflowDrawer({
   presentationMessageIds: Set<string>;
   standaloneToolMessages: Message[];
   liveRoundData?: AgentRoundData | null;
+  phaseDetail?: string;
   resultMap: Map<string, ToolResultInfo>;
   plan: PlanStep[];
   defaultToolDetailsOpen: boolean;
@@ -628,6 +624,7 @@ function AgentWorkflowDrawer({
               defaultToolDetailsOpen={defaultToolDetailsOpen}
               showWorkflow
               showOutput
+              phaseDetail={phaseDetail}
             />
           )}
           {standaloneToolMessages.length > 0 && (
@@ -715,12 +712,14 @@ function UserBubble({
   content,
   messageId,
   attachments,
+  delivery,
   onEdit,
   onBranch,
 }: {
   content: string;
   messageId: string;
   attachments?: MessageAttachment[];
+  delivery?: Message["delivery"];
   onEdit?: (messageId: string, content: string, mode: RevertMode) => void;
   onBranch?: (messageId: string) => void;
 }) {
@@ -834,6 +833,11 @@ function UserBubble({
   return (
     <div className="user-bubble-row" onContextMenu={handleUserBubbleContextMenu}>
       <div className="user-bubble-col">
+        {delivery && (
+          <span className="user-bubble-delivery">
+            {delivery === "follow_up" ? "Follow-up" : "Steering"}
+          </span>
+        )}
         <div className="user-bubble">{content}</div>
         {visibleAttachments.length > 0 && (
           <div className="user-bubble-attachments">
@@ -1166,7 +1170,7 @@ function ToolActivityCard({
   const kindLabel = getToolKindLabel(item.name);
   const detail =
     item.status === "error"
-      ? item.error ?? t("tool.unknownError")
+      ? formatToolError(item.error ?? t("tool.unknownError"), item.errorCode)
       : item.output !== undefined
         ? safeStringify(item.output)
         : null;
@@ -1273,6 +1277,16 @@ function ToolActivityCard({
       )}
     </section>
   );
+}
+
+function formatToolError(error: string, errorCode?: string): string {
+  if (!errorCode) return error;
+  const label =
+    errorCode === "schema_validation_failed" ? "参数校验失败" :
+    errorCode === "approval_denied" ? "审批未通过" :
+    errorCode === "execution_failed" ? "执行失败" :
+    errorCode;
+  return `${label}\n${error}`;
 }
 
 function safeStringify(value: unknown): string {

@@ -39,8 +39,8 @@ export const bashTool = make({
     `Output is capped at ${MAX_CAPTURE_BYTES / 1024}KB.`,
   input: Input,
   output: Output,
-  execute: (input) => {
-    const cwd = input.workdir ? resolve(process.cwd(), input.workdir) : process.cwd()
+  execute: (input, ctx) => {
+    const cwd = input.workdir ? resolve(ctx.workspaceDir, input.workdir) : ctx.workspaceDir
     const timeoutMs = Math.min(input.timeout ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)
     const shell = defaultShell()
 

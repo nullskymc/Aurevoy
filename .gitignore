@@ -40,3 +40,7 @@ packages/web-ui/dist/
 
 # Personal blog / social media posts
 blog/
+
+# Tauri bundled Node.js runtime (auto-generated)
+apps/desktop/src-tauri/node-runtime/*
+!apps/desktop/src-tauri/node-runtime/.gitkeep

@@ -23,7 +23,7 @@ process.env.AUREVOY_LLM_BASE_URL = llmFixture.url;
 process.env.AUREVOY_LLM_MODEL = 'm5-initial-model';
 process.env.AUREVOY_MCP_SERVERS_JSON = '';
 
-await import('../apps/agent/dist/tools/builtins.js');
+await import('../apps/agent/dist/tool/index.js').then(m => m.initializeUnifiedToolFramework());
 const { taskStore } = await import('../apps/agent/dist/store/db.js');
 seedOldTask(taskStore);
 const { buildServer } = await import('../apps/agent/dist/server.js');

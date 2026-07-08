@@ -238,14 +238,12 @@ function App() {
   const [workMode, setWorkMode] = useState<WorkMode>(() =>
     readStoredOption(WORK_MODE_KEY, defaultToolDetailsOpen ? "coding" : "daily", ["coding", "daily"] as const),
   );
-  const [autoModeLevel, setAutoModeLevel] = useState<'off' | 'plan' | 'auto-edit' | 'full'>(() => {
+  const [autoModeLevel, setAutoModeLevel] = useState<'auto' | 'plan'>(() => {
     const stored = localStorage.getItem("aurevoy.autoModeLevel");
-    if (stored === 'plan' || stored === 'auto-edit' || stored === 'full') return stored;
-    // 迁移旧版 boolean: autoMode=true → full
-    if (localStorage.getItem("aurevoy.autoMode") === 'true') return 'full';
-    return 'off';
+    if (stored === 'plan') return 'plan';
+    return 'auto';
   });
-  const [autoModeState, setAutoModeState] = useState<{ paused?: boolean; pausedReason?: string; autoApprovedCalls?: number; consecutiveAutoCalls?: number } | null>(null);
+  const [autoModeState, setAutoModeState] = useState<{ paused?: boolean; pausedReason?: string; autoApprovedCalls?: number } | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() =>
     readStoredOption(THEME_MODE_KEY, "system", ["system", "light", "dark"] as const),
   );
@@ -440,17 +438,16 @@ function App() {
     if (!currentTask?.id) return;
     try {
       await resumeAutoModeApi(currentTask.id);
-      setAutoModeState((prev) => prev ? { ...prev, paused: false, pausedReason: undefined, consecutiveAutoCalls: 0 } : null);
+      setAutoModeState((prev) => prev ? { ...prev, paused: false, pausedReason: undefined } : null);
     } catch (err) {
       setNotice(`恢复 auto mode 失败: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   function cycleAutoModeLevel(): void {
-    const next = autoModeLevel === 'off' ? 'plan' : autoModeLevel === 'plan' ? 'auto-edit' : autoModeLevel === 'auto-edit' ? 'full' : 'off';
+    const next = autoModeLevel === 'auto' ? 'plan' : 'auto';
     setAutoModeLevel(next);
     localStorage.setItem("aurevoy.autoModeLevel", next);
-    localStorage.removeItem("aurevoy.autoMode");
     void updateSettings({ autoModeLevel: next }).catch(() => {});
   }
 
@@ -605,13 +602,6 @@ function App() {
     setGoal("");
     clearLiveState();
     void refreshTaskTraces(task.id);
-    resetMainScroll();
-  }
-
-  function resetMainScroll(): void {
-    const reset = () => mainScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
-    window.requestAnimationFrame(reset);
-    window.requestAnimationFrame(() => window.requestAnimationFrame(reset));
   }
 
   async function refreshTaskTraces(taskId: string): Promise<void> {
@@ -689,8 +679,6 @@ function App() {
           setOutput((previous) => previous + event.delta);
         }
         break;
-      case "reasoning":
-        break;
       case "message_start":
         if (event.role === "assistant") {
           nextOutputFreshRef.current = true;
@@ -703,8 +691,6 @@ function App() {
         }
         const isAssistant = event.message.role === "assistant";
         const hasToolCalls = (event.message.toolCalls?.length ?? 0) > 0;
-        // 最终回复（不带 toolCalls 的 assistant message）已进历史区，
-        // 清空流式累积，避免 live tail 与历史区双写同一段内容。
         if (isAssistant && !hasToolCalls) {
           setOutput("");
         }
@@ -721,7 +707,13 @@ function App() {
           updateTaskList(nextTask);
           return nextTask;
         });
-        // 同步 live 状态（RAF 批处理合并同一帧内的多次更新）
+        if (event.message.contentBlocks?.length) {
+          setLiveContentBlocks((prev) => {
+            const existingIds = new Set(prev.map((b) => b.id));
+            const newBlocks = event.message.contentBlocks!.filter((b) => !existingIds.has(b.id));
+            return newBlocks.length > 0 ? [...prev, ...newBlocks] : prev;
+          });
+        }
         scheduleLiveActivitySync();
         break;
       }
@@ -773,6 +765,7 @@ function App() {
           status: event.result.ok ? 'ok' : 'error',
           output: event.result.output,
           error: event.result.error,
+          errorCode: event.result.errorCode,
         });
         scheduleLiveActivitySync();
         setCurrentTask((previous) => {
@@ -1007,11 +1000,23 @@ function App() {
 
   function handleSelectTask(task: Task): void {
     closeStream();
-    setBusy(false);
     setModelDrawerOpen(false);
     setEditingMessageId(null);
     setActiveView("chat");
     applyTaskSnapshot(task);
+
+    const isLive =
+      task.status === 'pending' ||
+      task.status === 'planning' ||
+      task.status === 'running' ||
+      task.status === 'paused';
+
+    if (isLive) {
+      setBusy(true);
+      openStream(task.id, handleEvent, () => setBusy(false));
+    } else {
+      setBusy(false);
+    }
   }
 
   /** 在当前任务内追加一轮输入并继续（多轮对话）；保留后端完整上下文。 */
@@ -1076,7 +1081,6 @@ function App() {
     setTraces([]);
     setGoal("");
     setDraftProjectId(projectId);
-    resetMainScroll();
   }
 
 
@@ -1098,7 +1102,6 @@ function App() {
       updateTaskList(response.task);
       setGoal(response.removedContent ?? _content);
       setEditingMessageId(messageId);
-      resetMainScroll();
     } catch (err) {
       setNotice(`${t("notice.revertFailed")}${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1244,7 +1247,6 @@ function App() {
     setNotice(null);
     setInspectorOpen(false);
     setActiveView("chat");
-    resetMainScroll();
   }
 
   function handleOpenModelSelector(): void {

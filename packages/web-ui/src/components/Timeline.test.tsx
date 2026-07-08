@@ -29,7 +29,6 @@ describe("buildLiveAgentRoundData", () => {
     const round = buildLiveAgentRoundData({
       plan: [{ id: "exec", description: "执行任务", status: "running" }],
       phase: "calling_tool",
-      phaseDetail: "调用工具 web_search",
       liveToolActivity: [
         {
           id: "call-search",
@@ -44,7 +43,6 @@ describe("buildLiveAgentRoundData", () => {
     const step = round.planStepGroups[0]?.steps[0];
 
     expect(round.summary).toBe("执行了 1 个搜索");
-    expect(round.phaseDetail).toBe("调用工具 web_search");
     expect(round.planStepGroups[0]?.planStepId).toBe("exec");
     expect(step?.status).toBe("running");
     expect(step?.progress).toEqual({ message: "正在搜索", percent: 45 });

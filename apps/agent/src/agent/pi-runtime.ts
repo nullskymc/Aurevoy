@@ -1,12 +1,22 @@
 import { promises as fs } from 'node:fs';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Agent, type AgentEvent as PiAgentEvent, type AgentMessage, type AgentTool } from '@earendil-works/pi-agent-core';
+import {
+  runAgentLoopContinue,
+  type AgentContext as PiAgentContext,
+  type AgentEvent as PiAgentEvent,
+  type AgentLoopConfig as PiAgentLoopConfig,
+  type AgentMessage,
+  type AgentTool,
+} from '@earendil-works/pi-agent-core';
+import { Type } from 'typebox';
 import {
   type AssistantMessageEvent as PiAssistantMessageEvent,
   type AssistantMessage as PiAssistantMessage,
+  type ImageContent as PiImageContent,
   type Message as PiMessage,
   type Model as PiModel,
+  type TextContent as PiTextContent,
   type ToolResultMessage as PiToolResultMessage,
   type Usage as PiUsage,
 } from '@earendil-works/pi-ai/compat';
@@ -32,7 +42,7 @@ import { config } from '../config.js';
 import { taskEvents } from './events.js';
 import { createTaskLogger } from '../logging/trace.js';
 import { taskStore, projectStore } from '../store/db.js';
-import { unifiedToolRegistry } from '../tool/unified-registry.js';
+import { unifiedToolRegistry, validateToolInputSchema } from '../tool/unified-registry.js';
 import { initializeUnifiedToolFramework, getAgentToolsForPi, createToolContext } from '../tool/index.js';
 import {
   buildSkillCatalogMessage,
@@ -40,7 +50,7 @@ import {
   buildToolGuidanceMessage,
   totalTokens,
 } from './context.js';
-import { effectiveBudget, initialBudgetUsage, updateWallTime } from './m6-state.js';
+import { createCheckpoint, createClarification, effectiveBudget, initialBudgetUsage, resolveClarification, updateWallTime } from './m6-state.js';
 import { waitForPiApproval } from './pi-approval.js';
 import { assertPiLLMConfigured, createPiModel } from '../llm/pi-provider.js';
 import { decideToolPermission } from './approval.js';
@@ -65,19 +75,74 @@ const TEXT_EXTENSIONS = new Set([
   '.sql', '.graphql', '.gql',
 ]);
 const MAX_ATTACHMENT_CONTENT_CHARS = 30_000;
-const activePiAgents = new Map<string, Agent>();
+const activePiControllers = new Map<string, ActivePiTaskController>();
+const pendingClarificationResolvers = new Map<string, Map<string, (answer: string) => void>>();
+const budgetStopReasons = new Map<string, string>();
+const invalidPiToolCallErrors = new Map<string, Map<string, string>>();
+const SEARCH_FILES_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    query: { type: 'string', description: '要搜索的关键词或 grep 正则表达式' },
+    glob: { type: 'string', description: '文件名 glob 过滤，例如 **/*.md' },
+    path: { type: 'string', description: '搜索起始目录（相对工作区根），缺省为工作区根目录' },
+    maxResults: { type: 'integer', description: '最多返回结果数，默认 50，上限 100' },
+  },
+  required: ['query'],
+  additionalProperties: false,
+} as const;
+
+class ActivePiTaskController {
+  private steeringQueue: Message[] = [];
+  private followUpQueue: Message[] = [];
+
+  constructor(
+    private readonly modelForNextTurn: () => PiModel<any>,
+  ) {}
+
+  enqueueSteering(message: Message): void {
+    this.steeringQueue.push(message);
+  }
+
+  enqueueFollowUp(message: Message): void {
+    this.followUpQueue.push(message);
+  }
+
+  async drainSteering(): Promise<AgentMessage[]> {
+    return await this.drainOne(this.steeringQueue);
+  }
+
+  async drainFollowUp(): Promise<AgentMessage[]> {
+    return await this.drainOne(this.followUpQueue);
+  }
+
+  private async drainOne(queue: Message[]): Promise<AgentMessage[]> {
+    const next = queue.shift();
+    if (!next) return [];
+    return [await toPiUserMessage(next, this.modelForNextTurn())];
+  }
+}
 
 export function steerPiTask(taskId: string, message: Message): boolean {
-  const agent = activePiAgents.get(taskId);
-  if (!agent) return false;
-  agent.steer(toPiUserMessage(message));
+  const controller = activePiControllers.get(taskId);
+  if (!controller) return false;
+  controller.enqueueSteering(message);
   return true;
 }
 
 export function followUpPiTask(taskId: string, message: Message): boolean {
-  const agent = activePiAgents.get(taskId);
-  if (!agent) return false;
-  agent.followUp(toPiUserMessage(message));
+  const controller = activePiControllers.get(taskId);
+  if (!controller) return false;
+  controller.enqueueFollowUp(message);
+  return true;
+}
+
+export function resolvePiClarificationAnswer(taskId: string, clarificationId: string, answer: string): boolean {
+  const byTask = pendingClarificationResolvers.get(taskId);
+  const resolve = byTask?.get(clarificationId);
+  if (!resolve) return false;
+  byTask!.delete(clarificationId);
+  if (byTask!.size === 0) pendingClarificationResolvers.delete(taskId);
+  resolve(answer);
   return true;
 }
 
@@ -94,46 +159,72 @@ export async function runPiTask(task: Task, options: PiRuntimeOptions): Promise<
 
   try {
     assertPiLLMConfigured();
-    const model = createPiModel();
-    const agent = new Agent({
-      initialState: {
-        systemPrompt: await buildPiSystemPrompt(task, options.workspaceDir),
-        model,
-        thinkingLevel: runtimeThinkingLevel(),
-        tools: createPiTools(task, options),
-        messages: toPiMessages(task.messages, model),
-      },
+    const selectedModel = selectPiModelForTask(task);
+    assertPiModelSupportsAttachments(task, selectedModel);
+    const controller = new ActivePiTaskController(() => selectPiModelForTask(task));
+    const context: PiAgentContext = {
+      systemPrompt: await buildPiSystemPrompt(task, options.workspaceDir),
+      tools: createPiTools(task, options),
+      messages: await toPiMessages(task.messages, selectedModel),
+    };
+    const initialThinkingLevel = runtimeThinkingLevel();
+    const loopConfig: PiAgentLoopConfig = {
+      model: selectedModel,
+      reasoning: initialThinkingLevel === 'off' ? undefined : initialThinkingLevel,
       getApiKey: () => config.llm.apiKey,
       toolExecution: runtimeToolExecution(),
-      prepareNextTurnWithContext: async () => ({
-        model: createPiModel(),
-        thinkingLevel: runtimeThinkingLevel(),
-      }),
+      convertToLlm: (messages) => messages.filter((message): message is PiMessage =>
+        message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult',
+      ),
+      prepareNextTurn: async () => {
+        const model = selectPiModelForTask(task);
+        assertPiModelSupportsAttachments(task, model);
+        const thinkingLevel = runtimeThinkingLevel();
+        return {
+          model,
+          ...(thinkingLevel === 'off' ? {} : { thinkingLevel }),
+        };
+      },
       beforeToolCall: async ({ toolCall, args }, signal) => {
         const call = toAurevoyToolCall(task, toolCall.id, toolCall.name, args);
         return await gatePiToolCall(task, call, signal ?? options.signal);
       },
-    });
-    installShouldStopAfterTurn(agent, task, options.taskStartedAtMs);
-
-    agent.subscribe(async (event, signal) => {
-      await handlePiEvent(task, event, signal, options.taskStartedAtMs);
-    });
+      getSteeringMessages: async () => await controller.drainSteering(),
+      getFollowUpMessages: async () => await controller.drainFollowUp(),
+      shouldStopAfterTurn: async () => shouldStopAfterTurn(task, options.taskStartedAtMs),
+    };
 
     publish({ type: 'phase', taskId: task.id, phase: 'thinking', detail: 'Agent 正在思考' });
     const abortPromise = new Promise<never>((_, reject) => {
       if (options.signal.aborted) return reject(new Error('cancelled'));
       options.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
     });
-    activePiAgents.set(task.id, agent);
+    activePiControllers.set(task.id, controller);
     try {
-      await Promise.race([agent.continue(), abortPromise]);
+      await Promise.race([
+        runAgentLoopContinue(
+          context,
+          loopConfig,
+          async (event) => {
+            await handlePiEvent(task, event, options.signal, options.taskStartedAtMs, options.workspaceDir);
+          },
+          options.signal,
+        ),
+        abortPromise,
+      ]);
     } finally {
-      activePiAgents.delete(task.id);
+      activePiControllers.delete(task.id);
+      invalidPiToolCallErrors.delete(task.id);
     }
 
     if (options.signal.aborted) {
       finishCancelled(task);
+      return;
+    }
+    const budgetStopReason = budgetStopReasons.get(task.id);
+    if (budgetStopReason) {
+      budgetStopReasons.delete(task.id);
+      finishFailed(task, new Error(`预算超限：${budgetStopReason}`), 'timeout');
       return;
     }
     finishCompleted(task);
@@ -151,27 +242,11 @@ export async function runPiTask(task: Task, options: PiRuntimeOptions): Promise<
   }
 }
 
-function toPiUserMessage(message: Message): AgentMessage {
+async function toPiUserMessage(message: Message, model: PiModel<any>): Promise<AgentMessage> {
   return {
     role: 'user',
-    content: [{ type: 'text', text: message.content }],
+    content: await userMessageContentToPi(message, model),
     timestamp: new Date(message.createdAt).getTime(),
-  };
-}
-
-function installShouldStopAfterTurn(agent: Agent, task: Task, taskStartedAtMs: number): void {
-  const rawAgent = agent as unknown as {
-    createLoopConfig?: (options?: unknown) => Record<string, unknown>;
-  };
-  const original = rawAgent.createLoopConfig?.bind(agent);
-  if (!original) return;
-
-  rawAgent.createLoopConfig = (options?: unknown) => {
-    const loopConfig = original(options);
-    return {
-      ...loopConfig,
-      shouldStopAfterTurn: async () => shouldStopAfterTurn(task, taskStartedAtMs),
-    };
   };
 }
 
@@ -188,6 +263,7 @@ function shouldStopAfterTurn(task: Task, taskStartedAtMs: number): boolean {
     null;
   if (!reason) return false;
 
+  budgetStopReasons.set(task.id, reason);
   saveTask(task);
   publish({ type: 'budget_usage', taskId: task.id, usage, budget: task.budget });
   writePiTrace(task, 'phase', {
@@ -284,16 +360,84 @@ async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<st
   return messages.map((message) => message.content).join('\n\n');
 }
 
+function selectPiModelForTask(task: Task): PiModel<any> {
+  const hasImageAttachment = task.messages.some((message) =>
+    message.attachments?.some((attachment) => attachment.type === 'image'),
+  );
+  return createPiModel(hasImageAttachment && config.llm.visionModel ? config.llm.visionModel : undefined);
+}
+
+function assertPiModelSupportsAttachments(task: Task, model: PiModel<any>): void {
+  const hasImageAttachment = task.messages.some((message) =>
+    message.attachments?.some((attachment) => attachment.type === 'image'),
+  );
+  if (!hasImageAttachment) return;
+  if (!model.input?.includes('image')) {
+    throw new Error(
+      `当前模型 ${model.provider}:${model.id} 不支持图片输入。请在设置中配置支持视觉的模型，或移除图片附件后重试。`,
+    );
+  }
+}
+
+async function userMessageContentToPi(message: Message, model: PiModel<any>): Promise<string | Array<PiTextContent | PiImageContent>> {
+  const imageAttachments = (message.attachments ?? []).filter((attachment) => attachment.type === 'image');
+  if (imageAttachments.length === 0) return message.content;
+
+  const content: Array<PiTextContent | PiImageContent> = [{ type: 'text', text: message.content }];
+  for (const attachment of imageAttachments) {
+    if (!model.input?.includes('image')) {
+      throw new Error(`模型 ${model.provider}:${model.id} 不支持图片附件：${attachment.name}`);
+    }
+    content.push({
+      type: 'text',
+      text: `[Attached image: ${attachment.name}, mime: ${attachment.mimeType}, path: ${attachment.path}]`,
+    });
+    content.push(await imageAttachmentToPiContent(attachment));
+  }
+  return content;
+}
+
+async function imageAttachmentToPiContent(attachment: MessageAttachment): Promise<PiImageContent> {
+  try {
+    const raw = await fs.readFile(attachment.path);
+    return {
+      type: 'image',
+      data: raw.toString('base64'),
+      mimeType: attachment.mimeType,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`无法读取图片附件 ${attachment.name} (${attachment.path})：${message}`);
+  }
+}
+
 function createPiTools(task: Task, options: PiRuntimeOptions): AgentTool[] {
   // 初始化统一工具框架（如果尚未初始化）
   initializeUnifiedToolFramework();
 
   // 获取所有可用工具，并注入带任务上下文的执行器
-  return getAgentToolsForPi().map((agentTool) => {
-    const def = unifiedToolRegistry.get(agentTool.name)!;
+  return withPiCompatibilityAliases(getAgentToolsForPi()).map((agentTool) => {
+    const executionToolName = executionToolNameForPiTool(agentTool.name);
+    const def = unifiedToolRegistry.get(executionToolName)!;
     return {
       ...agentTool,
       execute: async (toolCallId, params, signal, onUpdate) => {
+        const rawValidationError = consumeInvalidPiToolCallError(task.id, toolCallId);
+        if (rawValidationError) {
+          throw new Error(rawValidationError);
+        }
+        if (agentTool.name === 'ask_user') {
+          const result = await executeAskUserTool(task, toolCallId, params, signal ?? options.signal);
+          return {
+            content: [{ type: 'text', text: formatUnknown(result) }],
+            details: result,
+          };
+        }
+        const validationError = validateToolInputSchema(inputSchemaForPiTool(agentTool.name, def.inputSchema), params);
+        if (validationError) {
+          throw new Error(`schema_validation_failed: ${validationError}`);
+        }
+        const executionParams = paramsForPiTool(agentTool.name, params);
         const context = createToolContext(task.id, options.workspaceDir, {
           taskGoal: task.goal,
           externalPaths: collectExternalPaths(task),
@@ -315,7 +459,7 @@ function createPiTools(task: Task, options: PiRuntimeOptions): AgentTool[] {
         });
 
         try {
-          const result = await def.execute(params as Record<string, unknown>, context);
+          const result = await def.execute(executionParams as Record<string, unknown>, context);
           return {
             content: [{ type: 'text', text: formatUnknown(result) }],
             details: result,
@@ -330,15 +474,159 @@ function createPiTools(task: Task, options: PiRuntimeOptions): AgentTool[] {
   });
 }
 
+function withPiCompatibilityAliases(tools: AgentTool[]): AgentTool[] {
+  const result = [...tools];
+  if (tools.some((tool) => tool.name === 'web_fetch') && !tools.some((tool) => tool.name === 'http_fetch')) {
+    const webFetch = tools.find((tool) => tool.name === 'web_fetch')!;
+    result.push({
+      ...webFetch,
+      name: 'http_fetch',
+      label: 'http_fetch',
+      description: `${webFetch.description}\nCompatibility alias for web_fetch.`,
+    });
+  }
+  if (tools.some((tool) => tool.name === 'open_file') && !tools.some((tool) => tool.name === 'read_file')) {
+    const openFile = tools.find((tool) => tool.name === 'open_file')!;
+    result.push({
+      ...openFile,
+      name: 'read_file',
+      label: 'read_file',
+      description: `${openFile.description}\nCompatibility alias for open_file.`,
+    });
+  }
+  if (tools.some((tool) => tool.name === 'search_grep') && !tools.some((tool) => tool.name === 'search_files')) {
+    const searchGrep = tools.find((tool) => tool.name === 'search_grep')!;
+    result.push({
+      ...searchGrep,
+      name: 'search_files',
+      label: 'search_files',
+      description: `${searchGrep.description}\nCompatibility alias for search_grep.`,
+      parameters: Type.Object({
+        query: Type.String({ description: '要搜索的关键词或 grep 正则表达式' }),
+        glob: Type.Optional(Type.String({ description: '文件名 glob 过滤，例如 **/*.md' })),
+        path: Type.Optional(Type.String({ description: '搜索起始目录（相对工作区根）' })),
+        maxResults: Type.Optional(Type.Integer({ description: '最多返回结果数，默认 50，上限 100' })),
+      }, { additionalProperties: false }),
+    });
+  }
+  return result;
+}
+
+function executionToolNameForPiTool(toolName: string): string {
+  if (toolName === 'http_fetch') return 'web_fetch';
+  if (toolName === 'read_file') return 'open_file';
+  if (toolName === 'search_files') return 'search_grep';
+  return toolName;
+}
+
+function inputSchemaForPiTool(toolName: string, schema: unknown): unknown {
+  if (toolName === 'search_files') return SEARCH_FILES_INPUT_SCHEMA;
+  return schema;
+}
+
+function paramsForPiTool(toolName: string, params: unknown): unknown {
+  if (toolName !== 'search_files' || !isRecord(params)) return params;
+  const { query, ...rest } = params;
+  return { ...rest, pattern: query };
+}
+
+async function executeAskUserTool(
+  task: Task,
+  callId: string,
+  params: unknown,
+  signal: AbortSignal,
+): Promise<unknown> {
+  const args = isRecord(params) ? params : {};
+  const question = typeof args.question === 'string' ? args.question : '请补充完成任务所需的信息。';
+  const options = Array.isArray(args.options) ? args.options.filter((item): item is string => typeof item === 'string') : undefined;
+  const context = typeof args.context === 'string' ? args.context : undefined;
+  const clarification = createClarification({ callId, question, options, context });
+
+  task.clarifications = [...(task.clarifications ?? []), clarification];
+  setTaskState(task, 'paused', 'waiting_clarification');
+  saveTask(task);
+  publish({ type: 'status', taskId: task.id, status: 'paused' });
+  publish({ type: 'phase', taskId: task.id, phase: 'waiting_clarification', detail: '等待用户补充信息' });
+  publish({ type: 'clarification_request', taskId: task.id, clarification });
+
+  const answer = await waitForClarificationAnswer(task.id, clarification.id, signal, config.agent.approvalTimeoutMs);
+  const resolved = resolveClarification(
+    task,
+    clarification.id,
+    answer === undefined ? 'timeout' : 'answered',
+    answer,
+  );
+  setTaskState(task, 'running', 'calling_tool');
+  saveTask(task);
+  if (resolved) {
+    publish({ type: 'clarification_resolved', taskId: task.id, clarification: resolved });
+  }
+  publish({ type: 'status', taskId: task.id, status: 'running' });
+  publish({ type: 'phase', taskId: task.id, phase: 'calling_tool', detail: '继续执行用户追问结果' });
+
+  return answer === undefined
+    ? { status: 'timeout', answer: null, message: '用户超时未回复，请基于已有信息继续或说明限制。' }
+    : { status: 'answered', answer };
+}
+
+function waitForClarificationAnswer(
+  taskId: string,
+  clarificationId: string,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error('cancelled'));
+      return;
+    }
+    let settled = false;
+    const cleanup = () => {
+      signal.removeEventListener('abort', onAbort);
+      clearTimeout(timer);
+      const byTask = pendingClarificationResolvers.get(taskId);
+      byTask?.delete(clarificationId);
+      if (byTask && byTask.size === 0) pendingClarificationResolvers.delete(taskId);
+    };
+    const finish = (answer: string | undefined) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(answer);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('cancelled'));
+    };
+    const timer = setTimeout(() => finish(undefined), timeoutMs);
+    signal.addEventListener('abort', onAbort, { once: true });
+    let byTask = pendingClarificationResolvers.get(taskId);
+    if (!byTask) {
+      byTask = new Map();
+      pendingClarificationResolvers.set(taskId, byTask);
+    }
+    byTask.set(clarificationId, (answer) => finish(answer));
+  });
+}
+
 async function gatePiToolCall(
   task: Task,
   call: ToolCall,
   signal: AbortSignal,
 ): Promise<{ block?: boolean; reason?: string } | undefined> {
+  const validationError = validatePiToolCallInput(call);
+  if (validationError) {
+    const message = `schema_validation_failed: ${validationError}`;
+    appendToolResult(task, call.id, call.toolName, { error: message }, true, '');
+    return { block: true, reason: message };
+  }
+
   const riskLevel = unifiedToolRegistry.riskLevelOf(call.toolName);
   const permission = decideToolPermission(
     {
-      autoModeLevel: config.autoMode.level as 'off' | 'plan' | 'auto-edit' | 'full',
+      autoModeLevel: config.autoMode.level as 'auto' | 'plan',
       autoModePaused: !!task.autoModeState?.paused,
     },
     call.toolName,
@@ -378,11 +666,38 @@ async function gatePiToolCall(
   return undefined;
 }
 
+function validatePiToolCallInput(call: ToolCall): string | null {
+  const executionToolName = executionToolNameForPiTool(call.toolName);
+  const def = unifiedToolRegistry.get(executionToolName);
+  if (!def) return null;
+  // tool_execution_start keeps the raw model arguments, before Pi's execute-time coercion.
+  return validateToolInputSchema(inputSchemaForPiTool(call.toolName, def.inputSchema), call.args);
+}
+
+function rememberInvalidPiToolCall(taskId: string, callId: string, message: string): void {
+  let byTask = invalidPiToolCallErrors.get(taskId);
+  if (!byTask) {
+    byTask = new Map();
+    invalidPiToolCallErrors.set(taskId, byTask);
+  }
+  byTask.set(callId, message);
+}
+
+function consumeInvalidPiToolCallError(taskId: string, callId: string): string | undefined {
+  const byTask = invalidPiToolCallErrors.get(taskId);
+  const message = byTask?.get(callId);
+  if (!message) return undefined;
+  byTask!.delete(callId);
+  if (byTask!.size === 0) invalidPiToolCallErrors.delete(taskId);
+  return message;
+}
+
 async function handlePiEvent(
   task: Task,
   event: PiAgentEvent,
   signal: AbortSignal,
   taskStartedAtMs: number,
+  workspaceDir: string,
 ): Promise<void> {
   if (signal.aborted) return;
   switch (event.type) {
@@ -415,6 +730,13 @@ async function handlePiEvent(
       task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
       task.budgetUsage.toolCalls += 1;
       saveTask(task);
+      {
+        const rawCall = toAurevoyToolCall(task, event.toolCallId, event.toolName, event.args);
+        const validationError = validatePiToolCallInput(rawCall);
+        if (validationError) {
+          rememberInvalidPiToolCall(task.id, event.toolCallId, `schema_validation_failed: ${validationError}`);
+        }
+      }
       publish({ type: 'phase', taskId: task.id, phase: 'calling_tool', detail: `调用工具 ${event.toolName}` });
       publish({ type: 'tool_call', taskId: task.id, call: toAurevoyToolCall(task, event.toolCallId, event.toolName, event.args) });
       writePiTrace(task, 'tool_call', {
@@ -435,7 +757,7 @@ async function handlePiEvent(
       });
       break;
     case 'tool_execution_end':
-      appendToolResult(task, event.toolCallId, event.toolName, event.result, event.isError);
+      appendToolResult(task, event.toolCallId, event.toolName, event.result, event.isError, workspaceDir);
       break;
     case 'turn_end':
       task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
@@ -472,9 +794,6 @@ function publishPiMessageDelta(task: Task, event: PiAssistantMessageEvent): void
   if (event.type === 'text_delta') {
     addOutputBytes(task, event.delta);
     publish({ type: 'token', taskId: task.id, delta: event.delta });
-  } else if (event.type === 'thinking_delta') {
-    addOutputBytes(task, event.delta);
-    publish({ type: 'reasoning', taskId: task.id, delta: event.delta });
   }
 }
 
@@ -535,21 +854,26 @@ function appendPiMessage(task: Task, message: AgentMessage): void {
   });
 }
 
-function appendToolResult(task: Task, callId: string, toolName: string, result: unknown, isError: boolean): void {
+function appendToolResult(task: Task, callId: string, toolName: string, result: unknown, isError: boolean, workspaceDir: string): void {
   const details = isRecord(result) && 'details' in result ? result.details : result;
+  const errorMessage = isError ? extractToolErrorMessage(result, details) : undefined;
+  const errorCode = isError ? classifyToolError(errorMessage) : undefined;
   const toolResult: ToolResult = isError
-    ? { callId, ok: false, error: extractToolErrorMessage(result, details) }
+    ? { callId, ok: false, error: errorMessage, errorCode }
     : { callId, ok: true, output: details };
   const message: Message = {
     id: randomUUID(),
     role: 'tool',
     content: isError
-      ? JSON.stringify({ error: toolResult.error || '工具执行失败' })
+      ? JSON.stringify({ error: toolResult.error || '工具执行失败', errorCode: toolResult.errorCode })
       : formatUnknown(toolResult.output),
     toolCallId: callId,
     createdAt: new Date().toISOString(),
   };
   task.messages.push(message);
+  if (!isError) {
+    maybeCreateToolCheckpoint(task, callId, toolName);
+  }
   saveTask(task);
   publish({ type: 'tool_result', taskId: task.id, result: toolResult });
   publish({ type: 'message', taskId: task.id, message });
@@ -567,10 +891,16 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
   if (!isError && toolName === 'attach_content') {
     const raw = extractAttachContentBlock(result, details);
     if (isRecord(raw) && typeof raw.type === 'string' && typeof raw.content === 'string') {
+      let resolvedContent = String(raw.content);
+      const blockType = (raw.type as string) === 'file_reference' || (raw.type as string) === 'image'
+        ? 'file' : 'url';
+      if (blockType === 'file' && resolvedContent.length > 0 && !resolvedContent.startsWith('/') && !resolvedContent.startsWith('~')) {
+        resolvedContent = join(workspaceDir, resolvedContent);
+      }
       const block: ContentBlock = {
         id: randomUUID(),
         type: raw.type as ContentBlock['type'],
-        content: raw.content,
+        content: resolvedContent,
         name: typeof raw.name === 'string' ? raw.name : undefined,
         mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : undefined,
         size: typeof raw.size === 'number' ? raw.size : undefined,
@@ -591,6 +921,30 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
   }
 }
 
+function maybeCreateToolCheckpoint(task: Task, callId: string, toolName: string): void {
+  if (task.plan.length < 2) return;
+  if ((task.checkpoints ?? []).some((checkpoint) => isRecord(checkpoint.data) && checkpoint.data.callId === callId)) return;
+  const checkpoint = createCheckpoint({
+    label: `工具 ${toolName} 已完成`,
+    stepId: planStepIdForToolCall(task, callId) ?? currentPlanStepId(task),
+    message: `已完成工具调用 ${toolName}`,
+    data: { callId, toolName },
+  });
+  task.checkpoints = [...(task.checkpoints ?? []), checkpoint];
+  publish({ type: 'checkpoint_created', taskId: task.id, checkpoint });
+}
+
+function classifyToolError(message: string | undefined): ToolResult['errorCode'] {
+  const text = message ?? '';
+  if (text.includes('schema_validation_failed') || text.includes('schema') || text.includes('参数')) {
+    return 'schema_validation_failed';
+  }
+  if (text.includes('用户拒绝') || text.includes('超时未批准') || text.includes('not approved')) {
+    return 'approval_denied';
+  }
+  return 'execution_failed';
+}
+
 function extractAttachContentBlock(result: unknown, details: unknown): unknown {
   if (isRecord(details) && 'contentBlock' in details) return details.contentBlock;
   if (isRecord(result) && 'contentBlock' in result) return result.contentBlock;
@@ -609,54 +963,45 @@ function assistantMessageToAurevoy(task: Task, message: PiAssistantMessage): Mes
         planStepId: planStepIdForToolCall(task, block.id),
       },
     }));
-  const reasoningContent = message.content
-    .filter((block) => block.type === 'thinking')
-    .map((block) => block.thinking)
-    .join('');
   return {
     id: randomUUID(),
     role: 'assistant',
-    content: piContentToText(message.content.filter((block) => block.type !== 'toolCall')),
+    content: piContentToText(message.content.filter((block) => block.type === 'text')),
     createdAt: new Date(message.timestamp).toISOString(),
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    reasoningContent: reasoningContent || undefined,
     failure: message.errorMessage
       ? { message: message.errorMessage, category: message.stopReason === 'aborted' ? 'cancelled' : 'model' }
       : undefined,
   };
 }
 
-function toPiMessages(messages: Message[], model: PiModel<any>): PiMessage[] {
+async function toPiMessages(messages: Message[], model: PiModel<any>): Promise<PiMessage[]> {
   const toolNamesByCallId = new Map<string, string>();
   for (const message of messages) {
     for (const call of message.toolCalls ?? []) {
       toolNamesByCallId.set(call.id, call.function.name);
     }
   }
-  return messages.flatMap((message) => toPiMessage(message, toolNamesByCallId, model));
+  const converted: PiMessage[] = [];
+  for (const message of messages) {
+    converted.push(...await toPiMessage(message, toolNamesByCallId, model));
+  }
+  return converted;
 }
 
-function toPiMessage(message: Message, toolNamesByCallId: Map<string, string>, model: PiModel<any>): PiMessage[] {
+async function toPiMessage(message: Message, toolNamesByCallId: Map<string, string>, model: PiModel<any>): Promise<PiMessage[]> {
   const timestamp = new Date(message.createdAt).getTime();
   if (message.role === 'user') {
     return [{
       role: 'user',
-      content: [{ type: 'text', text: message.content }],
+      content: await userMessageContentToPi(message, model),
       timestamp,
     }];
   }
   if (message.role === 'assistant') {
-    const thinkingBlock = message.reasoningContent
-      ? [{
-          type: 'thinking' as const,
-          thinking: message.reasoningContent,
-          thinkingSignature: reasoningReplayFieldForModel(model),
-        }]
-      : [];
     return [{
       role: 'assistant',
       content: [
-        ...thinkingBlock,
         ...(message.content ? [{ type: 'text' as const, text: message.content }] : []),
         ...(message.toolCalls ?? []).map((call) => ({
           type: 'toolCall' as const,
@@ -685,31 +1030,6 @@ function toPiMessage(message: Message, toolNamesByCallId: Map<string, string>, m
     } satisfies PiToolResultMessage];
   }
   return [];
-}
-
-function reasoningReplayFieldForModel(model: PiModel<any>): 'reasoning_content' | undefined {
-  if (model.api !== 'openai-completions') return undefined;
-  const compat = isRecord(model.compat) ? model.compat : {};
-  // 同时检查 model 级别的 provider 和用户配置的 provider，避免 Pi SDK builtin model 缺失 compat 信息
-  const configuredProvider = config.llm.provider?.toLowerCase() ?? '';
-  const isDeepSeek =
-    model.provider === 'deepseek' ||
-    configuredProvider === 'deepseek' ||
-    compat.thinkingFormat === 'deepseek';
-  const isQwen =
-    model.provider === 'qwen' ||
-    configuredProvider === 'qwen' ||
-    compat.thinkingFormat === 'qwen' ||
-    compat.thinkingFormat === 'qwen-chat-template';
-  if (
-    compat.requiresReasoningContentOnAssistantMessages === true ||
-    isDeepSeek ||
-    isQwen ||
-    model.provider === 'openai-compatible'
-  ) {
-    return 'reasoning_content';
-  }
-  return undefined;
 }
 
 function toAurevoyToolCall(task: Task, id: string, toolName: string, args: unknown): ToolCall {
@@ -858,7 +1178,6 @@ function piContentToText(content: unknown): string {
   if (!Array.isArray(content)) return '';
   return content.map((block) => {
     if (isRecord(block) && block.type === 'text' && typeof block.text === 'string') return block.text;
-    if (isRecord(block) && block.type === 'thinking' && typeof block.thinking === 'string') return block.thinking;
     if (isRecord(block) && block.type === 'image' && typeof block.mimeType === 'string') return `[image:${block.mimeType}]`;
     return '';
   }).join('');

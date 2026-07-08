@@ -1,4 +1,4 @@
-import { unifiedToolRegistry } from '../tool/unified-registry.js';
+import { unifiedToolRegistry } from './unified-registry.js';
 import { installFromGit } from '../skills/installer.js';
 import { reloadSkillsAndTools } from '../skills/reload.js';
 import { config } from '../config.js';

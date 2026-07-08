@@ -29,7 +29,7 @@ process.env.AUREVOY_COMPRESSED_MESSAGE_CHAR_CAP = '200';
 // 禁用 LLM 规划：fixture mock server 不处理 scout/plan 对话模式，直接用正则兜底
 process.env.AUREVOY_LLM_PLANNING_ENABLED = 'false';
 
-await import('../apps/agent/dist/tools/builtins.js');
+await import('../apps/agent/dist/tool/index.js').then(m => m.initializeUnifiedToolFramework());
 const { taskStore } = await import('../apps/agent/dist/store/db.js');
 const seededRecoveryTaskId = seedInterruptedTask(taskStore);
 const { buildServer } = await import('../apps/agent/dist/server.js');

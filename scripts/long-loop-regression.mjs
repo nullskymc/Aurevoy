@@ -26,8 +26,7 @@ process.env.AUREVOY_ENABLE_COMMAND_EXECUTION = 'true';
 process.env.AUREVOY_COMMAND_TIMEOUT_MS = '2000';
 process.env.AUREVOY_COMMAND_OUTPUT_LIMIT_BYTES = '128';
 
-await import('../apps/agent/dist/tools/registry.js');
-await import('../apps/agent/dist/tools/builtins.js');
+await import('../apps/agent/dist/tool/index.js').then(m => m.initializeUnifiedToolFramework());
 const { buildServer } = await import('../apps/agent/dist/server.js');
 const {
   buildConversationViewModel,
@@ -391,7 +390,7 @@ async function sendLongLoopToolCall(res, iteration) {
               index: 0,
               id: callId,
               type: 'function',
-              function: { name: 'execute_command', arguments: '' },
+              function: { name: 'bash', arguments: '' },
             },
           ],
         },

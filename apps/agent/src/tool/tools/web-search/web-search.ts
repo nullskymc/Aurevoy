@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { make, type ContentPart } from "../../framework/definition.js"
-import { searchWeb } from "../../../tools/web-content.js"
+import { searchWeb } from "../../web-content.js"
 
 const Input = Schema.Struct({
   query: Schema.String.annotations({ description: "Search query string." }),

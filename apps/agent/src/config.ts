@@ -156,7 +156,7 @@ export const config = {
   },
 
   autoMode: {
-    level: 'off' as string,
+    level: 'auto' as string,
   },
 
   network: {

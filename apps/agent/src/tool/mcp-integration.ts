@@ -9,7 +9,7 @@ import {
 import type { Tool as McpSdkTool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerStatus, ToolRiskLevel } from '@aurevoy/shared';
 import { config, type McpServerConfig } from '../config.js';
-import { unifiedToolRegistry } from '../tool/unified-registry.js';
+import { unifiedToolRegistry } from './unified-registry.js';
 import { getLogger } from '../logging/logger.js';
 import { getPythonBinDir, isPythonInstalled } from '../runtime/python-runtime.js';
 

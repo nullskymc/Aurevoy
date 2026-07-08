@@ -487,7 +487,7 @@ export function estimateTokens(text: string): number {
 
 function messageTokens(message: Message): number {
   let n = estimateTokens(message.content ?? '');
-  if (message.reasoningContent) n += estimateTokens(message.reasoningContent);
+
   if (message.toolCalls?.length) {
     for (const tc of message.toolCalls) {
       n += estimateTokens(tc.function.arguments ?? '');

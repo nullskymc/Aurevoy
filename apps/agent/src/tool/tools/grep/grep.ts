@@ -33,8 +33,8 @@ export const grepTool = make({
     "Search file contents by regular expression. Use path to narrow the search, include to filter files by glob, and limit to bound the match count. Returns file paths, line numbers, and matched text.",
   input: Input,
   output: Output,
-  execute: async (input) => {
-    const cwd = input.path ? resolve(process.cwd(), input.path) : process.cwd()
+  execute: async (input, ctx) => {
+    const cwd = input.path ? resolve(ctx.workspaceDir, input.path) : ctx.workspaceDir
     const limit = input.limit ?? 100
     const args = ["-rni", "--binary-files=without-match", "-m", String(limit)]
 

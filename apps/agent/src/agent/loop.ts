@@ -15,7 +15,7 @@ import type {
 } from '@aurevoy/shared';
 import { config } from '../config.js';
 import { taskEvents } from './events.js';
-import { followUpPiTask, runPiTask, steerPiTask } from './pi-runtime.js';
+import { followUpPiTask, resolvePiClarificationAnswer, runPiTask, steerPiTask } from './pi-runtime.js';
 import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval, waitForPlanApproval } from './pi-approval.js';
 import { taskStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
@@ -292,7 +292,6 @@ export function addUserTurn(
 
   const parsed = parseSlashCommand(content);
   const messageContent = parsed.planRequested ? (parsed.text || task.goal) : content;
-  task.planMode = parsed.planRequested ? 'manual' : undefined;
   if (parsed.planRequested) task.goal = messageContent;
 
   const userMsg: Message = {
@@ -330,6 +329,7 @@ export function queueRunningUserTurn(
     content,
     createdAt: new Date().toISOString(),
     attachments,
+    delivery,
   };
 
   const delivered = delivery === 'follow_up'
@@ -351,13 +351,12 @@ export function queueRunningUserTurn(
   return { message: userMsg, delivered };
 }
 
-/** Pi runtime 当前不维护旧 auto-mode 暂停态；保留端点兼容。 */
+/** plan 模式下恢复暂停的任务继续执行。 */
 export function resumeAutoMode(taskId: string): boolean {
   const task = taskStore.get(taskId);
   if (!task?.autoModeState?.paused) return false;
   task.autoModeState.paused = false;
   task.autoModeState.pausedReason = undefined;
-  task.autoModeState.consecutiveAutoCalls = 0;
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
   taskEvents.publish({ type: 'auto_mode_state', taskId, state: { ...task.autoModeState } });
@@ -383,11 +382,11 @@ export function resolvePlanApprovalDecision(
 
 /** Pi-only 后端不再维护旧 ask_user 等待队列。 */
 export function resolveClarificationAnswer(
-  _taskId: string,
-  _clarificationId: string,
-  _answer: string,
+  taskId: string,
+  clarificationId: string,
+  answer: string,
 ): boolean {
-  return false;
+  return resolvePiClarificationAnswer(taskId, clarificationId, answer);
 }
 
 /** 创建一个新任务并持久化（尚未开始执行）。 */
@@ -422,7 +421,6 @@ export function createTask(
     budgetUsage: initialBudgetUsage(),
     tokenUsage: { available: false, provider: getPiProviderName(), model: config.llm.model },
     projectId: projectId ?? undefined,
-    planMode: parsed.planRequested ? 'manual' : undefined,
     createdAt: now,
     updatedAt: now,
   };
@@ -430,7 +428,7 @@ export function createTask(
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
     summary: '任务已创建，等待 Agent runtime 执行',
-    data: { goal: taskGoal, planMode: task.planMode },
+    data: { goal: taskGoal },
   });
   return task;
 }
@@ -450,7 +448,7 @@ export async function resolveTaskWorkspace(task: Task): Promise<string> {
 export async function runTask(task: Task): Promise<void> {
   task.pendingApprovals = [];
   if (task.plan.length === 0) {
-    task.plan = [{ id: 'exec', description: 'Agent 执行任务', status: 'running' }];
+    task.plan = createInitialPlan(task);
   } else {
     task.plan = task.plan.map((step, index) =>
       step.status === 'completed' ? step : { ...step, status: index === 0 ? 'running' : 'pending' },
@@ -464,7 +462,7 @@ export async function runTask(task: Task): Promise<void> {
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
   try {
-    if (task.planMode === 'manual') {
+    if (config.autoMode.level === 'plan') {
       const approved = await requestManualPlanApproval(task, abortController.signal);
       if (!approved) return;
     }
@@ -476,6 +474,21 @@ export async function runTask(task: Task): Promise<void> {
   } finally {
     activeAbortControllers.delete(task.id);
   }
+}
+
+function createInitialPlan(task: Task): PlanStep[] {
+  if (!shouldUseMultiStepPlan(task.goal)) {
+    return [{ id: 'exec', description: 'Agent 执行任务', status: 'running' }];
+  }
+  return [
+    { id: 'discover', description: '搜集并确认本地材料', status: 'running' },
+    { id: 'synthesize', description: '整理关键信息并形成结构', status: 'pending' },
+    { id: 'deliver', description: '输出最终结果并检查完整性', status: 'pending' },
+  ];
+}
+
+function shouldUseMultiStepPlan(goal: string): boolean {
+  return /(整理|报告|Markdown|材料|多步|计划|report|markdown|plan|summari[sz]e|organize)/i.test(goal);
 }
 
 async function requestManualPlanApproval(task: Task, signal: AbortSignal): Promise<boolean> {

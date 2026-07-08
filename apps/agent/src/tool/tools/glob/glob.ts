@@ -60,8 +60,8 @@ export const globTool = make({
   description: "Find files by glob pattern. Use ** to match directories recursively. Returns relative file paths.",
   input: Input,
   output: Output,
-  execute: async (input) => {
-    const cwd = input.path ? resolve(process.cwd(), input.path) : process.cwd()
+  execute: async (input, ctx) => {
+    const cwd = input.path ? resolve(ctx.workspaceDir, input.path) : ctx.workspaceDir
     const limit = input.limit ?? 200
     return scanRecursive(cwd, input.pattern, limit)
   },

@@ -12,6 +12,8 @@ import type {
   BranchTaskResponse,
   CleanupDataRequest,
   CleanupDataResponse,
+  ClarificationAnswerRequest,
+  ClarificationAnswerResponse,
   CompactTaskRequest,
   CompactTaskResponse,
   ContinueTaskRequest,
@@ -60,6 +62,7 @@ import {
   prepareTaskForResume,
   queueRunningUserTurn,
   resolveApproval,
+  resolveClarificationAnswer,
   resolvePlanApprovalDecision,
   resumeAutoMode,
   revertTask,
@@ -74,7 +77,7 @@ import { skillRegistry } from './skills/registry.js';
 import { installFromGit, uninstallSkill } from './skills/installer.js';
 import { reloadSkillsAndTools } from './skills/reload.js';
 import { getPiProviderName, listPiProviderModels } from './llm/pi-provider.js';
-import { getMcpStatuses, reloadMcpTools } from './tools/mcp.js';
+import { getMcpStatuses, reloadMcpTools } from './tool/mcp-integration.js';
 import {
   readCleanupPolicyDays,
   readRuntimeSettings,
@@ -520,6 +523,25 @@ export async function buildServer(externalLogger?: Logger) {
     },
   );
 
+  app.post<{ Params: { id: string; clarificationId: string }; Body: ClarificationAnswerRequest }>(
+    '/api/tasks/:id/clarifications/:clarificationId',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      const { answer } = req.body ?? {};
+      if (typeof answer !== 'string') {
+        return reply.code(400).send({ error: 'answer(string) 必填' });
+      }
+      const delivered = resolveClarificationAnswer(req.params.id, req.params.clarificationId, answer);
+      const body: ClarificationAnswerResponse = {
+        taskId: req.params.id,
+        clarificationId: req.params.clarificationId,
+        delivered,
+      };
+      return reply.send(body);
+    },
+  );
+
   // 审批 /plan 触发的执行计划。Pi runtime 只在批准后进入模型调用。
   app.post<{ Params: { id: string }; Body: PlanApprovalRequest }>(
     '/api/tasks/:id/plan-approval',
@@ -806,6 +828,9 @@ export async function buildServer(externalLogger?: Logger) {
           ? { type: 'clarification_request', taskId: task.id, clarification }
           : { type: 'clarification_resolved', taskId: task.id, clarification },
       );
+    }
+    for (const approval of task.pendingApprovals ?? []) {
+      sendSnapshot({ type: 'approval_request', taskId: task.id, call: approval.call, riskLevel: approval.riskLevel });
     }
     if (['completed', 'failed', 'cancelled'].includes(task.status)) {
       replayingSnapshot = false;

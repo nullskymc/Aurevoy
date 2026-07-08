@@ -28,8 +28,8 @@ export const writeTool = make({
     "Preserves UTF-8 BOM if the file already has one. Relative paths resolve from the workspace root.",
   input: Input,
   output: Output,
-  execute: async (input) => {
-    const path = resolve(process.cwd(), input.path)
+  execute: async (input, ctx) => {
+    const path = resolve(ctx.workspaceDir, input.path)
     const mode = input.mode ?? "overwrite"
 
     if (mode === "create") {

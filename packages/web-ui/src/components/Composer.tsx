@@ -10,7 +10,7 @@ interface SlashCommand {
   description?: string;
 }
 
-export type AutoModeUILevel = 'off' | 'plan' | 'auto-edit' | 'full';
+export type AutoModeUILevel = 'auto' | 'plan';
 
 interface ComposerProps {
   value: string;
@@ -410,7 +410,7 @@ export function Composer({
               type="button"
               className="auto-mode-btn-composer auto-mode-paused"
               onClick={onResumeAutoMode}
-              title="Auto mode 已暂停，点击恢复"
+              title="Plan approval paused — resume"
             >
               <span className="auto-mode-dot paused" />
               <span>Paused — resume</span>
@@ -418,27 +418,17 @@ export function Composer({
           ) : (
             <button
               type="button"
-              className={"auto-mode-btn-composer" + (autoModeLevel && autoModeLevel !== 'off' ? " is-active" : "")}
+              className={"auto-mode-btn-composer is-active"}
               onClick={onCycleAutoMode}
               title={
-                autoModeLevel === 'full'
-                  ? 'Full Auto — all tools auto-approved with safety rules. Plan: auto.'
-                  : autoModeLevel === 'auto-edit'
-                    ? 'Auto-edit — file ops auto, shell/network manual. Plan: auto.'
-                    : autoModeLevel === 'plan'
-                      ? 'Plan Mode — read-only exploration. Agent reads & plans, no writes until approved.'
-                      : 'Manual — all tools and plans require approval.'
+                autoModeLevel === 'auto'
+                  ? 'Auto — agent runs freely, all tools auto-approved'
+                  : 'Plan — agent plans first, user approves, then auto-executes'
               }
             >
-              <span className={"auto-mode-dot" + (autoModeLevel === 'full' ? ' full' : autoModeLevel === 'auto-edit' ? ' auto-edit' : autoModeLevel === 'plan' ? ' plan' : ' off')} />
+              <span className={"auto-mode-dot" + (autoModeLevel === 'plan' ? ' plan' : '')} />
               <span>
-                {autoModeLevel === 'full'
-                  ? 'Full Auto'
-                  : autoModeLevel === 'auto-edit'
-                    ? 'Auto-edit'
-                    : autoModeLevel === 'plan'
-                      ? 'Plan'
-                      : 'Manual'}
+                {autoModeLevel === 'plan' ? 'Plan' : 'Auto'}
               </span>
             </button>
           )}
