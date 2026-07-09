@@ -1,4 +1,5 @@
 import type { Task } from "@aurevoy/shared";
+import { taskDisplayTitle } from "@aurevoy/shared";
 import { t } from "../i18n";
 import { getStatusLabel } from "../components/status";
 
@@ -15,7 +16,10 @@ export function SearchPage({
 }) {
   const normalizedQuery = query.trim().toLowerCase();
   const filteredTasks = normalizedQuery
-    ? tasks.filter((task) => task.goal.toLowerCase().includes(normalizedQuery))
+    ? tasks.filter((task) => {
+        const haystack = `${taskDisplayTitle(task)}\n${task.goal}`.toLowerCase();
+        return haystack.includes(normalizedQuery);
+      })
     : tasks;
 
   return (
@@ -31,8 +35,8 @@ export function SearchPage({
           <p className="page-empty">{t("sidebar.emptyNoMatch")}</p>
         ) : (
           filteredTasks.map((task) => (
-            <button key={task.id} type="button" className="page-list-row" onClick={() => onSelectTask(task)}>
-              <span className="page-list-title">{task.goal}</span>
+            <button key={task.id} type="button" className="page-list-row" onClick={() => onSelectTask(task)} title={task.goal}>
+              <span className="page-list-title">{taskDisplayTitle(task)}</span>
               <span className="page-list-meta">
                 {getStatusLabel(task.status)} · {new Date(task.updatedAt).toLocaleString("zh-CN")}
               </span>

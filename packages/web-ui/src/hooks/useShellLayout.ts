@@ -7,13 +7,16 @@ import {
   DEFAULT_CHAT_FONT_SIZE,
   DEFAULT_CODE_FONT_SIZE,
   DEFAULT_UI_FONT_SIZE,
-  MAX_INSPECTOR_WIDTH,
+  DEFAULT_WORKBENCH_WIDTH,
   MAX_SIDEBAR_WIDTH,
-  MIN_INSPECTOR_WIDTH,
+  MAX_WORKBENCH_WIDTH,
   MIN_SIDEBAR_WIDTH,
+  MIN_WORKBENCH_WIDTH,
   TOOL_DETAILS_OPEN_KEY,
   UI_FONT_SIZE_KEY,
   WORK_MODE_KEY,
+  WORKBENCH_OPEN_KEY,
+  WORKBENCH_WIDTH_KEY,
   clamp,
   readStoredBoolean,
   readStoredLocale,
@@ -24,13 +27,15 @@ import {
 import type { ThemeMode, WorkMode } from "../app/types";
 
 export function useShellLayout() {
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [workbenchOpen, setWorkbenchOpen] = useState(() =>
+    readStoredBoolean(WORKBENCH_OPEN_KEY, true),
+  );
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     readStoredNumber("aurevoy.sidebarWidth", 330, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
   );
-  const [inspectorWidth, setInspectorWidth] = useState(() =>
-    readStoredNumber("aurevoy.inspectorWidth", 760, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH),
+  const [workbenchWidth, setWorkbenchWidth] = useState(() =>
+    readStoredNumber(WORKBENCH_WIDTH_KEY, DEFAULT_WORKBENCH_WIDTH, MIN_WORKBENCH_WIDTH, MAX_WORKBENCH_WIDTH),
   );
   const [chatFontSize, setChatFontSize] = useState(() =>
     readStoredNumber(CHAT_FONT_SIZE_KEY, DEFAULT_CHAT_FONT_SIZE, 11, 24),
@@ -55,8 +60,12 @@ export function useShellLayout() {
   }, [sidebarWidth]);
 
   useEffect(() => {
-    window.localStorage.setItem("aurevoy.inspectorWidth", String(inspectorWidth));
-  }, [inspectorWidth]);
+    window.localStorage.setItem(WORKBENCH_WIDTH_KEY, String(workbenchWidth));
+  }, [workbenchWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem(WORKBENCH_OPEN_KEY, String(workbenchOpen));
+  }, [workbenchOpen]);
 
   useEffect(() => {
     window.localStorage.setItem(CHAT_FONT_SIZE_KEY, String(chatFontSize));
@@ -113,15 +122,14 @@ export function useShellLayout() {
   function startResize(panel: "left" | "right", event: PointerEvent<HTMLDivElement>): void {
     event.preventDefault();
     const startX = event.clientX;
-    const startWidth = panel === "left" ? sidebarWidth : inspectorWidth;
+    const startWidth = panel === "left" ? sidebarWidth : workbenchWidth;
 
-    // 拖拽只修改布局宽度状态；具体列宽由 CSS 变量消费，避免组件互相知道布局细节。
     function handleMove(moveEvent: globalThis.PointerEvent): void {
       const delta = moveEvent.clientX - startX;
       if (panel === "left") {
         setSidebarWidth(clamp(startWidth + delta, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH));
       } else {
-        setInspectorWidth(clamp(startWidth - delta, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH));
+        setWorkbenchWidth(clamp(startWidth - delta, MIN_WORKBENCH_WIDTH, MAX_WORKBENCH_WIDTH));
       }
     }
 
@@ -136,7 +144,7 @@ export function useShellLayout() {
 
   const shellStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
-    "--inspector-width": `${inspectorWidth}px`,
+    "--workbench-width": `${workbenchWidth}px`,
     "--ui-font-size": `${uiFontSize}px`,
     "--chat-font-size": `${chatFontSize}px`,
     "--code-font-size": `${codeFontSize}px`,
@@ -146,7 +154,7 @@ export function useShellLayout() {
     chatFontSize,
     codeFontSize,
     defaultToolDetailsOpen,
-    inspectorOpen,
+    workbenchOpen,
     leftCollapsed,
     locale,
     shellStyle,
@@ -157,7 +165,7 @@ export function useShellLayout() {
     handleCodeFontSizeChange,
     handleUiFontSizeChange,
     handleWorkModeChange,
-    setInspectorOpen,
+    setWorkbenchOpen,
     setLeftCollapsed,
     setLocaleState,
     setThemeMode,

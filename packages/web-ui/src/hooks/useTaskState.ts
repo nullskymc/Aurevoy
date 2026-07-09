@@ -1,9 +1,18 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
 import type { PlanStep, Task, TaskPhase, TaskStatus, TaskTraceEntry } from "@aurevoy/shared";
+import { formatTaskTitle } from "@aurevoy/shared";
 
 function sanitizeTaskForDisplay(task: Task): Task {
   const messages = task.messages.filter((message) => message.role !== "system");
-  return messages.length === task.messages.length ? task : { ...task, messages };
+  const title = task.title?.trim() ? task.title : formatTaskTitle(task.goal);
+  const needsMessages = messages.length !== task.messages.length;
+  const needsTitle = title !== task.title;
+  if (!needsMessages && !needsTitle) return task;
+  return {
+    ...task,
+    ...(needsMessages ? { messages } : null),
+    ...(needsTitle ? { title, titleSource: task.titleSource ?? "truncated" } : null),
+  };
 }
 
 function sanitizeNullableTaskForDisplay(task: Task | null): Task | null {
@@ -56,6 +65,7 @@ export function useTaskState() {
     'messages',
     'updatedAt',
     'goal',
+    'title',
   ];
 
   function patchCurrentTask(patch: Partial<Task>): void {

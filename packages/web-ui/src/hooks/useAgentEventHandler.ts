@@ -94,6 +94,16 @@ export function useAgentEventHandler({
         setTraces([]);
         updateTaskList(event.task);
         break;
+      case "task_title":
+        patchCurrentTask({ title: event.title, titleSource: event.source });
+        setTasks((prev) =>
+          prev.map((task) =>
+            task.id === event.taskId
+              ? { ...task, title: event.title, titleSource: event.source }
+              : task,
+          ),
+        );
+        break;
       case "agent_start":
         setStatus("running");
         setPhase("thinking");

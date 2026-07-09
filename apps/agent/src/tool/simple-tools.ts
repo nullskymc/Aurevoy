@@ -353,39 +353,85 @@ export function registerSimpleTools(): void {
   });
 
   // delegate_task
-  unifiedToolRegistry.register({
-    name: 'delegate_task',
-    description: '将独立子任务委托给另一个 Agent 执行。适用于同时搜索多个目录、并发读取多个文件、独立子分析。子代理默认只有只读权限，无权写入文件。可同时发起多个 delegate_task 调用实现并行子代理。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        goal: { type: 'string', description: '子任务的简要目标（一句话）' },
-        prompt: { type: 'string', description: '给子代理的详细指令' },
-        tools: { type: 'array', items: { type: 'string' }, description: '允许子代理使用的工具' },
+  {
+    const roleCatalog = [
+      'explore：工作区只读侦查',
+      'research：联网+本地调研',
+      'coder：读写改代码/文件',
+      'shell：命令执行与诊断',
+      'writer：文档与报告产出',
+      'general：通用宽任务面（默认）',
+    ].join('；');
+    unifiedToolRegistry.register({
+      name: 'delegate_task',
+      description:
+        '将独立子任务委托给专用子代理并行执行。' +
+        `role 选型：${roleCatalog}。` +
+        '子代理继承父任务 auto/plan 权限；tools 可覆盖角色默认工具白名单。' +
+        '可同时发起多个 delegate_task 实现并行。子代理不能再委托。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal: { type: 'string', description: '子任务的简要目标（一句话）' },
+          prompt: { type: 'string', description: '给子代理的详细指令' },
+          role: {
+            type: 'string',
+            enum: ['explore', 'research', 'coder', 'shell', 'writer', 'general'],
+            description: '子代理角色，决定默认工具面与行为；缺省 general',
+          },
+          tools: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '可选：覆盖角色默认工具白名单（权限仍继承父任务）',
+          },
+        },
+        required: ['goal', 'prompt'],
+        additionalProperties: false,
       },
-      required: ['goal', 'prompt'],
-      additionalProperties: false,
-    },
-    riskLevel: 'safe',
-    executionPolicy: { parallelizable: true },
-    source: { type: 'builtin' },
-    async execute(args, context) {
-      const { runSubTask } = await import('../agent/subagent.js');
-      const goal = typeof args.goal === 'string' ? args.goal.trim() : '';
-      const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
-      if (!goal || !prompt) throw new Error('goal 和 prompt 必须是非空字符串');
-      const tools = Array.isArray(args.tools) ? (args.tools as unknown[]).filter((t): t is string => typeof t === 'string') : undefined;
-      const result = await runSubTask({
-        goal, prompt, allowedTools: tools,
-        workspaceDir: context?.workspaceDir ?? process.cwd(),
-      });
-      return {
-        ok: result.ok, subTaskGoal: goal, content: result.content,
-        toolCallCount: result.toolCallCount, iterations: result.iterations, error: result.error,
-        note: result.ok
-          ? `子代理完成，${result.iterations} 轮，${result.toolCallCount} 次工具调用。`
-          : `子代理失败：${result.error ?? '未知错误'}`,
-      };
-    },
-  });
+      riskLevel: 'safe',
+      executionPolicy: { parallelizable: true },
+      source: { type: 'builtin' },
+      async execute(args, context) {
+        const { runSubTask } = await import('../agent/subagent.js');
+        const { approvalConfigFromTask } = await import('../agent/approval.js');
+        const { isSubagentRole } = await import('../agent/subagent-profiles.js');
+        const { config } = await import('../config.js');
+        const goal = typeof args.goal === 'string' ? args.goal.trim() : '';
+        const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
+        if (!goal || !prompt) throw new Error('goal 和 prompt 必须是非空字符串');
+        const role = isSubagentRole(args.role) ? args.role : undefined;
+        const tools = Array.isArray(args.tools)
+          ? (args.tools as unknown[]).filter((t): t is string => typeof t === 'string')
+          : undefined;
+        const level = config.autoMode.level === 'plan' ? 'plan' as const : 'auto' as const;
+        const parentTask = context?.task;
+        const approvalConfig = parentTask
+          ? approvalConfigFromTask(parentTask, level)
+          : { autoModeLevel: level, autoModePaused: false, planApproved: level === 'auto' };
+        const result = await runSubTask({
+          goal,
+          prompt,
+          role,
+          allowedTools: tools,
+          workspaceDir: context?.workspaceDir ?? process.cwd(),
+          approvalConfig,
+          parentTask: parentTask
+            ? { id: parentTask.id, autoModeState: parentTask.autoModeState, goal: parentTask.goal }
+            : undefined,
+        });
+        return {
+          ok: result.ok,
+          subTaskGoal: goal,
+          role: result.role,
+          content: result.content,
+          toolCallCount: result.toolCallCount,
+          iterations: result.iterations,
+          error: result.error,
+          note: result.ok
+            ? `子代理(${result.role})完成，${result.iterations} 轮，${result.toolCallCount} 次工具调用（权限继承父任务 ${level}）。`
+            : `子代理(${result.role})失败：${result.error ?? '未知错误'}`,
+        };
+      },
+    });
+  }
 }

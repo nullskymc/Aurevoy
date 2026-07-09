@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import Fastify from 'fastify';
 import pino, { type Logger } from 'pino';
 import cors from '@fastify/cors';
@@ -144,7 +144,68 @@ export async function buildServer(externalLogger?: Logger) {
         },
         createToolContext('workspace-read', workspace.workspaceDir, { callId: `workspace-read-${Date.now()}` }),
       );
-      return normalizeWorkspaceReadOutput(output, workspace.workspaceDir, path);
+      return await normalizeWorkspaceReadOutput(output, workspace.workspaceDir, path);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: message });
+    }
+  });
+
+  app.delete<{
+    Querystring: { path?: string; taskId?: string; projectId?: string };
+  }>('/api/workspace/delete', async (req, reply) => {
+    const workspace = await resolveWorkspaceForRead(req.query.taskId, req.query.projectId);
+    if (!workspace.ok) return reply.code(workspace.status).send({ error: workspace.error });
+    const relativePath = req.query.path?.trim();
+    if (!relativePath) return reply.code(400).send({ error: 'path is required' });
+    const target = resolve(workspace.workspaceDir, relativePath);
+    try {
+      const stat = await fs.stat(target);
+      if (stat.isDirectory()) await fs.rm(target, { recursive: true });
+      else await fs.unlink(target);
+      return reply.code(204).send();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: message });
+    }
+  });
+
+  app.post<{
+    Body: { path?: string; newName?: string; taskId?: string; projectId?: string };
+  }>('/api/workspace/rename', async (req, reply) => {
+    const body = req.body ?? {};
+    const workspace = await resolveWorkspaceForRead(body.taskId, body.projectId);
+    if (!workspace.ok) return reply.code(workspace.status).send({ error: workspace.error });
+    const relativePath = body.path?.trim();
+    const newName = body.newName?.trim();
+    if (!relativePath || !newName) return reply.code(400).send({ error: 'path and newName are required' });
+    const oldPath = resolve(workspace.workspaceDir, relativePath);
+    const dir = dirname(oldPath);
+    const newPath = resolve(dir, newName);
+    try {
+      await fs.rename(oldPath, newPath);
+      return reply.code(204).send();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: message });
+    }
+  });
+
+  app.post<{
+    Body: { path?: string; newName?: string; taskId?: string; projectId?: string };
+  }>('/api/workspace/copy', async (req, reply) => {
+    const body = req.body ?? {};
+    const workspace = await resolveWorkspaceForRead(body.taskId, body.projectId);
+    if (!workspace.ok) return reply.code(workspace.status).send({ error: workspace.error });
+    const relativePath = body.path?.trim();
+    const newName = body.newName?.trim();
+    if (!relativePath || !newName) return reply.code(400).send({ error: 'path and newName are required' });
+    const srcPath = resolve(workspace.workspaceDir, relativePath);
+    const dir = dirname(srcPath);
+    const destPath = resolve(dir, newName);
+    try {
+      await fs.copyFile(srcPath, destPath);
+      return reply.code(204).send();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return reply.code(400).send({ error: message });
@@ -977,32 +1038,40 @@ function parsePositiveInteger(raw?: string): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function normalizeWorkspaceReadOutput(output: unknown, workspaceDir: string, requestedPath: string): WorkspaceReadResponse {
+async function normalizeWorkspaceReadOutput(output: unknown, workspaceDir: string, requestedPath: string): Promise<WorkspaceReadResponse> {
   if (!isRecord(output) || typeof output.type !== 'string') {
     throw new Error('read tool returned an unsupported response');
   }
 
   const path = normalizeWorkspacePath(requestedPath);
   if (output.type === 'directory') {
-    const entries = Array.isArray(output.entries) ? output.entries : [];
+    const rawEntries = Array.isArray(output.entries) ? output.entries : [];
+    const entries = rawEntries
+      .filter((entry): entry is { path: string; type: 'file' | 'directory' } =>
+        isRecord(entry) &&
+        typeof entry.path === 'string' &&
+        (entry.type === 'file' || entry.type === 'directory'),
+      );
+    const enriched = await Promise.all(entries.map(async (entry) => {
+      const name = entry.path.replace(/\/+$/g, '').split('/').pop() || entry.path;
+      const entryPath = normalizeWorkspacePath(path === '.' ? entry.path : join(path, entry.path));
+      const absPath = resolve(workspaceDir, entryPath);
+      let size: number | undefined;
+      let mimeType: string | undefined;
+      try {
+        const st = await fs.stat(absPath);
+        if (entry.type === 'file') {
+          size = st.size;
+          mimeType = inferMimeType(name);
+        }
+      } catch { /* best-effort */ }
+      return { name, path: entryPath, type: entry.type, ...(size !== undefined ? { size } : {}), ...(mimeType ? { mimeType } : {}) };
+    }));
     return {
       root: workspaceDir,
       path,
       type: 'directory',
-      entries: entries
-        .filter((entry): entry is { path: string; type: 'file' | 'directory' } =>
-          isRecord(entry) &&
-          typeof entry.path === 'string' &&
-          (entry.type === 'file' || entry.type === 'directory'),
-        )
-        .map((entry) => {
-          const name = entry.path.replace(/\/+$/g, '').split('/').pop() || entry.path;
-          return {
-            name,
-            path: normalizeWorkspacePath(path === '.' ? entry.path : join(path, entry.path)),
-            type: entry.type,
-          };
-        }),
+      entries: enriched,
       truncated: output.truncated === true,
       ...(typeof output.next === 'number' ? { next: output.next } : {}),
     };
@@ -1051,6 +1120,20 @@ function normalizeWorkspacePath(input: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const MIME_MAP: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+  pdf: 'application/pdf', json: 'application/json', md: 'text/markdown', txt: 'text/plain', csv: 'text/csv',
+  html: 'text/html', css: 'text/css', js: 'text/javascript', ts: 'text/typescript',
+  tsx: 'text/typescript', jsx: 'text/javascript', py: 'text/x-python', go: 'text/x-go', rs: 'text/x-rust',
+  yaml: 'text/yaml', yml: 'text/yaml', sh: 'text/x-shellscript',
+};
+
+function inferMimeType(name: string): string | undefined {
+  const ext = name.split('.').pop()?.toLowerCase();
+  if (!ext || ext === name) return undefined;
+  return MIME_MAP[ext];
 }
 
 function publishSkillDeactivated(skillName: string): void {

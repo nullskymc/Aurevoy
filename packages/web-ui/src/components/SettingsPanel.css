@@ -80,11 +80,17 @@
 }
 
 .page-list-title {
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   font-size: var(--ui-font-size);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.page-list-row {
+  min-width: 0;
 }
 
 .page-list-meta,

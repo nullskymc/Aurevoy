@@ -143,6 +143,47 @@ export async function readWorkspaceEntry(options: {
   return res.json();
 }
 
+export async function deleteWorkspacePath(options: {
+  path: string;
+  taskId?: string;
+  projectId?: string;
+}): Promise<void> {
+  const params = new URLSearchParams();
+  params.set("path", options.path);
+  if (options.taskId) params.set("taskId", options.taskId);
+  if (options.projectId) params.set("projectId", options.projectId);
+  const res = await fetch(`${BASE_URL}/api/workspace/delete?${params.toString()}`, { method: "DELETE" });
+  if (!res.ok) await throwApiError(res, "delete workspace path failed");
+}
+
+export async function renameWorkspacePath(options: {
+  path: string;
+  newName: string;
+  taskId?: string;
+  projectId?: string;
+}): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/workspace/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+  if (!res.ok) await throwApiError(res, "rename workspace path failed");
+}
+
+export async function copyWorkspacePath(options: {
+  path: string;
+  newName: string;
+  taskId?: string;
+  projectId?: string;
+}): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/workspace/copy`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+  if (!res.ok) await throwApiError(res, "copy workspace path failed");
+}
+
 /** 在同一任务内追加一轮用户输入并继续执行（多轮对话） */
 export async function continueTask(
   taskId: string,

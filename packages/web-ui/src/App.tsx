@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   HealthResponse,
+  MessageAttachment,
 } from "@aurevoy/shared";
 import {
   createProject,
@@ -23,13 +24,13 @@ import { useRuntimeController } from "./hooks/useRuntimeController";
 import { useSettingsController } from "./hooks/useSettingsController";
 import { useShellLayout } from "./hooks/useShellLayout";
 import { useSkills } from "./hooks/useSkills";
-import { useTabs } from "./hooks/useTabs";
+import { useWorkbenchTabs } from "./hooks/useWorkbenchTabs";
 import { useTaskController } from "./hooks/useTaskController";
 import { Composer } from "./components/Composer";
 import { Conversation } from "./components/Conversation";
 import { AppTopBar } from "./components/AppTopBar";
 import { ModelSelectorDrawer } from "./components/ModelSelectorDrawer";
-import { RightPanel } from "./components/RightPanel";
+import { WorkbenchPanel } from "./components/WorkbenchPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { ToastNotice } from "./components/ToastNotice";
@@ -48,12 +49,11 @@ function App() {
   const [activeView, setActiveView] = useState<MainView>("chat");
   const [goal, setGoal] = useState("");
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const workspaceTabs = useTabs();
   const {
     chatFontSize,
     codeFontSize,
     defaultToolDetailsOpen,
-    inspectorOpen,
+    workbenchOpen,
     leftCollapsed,
     locale,
     shellStyle,
@@ -64,7 +64,7 @@ function App() {
     handleCodeFontSizeChange,
     handleUiFontSizeChange,
     handleWorkModeChange,
-    setInspectorOpen,
+    setWorkbenchOpen,
     setLeftCollapsed,
     setLocaleState,
     setThemeMode,
@@ -168,9 +168,15 @@ function App() {
     if (currentTask?.projectId) setDraftProjectId(currentTask.projectId);
   }, [currentTask?.projectId]);
 
+  const activeWorkspaceProjectId = draftProjectId ?? currentTask?.projectId;
+  const workbenchTabs = useWorkbenchTabs({
+    projectId: activeWorkspaceProjectId,
+    taskId: currentTask?.id,
+  });
+
   const draftProjectName = useMemo(
-    () => projects.find((p) => p.id === (draftProjectId ?? currentTask?.projectId))?.name,
-    [projects, draftProjectId, currentTask?.projectId],
+    () => projects.find((p) => p.id === activeWorkspaceProjectId)?.name,
+    [projects, activeWorkspaceProjectId],
   );
 
   useEffect(() => {
@@ -273,21 +279,21 @@ function App() {
     setModelDrawerOpen(false);
     setSettingsInitialSection(nextSection);
     setActiveView("settings");
-    setInspectorOpen(false);
+    setWorkbenchOpen(false);
     void refreshSettings();
     if (nextSection === "memory") void refreshMemories();
   }
 
   function handleCloseSettings(): void {
     setNotice(null);
-    setInspectorOpen(false);
+    setWorkbenchOpen(false);
     setActiveView("chat");
   }
 
   function handleOpenModelSelector(): void {
     setNotice(null);
     setModelDrawerOpen(true);
-    setInspectorOpen(false);
+    setWorkbenchOpen(false);
     if (!runtimeSettings) void refreshSettings();
   }
 
@@ -299,13 +305,13 @@ function App() {
   function handleOpenSearch(): void {
     setModelDrawerOpen(false);
     setActiveView("search");
-    setInspectorOpen(false);
+    setWorkbenchOpen(false);
   }
 
   function handleOpenSkills(): void {
     setModelDrawerOpen(false);
     setActiveView("skills");
-    setInspectorOpen(false);
+    setWorkbenchOpen(false);
     void refreshRuntime();
   }
 
@@ -364,14 +370,13 @@ function App() {
     derivedLive.length > 0 ||
     phase === "waiting_approval" ||
     output.trim().length > 0;
-  const activeWorkspaceProjectId = draftProjectId ?? currentTask?.projectId;
 
   return (
     <div
       className="app-shell"
       data-active-view={activeView}
       data-left-collapsed={leftCollapsed}
-      data-inspector-open={inspectorOpen}
+      data-workbench-open={workbenchOpen}
       data-theme={themeMode}
       style={shellStyle}
     >
@@ -403,11 +408,11 @@ function App() {
         <AppTopBar
           activeView={activeView}
           currentTask={currentTask}
-          inspectorOpen={inspectorOpen}
+          workbenchOpen={workbenchOpen}
           leftCollapsed={leftCollapsed}
           phase={phase}
           status={status}
-          onToggleInspector={() => setInspectorOpen((open) => !open)}
+          onToggleWorkbench={() => setWorkbenchOpen((open) => !open)}
           onToggleSidebar={() => setLeftCollapsed((collapsed) => !collapsed)}
         />
 
@@ -580,20 +585,38 @@ function App() {
         onPointerDown={(event) => startResize("right", event)}
       />
 
-      <RightPanel
-        open={inspectorOpen}
+      <WorkbenchPanel
+        open={workbenchOpen}
         task={currentTask}
         projectId={activeWorkspaceProjectId}
-        tabs={workspaceTabs.tabs}
-        activeTab={workspaceTabs.activeTab}
-        activeTabId={workspaceTabs.activeTabId}
-        onSelectTab={workspaceTabs.setActiveTabId}
-        onCloseTab={workspaceTabs.closeTab}
-        onAddTab={() => workspaceTabs.openEmptyTab(t("rightPanel.openFile"))}
+        tabs={workbenchTabs.tabs}
+        activeTab={workbenchTabs.activeTab}
+        activeTabId={workbenchTabs.activeTabId}
+        onSelectTab={workbenchTabs.setActiveTabId}
+        onCloseTab={workbenchTabs.closeTab}
         onOpenFile={(path) => {
-          workspaceTabs.openWorkspaceFile(path);
+          workbenchTabs.openWorkspaceFile(path);
           setActiveView("chat");
-          setInspectorOpen(true);
+          setWorkbenchOpen(true);
+        }}
+        onOpenArtifact={(artifact) => {
+          if (!currentTask?.id) return;
+          workbenchTabs.openArtifact(artifact, currentTask.id);
+          setActiveView("chat");
+          setWorkbenchOpen(true);
+        }}
+        onAttachToChat={(entry) => {
+          if (entry.type === "directory") return;
+          const att: MessageAttachment = {
+            id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            name: entry.name,
+            path: entry.path,
+            mimeType: entry.mimeType ?? "application/octet-stream",
+            size: entry.size ?? 0,
+            type: (entry.mimeType ?? "").startsWith("image/") ? "image" : "file",
+          };
+          setAttachments((prev) => (prev.some((a) => a.path === att.path) ? prev : [...prev, att]));
+          setActiveView("chat");
         }}
       />
 

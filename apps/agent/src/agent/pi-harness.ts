@@ -68,8 +68,9 @@ import {
 import { createCheckpoint, createClarification, effectiveBudget, initialBudgetUsage, resolveClarification, updateWallTime } from './m6-state.js';
 import { waitForPiApproval } from './pi-approval.js';
 import { assertPiLLMConfigured, createPiModel } from '../llm/pi-provider.js';
-import { decideToolPermission } from './approval.js';
+import { approvalConfigFromTask, decideToolPermission } from './approval.js';
 import { skillRegistry } from '../skills/registry.js';
+import { scheduleTaskTitleRefine } from './task-title.js';
 
 interface PiHarnessOptions {
   workspaceDir: string;
@@ -782,26 +783,37 @@ async function gatePiToolCall(
   }
 
   const riskLevel = unifiedToolRegistry.riskLevelOf(call.toolName);
+  const autoModeLevel = config.autoMode.level === 'plan' ? 'plan' : 'auto';
   const permission = decideToolPermission(
-    {
-      autoModeLevel: config.autoMode.level as 'auto' | 'plan',
-      autoModePaused: !!task.autoModeState?.paused,
-    },
+    approvalConfigFromTask(task, autoModeLevel),
     call.toolName,
     riskLevel,
   );
   if (permission.allowed) {
+    if (permission.autoApproved && task.autoModeState) {
+      task.autoModeState.autoApprovedCalls = (task.autoModeState.autoApprovedCalls ?? 0) + 1;
+      saveTask(task);
+      publish({ type: 'auto_mode_state', taskId: task.id, state: { ...task.autoModeState } });
+    }
     return undefined;
   }
 
+  // plan 未批准时的回退：单次工具审批（正常路径应在 harness 启动前完成计划审批）
+  const autoModeReason =
+    autoModeLevel === 'plan' && !task.autoModeState?.planApproved
+      ? 'not_covered' as const
+      : task.autoModeState?.paused
+        ? 'paused' as const
+        : undefined;
+
   task.pendingApprovals = [
     ...(task.pendingApprovals ?? []),
-    { call, riskLevel, createdAt: new Date().toISOString() },
+    { call, riskLevel, createdAt: new Date().toISOString(), autoModeReason },
   ];
   setTaskState(task, 'paused', 'waiting_approval');
   saveTask(task);
   publish({ type: 'phase', taskId: task.id, phase: 'waiting_approval', detail: `等待审批工具 ${call.toolName}` });
-  publish({ type: 'approval_request', taskId: task.id, call, riskLevel });
+  publish({ type: 'approval_request', taskId: task.id, call, riskLevel, autoModeReason });
 
   const decision = await waitForPiApproval(task.id, call.id, signal, config.agent.approvalTimeoutMs);
   task.pendingApprovals = (task.pendingApprovals ?? []).filter((item) => item.call.id !== call.id);
@@ -815,7 +827,7 @@ async function gatePiToolCall(
     riskLevel,
     errorCategory: decision.approved ? undefined : 'permission',
     summary: decision.approved ? `已批准工具 ${call.toolName}` : `拒绝/超时工具 ${call.toolName}`,
-    data: { approved: decision.approved },
+    data: { approved: decision.approved, autoModeReason },
   });
 
   if (!decision.approved) {
@@ -931,6 +943,8 @@ async function handlePiEvent(
       }
       break;
     case 'agent_end':
+      // 对齐 Pi #2090：首轮成功后 fire-and-forget 精炼侧栏标题，不阻塞主循环
+      scheduleTaskTitleRefine(task);
       break;
   }
 }

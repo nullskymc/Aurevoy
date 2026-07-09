@@ -1,7 +1,9 @@
 import type { MainView } from "../app/types";
 import { t } from "../i18n";
 import { getPhaseLabel, getStatusLabel } from "./status";
+import { IconWorkbench } from "./workbenchIcons";
 import type { Task, TaskPhase, TaskStatus } from "@aurevoy/shared";
+import { taskDisplayTitle } from "@aurevoy/shared";
 
 function SidebarIcon({ collapsed }: { collapsed: boolean }) {
   return (
@@ -22,20 +24,7 @@ function SidebarIcon({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-function PanelFilesIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-      <path
-        d="M2 5.5h6L9.5 4h6.5c.6 0 1 .4 1 1v10c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V5.5z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinejoin="round"
-      />
-      <line x1="2" y1="14.5" x2="18" y2="14.5" stroke="currentColor" strokeWidth="1.3" />
-    </svg>
-  );
-}
+
 
 function getMainViewTitle(view: MainView): string {
   if (view === "search") return t("nav.search");
@@ -47,20 +36,20 @@ function getMainViewTitle(view: MainView): string {
 export function AppTopBar({
   activeView,
   currentTask,
-  inspectorOpen,
+  workbenchOpen,
   leftCollapsed,
   phase,
   status,
-  onToggleInspector,
+  onToggleWorkbench,
   onToggleSidebar,
 }: {
   activeView: MainView;
   currentTask: Task | null;
-  inspectorOpen: boolean;
+  workbenchOpen: boolean;
   leftCollapsed: boolean;
   phase: TaskPhase | null;
   status: TaskStatus | null;
-  onToggleInspector: () => void;
+  onToggleWorkbench: () => void;
   onToggleSidebar: () => void;
 }) {
   const isChatView = activeView === "chat";
@@ -82,7 +71,7 @@ export function AppTopBar({
         <>
           <div className="topbar-context">
             <div className="topbar-title-group">
-              <span className="topbar-title">{currentTask.goal}</span>
+              <span className="topbar-title" title={currentTask.goal}>{taskDisplayTitle(currentTask)}</span>
               <span className="topbar-subtitle">
                 {status === "completed" || status === "failed" || status === "cancelled"
                   ? getStatusLabel(status)
@@ -95,10 +84,10 @@ export function AppTopBar({
             <button
               type="button"
               className="icon-btn"
-              aria-label={inspectorOpen ? t("rightPanel.hide") : t("rightPanel.show")}
-              onClick={onToggleInspector}
+              aria-label={workbenchOpen ? t("workbench.hide") : t("workbench.show")}
+              onClick={onToggleWorkbench}
             >
-              <PanelFilesIcon />
+              <IconWorkbench />
             </button>
           </div>
         </>
@@ -111,10 +100,10 @@ export function AppTopBar({
             <button
               type="button"
               className="icon-btn"
-              aria-label={inspectorOpen ? t("rightPanel.hide") : t("rightPanel.show")}
-              onClick={onToggleInspector}
+              aria-label={workbenchOpen ? t("workbench.hide") : t("workbench.show")}
+              onClick={onToggleWorkbench}
             >
-              <PanelFilesIcon />
+              <IconWorkbench />
             </button>
           </div>
         </>

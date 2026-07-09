@@ -3,8 +3,10 @@ import type { ThemeMode, WorkMode } from "./types";
 
 export const MIN_SIDEBAR_WIDTH = 260;
 export const MAX_SIDEBAR_WIDTH = 420;
-export const MIN_INSPECTOR_WIDTH = 560;
-export const MAX_INSPECTOR_WIDTH = 980;
+/** Coding workbench (explorer + editor). Wide enough for tree + preview. */
+export const MIN_WORKBENCH_WIDTH = 520;
+export const MAX_WORKBENCH_WIDTH = 1100;
+export const DEFAULT_WORKBENCH_WIDTH = 720;
 export const DEFAULT_CHAT_FONT_SIZE = 14;
 export const DEFAULT_UI_FONT_SIZE = 12.5;
 export const DEFAULT_CODE_FONT_SIZE = 12;
@@ -15,6 +17,8 @@ export const TOOL_DETAILS_OPEN_KEY = "aurevoy.defaultToolDetailsOpen";
 export const THEME_MODE_KEY = "aurevoy.themeMode";
 export const LOCALE_KEY = "aurevoy.locale";
 export const WORK_MODE_KEY = "aurevoy.workMode";
+export const WORKBENCH_WIDTH_KEY = "aurevoy.workbenchWidth";
+export const WORKBENCH_OPEN_KEY = "aurevoy.workbenchOpen";
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
