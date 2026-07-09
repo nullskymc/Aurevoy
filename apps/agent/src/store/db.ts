@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import type { MemoryEntry, Project, Task, TaskTraceEntry } from '@aurevoy/shared';
+import { formatTaskTitle, type MemoryEntry, type Project, type Task, type TaskTraceEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
 
 /**
@@ -148,6 +148,8 @@ const taskColumnMigrations: Array<{ name: string; sql: string }> = [
   { name: 'active_skills', sql: 'ALTER TABLE tasks ADD COLUMN active_skills TEXT' },
   { name: 'plan_mode', sql: 'ALTER TABLE tasks ADD COLUMN plan_mode TEXT' },
   { name: 'context_tokens', sql: 'ALTER TABLE tasks ADD COLUMN context_tokens INTEGER' },
+  { name: 'title', sql: 'ALTER TABLE tasks ADD COLUMN title TEXT' },
+  { name: 'title_source', sql: 'ALTER TABLE tasks ADD COLUMN title_source TEXT' },
 ];
 for (const migration of taskColumnMigrations) {
   if (!taskColumns.some((column) => column.name === migration.name)) {
@@ -215,6 +217,8 @@ try {
 interface TaskRow {
   id: string;
   goal: string;
+  title: string | null;
+  title_source: string | null;
   status: string;
   phase: string | null;
   plan: string;
@@ -260,9 +264,14 @@ interface TaskTraceRow {
 }
 
 function rowToTask(row: TaskRow): Task {
+  const goal = row.goal;
+  const titleFromDb = row.title?.trim();
+  const titleSource = row.title_source === 'llm' ? 'llm' : 'truncated';
   return {
     id: row.id,
-    goal: row.goal,
+    goal,
+    title: titleFromDb || formatTaskTitle(goal),
+    titleSource,
     status: row.status as Task['status'],
     phase: (row.phase as Task['phase']) ?? null,
     plan: JSON.parse(row.plan),
@@ -326,17 +335,18 @@ export const taskStore = {
   save(task: Task): void {
     db.prepare(
       `INSERT INTO tasks (
-         id, goal, status, phase, plan, messages, artifacts, clarifications, pending_approvals, checkpoints,
+         id, goal, title, title_source, status, phase, plan, messages, artifacts, clarifications, pending_approvals, checkpoints,
          budget, budget_usage, token_usage, archived_messages, parent_task_id, project_id,
          plan_mode, context_tokens, created_at, updated_at
        )
        VALUES (
-         @id, @goal, @status, @phase, @plan, @messages, @artifacts, @clarifications,
+         @id, @goal, @title, @titleSource, @status, @phase, @plan, @messages, @artifacts, @clarifications,
          @pendingApprovals, @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId,
          @projectId, @planMode, @contextTokens, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
-         goal=excluded.goal, status=excluded.status, phase=excluded.phase, plan=excluded.plan,
+         goal=excluded.goal, title=excluded.title, title_source=excluded.title_source,
+         status=excluded.status, phase=excluded.phase, plan=excluded.plan,
          messages=excluded.messages, artifacts=excluded.artifacts,
          clarifications=excluded.clarifications, pending_approvals=excluded.pending_approvals,
          checkpoints=excluded.checkpoints,
@@ -349,6 +359,8 @@ export const taskStore = {
     ).run({
       id: task.id,
       goal: task.goal,
+      title: task.title || formatTaskTitle(task.goal),
+      titleSource: task.titleSource === 'llm' ? 'llm' : 'truncated',
       status: task.status,
       phase: task.phase,
       plan: JSON.stringify(task.plan),

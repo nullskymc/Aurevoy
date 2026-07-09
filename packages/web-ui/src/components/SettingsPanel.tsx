@@ -9,6 +9,7 @@ import type {
 } from "@aurevoy/shared";
 import { t, type Locale } from "../i18n";
 import { getTokenUsageReport, setBaseUrl } from "../api";
+import "./SettingsPanel.css";
 
 interface KbDir {
   id: string;
@@ -32,10 +33,11 @@ interface SettingsDraft {
   visionModel: string;
   apiKey: string;
   workspaceDir: string;
-  temperature: number;
-  timeoutMs: number;
+  /** Pi harness 仍读取 maxTokens；temperature/timeout 已不再驱动主循环，故不暴露 UI */
   maxTokens: number;
   commandExecutionEnabled: boolean;
+  autoModeSafetyEnabled: boolean;
+  agentToolExecution: string;
   mcpServersJson: string;
   cleanupPolicyDays: number;
   embeddingProvider: string;
@@ -50,7 +52,6 @@ interface SettingsDraft {
 const PI_PROVIDER_OPTIONS = [
   { value: "openai", label: "OpenAI" },
   { value: "openai-compatible", label: "OpenAI-compatible / Custom" },
-  { value: "openai-response", label: "OpenAI Responses / Compatibility" },
   { value: "azure-openai-responses", label: "Azure OpenAI Responses" },
   { value: "anthropic", label: "Anthropic" },
   { value: "ant-ling", label: "Ant Ling" },
@@ -538,6 +539,12 @@ function GeneralSettings({
           checked={draft.commandExecutionEnabled}
           onChange={(checked) => onDraftChange({ ...draft, commandExecutionEnabled: checked })}
         />
+        <SettingsSwitchRow
+          title={t("settings.autoModeSafetyTitle")}
+          description={t("settings.autoModeSafetyDesc")}
+          checked={draft.autoModeSafetyEnabled}
+          onChange={(checked) => onDraftChange({ ...draft, autoModeSafetyEnabled: checked })}
+        />
         <SettingsActionRow
           title={t("settings.workspaceTitle")}
           description={t("settings.workspaceDesc")}
@@ -549,6 +556,20 @@ function GeneralSettings({
             />
           }
         />
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.agentRuntime")}>
+        <SettingsSelectRow
+          title={t("settings.toolExecutionTitle")}
+          description={t("settings.toolExecutionDesc")}
+          value={draft.agentToolExecution}
+          options={[
+            { value: "parallel", label: t("settings.toolExecutionParallel") },
+            { value: "sequential", label: t("settings.toolExecutionSequential") },
+          ]}
+          onChange={(value) => onDraftChange({ ...draft, agentToolExecution: value })}
+        />
+        <p className="settings-provider-hint">{t("settings.thinkingLevelMovedHint")}</p>
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.general")}>
@@ -814,14 +835,29 @@ function ProviderSettings({
   onFetchModels: () => void;
   onSaveEnabledModels: (models: string[]) => void;
 }) {
-  const availableModels = settings?.llm.availableModels ?? [];
-  const enabledModels = settings?.llm.enabledModels ?? [];
-  const currentModel = settings?.llm.model ?? draft.model;
-  const modelInputOptions = [...new Set([currentModel, ...availableModels].filter(Boolean))];
+  // 编辑中的 draft.provider 可能与当前激活不同；列表/勾选以“当前正在编辑的槽位”为准
+  const editingSlot = settings?.llm.providers?.find((slot) => slot.provider === draft.provider);
+  const isEditingActive = !settings || draft.provider === settings.llm.provider;
+  const availableModels = isEditingActive
+    ? (settings?.llm.availableModels ?? [])
+    : (editingSlot?.availableModels ?? []);
+  const enabledModels = isEditingActive
+    ? (settings?.llm.enabledModels ?? [])
+    : (editingSlot?.enabledModels ?? []);
+  const currentModel = isEditingActive
+    ? (settings?.llm.model ?? draft.model)
+    : (editingSlot?.model ?? draft.model);
+  const apiKeyConfigured = isEditingActive
+    ? Boolean(settings?.llm.apiKeyConfigured)
+    : Boolean(editingSlot?.apiKeyConfigured);
+  const modelInputOptions = [...new Set([currentModel, draft.model, ...availableModels].filter(Boolean))];
   const currentModelMissing = Boolean(currentModel && availableModels.length > 0 && !availableModels.includes(currentModel));
   const enabledSet = new Set(enabledModels);
+  const configuredProviders = settings?.llm.providers ?? [];
 
   function toggleEnabledModel(model: string, checked: boolean): void {
+    // 模型启用列表只对“已激活并保存”的 provider 生效；编辑未保存槽位时先提示保存
+    if (!isEditingActive) return;
     if (model === currentModel && !checked) return;
     const next = checked
       ? [...new Set([...enabledModels, model])]
@@ -829,8 +865,67 @@ function ProviderSettings({
     onSaveEnabledModels(next);
   }
 
+  function handleProviderChange(nextProvider: string): void {
+    if (nextProvider === draft.provider) return;
+    const slot = settings?.llm.providers?.find((item) => item.provider === nextProvider);
+    const isActive = settings?.llm.provider === nextProvider;
+    onDraftChange({
+      ...draft,
+      provider: nextProvider,
+      // 切换槽位时回填已保存配置；新 provider 清空 baseUrl（兼容端点除外由用户填）
+      baseUrl: slot?.baseUrl
+        ?? (isActive ? (settings?.llm.baseUrl ?? "") : ""),
+      model: slot?.model
+        ?? (isActive ? (settings?.llm.model ?? "") : draft.model),
+      visionModel: slot?.visionModel
+        ?? (isActive ? (settings?.llm.visionModel ?? "") : ""),
+      apiKey: "",
+    });
+  }
+
   return (
     <>
+    {configuredProviders.length > 0 && (
+      <SettingsChoiceGroup title={t("settings.configuredProviders")}>
+        <p className="settings-provider-hint">{t("settings.multiProviderHint")}</p>
+        <div className="settings-provider-slots" aria-label={t("settings.configuredProviders")}>
+          {configuredProviders.map((slot) => {
+            const active = slot.provider === settings?.llm.provider;
+            const editing = slot.provider === draft.provider;
+            const label = PI_PROVIDER_OPTIONS.find((opt) => opt.value === slot.provider)?.label ?? slot.provider;
+            return (
+              <button
+                key={slot.provider}
+                type="button"
+                className="settings-provider-chip"
+                data-active={active}
+                data-editing={editing}
+                onClick={() => handleProviderChange(slot.provider)}
+                title={`${slot.provider}${slot.model ? ` · ${slot.model}` : ""}`}
+              >
+                <span className="settings-provider-chip-main">
+                  <strong>{label}</strong>
+                  <small>{slot.model || t("settings.providerNoModel")}</small>
+                </span>
+                <span className="settings-provider-chip-meta">
+                  {active && <em className="settings-provider-badge" data-kind="active">{t("settings.providerActive")}</em>}
+                  {editing && !active && (
+                    <em className="settings-provider-badge" data-kind="editing">{t("settings.providerEditing")}</em>
+                  )}
+                  <em
+                    className="settings-provider-badge"
+                    data-kind={slot.apiKeyConfigured ? "ready" : "missing"}
+                  >
+                    {slot.apiKeyConfigured ? t("settings.apiKeyConfiguredShort") : t("settings.apiKeyMissingShort")}
+                  </em>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </SettingsChoiceGroup>
+    )}
+
     <SettingsGroup title={t("settings.providerConfig")}>
       <SettingsActionRow
         title={t("settings.providerTitle")}
@@ -839,11 +934,17 @@ function ProviderSettings({
           <select
             className="settings-inline-select"
             value={draft.provider}
-            onChange={(event) => onDraftChange({ ...draft, provider: event.currentTarget.value })}
+            onChange={(event) => handleProviderChange(event.currentTarget.value)}
           >
             {PI_PROVIDER_OPTIONS.map((provider) => (
               <option key={provider.value} value={provider.value}>{provider.label}</option>
             ))}
+            {/* 已保存但不在静态列表中的自定义 provider id */}
+            {configuredProviders
+              .filter((slot) => !PI_PROVIDER_OPTIONS.some((opt) => opt.value === slot.provider))
+              .map((slot) => (
+                <option key={slot.provider} value={slot.provider}>{slot.provider}</option>
+              ))}
           </select>
         }
       />
@@ -904,9 +1005,18 @@ function ProviderSettings({
       />
       <SettingsActionRow
         title={t("settings.fetchModelsTitle")}
-        description={t("settings.fetchModelsDesc")}
+        description={
+          isEditingActive
+            ? t("settings.fetchModelsDesc")
+            : t("settings.fetchModelsNeedSave")
+        }
         control={
-          <button type="button" className="settings-secondary-btn" disabled={fetchingModels} onClick={onFetchModels}>
+          <button
+            type="button"
+            className="settings-secondary-btn"
+            disabled={fetchingModels || !isEditingActive}
+            onClick={onFetchModels}
+          >
             {fetchingModels ? t("settings.fetching") : t("settings.fetchModels")}
           </button>
         }
@@ -916,7 +1026,7 @@ function ProviderSettings({
           <span>
             <strong>{t("settings.enabledModelsTitle")}</strong>
             <small>
-              {t("settings.enabledModelsDesc")}
+              {isEditingActive ? t("settings.enabledModelsDesc") : t("settings.enabledModelsNeedSave")}
             </small>
           </span>
           <em>{enabledModels.length}/{availableModels.length}</em>
@@ -931,13 +1041,13 @@ function ProviderSettings({
         ) : (
           <div className="settings-model-list" role="list" aria-label={t("settings.enableModelListLabel")}>
             {availableModels.map((model) => {
-              const isCurrent = model === currentModel;
+              const isCurrent = model === currentModel && isEditingActive;
               return (
                 <label key={model} className="settings-model-option" data-current={isCurrent}>
                   <input
                     type="checkbox"
                     checked={enabledSet.has(model) || isCurrent}
-                    disabled={saving || isCurrent}
+                    disabled={saving || isCurrent || !isEditingActive}
                     onChange={(event) => toggleEnabledModel(model, event.currentTarget.checked)}
                   />
                   <span>{model}</span>
@@ -950,61 +1060,35 @@ function ProviderSettings({
       </div>
       <SettingsActionRow
         title="API Key"
-        description={settings?.llm.apiKeyConfigured ? t("settings.apiKeyConfigured") : t("settings.apiKeyMissing")}
+        description={
+          apiKeyConfigured
+            ? `${t("settings.apiKeyConfigured")} · ${draft.provider}`
+            : `${t("settings.apiKeyMissing")} · ${draft.provider}`
+        }
         control={
           <input
             className="settings-inline-input"
             type="password"
             value={draft.apiKey}
-            placeholder={settings?.llm.apiKeyConfigured ? t("settings.apiKeyKeepPlaceholder") : t("settings.apiKeyInputPlaceholder")}
+            placeholder={apiKeyConfigured ? t("settings.apiKeyKeepPlaceholder") : t("settings.apiKeyInputPlaceholder")}
             onChange={(event) => onDraftChange({ ...draft, apiKey: event.currentTarget.value })}
           />
         }
       />
       <SettingsActionRow
-        title={t("settings.temperatureTitle")}
-        description={t("settings.temperatureDesc")}
+        title={t("settings.maxTokensTitle")}
+        description={t("settings.maxTokensDesc")}
         control={
           <input
             className="settings-number-input"
             type="number"
-            min={0}
-            max={2}
-            step={0.1}
-            value={draft.temperature}
-            onChange={(event) => onDraftChange({ ...draft, temperature: Number(event.currentTarget.value) })}
+            min={256}
+            step={256}
+            value={draft.maxTokens}
+            onChange={(event) => onDraftChange({ ...draft, maxTokens: Number(event.currentTarget.value) })}
           />
         }
       />
-      <SettingsActionRow
-        title={t("settings.timeoutTitle")}
-        description={t("settings.timeoutDesc")}
-        control={
-          <input
-            className="settings-number-input"
-            type="number"
-            min={1000}
-            value={draft.timeoutMs}
-            onChange={(event) => onDraftChange({ ...draft, timeoutMs: Number(event.currentTarget.value) })}
-          />
-        }
-      />
-      {draft.provider === "anthropic" && (
-        <SettingsActionRow
-          title={t("settings.maxTokensTitle")}
-          description={t("settings.maxTokensDesc")}
-          control={
-            <input
-              className="settings-number-input"
-              type="number"
-              min={256}
-              step={256}
-              value={draft.maxTokens}
-              onChange={(event) => onDraftChange({ ...draft, maxTokens: Number(event.currentTarget.value) })}
-            />
-          }
-        />
-      )}
       <SettingsActionRow
         title={t("settings.saveProviderTitle")}
         description={t("settings.saveProviderDesc")}
@@ -1797,10 +1881,10 @@ function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
     visionModel: settings?.llm.visionModel ?? "",
     apiKey: "",
     workspaceDir: settings?.workspaceDir ?? "",
-    temperature: settings?.llm.temperature ?? 0.7,
-    timeoutMs: settings?.llm.timeoutMs ?? 120000,
     maxTokens: settings?.llm.maxTokens ?? 8192,
     commandExecutionEnabled: settings?.commandExecutionEnabled ?? false,
+    autoModeSafetyEnabled: settings?.autoModeSafetyEnabled ?? true,
+    agentToolExecution: settings?.agentToolExecution ?? "parallel",
     mcpServersJson: settings?.mcpServersJson ?? "",
     cleanupPolicyDays: settings?.cleanupPolicyDays ?? 30,
     // 默认复用 LLM 配置（都是 OpenAI 兼容 API）

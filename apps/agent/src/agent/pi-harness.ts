@@ -12,24 +12,26 @@ import {
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node';
 import { Type } from 'typebox';
 import {
-  complete,
-  completeSimple,
+  anthropicMessagesApi,
+  azureOpenAIResponsesApi,
+  bedrockConverseStreamApi,
+  googleGenerativeAIApi,
+  googleVertexApi,
+  mistralConversationsApi,
+  openAICodexResponsesApi,
+  openAICompletionsApi,
+  openAIResponsesApi,
   type AssistantMessageEvent as PiAssistantMessageEvent,
   type AssistantMessage as PiAssistantMessage,
-  type AssistantMessageEventStream as PiAssistantMessageEventStream,
   type ImageContent as PiImageContent,
   type Message as PiMessage,
   type Model as PiModel,
   type Models as PiModels,
-  type Provider as PiProvider,
-  type ProviderStreamOptions as PiProviderStreamOptions,
-  type SimpleStreamOptions as PiSimpleStreamOptions,
-  stream,
-  streamSimple,
   type TextContent as PiTextContent,
   type ToolResultMessage as PiToolResultMessage,
   type Usage as PiUsage,
 } from '@earendil-works/pi-ai/compat';
+import { createModels, createProvider } from '@earendil-works/pi-ai';
 import type {
   AgentEvent,
   AggregatedTokenUsage,
@@ -66,8 +68,9 @@ import {
 import { createCheckpoint, createClarification, effectiveBudget, initialBudgetUsage, resolveClarification, updateWallTime } from './m6-state.js';
 import { waitForPiApproval } from './pi-approval.js';
 import { assertPiLLMConfigured, createPiModel } from '../llm/pi-provider.js';
-import { decideToolPermission } from './approval.js';
+import { approvalConfigFromTask, decideToolPermission } from './approval.js';
 import { skillRegistry } from '../skills/registry.js';
+import { scheduleTaskTitleRefine } from './task-title.js';
 
 interface PiHarnessOptions {
   workspaceDir: string;
@@ -302,34 +305,7 @@ async function createPiHarness(
 }
 
 export function createAurevoyPiModels(selectedModel: PiModel<any>): PiModels {
-  const provider = createAurevoyPiProvider(selectedModel);
-  return {
-    getProviders: () => [provider],
-    getProvider: (id) => id === provider.id ? provider : undefined,
-    getModels: (providerId) => !providerId || providerId === provider.id ? [selectedModel] : [],
-    getModel: (providerId, modelId) =>
-      providerId === selectedModel.provider && modelId === selectedModel.id ? selectedModel : undefined,
-    refresh: async () => undefined,
-    getAuth: async () => ({
-      auth: {
-        apiKey: config.llm.apiKey,
-        baseUrl: selectedModel.baseUrl,
-      },
-      source: 'AUREVOY_LLM_API_KEY',
-    }),
-    stream: (model, context, streamOptions) =>
-      stream(model, context, withAurevoyStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
-    complete: async (model, context, streamOptions) =>
-      await complete(model, context, withAurevoyStreamOptions(streamOptions)),
-    streamSimple: (model, context, streamOptions) =>
-      streamSimple(model, context, withAurevoySimpleStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
-    completeSimple: async (model, context, streamOptions) =>
-      await completeSimple(model, context, withAurevoySimpleStreamOptions(streamOptions)),
-  };
-}
-
-function createAurevoyPiProvider(selectedModel: PiModel<any>): PiProvider {
-  return {
+  const provider = createProvider({
     id: selectedModel.provider,
     name: selectedModel.provider,
     baseUrl: selectedModel.baseUrl,
@@ -339,37 +315,32 @@ function createAurevoyPiProvider(selectedModel: PiModel<any>): PiProvider {
         resolve: async () => ({
           auth: {
             apiKey: config.llm.apiKey,
-            baseUrl: selectedModel.baseUrl,
+            baseUrl: selectedModel.baseUrl ?? config.llm.baseUrl,
           },
           source: 'AUREVOY_LLM_API_KEY',
         }),
       },
     },
-    getModels: () => [selectedModel],
-    stream: (model, context, streamOptions) =>
-      stream(model, context, withAurevoyStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
-    streamSimple: (model, context, streamOptions) =>
-      streamSimple(model, context, withAurevoySimpleStreamOptions(streamOptions)) as PiAssistantMessageEventStream,
-  };
+    models: [selectedModel],
+    api: getApiForApiName(selectedModel.api),
+  });
+  const models = createModels();
+  models.setProvider(provider);
+  return models;
 }
 
-function withAurevoyStreamOptions(options: object | undefined): PiProviderStreamOptions {
-  return withAurevoyApiKey(options) as PiProviderStreamOptions;
-}
-
-function withAurevoySimpleStreamOptions(options: PiSimpleStreamOptions | undefined): PiSimpleStreamOptions {
-  return withAurevoyApiKey(options) as PiSimpleStreamOptions;
-}
-
-function withAurevoyApiKey<TOptions extends object | undefined>(
-  options: TOptions,
-): NonNullable<TOptions> & { apiKey: string } {
-  const base = (options ?? {}) as NonNullable<TOptions>;
-  const currentApiKey = (base as { apiKey?: unknown }).apiKey;
-  return {
-    ...base,
-    apiKey: typeof currentApiKey === 'string' && currentApiKey.trim() ? currentApiKey : config.llm.apiKey,
-  };
+function getApiForApiName(api: string) {
+  switch (api) {
+    case 'anthropic-messages': return anthropicMessagesApi();
+    case 'azure-openai-responses': return azureOpenAIResponsesApi();
+    case 'bedrock-converse-stream': return bedrockConverseStreamApi();
+    case 'google-generative-ai': return googleGenerativeAIApi();
+    case 'google-vertex': return googleVertexApi();
+    case 'mistral-conversations': return mistralConversationsApi();
+    case 'openai-codex-responses': return openAICodexResponsesApi();
+    case 'openai-responses': return openAIResponsesApi();
+    default: return openAICompletionsApi();
+  }
 }
 
 function isPiAgentEvent(event: { type: string }): event is PiAgentEvent {
@@ -812,26 +783,37 @@ async function gatePiToolCall(
   }
 
   const riskLevel = unifiedToolRegistry.riskLevelOf(call.toolName);
+  const autoModeLevel = config.autoMode.level === 'plan' ? 'plan' : 'auto';
   const permission = decideToolPermission(
-    {
-      autoModeLevel: config.autoMode.level as 'auto' | 'plan',
-      autoModePaused: !!task.autoModeState?.paused,
-    },
+    approvalConfigFromTask(task, autoModeLevel),
     call.toolName,
     riskLevel,
   );
   if (permission.allowed) {
+    if (permission.autoApproved && task.autoModeState) {
+      task.autoModeState.autoApprovedCalls = (task.autoModeState.autoApprovedCalls ?? 0) + 1;
+      saveTask(task);
+      publish({ type: 'auto_mode_state', taskId: task.id, state: { ...task.autoModeState } });
+    }
     return undefined;
   }
 
+  // plan 未批准时的回退：单次工具审批（正常路径应在 harness 启动前完成计划审批）
+  const autoModeReason =
+    autoModeLevel === 'plan' && !task.autoModeState?.planApproved
+      ? 'not_covered' as const
+      : task.autoModeState?.paused
+        ? 'paused' as const
+        : undefined;
+
   task.pendingApprovals = [
     ...(task.pendingApprovals ?? []),
-    { call, riskLevel, createdAt: new Date().toISOString() },
+    { call, riskLevel, createdAt: new Date().toISOString(), autoModeReason },
   ];
   setTaskState(task, 'paused', 'waiting_approval');
   saveTask(task);
   publish({ type: 'phase', taskId: task.id, phase: 'waiting_approval', detail: `等待审批工具 ${call.toolName}` });
-  publish({ type: 'approval_request', taskId: task.id, call, riskLevel });
+  publish({ type: 'approval_request', taskId: task.id, call, riskLevel, autoModeReason });
 
   const decision = await waitForPiApproval(task.id, call.id, signal, config.agent.approvalTimeoutMs);
   task.pendingApprovals = (task.pendingApprovals ?? []).filter((item) => item.call.id !== call.id);
@@ -845,7 +827,7 @@ async function gatePiToolCall(
     riskLevel,
     errorCategory: decision.approved ? undefined : 'permission',
     summary: decision.approved ? `已批准工具 ${call.toolName}` : `拒绝/超时工具 ${call.toolName}`,
-    data: { approved: decision.approved },
+    data: { approved: decision.approved, autoModeReason },
   });
 
   if (!decision.approved) {
@@ -961,6 +943,8 @@ async function handlePiEvent(
       }
       break;
     case 'agent_end':
+      // 对齐 Pi #2090：首轮成功后 fire-and-forget 精炼侧栏标题，不阻塞主循环
+      scheduleTaskTitleRefine(task);
       break;
   }
 }
@@ -1078,37 +1062,30 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
     data: { output: toolResult.output },
   });
 
-  // 当 attach_content 工具成功返回时，提取 contentBlock 并推送给前端。
+  // attach_content / present_ui：提取 contentBlock 并挂到 assistant 消息。
   // Pi harness 会把工具原始返回值放到 AgentToolResult.details，不能只看最外层 result。
-  if (!isError && toolName === 'attach_content') {
+  if (!isError && (toolName === 'attach_content' || toolName === 'present_ui')) {
     const raw = extractAttachContentBlock(result, details);
-    if (isRecord(raw) && typeof raw.type === 'string' && typeof raw.content === 'string') {
-      let resolvedContent = String(raw.content);
-      const blockType = (raw.type as string) === 'file_reference' || (raw.type as string) === 'image'
-        ? 'file' : 'url';
-      if (blockType === 'file' && resolvedContent.length > 0 && !resolvedContent.startsWith('/') && !resolvedContent.startsWith('~')) {
-        resolvedContent = join(workspaceDir, resolvedContent);
-      }
-      const block: ContentBlock = {
-        id: randomUUID(),
-        type: raw.type as ContentBlock['type'],
-        content: resolvedContent,
-        name: typeof raw.name === 'string' ? raw.name : undefined,
-        mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : undefined,
-        size: typeof raw.size === 'number' ? raw.size : undefined,
-      };
-      // 找到发起该工具调用的 assistant 消息，将内容块挂载上去
-      let assistantMessageId: string | undefined;
-      for (let i = task.messages.length - 1; i >= 0; i--) {
-        const msg = task.messages[i];
-        if (msg.role === 'assistant' && msg.toolCalls?.some((tc) => tc.id === callId)) {
-          msg.contentBlocks = [...(msg.contentBlocks ?? []), block];
-          assistantMessageId = msg.id;
-          break;
+    if (isRecord(raw) && typeof raw.type === 'string') {
+      const block = buildContentBlockFromTool(raw, workspaceDir, toolName);
+      if (block) {
+        let assistantMessageId: string | undefined;
+        for (let i = task.messages.length - 1; i >= 0; i--) {
+          const msg = task.messages[i];
+          if (msg.role === 'assistant' && msg.toolCalls?.some((tc) => tc.id === callId)) {
+            msg.contentBlocks = upsertContentBlocks(msg.contentBlocks, block);
+            assistantMessageId = msg.id;
+            break;
+          }
+        }
+        saveTask(task);
+        const messageId = assistantMessageId ?? message.id;
+        if (toolName === 'present_ui') {
+          publish({ type: 'content_blocks_upserted', taskId: task.id, messageId, blocks: [block] });
+        } else {
+          publish({ type: 'content_blocks_added', taskId: task.id, messageId, blocks: [block] });
         }
       }
-      saveTask(task);
-      publish({ type: 'content_blocks_added', taskId: task.id, messageId: assistantMessageId ?? message.id, blocks: [block] });
     }
   }
 }
@@ -1141,6 +1118,65 @@ function extractAttachContentBlock(result: unknown, details: unknown): unknown {
   if (isRecord(details) && 'contentBlock' in details) return details.contentBlock;
   if (isRecord(result) && 'contentBlock' in result) return result.contentBlock;
   return undefined;
+}
+
+function upsertContentBlocks(
+  existing: ContentBlock[] | undefined,
+  block: ContentBlock,
+): ContentBlock[] {
+  const list = existing ?? [];
+  const idx = list.findIndex((b) => b.id === block.id);
+  if (idx < 0) return [...list, block];
+  const next = list.slice();
+  next[idx] = block;
+  return next;
+}
+
+function buildContentBlockFromTool(
+  raw: Record<string, unknown>,
+  workspaceDir: string,
+  toolName: string,
+): ContentBlock | null {
+  const type = String(raw.type);
+  if (type === 'ui' || toolName === 'present_ui') {
+    const kind = typeof raw.kind === 'string' ? raw.kind : '';
+    if (!kind) return null;
+    const fallbackText =
+      typeof raw.fallbackText === 'string'
+        ? raw.fallbackText
+        : typeof raw.content === 'string'
+          ? raw.content
+          : '';
+    const id =
+      typeof raw.id === 'string' && raw.id.trim()
+        ? raw.id.trim()
+        : randomUUID();
+    return {
+      id,
+      type: 'ui',
+      content: fallbackText,
+      kind,
+      props: raw.props,
+      fallbackText: fallbackText || undefined,
+    };
+  }
+
+  if (typeof raw.content !== 'string') return null;
+  if (type !== 'file_reference' && type !== 'image' && type !== 'link') return null;
+
+  let resolvedContent = String(raw.content);
+  const isFile = type === 'file_reference' || type === 'image';
+  if (isFile && resolvedContent.length > 0 && !resolvedContent.startsWith('/') && !resolvedContent.startsWith('~')) {
+    resolvedContent = join(workspaceDir, resolvedContent);
+  }
+  return {
+    id: randomUUID(),
+    type: type as ContentBlock['type'],
+    content: resolvedContent,
+    name: typeof raw.name === 'string' ? raw.name : undefined,
+    mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : undefined,
+    size: typeof raw.size === 'number' ? raw.size : undefined,
+  };
 }
 
 function assistantMessageToAurevoy(task: Task, message: PiAssistantMessage): Message {

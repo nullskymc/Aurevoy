@@ -29,7 +29,7 @@
 | ThinkingCard | 替 ReasoningBlock，干净的思考过程卡片 | ✅ |
 | Pi Approval Gate | Pi `beforeToolCall` 单点门禁 + auto mode 核心策略 | ✅ |
 | Multi-Provider LLM | Anthropic / OpenAI 兼容 / OpenAI Responses v2 | ✅ |
-| Auto Mode | 4 级自动模式 + 安全暂停 + 自动规划 | ✅ |
+| Auto Mode | auto/plan 两档 + 安全暂停 + 计划门禁 | ✅ |
 | Plan Mode | 自动复杂度检测 + Scout + LLM 规划 | ✅ |
 | Tool Framework | Effect-TS 新一代工具系统（P0-P4） | ✅ |
 | Memory Vectorization | sqlite-vec 向量检索 + Dreams 维护管道 | ✅ |

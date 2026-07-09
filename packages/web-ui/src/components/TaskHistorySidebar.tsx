@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Task, Project } from "@aurevoy/shared";
+import { taskDisplayTitle } from "@aurevoy/shared";
 import { getRelativeTime, getStatusLabel } from "./status";
 import { t } from "../i18n";
 import { usePlatform } from "../platform/context";
@@ -11,6 +12,17 @@ import {
   copyTextItem,
   type ContextMenuState,
 } from "./contextMenuActions";
+import {
+  IconChat,
+  IconChevron,
+  IconFolder,
+  IconPlus,
+  IconSearch,
+  IconSettings,
+  IconSkills,
+  IconTrash,
+} from "./shellIcons";
+import "./TaskHistorySidebar.css";
 
 type MainView = "chat" | "search" | "skills" | "settings";
 
@@ -54,29 +66,32 @@ export function TaskHistorySidebar({
     initial.add("__standalone__");
     return initial;
   });
-
-  // Context menu state
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   const closeCtxMenu = useCallback(() => {
     setCtxMenu((prev) => ({ ...prev, open: false }));
   }, []);
 
-  // Auto-expand new projects as they appear
-  const prevProjectIds = useMemo(() => new Set(projects.map((p) => p.id)), [projects]);
-  useMemo(() => {
+  const projectIds = useMemo(() => projects.map((p) => p.id).join(","), [projects]);
+
+  // Expand newly imported projects.
+  useEffect(() => {
     setExpandedIds((prev) => {
       let changed = false;
-      for (const id of prevProjectIds) {
-        if (!prev.has(id)) { changed = true; break; }
-      }
-      if (!changed) return prev;
       const next = new Set(prev);
-      for (const id of prevProjectIds) next.add(id);
-      next.add("__standalone__");
-      return next;
+      for (const project of projects) {
+        if (!next.has(project.id)) {
+          next.add(project.id);
+          changed = true;
+        }
+      }
+      if (!next.has("__standalone__")) {
+        next.add("__standalone__");
+        changed = true;
+      }
+      return changed ? next : prev;
     });
-  }, [prevProjectIds]);
+  }, [projectIds, projects]);
 
   const tasksByProject = useMemo(() => {
     const map = new Map<string, Task[]>();
@@ -93,8 +108,8 @@ export function TaskHistorySidebar({
     return { map, standalone };
   }, [tasks]);
 
-  // Auto-expand drawer containing the active task
-  useMemo(() => {
+  // Keep the drawer containing the active task open.
+  useEffect(() => {
     if (!activeTaskId) return;
     const activeTask = tasks.find((t) => t.id === activeTaskId);
     if (!activeTask) return;
@@ -116,10 +131,7 @@ export function TaskHistorySidebar({
     });
   }
 
-  function handleProjectContextMenu(
-    e: React.MouseEvent,
-    project: Project,
-  ) {
+  function handleProjectContextMenu(e: React.MouseEvent, project: Project) {
     e.preventDefault();
     e.stopPropagation();
     const items: ContextMenuItem[] = [
@@ -127,7 +139,7 @@ export function TaskHistorySidebar({
         type: "item",
         id: "new-conversation",
         label: t("nav.newChat"),
-        icon: <PlusIcon />,
+        icon: <IconPlus size={14} />,
         action: () => onNewTask(project.id),
       },
       { type: "separator" },
@@ -143,22 +155,15 @@ export function TaskHistorySidebar({
         type: "item",
         id: "delete-project",
         label: t("projects.delete"),
-        icon: <TrashIcon />,
+        icon: <IconTrash />,
         danger: true,
         action: () => onDeleteProject(project.id),
       },
     ];
-    setCtxMenu({
-      open: true,
-      point: contextMenuPoint(e),
-      items,
-    });
+    setCtxMenu({ open: true, point: contextMenuPoint(e), items });
   }
 
-  function handleTaskContextMenu(
-    e: React.MouseEvent,
-    task: Task,
-  ) {
+  function handleTaskContextMenu(e: React.MouseEvent, task: Task) {
     e.preventDefault();
     e.stopPropagation();
     const items: ContextMenuItem[] = [
@@ -166,43 +171,40 @@ export function TaskHistorySidebar({
         type: "item",
         id: "select-task",
         label: "选择对话",
-        icon: <ChatIcon />,
+        icon: <IconChat size={14} />,
         action: () => onSelectTask(task),
       },
-      copyTextItem("copy-task-title", "复制标题", task.goal),
+      copyTextItem("copy-task-title", "复制标题", taskDisplayTitle(task)),
       copyTextItem("copy-task-id", "复制对话 ID", task.id),
       { type: "separator" },
       {
         type: "item",
         id: "delete-task",
         label: t("sidebar.deleteTask"),
-        icon: <TrashIcon />,
+        icon: <IconTrash />,
         danger: true,
         action: () => onDeleteTask(task.id),
       },
     ];
-    setCtxMenu({
-      open: true,
-      point: contextMenuPoint(e),
-      items,
-    });
+    setCtxMenu({ open: true, point: contextMenuPoint(e), items });
   }
 
   return (
     <aside className="sidebar app-sidebar" aria-label={t("sidebar.label")}>
       <div className="window-drag-strip window-drag-region" data-tauri-drag-region aria-hidden="true" />
-      <div className="sidebar-brand" >
+
+      <div className="sidebar-brand">
         <img className="sidebar-brand-logo" src="/aurevoy-wordmark.svg" alt="Aurevoy" />
       </div>
 
-      <div className="sidebar-actions">
+      <nav className="sidebar-nav" aria-label={t("sidebar.label")}>
         <button
           type="button"
-          className="sidebar-action primary new-chat-btn"
+          className="sidebar-action"
           data-active={activeView === "chat" && !activeTaskId}
           onClick={() => onNewTask()}
         >
-          <PlusIcon />
+          <IconPlus />
           <span>{t("nav.newChat")}</span>
         </button>
         <button
@@ -211,7 +213,7 @@ export function TaskHistorySidebar({
           data-active={activeView === "search"}
           onClick={onOpenSearch}
         >
-          <SearchIcon />
+          <IconSearch />
           <span>{t("nav.search")}</span>
         </button>
         <button
@@ -220,97 +222,109 @@ export function TaskHistorySidebar({
           data-active={activeView === "skills"}
           onClick={onOpenSkills}
         >
-          <PluginIcon />
+          <IconSkills />
           <span>{t("nav.skills")}</span>
         </button>
-      </div>
+      </nav>
 
       <div className="sidebar-scroll">
-        <div className="drawer-list">
-          {/* 项目标头 */}
-          <div className="sidebar-section-divider">
-            <span className="section-line-short" />
-            <span className="section-title">{t("nav.projects")}</span>
-            <span className="section-line-long" />
+        <section className="sidebar-section">
+          <header className="sidebar-section-head">
+            <h2 className="sidebar-section-title">{t("nav.projects")}</h2>
             <button
               type="button"
-              className="section-action-btn"
+              className="sidebar-icon-btn"
               onClick={onImportProject}
               title={t("projects.import")}
               aria-label={t("projects.import")}
             >
-              <PlusIcon />
+              <IconPlus size={14} />
             </button>
-          </div>
+          </header>
 
-          {projects.map((project) => {
-            const projectTasks = tasksByProject.map.get(project.id) ?? [];
-            const expanded = expandedIds.has(project.id);
-            return (
-              <div key={project.id} className="drawer-group">
-                <div className="drawer-header-row" onContextMenu={(e) => handleProjectContextMenu(e, project)}>
-                  <button
-                    type="button"
-                    className="sidebar-action drawer-header"
-                    data-expanded={expanded}
+          <div className="drawer-list">
+            {projects.map((project) => {
+              const projectTasks = tasksByProject.map.get(project.id) ?? [];
+              const expanded = expandedIds.has(project.id);
+              return (
+                <div key={project.id} className="drawer-group">
+                  <div
+                    className="drawer-header-row"
                     data-selected={selectedProjectId === project.id}
-                    onClick={() => { toggleExpand(project.id); onSelectProject(project.id); }}
-                    title={project.path}
+                    onContextMenu={(e) => handleProjectContextMenu(e, project)}
                   >
-                    <FolderIcon />
-                    <span className="drawer-name">{project.name}</span>
-                    {projectTasks.length > 0 && (
-                      <span className="drawer-count">{projectTasks.length}</span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    className="project-new-chat-btn"
-                    onClick={(e) => { e.stopPropagation(); onNewTask(project.id); }}
-                    title={t("nav.newChat")}
-                    aria-label={t("nav.newChat")}
-                  >
-                    <PlusIcon />
-                  </button>
-                  <button
-                    type="button"
-                    className="project-delete-btn"
-                    onClick={(e) => { e.stopPropagation(); onDeleteProject(project.id); }}
-                    title={t("projects.delete")}
-                    aria-label={t("projects.delete")}
-                  >
-                    <TrashIcon />
-                  </button>
+                    <button
+                      type="button"
+                      className="drawer-header"
+                      data-expanded={expanded}
+                      data-selected={selectedProjectId === project.id}
+                      onClick={() => {
+                        toggleExpand(project.id);
+                        onSelectProject(project.id);
+                      }}
+                      title={project.path}
+                    >
+                      <IconChevron open={expanded} className="drawer-chevron" />
+                      <IconFolder />
+                      <span className="drawer-name">{project.name}</span>
+                      {projectTasks.length > 0 && (
+                        <span className="drawer-count">{projectTasks.length}</span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-icon-btn drawer-action"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onNewTask(project.id);
+                      }}
+                      title={t("nav.newChat")}
+                      aria-label={t("nav.newChat")}
+                    >
+                      <IconPlus size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-icon-btn drawer-action is-danger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteProject(project.id);
+                      }}
+                      title={t("projects.delete")}
+                      aria-label={t("projects.delete")}
+                    >
+                      <IconTrash />
+                    </button>
+                  </div>
+                  {expanded && (
+                    <TaskList
+                      tasks={projectTasks}
+                      activeTaskId={activeTaskId}
+                      onSelectTask={onSelectTask}
+                      onDeleteTask={onDeleteTask}
+                      onContextMenuTask={handleTaskContextMenu}
+                      nested
+                    />
+                  )}
                 </div>
-                {expanded && (
-                  <TaskList
-                    tasks={projectTasks}
-                    activeTaskId={activeTaskId}
-                    onSelectTask={onSelectTask}
-                    onDeleteTask={onDeleteTask}
-                    onContextMenuTask={handleTaskContextMenu}
-                    isChild={true}
-                  />
-                )}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+        </section>
 
-          {/* 独立对话标头 */}
-          <div className="sidebar-section-divider">
-            <span className="section-line-short" />
-            <span className="section-title">{t("nav.conversations")}</span>
-            <span className="section-line-long" />
+        <section className="sidebar-section">
+          <header className="sidebar-section-head">
+            <h2 className="sidebar-section-title">{t("nav.conversations")}</h2>
             <button
               type="button"
-              className="section-action-btn"
+              className="sidebar-icon-btn"
               onClick={() => onNewTask()}
               title={t("nav.newChat")}
               aria-label={t("nav.newChat")}
             >
-              <PlusIcon />
+              <IconPlus size={14} />
             </button>
-          </div>
+          </header>
 
           {tasksByProject.standalone.length === 0 ? (
             <p className="sidebar-empty">{t("sidebar.emptyNoTasks")}</p>
@@ -323,7 +337,7 @@ export function TaskHistorySidebar({
               onContextMenuTask={handleTaskContextMenu}
             />
           )}
-        </div>
+        </section>
       </div>
 
       <div className="sidebar-footer">
@@ -333,7 +347,7 @@ export function TaskHistorySidebar({
           data-active={activeView === "settings"}
           onClick={() => onOpenSettings()}
         >
-          <GearIcon />
+          <IconSettings />
           <span>{t("nav.settings")}</span>
         </button>
       </div>
@@ -354,21 +368,22 @@ function TaskList({
   onSelectTask,
   onDeleteTask,
   onContextMenuTask,
-  isChild = false,
+  nested = false,
 }: {
   tasks: Task[];
   activeTaskId?: string;
   onSelectTask: (task: Task) => void;
   onDeleteTask: (taskId: string) => void;
   onContextMenuTask?: (e: React.MouseEvent, task: Task) => void;
-  isChild?: boolean;
+  nested?: boolean;
 }) {
   if (tasks.length === 0) {
     return <p className="sidebar-empty drawer-empty">{t("sidebar.emptyNoTasks")}</p>;
   }
+
   return (
     <ul
-      className={`conv-list ${isChild ? "child-chat-list" : "drawer-conv-list"}`}
+      className={nested ? "conv-list is-nested" : "conv-list"}
       role="listbox"
       aria-label={t("sidebar.listLabel")}
       onKeyDown={(event) => {
@@ -390,44 +405,32 @@ function TaskList({
       {tasks.map((task) => (
         <li key={task.id} role="option" aria-selected={task.id === activeTaskId}>
           <div
-            className={`conv-item-row ${isChild ? "child-chat-item-row" : ""}`}
+            className="conv-item-row"
             onContextMenu={
-              onContextMenuTask
-                ? (e) => onContextMenuTask(e, task)
-                : undefined
+              onContextMenuTask ? (e) => onContextMenuTask(e, task) : undefined
             }
           >
             <button
               type="button"
-              className={`conv-item ${isChild ? "child-chat-item" : ""}`}
+              className="conv-item"
               data-active={task.id === activeTaskId}
               onClick={() => onSelectTask(task)}
               title={task.goal}
             >
-              <ChatIcon />
+              <IconChat size={14} />
               <span className="conv-copy">
-                <span className="conv-title">{task.goal}</span>
-                {!isChild && (task.artifacts?.length || task.budgetUsage?.toolCalls) ? (
-                  <span className="conv-summary">
-                    {task.artifacts?.length ? (
-                      <span className="conv-summary-chip">📄 {task.artifacts.length} {t("sidebar.unitArtifacts")}</span>
-                    ) : null}
-                    {task.budgetUsage?.toolCalls ? (
-                      <span className="conv-summary-chip">⚙ {task.budgetUsage.toolCalls} {t("sidebar.unitTools")}</span>
-                    ) : null}
-                  </span>
-                ) : null}
-                {!isChild && (
+                <span className="conv-title">{taskDisplayTitle(task)}</span>
+                {!nested && (
                   <span className="conv-meta">
-                    <span>{getStatusLabel(task.status)}</span>
-                    <span>{getRelativeTime(task.updatedAt)}</span>
+                    <span className="conv-status">{getStatusLabel(task.status)}</span>
+                    <span className="conv-time">{getRelativeTime(task.updatedAt)}</span>
                   </span>
                 )}
               </span>
             </button>
             <button
               type="button"
-              className="conv-delete-btn"
+              className="sidebar-icon-btn conv-delete-btn is-danger"
               onClick={(event) => {
                 event.stopPropagation();
                 onDeleteTask(task.id);
@@ -435,104 +438,11 @@ function TaskList({
               title={t("sidebar.deleteTask")}
               aria-label={t("sidebar.deleteTask")}
             >
-              <TrashIcon />
+              <IconTrash />
             </button>
           </div>
         </li>
       ))}
     </ul>
-  );
-}
-
-function GearIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.4" fill="none" />
-      <path
-        d="M10 2.8v2.2M10 15v2.2M17.2 10H15M5 10H2.8M15.1 4.9l-1.6 1.6M6.5 13.5l-1.6 1.6M15.1 15.1l-1.6-1.6M6.5 6.5L4.9 4.9"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-      <path
-        d="M5 6h10l-.8 9.3a1 1 0 01-1 .7H6.8a1 1 0 01-1-.7L5 6zM8 6V4.5a1 1 0 011-1h2a1 1 0 011 1V6M3.5 6h13"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        fill="none"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <path
-        d="M10 4v12M4 10h12"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        fill="none"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function SearchIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <circle cx="9" cy="9" r="5" stroke="currentColor" strokeWidth="1.5" fill="none" />
-      <path d="M13 13l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function PluginIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <rect x="3.5" y="3.5" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" fill="none" />
-      <rect x="11.5" y="3.5" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" fill="none" />
-      <rect x="3.5" y="11.5" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" fill="none" />
-      <rect x="11.5" y="11.5" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" fill="none" />
-    </svg>
-  );
-}
-
-
-function FolderIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-      <path
-        d="M3 6.2c0-.8.6-1.4 1.4-1.4h3.1l1.3 1.5h5.8c.8 0 1.4.6 1.4 1.4v6.1c0 .8-.6 1.4-1.4 1.4H4.4c-.8 0-1.4-.6-1.4-1.4V6.2z"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        fill="none"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function ChatIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" className="conv-icon-svg">
-      <path
-        d="M3.5 5.5v7c0 .8.6 1.4 1.4 1.4h9.2l3.2 2.6V5.5c0-.8-.6-1.4-1.4-1.4H4.9c-.8 0-1.4.6-1.4 1.4z"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        fill="none"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }

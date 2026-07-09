@@ -62,7 +62,7 @@ export class DisabledCommandExecutor implements CommandExecutor {
     _signal?: AbortSignal,
     _workspaceOverride?: string,
   ): Promise<CommandExecutionResult> {
-    throw new Error('命令执行默认关闭。需通过设置显式启用，并接入审批、轨迹、超时和输出上限后才能使用。');
+    throw new Error('终端命令默认关闭。请在设置中开启「允许运行终端命令」，并完成审批、轨迹、超时与输出上限管控后再使用。');
   }
 }
 
@@ -78,7 +78,7 @@ export class ProcessCommandExecutor implements CommandExecutor {
   ): Promise<CommandExecutionResult> {
     const policy = this.policy;
     if (!policy.enabled) {
-      throw new Error('命令执行默认关闭。请先在设置页启用基础命令执行。');
+      throw new Error('终端命令默认关闭。请先在设置中开启「允许运行终端命令」。');
     }
     if (!request.command.trim()) throw new Error('command 必须是非空字符串');
     const cwd = resolveCommandCwd(request.cwd, workspaceOverride ?? policy.workspaceDir);

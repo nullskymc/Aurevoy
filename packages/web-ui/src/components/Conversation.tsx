@@ -30,6 +30,7 @@ import {
   buildConversationViewModel,
   type ConversationTurn,
 } from "./conversationWorkflow";
+import "./Conversation.css";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
 export interface ToolActivity {
@@ -83,8 +84,12 @@ interface ConversationProps {
   onBranch?: (messageId: string) => void;
   /** 恢复中断的任务 */
   onResume?: () => void;
-  /** Agent 本轮通过 attach_content 工具的实时内容块 */
+  /** Agent 本轮通过 attach_content / present_ui 的实时内容块 */
   liveContentBlocks?: ContentBlock[];
+  /** 限定 UI choice 提交 → 作为用户消息续聊 */
+  onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
+  /** 对话内文件引用 → 侧边工作台预览 */
+  onOpenWorkspacePath?: (path: string) => void;
 }
 
 interface ToolResultInfo {
@@ -205,6 +210,8 @@ export function Conversation({
   onBranch,
   onResume,
   liveContentBlocks = [],
+  onUiChoice,
+  onOpenWorkspacePath,
 }: ConversationProps) {
   const platform = usePlatform();
   const topRef = useRef<HTMLDivElement>(null);
@@ -286,6 +293,8 @@ export function Conversation({
 
         {viewModel.turns.map((turn, index) => (
           <ConversationTurnView
+            onUiChoice={onUiChoice}
+            onOpenWorkspacePath={onOpenWorkspacePath}
             key={turn.id}
             turn={turn}
             isLiveTurn={hasLiveTail && index === viewModel.turns.length - 1}
@@ -374,6 +383,8 @@ function ConversationTurnView({
   onBranch,
   liveRoundData,
   phaseDetail,
+  onUiChoice,
+  onOpenWorkspacePath,
 }: {
   turn: ConversationTurn;
   isLiveTurn: boolean;
@@ -386,6 +397,8 @@ function ConversationTurnView({
   onBranch?: (messageId: string) => void;
   liveRoundData?: AgentRoundData | null;
   phaseDetail?: string;
+  onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
+  onOpenWorkspacePath?: (path: string) => void;
 }) {
   const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
   const attachContentToolCallIds = collectAttachContentToolCallIds(turn.agentMessages);
@@ -434,24 +447,17 @@ function ConversationTurnView({
               defaultToolDetailsOpen={defaultToolDetailsOpen}
               onToolDecision={onToolDecision}
               defaultOpen={isLiveTurn}
+              onUiChoice={onUiChoice}
+              onOpenWorkspacePath={onOpenWorkspacePath}
             />
           )}
 
-          {presentationMessages.map((message) => (
-            <div
-              key={`presentation-${message.id}`}
-              className="agent-final-response"
-              onContextMenu={(event) => onAgentContextMenu(event, message)}
-            >
-              <AgentRound
-                data={buildAgentRoundFromMessage(message, resultMap, plan)}
-                busy={false}
-                defaultToolDetailsOpen={defaultToolDetailsOpen}
-                showWorkflow={false}
-              />
-            </div>
-          ))}
-
+          {/*
+            正文（final）必须在附件/UI 块（presentation）之前。
+            present_ui / attach_content 挂在「发起 tool_call 的中间 assistant 消息」上，
+            真正的提问/总结往往在后续无 tool 的 final 消息里；若先画 presentation，
+            会出现 choice 等回答 UI 压在 Agent 问题文字上方。
+          */}
           {finalMessages.map((message) => (
             <div
               key={message.id}
@@ -467,9 +473,28 @@ function ConversationTurnView({
                     busy={false}
                     defaultToolDetailsOpen={defaultToolDetailsOpen}
                     showWorkflow={false}
+                    onUiChoice={onUiChoice}
+                    onOpenWorkspacePath={onOpenWorkspacePath}
                   />
                 </>
               )}
+            </div>
+          ))}
+
+          {presentationMessages.map((message) => (
+            <div
+              key={`presentation-${message.id}`}
+              className="agent-final-response"
+              onContextMenu={(event) => onAgentContextMenu(event, message)}
+            >
+              <AgentRound
+                data={buildAgentRoundFromMessage(message, resultMap, plan)}
+                busy={false}
+                defaultToolDetailsOpen={defaultToolDetailsOpen}
+                showWorkflow={false}
+                onUiChoice={onUiChoice}
+                onOpenWorkspacePath={onOpenWorkspacePath}
+              />
             </div>
           ))}
         </div>
@@ -479,18 +504,32 @@ function ConversationTurnView({
 }
 
 function findFinalAssistantMessage(messages: Message[]): Message | null {
-  const attachContentToolCallIds = collectAttachContentToolCallIds(messages);
+  const presentationToolCallIds = collectPresentationToolCallIds(messages);
+  // 从后往前：跳过纯 present_ui/attach_content 轮次，优先取带正文、无过程工具的 final 回复
+  let presentationOnlyFallback: Message | null = null;
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.role === "tool") {
-      if (message.toolCallId && attachContentToolCallIds.has(message.toolCallId)) continue;
-      return null;
+      if (message.toolCallId && presentationToolCallIds.has(message.toolCallId)) continue;
+      // 普通 tool 结果打断「尾部 final」搜索
+      break;
     }
     if (message.role !== "assistant") continue;
-    if ((message.toolCalls?.length ?? 0) === 0) return message;
-    return isPresentationOnlyAssistantMessage(message) ? message : null;
+    if ((message.toolCalls?.length ?? 0) === 0) {
+      if (message.content.trim().length > 0 || (message.contentBlocks?.length ?? 0) > 0) {
+        return message;
+      }
+      continue;
+    }
+    if (isPresentationOnlyAssistantMessage(message)) {
+      // 仅交付块的消息：若后面没有更好的正文 final，再回退用它
+      if (!presentationOnlyFallback) presentationOnlyFallback = message;
+      continue;
+    }
+    // 含非 presentation 工具的 assistant：不是用户可读 final
+    break;
   }
-  return null;
+  return presentationOnlyFallback;
 }
 
 function getFailureInfo(message: Message): { message: string; category?: string } | null {
@@ -518,9 +557,16 @@ function AgentFailureCard({ message }: { message: Message }) {
   );
 }
 
+/** 仅用于向用户交付附件/UI 的工具，不参与「工作流过程」叙事 */
+const PRESENTATION_TOOL_NAMES = new Set(["attach_content", "present_ui"]);
+
+function isPresentationToolName(name: string): boolean {
+  return PRESENTATION_TOOL_NAMES.has(name);
+}
+
 function isPresentationOnlyAssistantMessage(message: Message): boolean {
   const toolCalls = message.toolCalls ?? [];
-  return toolCalls.length > 0 && toolCalls.every((toolCall) => toolCall.function.name === "attach_content");
+  return toolCalls.length > 0 && toolCalls.every((toolCall) => isPresentationToolName(toolCall.function.name));
 }
 
 function isPresentationAssistantMessage(message: Message): boolean {
@@ -539,15 +585,22 @@ function isRenderableAssistantMessage(message: Message): boolean {
   return !!message.failure || message.content.trim().length > 0 || (message.contentBlocks?.length ?? 0) > 0;
 }
 
-function collectAttachContentToolCallIds(messages: Message[]): Set<string> {
+function collectPresentationToolCallIds(messages: Message[]): Set<string> {
   const ids = new Set<string>();
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const toolCall of message.toolCalls ?? []) {
-      if (toolCall.function.name === "attach_content") ids.add(toolCall.id);
+      if (isPresentationToolName(toolCall.function.name)) {
+        ids.add(toolCall.id);
+      }
     }
   }
   return ids;
+}
+
+/** @deprecated 名称保留兼容；实际含 present_ui */
+function collectAttachContentToolCallIds(messages: Message[]): Set<string> {
+  return collectPresentationToolCallIds(messages);
 }
 
 function AgentWorkflowDrawer({
@@ -561,6 +614,8 @@ function AgentWorkflowDrawer({
   defaultToolDetailsOpen,
   onToolDecision,
   defaultOpen = false,
+  onUiChoice,
+  onOpenWorkspacePath,
 }: {
   assistantMessages: Message[];
   presentationMessageIds: Set<string>;
@@ -572,6 +627,8 @@ function AgentWorkflowDrawer({
   defaultToolDetailsOpen: boolean;
   onToolDecision: ToolDecisionHandler;
   defaultOpen?: boolean;
+  onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
+  onOpenWorkspacePath?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const rounds = assistantMessages.map((message) =>
@@ -614,6 +671,8 @@ function AgentWorkflowDrawer({
               defaultToolDetailsOpen={defaultToolDetailsOpen}
               showWorkflow
               showOutput
+              onUiChoice={onUiChoice}
+              onOpenWorkspacePath={onOpenWorkspacePath}
             />
           ))}
           {liveRoundData && (
@@ -624,6 +683,8 @@ function AgentWorkflowDrawer({
               defaultToolDetailsOpen={defaultToolDetailsOpen}
               showWorkflow
               showOutput
+              onUiChoice={onUiChoice}
+              onOpenWorkspacePath={onOpenWorkspacePath}
               phaseDetail={phaseDetail}
             />
           )}

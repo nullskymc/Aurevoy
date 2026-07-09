@@ -3,6 +3,7 @@ import { t, type TranslationKey } from "../i18n";
 import { usePlatform } from "../platform/context";
 import { ImageViewer } from "./ImageViewer";
 import type { MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
+import "./Composer.css";
 
 interface SlashCommand {
   name: string;
@@ -11,6 +12,11 @@ interface SlashCommand {
 }
 
 export type AutoModeUILevel = 'auto' | 'plan';
+export type ThinkingUILevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+const THINKING_LEVEL_CYCLE: ThinkingUILevel[] = [
+  'off', 'minimal', 'low', 'medium', 'high', 'xhigh',
+];
 
 interface ComposerProps {
   value: string;
@@ -49,6 +55,10 @@ interface ComposerProps {
   onCycleAutoMode?: () => void;
   /** 恢复暂停的 auto mode */
   onResumeAutoMode?: () => void;
+  /** 推理深度（与模型能力相关，仅支持推理的模型会生效） */
+  thinkingLevel?: ThinkingUILevel;
+  /** 点击循环切换推理深度 */
+  onCycleThinkingLevel?: () => void;
 }
 
 const IME_ENTER_GUARD_MS = 120;
@@ -76,6 +86,8 @@ export function Composer({
   autoModePaused,
   onCycleAutoMode,
   onResumeAutoMode,
+  thinkingLevel = 'medium',
+  onCycleThinkingLevel,
 }: ComposerProps) {
   const platform = usePlatform();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -367,6 +379,17 @@ export function Composer({
           </div>
 
           <div className="composer-tools-right">
+            {onCycleThinkingLevel && (
+              <button
+                type="button"
+                className={"composer-chip thinking-level-chip" + (thinkingLevel !== "off" ? " is-active" : "")}
+                onClick={onCycleThinkingLevel}
+                title={t("composer.thinkingLevelHint")}
+              >
+                <span className={"thinking-level-dot level-" + thinkingLevel} />
+                <span>{thinkingLevelShortLabel(thinkingLevel)}</span>
+              </button>
+            )}
             <button
               type="button"
               className="composer-send"
@@ -442,6 +465,16 @@ export function Composer({
       )}
     </div>
   );
+}
+
+/** 固定英文档位名，与 API 枚举一致，不走 i18n */
+function thinkingLevelShortLabel(level: ThinkingUILevel): string {
+  return level;
+}
+
+export function nextThinkingLevel(current: ThinkingUILevel): ThinkingUILevel {
+  const idx = THINKING_LEVEL_CYCLE.indexOf(current);
+  return THINKING_LEVEL_CYCLE[(idx < 0 ? 0 : idx + 1) % THINKING_LEVEL_CYCLE.length];
 }
 
 function DocFileIcon() {

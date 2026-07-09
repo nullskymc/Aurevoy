@@ -6,6 +6,8 @@ function task(id: string, tokenUsage?: Task["tokenUsage"]): Task {
   return {
     id,
     goal: id,
+    title: id,
+    titleSource: "truncated",
     status: "completed",
     phase: "finalizing",
     plan: [],

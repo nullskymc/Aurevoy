@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
+  AutoModeLevel,
   Message,
   MessageAttachment,
   PlanStep,
@@ -22,10 +23,12 @@ import {
   steerPiHarnessTask,
 } from './pi-harness.js';
 import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval, waitForPlanApproval } from './pi-approval.js';
+import { createInitialAutoModeState, syncAutoModeState } from './approval.js';
 import { taskStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
 import { initialBudgetUsage, normalizeBudget } from './m6-state.js';
 import { getPiProviderName } from '../llm/pi-provider.js';
+import { initialTaskTitle, isTitleStillAuto } from './task-title.js';
 
 /** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
 const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'running', 'paused'];
@@ -199,9 +202,12 @@ export function branchTask(
   }));
 
   const now = new Date().toISOString();
+  const branchGoal = goalOverride ?? parentTask.goal;
   const task: Task = {
     id: randomUUID(),
-    goal: goalOverride ?? parentTask.goal,
+    goal: branchGoal,
+    title: goalOverride ? initialTaskTitle(branchGoal) : (parentTask.title || initialTaskTitle(branchGoal)),
+    titleSource: goalOverride ? 'truncated' : (parentTask.titleSource ?? 'truncated'),
     status: clonedMessages.length > 0 ? 'completed' : 'pending',
     phase: clonedMessages.length > 0 ? 'finalizing' : 'initializing',
     plan: [],
@@ -215,6 +221,8 @@ export function branchTask(
     tokenUsage: { available: false, provider: getPiProviderName(), model: config.llm.model },
     parentTaskId: parentTask.id,
     projectId: parentTask.projectId,
+    // 分支任务重新走权限门禁，不继承父任务的 planApproved
+    autoModeState: createInitialAutoModeState(currentAutoModeLevel()),
     createdAt: now,
     updatedAt: now,
   };
@@ -294,7 +302,17 @@ export function addUserTurn(
 
   const parsed = parseSlashCommand(content);
   const messageContent = parsed.planRequested ? (parsed.text || task.goal) : content;
-  if (parsed.planRequested) task.goal = messageContent;
+  if (parsed.planRequested) {
+    task.goal = messageContent;
+    if (isTitleStillAuto(task)) {
+      task.title = initialTaskTitle(messageContent);
+      task.titleSource = 'truncated';
+    }
+    // /plan 重新要求确认计划
+    const state = syncAutoModeState(task, currentAutoModeLevel());
+    state.planApproved = false;
+    state.planReady = false;
+  }
 
   const userMsg: Message = {
     id: randomUUID(),
@@ -408,9 +426,12 @@ export function createTask(
     createdAt: now,
     attachments,
   };
+  const autoModeLevel = currentAutoModeLevel();
   const task: Task = {
     id: randomUUID(),
     goal: taskGoal,
+    title: initialTaskTitle(taskGoal),
+    titleSource: 'truncated',
     status: 'pending',
     phase: 'initializing',
     plan: [],
@@ -423,6 +444,7 @@ export function createTask(
     budgetUsage: initialBudgetUsage(),
     tokenUsage: { available: false, provider: getPiProviderName(), model: config.llm.model },
     projectId: projectId ?? undefined,
+    autoModeState: createInitialAutoModeState(autoModeLevel),
     createdAt: now,
     updatedAt: now,
   };
@@ -430,7 +452,7 @@ export function createTask(
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
     summary: '任务已创建，等待 Pi harness 执行',
-    data: { goal: taskGoal },
+    data: { goal: taskGoal, autoModeLevel },
   });
   return task;
 }
@@ -449,6 +471,10 @@ export async function resolveTaskWorkspace(task: Task): Promise<string> {
 /** 主执行入口：任务控制只委托 Pi harness。 */
 export async function runHarnessTask(task: Task): Promise<void> {
   task.pendingApprovals = [];
+  const autoModeLevel = currentAutoModeLevel();
+  const autoModeState = syncAutoModeState(task, autoModeLevel);
+  taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...autoModeState } });
+
   if (task.plan.length === 0) {
     task.plan = createInitialPlan(task);
   } else {
@@ -464,7 +490,8 @@ export async function runHarnessTask(task: Task): Promise<void> {
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
   try {
-    if (config.autoMode.level === 'plan') {
+    // plan：先批计划；已批准则跳过。auto：直接执行。
+    if (autoModeLevel === 'plan' && !task.autoModeState?.planApproved) {
       const approved = await requestManualPlanApproval(task, abortController.signal);
       if (!approved) return;
     }
@@ -476,6 +503,10 @@ export async function runHarnessTask(task: Task): Promise<void> {
   } finally {
     activeAbortControllers.delete(task.id);
   }
+}
+
+function currentAutoModeLevel(): AutoModeLevel {
+  return config.autoMode.level === 'plan' ? 'plan' : 'auto';
 }
 
 function createInitialPlan(task: Task): PlanStep[] {
@@ -494,17 +525,21 @@ function shouldUseMultiStepPlan(goal: string): boolean {
 }
 
 async function requestManualPlanApproval(task: Task, signal: AbortSignal): Promise<boolean> {
+  const state = syncAutoModeState(task, currentAutoModeLevel());
+  state.planReady = true;
+  state.planApproved = false;
   task.status = 'paused';
   task.phase = 'waiting_approval';
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
   taskEvents.publish({ type: 'status', taskId: task.id, status: 'paused' });
   taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'waiting_approval', detail: '等待确认执行计划' });
+  taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...state } });
   taskEvents.publish({
     type: 'plan_approval_request',
     taskId: task.id,
     plan: task.plan,
-    reasoning: '用户通过 /plan 请求先确认执行计划。',
+    reasoning: '当前为 Plan 模式：请确认执行计划后，Agent 将自动执行（执行期不再逐工具审批）。',
   });
 
   const decision = await waitForPlanApproval(task.id, signal, config.agent.approvalTimeoutMs);
@@ -516,12 +551,19 @@ async function requestManualPlanApproval(task: Task, signal: AbortSignal): Promi
   });
 
   if (!decision.approved) {
+    if (task.autoModeState) {
+      task.autoModeState.planReady = false;
+      task.autoModeState.planApproved = false;
+    }
     task.status = 'cancelled';
     task.phase = 'cancelled';
     task.updatedAt = new Date().toISOString();
     taskStore.save(task);
     taskEvents.publish({ type: 'status', taskId: task.id, status: task.status });
     taskEvents.publish({ type: 'phase', taskId: task.id, phase: task.phase });
+    if (task.autoModeState) {
+      taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...task.autoModeState } });
+    }
     taskEvents.publish({ type: 'done', taskId: task.id, status: task.status });
     writeTrace(task.id, 'approval', 'cancelled', {
       ok: false,
@@ -531,6 +573,10 @@ async function requestManualPlanApproval(task: Task, signal: AbortSignal): Promi
     return false;
   }
 
+  // 计划已批：执行期与 auto 相同
+  const approvedState = syncAutoModeState(task, currentAutoModeLevel());
+  approvedState.planApproved = true;
+  approvedState.planReady = false;
   task.status = 'running';
   task.phase = 'initializing';
   task.plan = task.plan.map((step, index) => ({
@@ -542,9 +588,10 @@ async function requestManualPlanApproval(task: Task, signal: AbortSignal): Promi
   taskEvents.publish({ type: 'status', taskId: task.id, status: task.status });
   taskEvents.publish({ type: 'phase', taskId: task.id, phase: task.phase, detail: '计划已确认，启动 Pi harness' });
   taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
+  taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...approvedState } });
   writeTrace(task.id, 'approval', 'initializing', {
     ok: true,
-    summary: '执行计划已批准，继续进入 Pi harness',
+    summary: '执行计划已批准，执行期自动放行工具（等同 auto）',
   });
   return true;
 }

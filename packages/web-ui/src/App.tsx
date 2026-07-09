@@ -1,208 +1,45 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
-  AgentEvent,
-  ContentBlock,
   HealthResponse,
-  MemoryCategory,
-  Message,
   MessageAttachment,
-  RevertMode,
-  SkillDescriptor,
-  SkillInstallResponse,
-  Task,
-  TaskPhase,
-  UpdateRuntimeSettingsRequest,
 } from "@aurevoy/shared";
 import {
-  answerClarification,
-  approvePlan,
-  approveToolCall,
-  branchTask,
-  cancelTask,
-  checkHealth,
-  cleanupData,
-  compactTask,
-  continueTask,
-  createMemory,
-  createTask,
   createProject,
   deleteProject,
   deleteTask,
-  deleteMemory,
-  getDataStatus,
-  getMcpStatus,
-  getSettings,
-  listProviderModels,
-  getTask,
-  listMemories,
-  listProjects,
   listTaskTraces,
-  listTasks,
   resumeAutoMode as resumeAutoModeApi,
-  resumeTask,
-  setBaseUrl,
   updateSettings,
-  revertTask,
-  unrevertTask,
-  updateMemory,
 } from "./api";
 import { usePlatform } from "./platform/context";
+import { useAgentEventHandler } from "./hooks/useAgentEventHandler";
 import { useArtifacts } from "./hooks/useArtifacts";
+import { useAttachments } from "./hooks/useAttachments";
 import { useMemories } from "./hooks/useMemories";
 import { useSSEStream } from "./hooks/useSSEStream";
 import { useSettings } from "./hooks/useSettings";
 import { useTaskState } from "./hooks/useTaskState";
 import { useProjects } from "./hooks/useProjects";
+import { useRuntimeController } from "./hooks/useRuntimeController";
+import { useSettingsController } from "./hooks/useSettingsController";
+import { useShellLayout } from "./hooks/useShellLayout";
 import { useSkills } from "./hooks/useSkills";
-import { Composer } from "./components/Composer";
-import { Conversation, type ToolActivity } from "./components/Conversation";
-import { InspectorPanel } from "./components/InspectorPanel";
-import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
-import { SettingsPanel, type SettingsDraft } from "./components/SettingsPanel";
+import { useWorkbenchTabs } from "./hooks/useWorkbenchTabs";
+import { useTaskController } from "./hooks/useTaskController";
+import { Composer, nextThinkingLevel, type ThinkingUILevel } from "./components/Composer";
+import { Conversation } from "./components/Conversation";
+import { AppTopBar } from "./components/AppTopBar";
+import { ModelSelectorDrawer } from "./components/ModelSelectorDrawer";
+import { WorkbenchPanel } from "./components/WorkbenchPanel";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
-
-import { getPhaseLabel, getStatusLabel } from "./components/status";
-import { setLocale, t, type Locale } from "./i18n";
+import { ToastNotice } from "./components/ToastNotice";
+import { SearchPage } from "./pages/SearchPage";
+import { SkillsPage } from "./pages/SkillsPage";
+import { SETTINGS_SECTION_IDS, type AutoModeLevel, type MainView, type SettingsSectionId } from "./app/types";
+import { formatContextK } from "./app/taskUtils";
+import { t } from "./i18n";
 import "./App.css";
-
-type MainView = "chat" | "search" | "skills" | "settings";
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb" | "search" | "usage";
-type ThemeMode = "system" | "light" | "dark";
-type WorkMode = "coding" | "daily";
-
-const MIN_SIDEBAR_WIDTH = 260;
-const MAX_SIDEBAR_WIDTH = 420;
-const MIN_INSPECTOR_WIDTH = 300;
-const MAX_INSPECTOR_WIDTH = 520;
-const DEFAULT_CHAT_FONT_SIZE = 14;
-const DEFAULT_UI_FONT_SIZE = 12.5;
-const DEFAULT_CODE_FONT_SIZE = 12;
-const CHAT_FONT_SIZE_KEY = "aurevoy.chatFontSizePx.v2";
-const UI_FONT_SIZE_KEY = "aurevoy.uiFontSizePx.v2";
-const CODE_FONT_SIZE_KEY = "aurevoy.codeFontSizePx.v2";
-const TOOL_DETAILS_OPEN_KEY = "aurevoy.defaultToolDetailsOpen";
-const THEME_MODE_KEY = "aurevoy.themeMode";
-const LOCALE_KEY = "aurevoy.locale";
-const WORK_MODE_KEY = "aurevoy.workMode";
-const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search", "usage"];
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function formatContextK(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
-}
-
-function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
-  const stored = window.localStorage.getItem(key);
-  const parsed = stored ? Number(stored) : Number.NaN;
-  return Number.isFinite(parsed) ? clamp(parsed, min, max) : fallback;
-}
-
-function readStoredBoolean(key: string, fallback: boolean): boolean {
-  const stored = window.localStorage.getItem(key);
-  if (stored === "true") return true;
-  if (stored === "false") return false;
-  return fallback;
-}
-
-function readStoredOption<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
-  const stored = window.localStorage.getItem(key);
-  return stored && allowed.includes(stored as T) ? (stored as T) : fallback;
-}
-
-function parseProviderModel(provider?: string | null): string {
-  if (!provider || provider === "unconfigured") return "";
-  const [, model] = provider.split(/:(.*)/s);
-  return model ?? provider;
-}
-
-/**
- * 实时工具活动状态（替代 deriveToolActivityFromEvents 的 events[] 全量扫描）。
- *
- * 用 useRef<Map> 做增量更新：每个 tool_call / tool_progress / tool_result SSE 事件
- * 直接 mutate map，再通过 scheduleLiveActivitySync() 安排 requestAnimationFrame 批量
- * 同步到 React state。这样跨事件循环的连续事件会被合并到同一帧渲染，消除工具
- * 卡片逐个出现的"打字机效果"。
- */
-function createLiveActivityStore() {
-  const map = new Map<string, ToolActivity>();
-  const order: string[] = [];
-
-  function upsert(id: string, patch: Partial<ToolActivity>) {
-    const existing = map.get(id);
-    if (existing) {
-      Object.assign(existing, patch);
-    } else {
-      order.push(id);
-      map.set(id, {
-        id,
-        name: '',
-        args: {} as Record<string, unknown>,
-        status: 'running',
-        ...patch,
-      } as ToolActivity);
-    }
-  }
-
-  function remove(id: string) {
-    map.delete(id);
-    const idx = order.indexOf(id);
-    if (idx >= 0) order.splice(idx, 1);
-  }
-
-  function has(id: string): boolean {
-    return map.has(id);
-  }
-
-  function snapshot(): ToolActivity[] {
-    return order.map((id) => map.get(id)!);
-  }
-
-  function clear() {
-    map.clear();
-    order.length = 0;
-  }
-
-  return { upsert, remove, has, snapshot, clear };
-}
-
-async function fetchWithRetry<T>(
-  fn: () => Promise<T>,
-  opts: { retries: number; baseDelayMs: number },
-): Promise<T> {
-  let lastErr: unknown;
-  for (let i = 0; i <= opts.retries; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (i < opts.retries) {
-        await new Promise((r) => setTimeout(r, opts.baseDelayMs * Math.pow(2, i)));
-      }
-    }
-  }
-  throw lastErr;
-}
-
-function mergeById<T extends { id: string }>(items: T[], next: T): T[] {
-  const index = items.findIndex((item) => item.id === next.id);
-  if (index < 0) return [...items, next];
-  return items.map((item) => (item.id === next.id ? next : item));
-}
-
-function createFailureMessage(taskId: string, message: string): Message {
-  return {
-    id: `failure-${taskId}-${Date.now()}`,
-    role: "assistant",
-    content: "",
-    failure: { message, category: "unknown" },
-    createdAt: new Date().toISOString(),
-  };
-}
 
 function App() {
   const platform = usePlatform();
@@ -210,54 +47,51 @@ function App() {
     platform.setupWindowDrag?.(".window-drag-region");
   }, [platform]);
   const [activeView, setActiveView] = useState<MainView>("chat");
-  const liveActivityRef = useRef(createLiveActivityStore());
-  const [liveToolActivity, setLiveToolActivity] = useState<ToolActivity[]>([]);
   const [goal, setGoal] = useState("");
-  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(() =>
-    readStoredNumber("aurevoy.sidebarWidth", 330, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
-  );
-  const [inspectorWidth, setInspectorWidth] = useState(() =>
-    readStoredNumber("aurevoy.inspectorWidth", 340, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH),
-  );
-  const [chatFontSize, setChatFontSize] = useState(() =>
-    readStoredNumber(CHAT_FONT_SIZE_KEY, DEFAULT_CHAT_FONT_SIZE, 11, 24),
-  );
-  const [uiFontSize, setUiFontSize] = useState(() =>
-    readStoredNumber(UI_FONT_SIZE_KEY, DEFAULT_UI_FONT_SIZE, 10, 20),
-  );
-  const [codeFontSize, setCodeFontSize] = useState(() =>
-    readStoredNumber(CODE_FONT_SIZE_KEY, DEFAULT_CODE_FONT_SIZE, 10, 18),
-  );
-  const [defaultToolDetailsOpen, setDefaultToolDetailsOpen] = useState(() =>
-    readStoredBoolean(TOOL_DETAILS_OPEN_KEY, false),
-  );
-  const [workMode, setWorkMode] = useState<WorkMode>(() =>
-    readStoredOption(WORK_MODE_KEY, defaultToolDetailsOpen ? "coding" : "daily", ["coding", "daily"] as const),
-  );
-  const [autoModeLevel, setAutoModeLevel] = useState<'auto' | 'plan'>(() => {
+  const {
+    chatFontSize,
+    codeFontSize,
+    defaultToolDetailsOpen,
+    workbenchOpen,
+    leftCollapsed,
+    locale,
+    shellStyle,
+    themeMode,
+    uiFontSize,
+    workMode,
+    handleChatFontSizeChange,
+    handleCodeFontSizeChange,
+    handleUiFontSizeChange,
+    handleWorkModeChange,
+    setWorkbenchOpen,
+    setLeftCollapsed,
+    setLocaleState,
+    setThemeMode,
+    startResize,
+  } = useShellLayout();
+  const [autoModeLevel, setAutoModeLevel] = useState<AutoModeLevel>(() => {
     const stored = localStorage.getItem("aurevoy.autoModeLevel");
     if (stored === 'plan') return 'plan';
     return 'auto';
   });
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingUILevel>(() => {
+    const stored = localStorage.getItem("aurevoy.thinkingLevel");
+    if (
+      stored === "off" || stored === "minimal" || stored === "low" ||
+      stored === "medium" || stored === "high" || stored === "xhigh"
+    ) {
+      return stored;
+    }
+    return "medium";
+  });
   const [autoModeState, setAutoModeState] = useState<{ paused?: boolean; pausedReason?: string; autoApprovedCalls?: number } | null>(null);
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() =>
-    readStoredOption(THEME_MODE_KEY, "system", ["system", "light", "dark"] as const),
-  );
-  const [locale, setLocaleState] = useState<Locale>(() =>
-    readStoredOption(LOCALE_KEY, "en", ["zh", "en", "ko", "ja"] as const),
-  );
   const [searchQuery, setSearchQuery] = useState("");
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
   const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [liveContentBlocks, setLiveContentBlocks] = useState<ContentBlock[]>([]);
-  const [phaseDetail, setPhaseDetail] = useState("");
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const {
@@ -279,46 +113,7 @@ function App() {
     patchCurrentTask,
     updateTaskList,
   } = useTaskState();
-  const previousPhaseRef = useRef<TaskPhase | null>(null);
-  const nextOutputFreshRef = useRef(false);
   const { closeStream, openStream } = useSSEStream();
-  const liveActivitySyncRafRef = useRef<number | null>(null);
-
-  const flushLiveActivity = useCallback((): void => {
-    liveActivitySyncRafRef.current = null;
-    setLiveToolActivity(liveActivityRef.current.snapshot());
-  }, []);
-
-  /** 将多个 SSE 事件触发的 live activity 更新合并到同一帧，避免工具卡片逐个渲染的“打字机效果”。 */
-  const scheduleLiveActivitySync = useCallback((): void => {
-    if (liveActivitySyncRafRef.current !== null) return;
-    liveActivitySyncRafRef.current = requestAnimationFrame(flushLiveActivity);
-  }, [flushLiveActivity]);
-
-  /** 统一清空所有实时/流式状态，避免切换任务时旧状态残留。 */
-  const clearLiveState = useCallback((): void => {
-    if (liveActivitySyncRafRef.current !== null) {
-      cancelAnimationFrame(liveActivitySyncRafRef.current);
-      liveActivitySyncRafRef.current = null;
-    }
-    liveActivityRef.current.clear();
-    setLiveToolActivity([]);
-    setOutput("");
-    setLiveContentBlocks([]);
-    setPhaseDetail("");
-    nextOutputFreshRef.current = false;
-  }, []);
-
-  // 组件卸载时取消待处理的 live activity 同步，防止 setState 已卸载组件。
-  useEffect(
-    () => () => {
-      if (liveActivitySyncRafRef.current !== null) {
-        cancelAnimationFrame(liveActivitySyncRafRef.current);
-        liveActivitySyncRafRef.current = null;
-      }
-    },
-    [],
-  );
   const {
     runtimeSettings,
     mcpServers,
@@ -335,6 +130,46 @@ function App() {
   const { memories, setMemories } = useMemories();
   const { skills, refresh: refreshSkills, installing, installError, install, reloading, reload, toggle } = useSkills();
   const { mergeArtifact } = useArtifacts(setCurrentTask, updateTaskList);
+  const { attachments, handlePickAttachments, handlePasteFiles, setAttachments } = useAttachments({
+    platform,
+    setNotice,
+    setProjects,
+  });
+  const { bootstrapRuntime, refreshRuntime, runAgentRequest } = useRuntimeController({
+    platform,
+    setHealth,
+    setNotice,
+    setOnline,
+    setProjects,
+    setTasks,
+  });
+  const {
+    handleCleanupData,
+    handleCreateMemory,
+    handleDeleteMemory,
+    handleEditMemory,
+    handleFetchModels,
+    handleSaveEnabledModels,
+    handleSaveModelSelection,
+    handleSaveSettings,
+    handleToggleMemory,
+    refreshMemories,
+    refreshSettings,
+  } = useSettingsController({
+    health,
+    onModelSaved: () => setModelDrawerOpen(false),
+    refreshRuntime,
+    runtimeSettings,
+    setAutoModeLevel,
+    setDataStatus,
+    setFetchingModels,
+    setHealth,
+    setMcpServers,
+    setMemories,
+    setNotice,
+    setRuntimeSettings,
+    setSettingsSaving,
+  });
 
   const [draftProjectId, setDraftProjectId] = useState<string | undefined>();
 
@@ -343,97 +178,21 @@ function App() {
     if (currentTask?.projectId) setDraftProjectId(currentTask.projectId);
   }, [currentTask?.projectId]);
 
+  const activeWorkspaceProjectId = draftProjectId ?? currentTask?.projectId;
+  const workbenchTabs = useWorkbenchTabs({
+    projectId: activeWorkspaceProjectId,
+    taskId: currentTask?.id,
+  });
+
   const draftProjectName = useMemo(
-    () => projects.find((p) => p.id === (draftProjectId ?? currentTask?.projectId))?.name,
-    [projects, draftProjectId, currentTask?.projectId],
+    () => projects.find((p) => p.id === activeWorkspaceProjectId)?.name,
+    [projects, activeWorkspaceProjectId],
   );
 
   useEffect(() => {
     void bootstrapRuntime();
   }, []);
 
-  useEffect(() => {
-    window.localStorage.setItem("aurevoy.sidebarWidth", String(sidebarWidth));
-  }, [sidebarWidth]);
-
-  useEffect(() => {
-    window.localStorage.setItem("aurevoy.inspectorWidth", String(inspectorWidth));
-  }, [inspectorWidth]);
-
-  useEffect(() => {
-    window.localStorage.setItem(CHAT_FONT_SIZE_KEY, String(chatFontSize));
-  }, [chatFontSize]);
-
-  useEffect(() => {
-    window.localStorage.setItem(UI_FONT_SIZE_KEY, String(uiFontSize));
-  }, [uiFontSize]);
-
-  useEffect(() => {
-    window.localStorage.setItem(CODE_FONT_SIZE_KEY, String(codeFontSize));
-  }, [codeFontSize]);
-
-  useEffect(() => {
-    window.localStorage.setItem(TOOL_DETAILS_OPEN_KEY, String(defaultToolDetailsOpen));
-  }, [defaultToolDetailsOpen]);
-
-  useEffect(() => {
-    window.localStorage.setItem(WORK_MODE_KEY, workMode);
-  }, [workMode]);
-
-  useEffect(() => {
-    window.localStorage.setItem(THEME_MODE_KEY, themeMode);
-    if (themeMode === "system") {
-      delete document.documentElement.dataset.theme;
-    } else {
-      document.documentElement.dataset.theme = themeMode;
-    }
-  }, [themeMode]);
-
-  useEffect(() => {
-    setLocale(locale);
-    window.localStorage.setItem(LOCALE_KEY, locale);
-  }, [locale]);
-
-    // 原生文件拖拽事件（通过 PlatformAdapter）
-  useEffect(() => {
-    const unlistenDrop = platform.onFileDrop?.((paths) => {
-      if (!paths || paths.length === 0) return;
-      void (async () => {
-        for (const p of paths) {
-          try {
-            const meta = platform.getFileMetadata ? await platform.getFileMetadata(p) : null;
-            if (!meta) continue;
-            if (meta.isDir) {
-              // 拖入文件夹 → 导入为项目
-              void handleImportProjectPath(p);
-            } else {
-              // 拖入文件 → 添加为附件
-              setAttachments((prev) => {
-                // 去重
-                if (prev.some((a) => a.path === p)) return prev;
-                return [
-                  ...prev,
-                  {
-                    id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                    name: meta.name,
-                    path: p,
-                    mimeType: meta.mimeType,
-                    size: meta.size,
-                    type: meta.mimeType.startsWith('image/') ? 'image' : 'file',
-                  },
-                ];
-              });
-            }
-          } catch {
-            setNotice(`无法读取文件信息: ${p}`);
-          }
-        }
-      })();
-    });
-    return () => {
-      unlistenDrop?.();
-    };
-  }, []);
   async function handleResumeAutoMode(): Promise<void> {
     if (!currentTask?.id) return;
     try {
@@ -451,781 +210,105 @@ function App() {
     void updateSettings({ autoModeLevel: next }).catch(() => {});
   }
 
-  async function handleImportProjectPath(dirPath: string): Promise<void> {
-    try {
-      const project = await createProject({ path: dirPath });
-      setProjects((prev) => [...prev, project]);
-      setNotice(`已导入项目: ${project.name}`);
-    } catch (err) {
-      setNotice(`导入失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  function cycleThinkingLevel(): void {
+    const next = nextThinkingLevel(thinkingLevel);
+    setThinkingLevel(next);
+    localStorage.setItem("aurevoy.thinkingLevel", next);
+    void updateSettings({ agentThinkingLevel: next }).catch(() => {});
   }
 
-  async function handlePickAttachments(): Promise<void> {
-    if (!platform.openFileDialog) return;
-    try {
-      const selected = await platform.openFileDialog({ multiple: true });
-      if (!selected || selected.length === 0) return;
-      const paths = selected;
-      for (const p of paths) {
-        try {
-          const meta = platform.getFileMetadata ? await platform.getFileMetadata(p) : null;
-          if (!meta || meta.isDir) continue;
-          setAttachments((prev) => {
-            if (prev.some((a) => a.path === p)) return prev;
-            return [
-              ...prev,
-              {
-                id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                name: meta.name,
-                path: p,
-                mimeType: meta.mimeType,
-                size: meta.size,
-                type: meta.mimeType.startsWith('image/') ? 'image' : 'file',
-              },
-            ];
-          });
-        } catch {
-          setNotice(`无法读取文件信息: ${p}`);
-        }
+  // 后端 settings 为推理深度真相源（刷新后与多端一致）
+  useEffect(() => {
+    const level = runtimeSettings?.agentThinkingLevel;
+    if (
+      level === "off" || level === "minimal" || level === "low" ||
+      level === "medium" || level === "high" || level === "xhigh"
+    ) {
+      setThinkingLevel(level);
+      localStorage.setItem("aurevoy.thinkingLevel", level);
+    }
+  }, [runtimeSettings?.agentThinkingLevel]);
+
+  const workbenchTabsRef = useRef(workbenchTabs);
+  workbenchTabsRef.current = workbenchTabs;
+
+  const { clearLiveState, derivedLive, handleEvent, liveContentBlocks, phaseDetail } = useAgentEventHandler({
+    closeStream,
+    currentTask,
+    mergeArtifact,
+    patchCurrentTask,
+    refreshRuntime,
+    refreshSkills,
+    refreshTaskTraces,
+    setAutoModeState,
+    setBusy,
+    setCurrentTask,
+    setOutput,
+    setPhase,
+    setPlan,
+    setStatus,
+    setTasks,
+    setTraces,
+    updateTaskList,
+    onAttachedPreviewFiles: (paths) => {
+      // attach_content：默认在侧边工作台打开并渲染（html/md 等由 FileViewer 预览）
+      if (paths.length === 0) return;
+      for (const path of paths) {
+        workbenchTabsRef.current.openWorkspaceFile(path);
       }
-    } catch (err) {
-      setNotice(`选择文件失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  async function handlePasteFiles(
-    files: Array<{ name: string; dataUrl: string; mimeType: string }>,
-  ): Promise<void> {
-    for (const f of files) {
-      try {
-        const path = platform.saveTempFile ? await platform.saveTempFile(f.name, f.dataUrl) : f.dataUrl;
-        setAttachments((prev) => {
-          if (prev.some((a) => a.path === path)) return prev;
-          return [
-            ...prev,
-            {
-              id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              name: f.name,
-              path,
-              mimeType: f.mimeType,
-              size: f.dataUrl.length, // 近似——data URL 长度约 4/3 原始大小
-              type: 'image' as const,
-            },
-          ];
-        });
-      } catch (err) {
-        setNotice(`粘贴图片失败: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-  }
-
-  async function bootstrapRuntime(): Promise<void> {
-    try {
-      const status = platform.ensureAgentRunning ? await platform.ensureAgentRunning() : null;
-      if (status?.baseUrl) {
-        setBaseUrl(status.baseUrl);
-      }
-      if (status?.error) {
-        setNotice(`${status.message}：${status.error}`);
-      }
-    } catch (err) {
-      setNotice(`${t("notice.startEngineFailed")}${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      await refreshRuntime();
-    }
-  }
-
-  async function ensureAgentAvailable(): Promise<void> {
-    if (!platform.ensureAgentRunning) return;
-    const status = await platform.ensureAgentRunning();
-    if (status?.baseUrl) {
-      setBaseUrl(status.baseUrl);
-    }
-    if (status && !status.running) {
-      throw new Error(status.error ? `${status.message}: ${status.error}` : status.message ?? "Agent 引擎未运行");
-    }
-    setOnline(true);
-  }
-
-  async function runAgentRequest<T>(request: () => Promise<T>): Promise<T> {
-    await ensureAgentAvailable();
-    try {
-      return await request();
-    } catch (err) {
-      if (!(err instanceof TypeError)) throw err;
-      await ensureAgentAvailable();
-      return request();
-    }
-  }
-
-  async function refreshRuntime(): Promise<void> {
-    try {
-      const [nextHealth, nextTasks, nextProjects] = await Promise.all([
-        checkHealth(),
-        listTasks(),
-        listProjects(),
-      ]);
-      setHealth(nextHealth);
-      setOnline(true);
-      setTasks(nextTasks);
-      setProjects(nextProjects);
-    } catch (err) {
-      setHealth(null);
-      // 仅网络层失败(fetch 抛 TypeError)才判定引擎离线；
-      // HTTP 4xx/5xx 说明引擎可达、只是返回了错误，不应误判为离线。
-      setOnline(err instanceof TypeError ? false : true);
-    }
-  }
-
-  async function refreshSettings(): Promise<void> {
-    try {
-      const [settings, mcp, data] = await Promise.all([
-        getSettings(),
-        getMcpStatus(),
-        getDataStatus(),
-      ]);
-      setRuntimeSettings(settings);
-      setAutoModeLevel(settings.autoModeLevel);
-      setMcpServers(mcp.servers);
-      setDataStatus(data);
-    } catch (err) {
-      setNotice(`${t("notice.readSettingsFailed")}${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  function applyTaskSnapshot(task: Task): void {
-    setCurrentTask(task);
-    setStatus(task.status);
-    setPhase(task.phase);
-    setPlan(task.plan);
-    setGoal("");
-    clearLiveState();
-    void refreshTaskTraces(task.id);
-  }
+      setActiveView("chat");
+      setWorkbenchOpen(true);
+    },
+  });
+  const {
+    handleBranch,
+    handleClarificationAnswer,
+    handleComposerSubmit,
+    handleUiChoice,
+    handleNewTask,
+    handlePlanDecision,
+    handleResumeTask,
+    handleRevertAndEdit,
+    handleSelectTask,
+    handleStopStream,
+    handleToolDecision,
+    handleUnrevert,
+  } = useTaskController({
+    attachments,
+    busy,
+    clearLiveState,
+    closeStream,
+    currentTask,
+    draftProjectId,
+    editingMessageId,
+    goal,
+    handleEvent,
+    openStream,
+    refreshTaskTraces,
+    runAgentRequest,
+    setActiveView,
+    setAttachments,
+    setBusy,
+    setCurrentTask,
+    setDraftProjectId,
+    setEditingMessageId,
+    setGoal,
+    setModelDrawerOpen,
+    setNotice,
+    setOnline,
+    setOutput,
+    setPhase,
+    setPlan,
+    setStatus,
+    setTraces,
+    updateTaskList,
+  });
 
   async function refreshTaskTraces(taskId: string): Promise<void> {
     try {
       setTraces(await listTaskTraces(taskId));
     } catch (err) {
       setNotice(`${t("notice.readTracesFailed")}${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  function handleEvent(event: AgentEvent): void {
-
-    switch (event.type) {
-      case "task_created":
-        setCurrentTask(event.task);
-        setPlan(event.task.plan);
-        setOutput("");
-        setTraces([]);
-        updateTaskList(event.task);
-        break;
-      case "agent_start":
-        setStatus("running");
-        setPhase("thinking");
-        patchCurrentTask({ status: "running", phase: "thinking" });
-        break;
-      case "scout_started":
-        setPhase("planning");
-        setPhaseDetail("侦查工作区");
-        patchCurrentTask({ phase: "planning" });
-        break;
-      case "scout_report":
-        setPhaseDetail(event.report.summary);
-        break;
-      case "status":
-        setStatus(event.status);
-        patchCurrentTask({ status: event.status });
-        break;
-      case "phase":
-        setPhase(event.phase);
-        setPhaseDetail(event.detail ?? "");
-        patchCurrentTask({ phase: event.phase });
-        if (event.phase !== previousPhaseRef.current) {
-          const prevPhase = previousPhaseRef.current;
-          previousPhaseRef.current = event.phase;
-          if (event.phase === "thinking") {
-            if (prevPhase === "calling_tool") {
-              nextOutputFreshRef.current = true;
-            }
-            setLiveContentBlocks([]);
-          }
-        }
-        break;
-      case "plan":
-        setPlan(event.plan);
-        patchCurrentTask({ plan: event.plan });
-        break;
-      case "plan_generated":
-        setPlan(event.plan);
-        patchCurrentTask({ plan: event.plan });
-        break;
-      case "step_update":
-        setPlan((previous) => {
-          const nextPlan = previous.map((step) =>
-            step.id === event.step.id ? event.step : step,
-          );
-          patchCurrentTask({ plan: nextPlan });
-          return nextPlan;
-        });
-        break;
-      case "token":
-        if (nextOutputFreshRef.current) {
-          setOutput(event.delta);
-          nextOutputFreshRef.current = false;
-        } else {
-          setOutput((previous) => previous + event.delta);
-        }
-        break;
-      case "message_start":
-        if (event.role === "assistant") {
-          nextOutputFreshRef.current = true;
-          setOutput("");
-        }
-        break;
-      case "message": {
-        if (event.message.role === "system") {
-          break;
-        }
-        const isAssistant = event.message.role === "assistant";
-        const hasToolCalls = (event.message.toolCalls?.length ?? 0) > 0;
-        if (isAssistant && !hasToolCalls) {
-          setOutput("");
-        }
-        setCurrentTask((previous) => {
-          const previousMessages = previous?.messages ?? [];
-          if (!previous) return previous;
-          const messageIndex = previousMessages.findIndex((message) => message.id === event.message.id);
-          const messages = messageIndex >= 0
-            ? previousMessages.map((message) =>
-                message.id === event.message.id ? { ...message, ...event.message } : message,
-              )
-            : [...previousMessages, event.message];
-          const nextTask = { ...previous, messages };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-        if (event.message.contentBlocks?.length) {
-          setLiveContentBlocks((prev) => {
-            const existingIds = new Set(prev.map((b) => b.id));
-            const newBlocks = event.message.contentBlocks!.filter((b) => !existingIds.has(b.id));
-            return newBlocks.length > 0 ? [...prev, ...newBlocks] : prev;
-          });
-        }
-        scheduleLiveActivitySync();
-        break;
-      }
-      case "tool_call":
-        liveActivityRef.current.upsert(event.call.id, {
-          name: event.call.toolName,
-          args: event.call.args,
-          status: 'running',
-          planStepId: event.call.planStepId,
-        });
-        scheduleLiveActivitySync();
-        break;
-      case "tool_progress":
-        liveActivityRef.current.upsert(event.callId, {
-          progress: { message: event.message, chunk: event.chunk, percent: event.percent },
-        });
-        scheduleLiveActivitySync();
-        break;
-      case "approval_request":
-        liveActivityRef.current.upsert(event.call.id, {
-          name: event.call.toolName,
-          args: event.call.args,
-          status: 'awaiting',
-          riskLevel: event.riskLevel,
-          planStepId: event.call.planStepId,
-        });
-        scheduleLiveActivitySync();
-        setStatus("paused");
-        setPhase("waiting_approval");
-        setPhaseDetail(`等待确认工具 ${event.call.toolName}`);
-        setCurrentTask((previous) => {
-          if (!previous) return previous;
-          const nextApprovals = [
-            ...(previous.pendingApprovals ?? []).filter((item) => item.call.id !== event.call.id),
-            { call: event.call, riskLevel: event.riskLevel, createdAt: new Date().toISOString() },
-          ];
-          const nextTask = {
-            ...previous,
-            status: "paused" as const,
-            phase: "waiting_approval" as const,
-            pendingApprovals: nextApprovals,
-          };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-        break;
-      case "tool_result":
-        liveActivityRef.current.upsert(event.result.callId, {
-          status: event.result.ok ? 'ok' : 'error',
-          output: event.result.output,
-          error: event.result.error,
-          errorCode: event.result.errorCode,
-        });
-        scheduleLiveActivitySync();
-        setCurrentTask((previous) => {
-          if (!previous) return previous;
-          const nextApprovals = (previous.pendingApprovals ?? []).filter(
-            (item) => item.call.id !== event.result.callId,
-          );
-          if (nextApprovals.length === (previous.pendingApprovals ?? []).length) return previous;
-          const nextTask = { ...previous, pendingApprovals: nextApprovals };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-        break;
-      case "clarification_request":
-      case "clarification_resolved":
-        setCurrentTask((previous) => {
-          if (!previous) return previous;
-          const nextTask = {
-            ...previous,
-            clarifications: mergeById(previous.clarifications ?? [], event.clarification),
-          };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-        break;
-      case "artifact_created":
-        mergeArtifact(event.artifact);
-        break;
-      case "artifact_updated":
-        mergeArtifact(event.artifact);
-        break;
-      case "content_blocks_added":
-        setCurrentTask((previous) => {
-          if (!previous) return previous;
-          const messages = (previous.messages ?? []).map((msg) => {
-            if (msg.id !== event.messageId) return msg;
-            const existingIds = new Set((msg.contentBlocks ?? []).map((b) => b.id));
-            const newBlocks = event.blocks.filter((b) => !existingIds.has(b.id));
-            if (newBlocks.length === 0) return msg;
-            return { ...msg, contentBlocks: [...(msg.contentBlocks ?? []), ...newBlocks] };
-          });
-          const nextTask = { ...previous, messages };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-        setLiveContentBlocks((prev) => {
-          const existingIds = new Set(prev.map((b) => b.id));
-          const newBlocks = event.blocks.filter((b) => !existingIds.has(b.id));
-          return newBlocks.length > 0 ? [...prev, ...newBlocks] : prev;
-        });
-        break;
-      case "checkpoint_created":
-        setCurrentTask((previous) => {
-          if (!previous) return previous;
-          const nextTask = {
-            ...previous,
-            checkpoints: mergeById(previous.checkpoints ?? [], event.checkpoint),
-          };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-        break;
-      case "budget_usage":
-        patchCurrentTask({ budgetUsage: event.usage, budget: event.budget });
-        break;
-      case "token_usage":
-        patchCurrentTask({ tokenUsage: event.usage });
-        break;
-      case "context_snapshot":
-        patchCurrentTask({ contextTokens: event.tokens });
-        break;
-      case "reverted":
-        break;
-      case "unreverted":
-        break;
-      case "branched":
-        break;
-      case "compacted":
-        break;
-      case "plan_approval_request":
-        setStatus("paused");
-        setPhase("waiting_approval");
-        setPlan(event.plan);
-        setCurrentTask((previous) => {
-          if (!previous) return previous;
-          const nextTask = {
-            ...previous,
-            status: "paused" as const,
-            phase: "waiting_approval" as const,
-            plan: event.plan,
-          };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-        break;
-      case "plan_approval_resolved":
-        setCurrentTask((previous) => {
-          if (!previous) return previous;
-          const nextPlan = previous.plan.map((step, index) => ({
-            ...step,
-            status: event.approved ? (index === 0 ? "running" as const : "pending" as const) : "pending" as const,
-          }));
-          setPlan(nextPlan);
-          const nextTask = { ...previous, plan: nextPlan };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-        break;
-      case "skill_installed":
-        refreshSkills();
-        break;
-      case "skill_deactivated":
-        refreshSkills();
-        break;
-      case "skill_uninstalled":
-        refreshSkills();
-        break;
-      case "auto_mode_state":
-        setAutoModeState({ ...event.state });
-        break;
-      case "task_deleted":
-        // 任务被删除（可能来自其他客户端或本端），关流并清理
-        closeStream();
-        setTasks((prev) => prev.filter((t) => t.id !== event.taskId));
-        if (currentTask?.id === event.taskId) {
-          setCurrentTask(null);
-          setStatus(null);
-          setPhase(null);
-          setPlan([]);
-          setBusy(false);
-          clearLiveState();
-        }
-        break;
-      case "done":
-        clearLiveState();
-        setStatus(event.status);
-        setPhase(
-          event.status === "cancelled"
-            ? "cancelled"
-            : event.status === "failed"
-              ? "failed"
-              : "finalizing",
-        );
-        setPhaseDetail("");
-        setBusy(false);
-        setAutoModeState(null);
-        patchCurrentTask({
-          status: event.status,
-          phase:
-            event.status === "cancelled"
-              ? "cancelled"
-              : event.status === "failed"
-                ? "failed"
-                : "finalizing",
-        });
-        closeStream();
-        void refreshRuntime();
-        void refreshTaskTraces(event.taskId);
-        // 拉取完整快照补全本轮线程（带重试，3 次指数退避）
-        void fetchWithRetry(() => getTask(event.taskId), { retries: 3, baseDelayMs: 500 })
-          .then((full) => {
-            setCurrentTask((previous) => (previous?.id === full.id ? full : previous));
-            updateTaskList(full);
-          })
-          .catch(() => {
-            /* 3 次重试后仍失败：核心数据已通过 SSE message 事件覆盖 */
-          });
-        break;
-      case "error":
-        setStatus("failed");
-        setPhase("failed");
-        setPhaseDetail(event.message);
-        setOutput("");
-        setBusy(false);
-        setCurrentTask((previous) => {
-          if (!previous || previous.id !== event.taskId) return previous;
-          const failureText = event.message.trim();
-          const alreadyHasFailure = previous.messages.some(
-            (message) =>
-              message.role === "assistant" &&
-              (message.failure?.message.includes(failureText) ||
-                message.content.includes(failureText) ||
-                message.id.startsWith(`failure-${event.taskId}-`)),
-          );
-          const messages = alreadyHasFailure
-            ? previous.messages
-            : [...previous.messages, createFailureMessage(event.taskId, event.message)];
-          const nextTask = {
-            ...previous,
-            messages,
-            status: "failed" as const,
-            phase: "failed" as const,
-          };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-        break;
-    }
-  }
-
-  async function startGoal(rawGoal: string, attach?: MessageAttachment[]): Promise<void> {
-    const trimmed = rawGoal.trim();
-    if (!trimmed || busy) return;
-
-    setBusy(true);
-    clearLiveState();
-    setTraces([]);
-    setPlan([]);
-    setStatus("pending");
-    setPhase("initializing");
-    setGoal("");
-    setAttachments([]);
-    closeStream();
-
-    try {
-      const { task } = await runAgentRequest(() =>
-        createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach),
-      );
-      setCurrentTask(task);
-      setPhase(task.phase);
-      setTraces([]);
-      updateTaskList(task);
-      openStream(task.id, handleEvent, () => setBusy(false));
-    } catch (err) {
-      setStatus("failed");
-      setOutput(`${t("notice.connectEngineFailed")}${err instanceof Error ? err.message : String(err)}`);
-      setBusy(false);
-      // 仅网络层失败才标记离线；HTTP 错误不代表引擎离线
-      if (err instanceof TypeError) setOnline(false);
-    }
-  }
-
-  function handleSelectTask(task: Task): void {
-    closeStream();
-    setModelDrawerOpen(false);
-    setEditingMessageId(null);
-    setActiveView("chat");
-    applyTaskSnapshot(task);
-
-    const isLive =
-      task.status === 'pending' ||
-      task.status === 'planning' ||
-      task.status === 'running' ||
-      task.status === 'paused';
-
-    if (isLive) {
-      setBusy(true);
-      openStream(task.id, handleEvent, () => setBusy(false));
-    } else {
-      setBusy(false);
-    }
-  }
-
-  /** 在当前任务内追加一轮输入并继续（多轮对话）；保留后端完整上下文。 */
-  async function continueGoal(rawMessage: string, attach?: MessageAttachment[]): Promise<void> {
-    const trimmed = rawMessage.trim();
-    if (!trimmed || busy || !currentTask) return;
-
-    setBusy(true);
-    clearLiveState();
-    setTraces([]);
-    setPlan([]);
-    setStatus("running");
-    setPhase("initializing");
-    setGoal("");
-    setAttachments([]);
-    closeStream();
-
-    try {
-      const { task } = await runAgentRequest(() => continueTask(currentTask.id, trimmed, attach));
-      setCurrentTask(task);
-      setPhase(task.phase);
-      updateTaskList(task);
-      openStream(task.id, handleEvent, () => setBusy(false));
-    } catch (err) {
-      setBusy(false);
-      setNotice(`${t("notice.continueFailed")}${err instanceof Error ? err.message : String(err)}`);
-      if (err instanceof TypeError) setOnline(false);
-    }
-  }
-
-  /** 输入框提交分流：斜杠命令 → 编辑模式续聊 → 已有任务续聊 → 新建。 */
-  function handleComposerSubmit(): void {
-    const trimmed = goal.trim();
-    if (trimmed === "/compact") {
-      setGoal("");
-      setAttachments([]);
-      void handleCompact();
-      return;
-    }
-    const currentAttachments = attachments.length > 0 ? [...attachments] : undefined;
-    if (editingMessageId) {
-      setEditingMessageId(null);
-      void continueGoal(goal, currentAttachments);
-    } else if (currentTask && !busy) {
-      void continueGoal(goal, currentAttachments);
-    } else {
-      void startGoal(goal, currentAttachments);
-    }
-  }
-
-  function handleNewTask(projectId?: string): void {
-    closeStream();
-    setBusy(false);
-    setModelDrawerOpen(false);
-    setEditingMessageId(null);
-    setActiveView("chat");
-    setCurrentTask(null);
-    setStatus(null);
-    setPhase(null);
-    setPlan([]);
-    clearLiveState();
-    setTraces([]);
-    setGoal("");
-    setDraftProjectId(projectId);
-  }
-
-
-  /** 编辑用户消息：先 revert 截断历史，再回填 Composer 等待编辑后重新提交。 */
-  async function handleRevertAndEdit(messageId: string, _content: string, mode: RevertMode): Promise<void> {
-    if (busy || !currentTask) return;
-
-    closeStream();
-    setBusy(false);
-    clearLiveState();
-    setTraces([]);
-
-    try {
-      const response = await revertTask(currentTask.id, messageId, mode);
-      setCurrentTask(response.task);
-      setStatus(response.task.status);
-      setPhase(response.task.phase);
-      setPlan(response.task.plan);
-      updateTaskList(response.task);
-      setGoal(response.removedContent ?? _content);
-      setEditingMessageId(messageId);
-    } catch (err) {
-      setNotice(`${t("notice.revertFailed")}${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  /** 从后端持久历史恢复当前任务；与“重试原始目标”不同，会保留已有消息与工具轨迹。 */
-  async function handleResumeTask(): Promise<void> {
-    if (!currentTask || busy) return;
-
-    setBusy(true);
-    clearLiveState();
-    setTraces([]);
-    setPlan([]);
-    setStatus("running");
-    setPhase("initializing");
-    closeStream();
-
-    try {
-      const { task } = await runAgentRequest(() => resumeTask(currentTask.id));
-      setCurrentTask(task);
-      setPhase(task.phase);
-      updateTaskList(task);
-      openStream(task.id, handleEvent, () => setBusy(false));
-    } catch (err) {
-      setBusy(false);
-      setNotice(`${t("notice.resumeFailed")}${err instanceof Error ? err.message : String(err)}`);
-      if (err instanceof TypeError) setOnline(false);
-    }
-  }
-
-  /** 撤销上一次 revert：从归档恢复被截断的消息。 */
-  async function handleUnrevert(): Promise<void> {
-    if (!currentTask || busy) return;
-
-    try {
-      const response = await unrevertTask(currentTask.id);
-      setCurrentTask(response.task);
-      setStatus(response.task.status);
-      setPhase(response.task.phase);
-      setPlan(response.task.plan);
-      updateTaskList(response.task);
-      setEditingMessageId(null);
-      setGoal("");
-    } catch (err) {
-      setNotice(`${t("notice.unrevertFailed")}${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  /** 从指定消息处分支出新任务并切换过去。 */
-  async function handleBranch(messageId: string): Promise<void> {
-    if (!currentTask || busy) return;
-
-    try {
-      const response = await branchTask(currentTask.id, messageId);
-      updateTaskList(response.task);
-      handleSelectTask(response.task);
-    } catch (err) {
-      setNotice(`${t("notice.branchFailed")}${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  /** 将旧消息压缩为 LLM 摘要。 */
-  async function handleCompact(): Promise<void> {
-    if (!currentTask || busy) return;
-
-    try {
-      const response = await compactTask(currentTask.id);
-      setCurrentTask(response.task);
-      updateTaskList(response.task);
-      setNotice(`${t("notice.compacted")}${response.originalCount} ${t("notice.compactedMessages")} ${response.summaryLength} ${t("notice.compactedChars")}`);
-    } catch (err) {
-      setNotice(`${t("notice.compactFailed")}${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  function handleStopStream(): void {
-    closeStream();
-    setBusy(false);
-    // 通知后端中断任务的 LLM 流（fire-and-forget；失败不影响前端已停止）
-    const taskId = currentTask?.id;
-    if (taskId) {
-      void cancelTask(taskId).catch((err) => {
-        setNotice(`${t("notice.cancelNotDelivered")}${err instanceof Error ? err.message : String(err)}`);
-      });
-    }
-  }
-
-  function handleToolDecision(
-    callId: string,
-    approved: boolean,
-  ): void {
-    const taskId = currentTask?.id;
-    if (!taskId) return;
-    setNotice(null);
-    void approveToolCall(taskId, callId, approved).catch((err) => {
-      setNotice(
-        `${t("notice.submit")}${approved ? t("action.approve") : t("action.reject")}${t("notice.failedColon")}${err instanceof Error ? err.message : String(err)}${t("notice.pleaseRetry")}`,
-      );
-    });
-  }
-
-  function handlePlanDecision(approved: boolean): void {
-    const taskId = currentTask?.id;
-    if (!taskId) return;
-    setNotice(null);
-    void approvePlan(taskId, approved).catch((err) => {
-      setNotice(`${t("notice.planApprovalFailed")}${err instanceof Error ? err.message : String(err)}`);
-    });
-  }
-
-  function handleClarificationAnswer(clarificationId: string, answer: string): void {
-    const taskId = currentTask?.id;
-    if (!taskId) return;
-    setNotice(null);
-    void answerClarification(taskId, clarificationId, answer).catch((err) => {
-      setNotice(`${t("notice.replyClarificationFailed")}${err instanceof Error ? err.message : String(err)}`);
-    });
-  }
-
-  async function refreshMemories(): Promise<void> {
-    try {
-      setMemories(await listMemories());
-    } catch (err) {
-      setNotice(`${t("notice.readMemoryFailed")}${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1238,21 +321,21 @@ function App() {
     setModelDrawerOpen(false);
     setSettingsInitialSection(nextSection);
     setActiveView("settings");
-    setInspectorOpen(false);
+    setWorkbenchOpen(false);
     void refreshSettings();
     if (nextSection === "memory") void refreshMemories();
   }
 
   function handleCloseSettings(): void {
     setNotice(null);
-    setInspectorOpen(false);
+    setWorkbenchOpen(false);
     setActiveView("chat");
   }
 
   function handleOpenModelSelector(): void {
     setNotice(null);
     setModelDrawerOpen(true);
-    setInspectorOpen(false);
+    setWorkbenchOpen(false);
     if (!runtimeSettings) void refreshSettings();
   }
 
@@ -1261,179 +344,17 @@ function App() {
     handleOpenSettings("provider");
   }
 
-  function handleWorkModeChange(mode: WorkMode): void {
-    setWorkMode(mode);
-    // 工作模式影响默认信息密度；用户仍可在外观页单独覆盖工具详情开关。
-    setDefaultToolDetailsOpen(mode === "coding");
-  }
-
   function handleOpenSearch(): void {
     setModelDrawerOpen(false);
     setActiveView("search");
-    setInspectorOpen(false);
+    setWorkbenchOpen(false);
   }
 
   function handleOpenSkills(): void {
     setModelDrawerOpen(false);
     setActiveView("skills");
-    setInspectorOpen(false);
+    setWorkbenchOpen(false);
     void refreshRuntime();
-  }
-
-  function handleSaveSettings(draft: SettingsDraft): void {
-    // Ensure current model is auto-added to quick-select list so the drawer isn't empty
-    const currentEnabled = runtimeSettings?.llm.enabledModels ?? [];
-    const mergedEnabled = currentEnabled.includes(draft.model)
-      ? currentEnabled
-      : [draft.model, ...currentEnabled];
-
-    const body: UpdateRuntimeSettingsRequest = {
-      llm: {
-        provider: draft.provider,
-        baseUrl: draft.baseUrl,
-        model: draft.model,
-        visionModel: draft.visionModel,
-        enabledModels: mergedEnabled,
-        temperature: draft.temperature,
-        timeoutMs: draft.timeoutMs,
-        maxTokens: draft.maxTokens,
-        ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
-      },
-      workspaceDir: draft.workspaceDir,
-      commandExecutionEnabled: draft.commandExecutionEnabled,
-      mcpServersJson: draft.mcpServersJson,
-      cleanupPolicyDays: draft.cleanupPolicyDays,
-      embedding: {
-        provider: draft.embeddingProvider as 'openai' | 'off',
-        model: draft.embeddingModel,
-        baseUrl: draft.embeddingBaseUrl,
-        ...(draft.embeddingApiKey ? { apiKey: draft.embeddingApiKey } : {}),
-      },
-      search: {
-        provider: draft.searchProvider as 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom',
-        baseUrl: draft.searchBaseUrl,
-        ...(draft.searchApiKey ? { apiKey: draft.searchApiKey } : {}),
-      },
-    };
-    setSettingsSaving(true);
-    void updateSettings(body)
-      .then((next) => {
-        setRuntimeSettings(next);
-        setHealth((previous) =>
-          previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
-        );
-        setNotice(t("notice.settingsSaved"));
-        return refreshSettings();
-      })
-      .catch((err) => setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => setSettingsSaving(false));
-  }
-
-  function handleSaveModelSelection(draft: ModelSelectorDraft): void {
-    setSettingsSaving(true);
-    void updateSettings({
-      llm: {
-        model: draft.model,
-      },
-    })
-      .then((next) => {
-        setRuntimeSettings(next);
-        setHealth((previous) =>
-          previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
-        );
-        setModelDrawerOpen(false);
-        setNotice(t("notice.modelSwitched"));
-        return refreshRuntime();
-      })
-      .catch((err) => setNotice(`${t("notice.switchModelFailed")}${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => setSettingsSaving(false));
-  }
-
-  function handleFetchModels(): void {
-    setFetchingModels(true);
-    void listProviderModels()
-      .then((models) => {
-        const currentModel = runtimeSettings?.llm.model ?? parseProviderModel(health?.provider);
-        const existingEnabled = runtimeSettings?.llm.enabledModels ?? [];
-        const firstFetch = (runtimeSettings?.llm.availableModels.length ?? 0) === 0;
-        const enabledModels = !firstFetch && existingEnabled.length > 0
-          ? existingEnabled.filter((model) => models.includes(model))
-          : [];
-        if (currentModel && models.includes(currentModel) && !enabledModels.includes(currentModel)) {
-          enabledModels.unshift(currentModel);
-        }
-        return updateSettings({ llm: { availableModels: models, enabledModels } });
-      })
-      .then((next) => {
-        setRuntimeSettings(next);
-        setNotice(`${t("notice.fetchedModelsPrefix")} ${next.llm.availableModels.length} ${t("notice.fetchedModelsMid")} ${next.llm.enabledModels.length} ${t("notice.fetchedModelsSuffix")}`);
-        return refreshSettings();
-      })
-      .catch((err) => setNotice(`${t("notice.fetchModelsFailed")}${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => setFetchingModels(false));
-  }
-
-  function handleSaveEnabledModels(models: string[]): void {
-    const currentModel = runtimeSettings?.llm.model;
-    const enabledModels = currentModel && !models.includes(currentModel) ? [currentModel, ...models] : models;
-    setSettingsSaving(true);
-    void updateSettings({
-      llm: {
-        enabledModels,
-      },
-    })
-      .then((next) => {
-        setRuntimeSettings(next);
-        setNotice(`${t("notice.enabledModelsPrefix")} ${next.llm.enabledModels.length} ${t("notice.enabledModelsSuffix")}`);
-        return refreshSettings();
-      })
-      .catch((err) => setNotice(`${t("notice.saveModelListFailed")}${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => setSettingsSaving(false));
-  }
-
-  function handleCleanupData(olderThanDays: number): void {
-    void cleanupData(olderThanDays)
-      .then((result) => {
-        setNotice(`${t("notice.cleanedPrefix")} ${result.deletedTasks} ${t("notice.cleanedMid")}${result.deletedTraces} ${t("notice.cleanedSuffix")}`);
-        return refreshSettings();
-      })
-      .catch((err) => setNotice(`${t("notice.cleanupFailed")}${err instanceof Error ? err.message : String(err)}`));
-  }
-
-  function handleCreateMemory(content: string, category: MemoryCategory): void {
-    void createMemory({ content, category })
-      .then((created) => setMemories((prev) => [created, ...prev]))
-      .catch((err) => setNotice(`${t("notice.addMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
-  }
-
-  function handleToggleMemory(id: string, enabled: boolean): void {
-    void updateMemory(id, { enabled })
-      .then((updated) => setMemories((prev) => prev.map((m) => (m.id === id ? updated : m))))
-      .catch((err) => setNotice(`${t("notice.updateMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
-  }
-
-  function handleEditMemory(id: string, content: string, category: MemoryCategory): void {
-    void updateMemory(id, { content, category })
-      .then((updated) => setMemories((prev) => prev.map((m) => (m.id === id ? updated : m))))
-      .catch((err) => setNotice(`${t("notice.editMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
-  }
-
-  function handleDeleteMemory(id: string): void {
-    void deleteMemory(id)
-      .then(() => setMemories((prev) => prev.filter((m) => m.id !== id)))
-      .catch((err) => setNotice(`${t("notice.deleteMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
-  }
-
-  function handleChatFontSizeChange(nextSize: number): void {
-    setChatFontSize(clamp(nextSize, 11, 24));
-  }
-
-  function handleUiFontSizeChange(nextSize: number): void {
-    setUiFontSize(clamp(nextSize, 10, 20));
-  }
-
-  function handleCodeFontSizeChange(nextSize: number): void {
-    setCodeFontSize(clamp(nextSize, 10, 18));
   }
 
   async function handleImportProject(): Promise<void> {
@@ -1477,30 +398,6 @@ function App() {
     }
   }
 
-  function startResize(panel: "left" | "right", event: PointerEvent<HTMLDivElement>): void {
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = panel === "left" ? sidebarWidth : inspectorWidth;
-
-    // 拖拽只修改布局宽度状态；具体列宽由 CSS 变量消费，避免组件互相知道布局细节。
-    function handleMove(moveEvent: globalThis.PointerEvent): void {
-      const delta = moveEvent.clientX - startX;
-      if (panel === "left") {
-        setSidebarWidth(clamp(startWidth + delta, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH));
-      } else {
-        setInspectorWidth(clamp(startWidth - delta, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH));
-      }
-    }
-
-    function handleUp(): void {
-      window.removeEventListener("pointermove", handleMove);
-      window.removeEventListener("pointerup", handleUp);
-    }
-
-    window.addEventListener("pointermove", handleMove);
-    window.addEventListener("pointerup", handleUp, { once: true });
-  }
-
   const showConversation = currentTask !== null;
   const canResume =
     !!currentTask &&
@@ -1510,47 +407,18 @@ function App() {
     currentTask.status !== "planning" &&
     currentTask.status !== "paused";
 
-  // 实时工具活动（ref map 增量更新，无逐条渲染的打字机效果）
-  const livePendingIds = new Set((currentTask?.pendingApprovals ?? []).map((pa) => pa.call.id));
-  const derivedLive = liveToolActivity.map((item) => {
-    if (livePendingIds.has(item.id) && item.status !== 'awaiting') {
-      return { ...item, status: 'awaiting' as const };
-    }
-    return item;
-  });
-  // 补上 pendingApprovals 中有但 live map 中没有的项（如从 DB 快照加载的初始审批）
-  for (const pa of currentTask?.pendingApprovals ?? []) {
-    if (!liveActivityRef.current.has(pa.call.id)) {
-      derivedLive.push({
-        id: pa.call.id,
-        name: pa.call.toolName,
-        args: pa.call.args,
-        status: 'awaiting' as const,
-        riskLevel: pa.riskLevel,
-        planStepId: pa.call.planStepId,
-      });
-    }
-  }
   const hasLiveTail =
     busy ||
     derivedLive.length > 0 ||
     phase === "waiting_approval" ||
     output.trim().length > 0;
-  const shellStyle = {
-    "--sidebar-width": `${sidebarWidth}px`,
-    "--inspector-width": `${inspectorWidth}px`,
-    "--ui-font-size": `${uiFontSize}px`,
-    "--chat-font-size": `${chatFontSize}px`,
-    "--code-font-size": `${codeFontSize}px`,
-  } as CSSProperties;
-  const isChatView = activeView === "chat";
 
   return (
     <div
       className="app-shell"
       data-active-view={activeView}
       data-left-collapsed={leftCollapsed}
-      data-inspector-open={inspectorOpen}
+      data-workbench-open={workbenchOpen}
       data-theme={themeMode}
       style={shellStyle}
     >
@@ -1579,63 +447,16 @@ function App() {
       />
 
       <main className="main">
-        <header className="topbar window-drag-region" data-tauri-drag-region>
-          <div className="topbar-left-tools">
-            <button
-              type="button"
-              className="icon-btn sidebar-toggle-btn"
-              onClick={() => setLeftCollapsed((c) => !c)}
-              aria-label={leftCollapsed ? t("nav.expand") : t("nav.collapse")}
-            >
-              <SidebarIcon collapsed={leftCollapsed} />
-            </button>
-          </div>
-          {isChatView && showConversation ? (
-            <>
-              <div className="topbar-context">
-                <div className="topbar-title-group">
-                  <span className="topbar-title">{currentTask?.goal}</span>
-                  <span className="topbar-subtitle">
-                    {status === "completed" || status === "failed" || status === "cancelled"
-                      ? getStatusLabel(status)
-                      : getPhaseLabel(phase) || getStatusLabel(status)}{" "}
-                    · {currentTask?.messages.length ?? 0} 条消息
-                  </span>
-                </div>
-              </div>
-              <div className="topbar-actions">
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={() => setInspectorOpen((open) => !open)}
-                >
-                  {inspectorOpen ? t("action.hideDetails") : t("action.runDetails")}
-                </button>
-              </div>
-            </>
-          ) : isChatView ? (
-            <>
-              <div className="topbar-context">
-                <span className="topbar-kicker">Aurevoy Agent</span>
-              </div>
-              <div className="topbar-actions">
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={() => setInspectorOpen((open) => !open)}
-                >
-                  {inspectorOpen ? t("action.hideDetails") : t("action.runDetails")}
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="topbar-context">
-              <div className="topbar-title-group">
-                <span className="topbar-title">{getMainViewTitle(activeView)}</span>
-              </div>
-            </div>
-          )}
-        </header>
+        <AppTopBar
+          activeView={activeView}
+          currentTask={currentTask}
+          workbenchOpen={workbenchOpen}
+          leftCollapsed={leftCollapsed}
+          phase={phase}
+          status={status}
+          onToggleWorkbench={() => setWorkbenchOpen((open) => !open)}
+          onToggleSidebar={() => setLeftCollapsed((collapsed) => !collapsed)}
+        />
 
         {activeView === "search" ? (
           <SearchPage
@@ -1712,6 +533,11 @@ function App() {
                 onUnrevert={() => void handleUnrevert()}
                 onBranch={(messageId) => void handleBranch(messageId)}
                 onResume={() => void handleResumeTask()}
+                onUiChoice={handleUiChoice}
+                onOpenWorkspacePath={(path) => {
+                  workbenchTabs.openWorkspaceFile(path);
+                  setWorkbenchOpen(true);
+                }}
               />
             </div>
             <div className="composer-dock">
@@ -1747,6 +573,8 @@ function App() {
                 autoModePaused={!!autoModeState?.paused}
                 onCycleAutoMode={cycleAutoModeLevel}
                 onResumeAutoMode={handleResumeAutoMode}
+                thinkingLevel={thinkingLevel}
+                onCycleThinkingLevel={cycleThinkingLevel}
               />
               <ModelSelectorDrawer
                 open={modelDrawerOpen}
@@ -1784,6 +612,8 @@ function App() {
               autoModePaused={!!autoModeState?.paused}
               onCycleAutoMode={cycleAutoModeLevel}
               onResumeAutoMode={handleResumeAutoMode}
+              thinkingLevel={thinkingLevel}
+              onCycleThinkingLevel={cycleThinkingLevel}
             />
             <ModelSelectorDrawer
               open={modelDrawerOpen}
@@ -1806,307 +636,44 @@ function App() {
         onPointerDown={(event) => startResize("right", event)}
       />
 
-      <InspectorPanel
-        open={inspectorOpen}
-        health={health}
-        settings={runtimeSettings}
+      <WorkbenchPanel
+        open={workbenchOpen}
         task={currentTask}
-        phase={phase}
-        onClose={() => setInspectorOpen(false)}
+        projectId={activeWorkspaceProjectId}
+        tabs={workbenchTabs.tabs}
+        activeTab={workbenchTabs.activeTab}
+        activeTabId={workbenchTabs.activeTabId}
+        onSelectTab={workbenchTabs.setActiveTabId}
+        onCloseTab={workbenchTabs.closeTab}
+        onOpenFile={(path) => {
+          workbenchTabs.openWorkspaceFile(path);
+          setActiveView("chat");
+          setWorkbenchOpen(true);
+        }}
+        onOpenArtifact={(artifact) => {
+          if (!currentTask?.id) return;
+          workbenchTabs.openArtifact(artifact, currentTask.id);
+          setActiveView("chat");
+          setWorkbenchOpen(true);
+        }}
+        onAttachToChat={(entry) => {
+          if (entry.type === "directory") return;
+          const att: MessageAttachment = {
+            id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            name: entry.name,
+            path: entry.path,
+            mimeType: entry.mimeType ?? "application/octet-stream",
+            size: entry.size ?? 0,
+            type: (entry.mimeType ?? "").startsWith("image/") ? "image" : "file",
+          };
+          setAttachments((prev) => (prev.some((a) => a.path === att.path) ? prev : [...prev, att]));
+          setActiveView("chat");
+        }}
       />
 
       {notice && <ToastNotice message={notice} onClose={() => setNotice(null)} />}
     </div>
   );
-}
-
-function ToastNotice({ message, onClose }: { message: string; onClose: () => void }) {
-  return createPortal(
-    <div className="toast-bubble" role="status">
-      <span>{message}</span>
-      <button type="button" className="toast-close" onClick={onClose} aria-label={t("a11y.closeNotice")}>
-        ×
-      </button>
-    </div>,
-    document.body,
-  );
-}
-
-function SidebarIcon({ collapsed }: { collapsed: boolean }) {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-      <path
-        d="M3.8 4.2h12.4c.9 0 1.6.7 1.6 1.6v8.4c0 .9-.7 1.6-1.6 1.6H3.8c-.9 0-1.6-.7-1.6-1.6V5.8c0-.9.7-1.6 1.6-1.6zM7.4 4.5v11"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        fill="none"
-        strokeLinejoin="round"
-      />
-      {collapsed ? (
-        <path d="M10 7.2l2.8 2.8-2.8 2.8" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" strokeLinecap="round" />
-      ) : (
-        <path d="M13 7.2l-2.8 2.8 2.8 2.8" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" strokeLinecap="round" />
-      )}
-    </svg>
-  );
-}
-
-function getMainViewTitle(view: MainView): string {
-  if (view === "search") return t("nav.search");
-  if (view === "skills") return t("nav.skills");
-  if (view === "settings") return t("nav.settings");
-  return t("nav.conversations");
-}
-
-function SearchPage({
-  query,
-  tasks,
-  onQueryChange,
-  onSelectTask,
-}: {
-  query: string;
-  tasks: Task[];
-  onQueryChange: (query: string) => void;
-  onSelectTask: (task: Task) => void;
-}) {
-  const normalizedQuery = query.trim().toLowerCase();
-  const filteredTasks = normalizedQuery
-    ? tasks.filter((task) => task.goal.toLowerCase().includes(normalizedQuery))
-    : tasks;
-
-  return (
-    <section className="page-panel">
-      <input
-        className="page-search-input"
-        value={query}
-        placeholder={t("search.placeholder")}
-        onChange={(event) => onQueryChange(event.currentTarget.value)}
-      />
-      <div className="page-list">
-        {filteredTasks.length === 0 ? (
-          <p className="page-empty">{t("sidebar.emptyNoMatch")}</p>
-        ) : (
-          filteredTasks.map((task) => (
-            <button key={task.id} type="button" className="page-list-row" onClick={() => onSelectTask(task)}>
-              <span className="page-list-title">{task.goal}</span>
-              <span className="page-list-meta">
-                {getStatusLabel(task.status)} · {new Date(task.updatedAt).toLocaleString("zh-CN")}
-              </span>
-            </button>
-          ))
-        )}
-      </div>
-    </section>
-  );
-}
-
-function SkillsPage({
-  skills,
-  installing,
-  installError,
-  reloading,
-  onInstall,
-  onReload,
-  onToggle,
-}: {
-  skills: SkillDescriptor[];
-  installing: boolean;
-  installError: string | null;
-  reloading: boolean;
-  onInstall: (url: string) => Promise<SkillInstallResponse>;
-  onReload: () => Promise<void>;
-  onToggle: (name: string, enabled: boolean) => Promise<void>;
-}) {
-  const [url, setUrl] = useState("");
-  const [query, setQuery] = useState("");
-  const [lastResult, setLastResult] = useState<SkillInstallResponse | null>(null);
-  const [installOpen, setInstallOpen] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set(["workspace", "user", "system"]));
-
-  const filtered = query.trim()
-    ? skills.filter((s) => {
-        const q = query.toLowerCase();
-        return s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q);
-      })
-    : skills;
-
-  async function handleInstall() {
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    try {
-      const result = await onInstall(trimmed);
-      setLastResult(result);
-      setUrl("");
-      setInstallOpen(false);
-    } catch {
-      /* error shown via installError prop */
-    }
-  }
-
-  function toggleGroup(id: string) {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  // Group skills by source directory
-  const groups = useMemo(() => {
-    const map = new Map<string, SkillDescriptor[]>();
-    for (const skill of filtered) {
-      const key = skill.sourceDir;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(skill);
-    }
-    // Sort groups by priority: workspace first, then user, then system, then builtin
-    const order = ["workspace", "user", "system", "builtin"];
-    const result: Array<{ key: string; labelKey: string; skills: SkillDescriptor[] }> = [];
-    for (const key of order) {
-      const items = map.get(key);
-      if (items) {
-        result.push({ key, labelKey: `skillsPage.group.${key}`, skills: items });
-        map.delete(key);
-      }
-    }
-    // Any remaining (future source types)
-    for (const [key, items] of map) {
-      result.push({ key, labelKey: "skillsPage.group.other", skills: items });
-    }
-    return result;
-  }, [filtered]);
-
-  return (
-    <section className="page-panel">
-      <header className="skills-page-header">
-        <div>
-          <h1>{t("nav.skills")}</h1>
-          <p className="skills-page-summary">{skills.length} skills</p>
-        </div>
-        <div className="skills-page-actions">
-          <button
-            type="button"
-            className="ghost-btn"
-            onClick={onReload}
-            disabled={reloading}
-            title={t("skillsPage.reload")}
-          >
-            {reloading ? t("skillsPage.reloading") : t("skillsPage.reload")}
-          </button>
-          {lastResult && !installError && (
-            <span className="skill-install-success">
-              {t("skillsPage.reloadSuccess")} ({(lastResult as SkillInstallResponse).installedSkills?.length ?? skills.length})
-            </span>
-          )}
-        </div>
-      </header>
-
-      <div className="skills-search-bar">
-        <input
-          type="text"
-          className="skills-search-input"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t("skillsPage.search")}
-        />
-        <button
-          type="button"
-          className="ghost-btn"
-          onClick={() => setInstallOpen(!installOpen)}
-        >
-          {installOpen ? t("skillsPage.installHide") : t("skillsPage.installShow")}
-        </button>
-      </div>
-
-      {installOpen && (
-        <div className="skills-install-area">
-          <div className="skills-install-row">
-            <input
-              type="text"
-              value={url}
-              onChange={(e) => {
-                setUrl(e.target.value);
-                setLastResult(null);
-              }}
-              placeholder={t("skillsPage.installPlaceholder")}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleInstall();
-              }}
-              disabled={installing}
-            />
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleInstall}
-              disabled={installing || !url.trim()}
-            >
-              {installing ? t("skillsPage.installing") : t("skillsPage.install")}
-            </button>
-          </div>
-          {installError && (
-            <p className="skill-install-error">{t("skillsPage.installFailed")}{installError}</p>
-          )}
-        </div>
-      )}
-
-      {filtered.length === 0 ? (
-        <p className="page-empty">{query ? t("search.placeholder") : t("skillsPage.empty")}</p>
-      ) : (
-        groups.map((group) => (
-          <section key={group.key} className="skills-group-section">
-            <button
-              type="button"
-              className="skills-group-header"
-              onClick={() => toggleGroup(group.key)}
-              aria-expanded={expandedGroups.has(group.key)}
-            >
-              <span className="skills-group-arrow">{expandedGroups.has(group.key) ? "\u25be" : "\u25b8"}</span>
-              <span>{t(group.labelKey as "skillsPage.group.workspace").replace("{n}", String(group.skills.length))}</span>
-              <span className="skills-group-count">{group.skills.length}</span>
-            </button>
-            {expandedGroups.has(group.key) && (
-              <div className="skills-group-body">
-                {group.skills.map((skill) => (
-                  <article key={skill.name} className="skills-card">
-                    <header className="skills-card-head">
-                      <label className="skills-card-toggle" title={skill.enabled ? t("memory.disable") : t("memory.enable")}>
-                        <input
-                          type="checkbox"
-                          checked={skill.enabled}
-                          onChange={() => onToggle(skill.name, !skill.enabled)}
-                        />
-                      </label>
-                      <strong>{skill.name}</strong>
-                      <span className={`skills-card-badge source-${skill.sourceDir}`}>
-                        {skill.sourcePath}
-                      </span>
-                    </header>
-                    <p className="skills-card-desc">{skill.description}</p>
-                    <div className="skills-card-meta">
-                      {skill.metadata?.version && <span className="skills-card-meta-item">{skill.metadata.version}</span>}
-                      {skill.license && <span className="skills-card-meta-item">{skill.license}</span>}
-                      <span className="skills-card-meta-item">{formatAllowedTools(skill.allowedTools)}</span>
-                    </div>
-                    {skill.installUrl && (
-                      <p className="skills-card-source" title={skill.installUrl}>
-                        {t("skillsPage.installedFrom")}: {skill.installUrl}
-                      </p>
-                    )}
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
-        ))
-      )}
-    </section>
-  );
-}
-
-function formatAllowedTools(allowedTools?: string[]): string {
-  if (!allowedTools || allowedTools.length === 0) return t("skillsPage.allTools");
-  return allowedTools.join(" · ");
 }
 
 export default App;

@@ -1,9 +1,65 @@
 import {
   getModel,
-  getModels,
   type Model as PiModel,
+  openAICompletionsApi,
 } from '@earendil-works/pi-ai/compat';
+import {
+  createModels,
+  createProvider,
+  type Models as PiModels,
+} from '@earendil-works/pi-ai';
+import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { config } from '../config.js';
+
+// ---- Dynamic model discovery via Pi's createProvider + refreshModels ----
+
+let _piModelsCache: PiModels | null = null;
+
+function getPiModels(): PiModels {
+  if (_piModelsCache) return _piModelsCache;
+  const models = createModels();
+  for (const provider of builtinProviders()) {
+    models.setProvider(provider);
+  }
+  models.setProvider(createOpenAICompatProvider());
+  _piModelsCache = models;
+  return _piModelsCache;
+}
+
+function createOpenAICompatProvider() {
+  return createProvider({
+    id: 'openai-compatible',
+    name: 'OpenAI Compatible',
+    baseUrl: config.llm.baseUrl,
+    auth: { apiKey: { name: 'none', resolve: async () => undefined } },
+    models: [],
+    refreshModels: async () => {
+      const base = config.llm.baseUrl.replace(/\/+$/, '');
+      const resp = await fetch(`${base}/models`, {
+        headers: config.llm.apiKey ? { Authorization: `Bearer ${config.llm.apiKey}` } : {},
+      });
+      if (!resp.ok) {
+        throw new Error(`Failed to fetch models from ${base}/models: ${resp.status} ${resp.statusText}`);
+      }
+      const json = (await resp.json()) as { data?: { id: string }[] };
+      return (json.data ?? []).map((item) => ({
+        id: item.id,
+        name: item.id,
+        api: 'openai-completions' as const,
+        provider: 'openai-compatible',
+        baseUrl: config.llm.baseUrl,
+        reasoning: false,
+        input: ['text', 'image'] as const,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: config.agent.contextTokenBudget,
+        maxTokens: config.llm.maxTokens,
+      }));
+    },
+    api: openAICompletionsApi(),
+  });
+}
+
+// ---- Public API ----
 
 export function getPiProviderName(): string {
   return isPiLLMConfigured() ? `${config.llm.provider}:${config.llm.model}` : 'unconfigured';
@@ -75,16 +131,24 @@ export function createPiModel(modelOverride?: string): PiModel<any> {
 }
 
 export async function listPiProviderModels(): Promise<string[]> {
-  const provider = normalizePiProvider(config.llm.provider);
-  const models = (getModels as (provider?: string) => readonly PiModel<any>[])(provider)
-    .map((model) => model.id)
-    .filter(Boolean);
-  if (models.length > 0) return [...new Set(models)].sort((a, b) => a.localeCompare(b));
+  const normalized = normalizePiProvider(config.llm.provider);
+  const models = getPiModels();
+
+  if (normalized === 'openai-compatible' && config.llm.baseUrl) {
+    try {
+      await models.refresh('openai-compatible');
+    } catch {
+      // refresh failed — fall through to static catalog / fallback
+    }
+  }
+
+  const ids = models.getModels(normalized).map((m) => m.id).filter(Boolean);
+  if (ids.length > 0) return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
   return config.llm.model.trim() ? [config.llm.model.trim()] : [];
 }
 
 export function resetPiProviderCache(): void {
-  // Pi compat model lookup is stateless for Aurevoy's current env-driven setup.
+  _piModelsCache = null;
 }
 
 function isValidPiProviderId(provider: string): boolean {

@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { RuntimeSettings } from "@aurevoy/shared";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { LlmProviderSlot, RuntimeSettings } from "@aurevoy/shared";
 import { t } from "../i18n";
+import "./ModelSelectorDrawer.css";
 
 export interface ModelSelectorDraft {
+  provider: string;
   model: string;
 }
 
@@ -21,8 +23,8 @@ const POPOVER_GAP = 8;
 const VIEWPORT_MARGIN = 12;
 const POPOVER_FALLBACK_WIDTH = 280;
 const POPOVER_MIN_WIDTH = 248;
-const POPOVER_MAX_WIDTH = 300;
-const POPOVER_MAX_HEIGHT = 390;
+const POPOVER_MAX_WIDTH = 320;
+const POPOVER_MAX_HEIGHT = 420;
 const POPOVER_MIN_HEIGHT = 180;
 
 interface PopoverPosition {
@@ -30,6 +32,12 @@ interface PopoverPosition {
   top: number;
   width: number;
   maxHeight: number;
+}
+
+interface SelectableModel {
+  provider: string;
+  model: string;
+  key: string;
 }
 
 export function ModelSelectorDrawer({
@@ -42,9 +50,13 @@ export function ModelSelectorDrawer({
   onOpenFullSettings,
   onSave,
 }: ModelSelectorDrawerProps) {
+  const activeProvider = settings?.llm.provider ?? parseProviderLabel(provider);
   const currentModel = settings?.llm.model ?? parseProviderModel(provider);
-  const providerLabel = parseProviderLabel(provider);
-  const models = settings?.llm.enabledModels ?? [];
+  const groups = useMemo(
+    () => buildModelGroups(settings),
+    [settings],
+  );
+  const totalModels = groups.reduce((sum, group) => sum + group.models.length, 0);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<PopoverPosition | null>(null);
 
@@ -93,7 +105,7 @@ export function ModelSelectorDrawer({
       return;
     }
     computePosition();
-  }, [computePosition, open, models.length, currentModel]);
+  }, [computePosition, open, totalModels, currentModel, activeProvider]);
 
   useEffect(() => {
     if (!open) return;
@@ -136,42 +148,112 @@ export function ModelSelectorDrawer({
       <div className="model-popover-main">
         <header className="model-popover-head">
           <p className="model-popover-title">{t("model.label")}</p>
-          <span className="model-popover-provider">{providerLabel}</span>
+          <span className="model-popover-provider">{activeProvider || t("composer.providerUnconfigured")}</span>
         </header>
-        {models.length === 0 ? (
+        {totalModels === 0 ? (
           <p className="model-popover-empty">{t("model.empty")}</p>
         ) : (
           <div className="model-popover-list">
-            {models.map((model) => {
-              const active = model === currentModel;
-              return (
-                <button
-                  key={model}
-                  type="button"
-                  className="model-popover-item"
-                  data-active={active}
-                  disabled={saving || active}
-                  onClick={() => onSave({ model })}
-                >
-                  <span className="model-popover-model">
-                    <span className="model-popover-name">{model}</span>
-                    {active && <span className="model-popover-current">{t("settings.modelCurrent")}</span>}
-                  </span>
-                  {active && <CheckIcon />}
-                </button>
-              );
-            })}
+            {groups.map((group) => (
+              <div key={group.provider} className="model-popover-group">
+                {groups.length > 1 && (
+                  <p className="model-popover-group-label">
+                    <span>{group.provider}</span>
+                    {!group.apiKeyConfigured && (
+                      <em className="model-popover-group-warn">{t("model.providerNoKey")}</em>
+                    )}
+                  </p>
+                )}
+                {group.models.map((item) => {
+                  const active = item.provider === activeProvider && item.model === currentModel;
+                  const disabled = saving || active || !group.apiKeyConfigured;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      className="model-popover-item"
+                      data-active={active}
+                      disabled={disabled}
+                      title={!group.apiKeyConfigured ? t("model.providerNoKeyHint") : undefined}
+                      onClick={() => onSave({ provider: item.provider, model: item.model })}
+                    >
+                      <span className="model-popover-model">
+                        <span className="model-popover-name">{item.model}</span>
+                        {active && <span className="model-popover-current">{t("settings.modelCurrent")}</span>}
+                      </span>
+                      {active && <CheckIcon />}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         )}
       </div>
 
       <div className="model-popover-footer">
         <button type="button" className="model-popover-action" onClick={onOpenFullSettings}>
-          {models.length === 0 ? t("model.gotoEnable") : t("model.manage")}
+          {totalModels === 0 ? t("model.gotoEnable") : t("model.manage")}
         </button>
       </div>
     </div>
   );
+}
+
+function buildModelGroups(settings: RuntimeSettings | null): Array<{
+  provider: string;
+  apiKeyConfigured: boolean;
+  models: SelectableModel[];
+}> {
+  if (!settings) return [];
+
+  const slots: LlmProviderSlot[] = settings.llm.providers?.length
+    ? settings.llm.providers
+    : [{
+        provider: settings.llm.provider,
+        baseUrl: settings.llm.baseUrl,
+        model: settings.llm.model,
+        visionModel: settings.llm.visionModel,
+        availableModels: settings.llm.availableModels,
+        enabledModels: settings.llm.enabledModels,
+        apiKeyConfigured: settings.llm.apiKeyConfigured,
+      }];
+
+  const groups: Array<{ provider: string; apiKeyConfigured: boolean; models: SelectableModel[] }> = [];
+
+  for (const slot of slots) {
+    const enabled = [...slot.enabledModels];
+    // 保证当前模型始终可见
+    if (
+      slot.provider === settings.llm.provider &&
+      settings.llm.model &&
+      !enabled.includes(settings.llm.model)
+    ) {
+      enabled.unshift(settings.llm.model);
+    } else if (slot.model && !enabled.includes(slot.model) && enabled.length === 0) {
+      // 槽位只有 last model、尚未勾选 enabled 时，至少展示 last model
+      enabled.push(slot.model);
+    }
+    if (enabled.length === 0) continue;
+    groups.push({
+      provider: slot.provider,
+      apiKeyConfigured: slot.apiKeyConfigured,
+      models: enabled.map((model) => ({
+        provider: slot.provider,
+        model,
+        key: `${slot.provider}:${model}`,
+      })),
+    });
+  }
+
+  // 当前激活 provider 排前面
+  groups.sort((a, b) => {
+    if (a.provider === settings.llm.provider) return -1;
+    if (b.provider === settings.llm.provider) return 1;
+    return a.provider.localeCompare(b.provider);
+  });
+
+  return groups;
 }
 
 function parseProviderModel(provider?: string): string {
@@ -181,7 +263,7 @@ function parseProviderModel(provider?: string): string {
 }
 
 function parseProviderLabel(provider?: string): string {
-  if (!provider || provider === "unconfigured") return t("composer.providerUnconfigured");
+  if (!provider || provider === "unconfigured") return "";
   const [kind] = provider.split(/:(.*)/s);
   return kind || provider;
 }

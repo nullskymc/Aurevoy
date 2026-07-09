@@ -25,6 +25,7 @@ import {
   type RuntimeSettings,
   type Task,
   type TaskArtifact,
+  type TaskArtifactContentResponse,
   type TokenUsageReport,
   type TaskTraceEntry,
   type TaskTraceListResponse,
@@ -38,6 +39,7 @@ import {
   type UpdateProjectRequest,
   type UpdateMemoryRequest,
   type UpdateTaskArtifactRequest,
+  type WorkspaceReadResponse,
 } from '@aurevoy/shared';
 
 /** Agent 引擎地址。优先级：localStorage > 运行时注入 > Vite 环境变量 > 默认值 */
@@ -120,6 +122,69 @@ export async function getTask(taskId: string): Promise<Task> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}`);
   if (!res.ok) await throwApiError(res, "get task failed");
   return res.json();
+}
+
+export async function readWorkspaceEntry(options: {
+  path: string;
+  taskId?: string;
+  projectId?: string;
+  offset?: number;
+  limit?: number;
+  /** 工作台预览：全量读取（不走 agent 工具分页截断） */
+  full?: boolean;
+}): Promise<WorkspaceReadResponse> {
+  const params = new URLSearchParams();
+  params.set("path", options.path);
+  if (options.taskId) params.set("taskId", options.taskId);
+  if (options.projectId) params.set("projectId", options.projectId);
+  if (options.offset) params.set("offset", String(options.offset));
+  if (options.limit) params.set("limit", String(options.limit));
+  if (options.full) params.set("full", "1");
+
+  const res = await fetch(`${BASE_URL}/api/workspace/read?${params.toString()}`);
+  if (!res.ok) await throwApiError(res, "read workspace entry failed");
+  return res.json();
+}
+
+export async function deleteWorkspacePath(options: {
+  path: string;
+  taskId?: string;
+  projectId?: string;
+}): Promise<void> {
+  const params = new URLSearchParams();
+  params.set("path", options.path);
+  if (options.taskId) params.set("taskId", options.taskId);
+  if (options.projectId) params.set("projectId", options.projectId);
+  const res = await fetch(`${BASE_URL}/api/workspace/delete?${params.toString()}`, { method: "DELETE" });
+  if (!res.ok) await throwApiError(res, "delete workspace path failed");
+}
+
+export async function renameWorkspacePath(options: {
+  path: string;
+  newName: string;
+  taskId?: string;
+  projectId?: string;
+}): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/workspace/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+  if (!res.ok) await throwApiError(res, "rename workspace path failed");
+}
+
+export async function copyWorkspacePath(options: {
+  path: string;
+  newName: string;
+  taskId?: string;
+  projectId?: string;
+}): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/workspace/copy`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+  if (!res.ok) await throwApiError(res, "copy workspace path failed");
 }
 
 /** 在同一任务内追加一轮用户输入并继续执行（多轮对话） */
@@ -258,6 +323,12 @@ export async function updateArtifact(
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`update artifact failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getArtifactContent(taskId: string, artifactId: string): Promise<TaskArtifactContentResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/artifacts/${artifactId}/content`);
+  if (!res.ok) await throwApiError(res, "get artifact content failed");
   return res.json();
 }
 

@@ -221,7 +221,10 @@ export function registerSimpleTools(): void {
   // attach_content
   unifiedToolRegistry.register({
     name: 'attach_content',
-    description: '在对话中附加文件引用、图片或超链接，使用户可以直观地访问文件或查看内容。通过此工具向用户展示文件位置、显示图片或提供重要链接。附加的内容会内联显示在对话消息中。',
+    description:
+      '向用户交付文件或链接。file_reference / image 会在对话中显示卡片，并默认在右侧工作台打开预览：' +
+      'Markdown 渲染、HTML 沙箱预览、图片预览等。交付报告/HTML/Markdown 文档时优先用本工具。' +
+      'link 类型仅展示可点击链接。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -250,6 +253,68 @@ export function registerSimpleTools(): void {
           size: typeof args.size === 'number' ? args.size : undefined,
         },
       };
+    },
+  });
+
+  // present_ui — 对话内限定交互组件（白名单 kind，禁止可执行代码）
+  unifiedToolRegistry.register({
+    name: 'present_ui',
+    description:
+      '在对话中展示可交互的限定 UI 组件（非任意 HTML/JSX）。' +
+      '用于数据表、指标卡、选项选择、简单计算器或 stack 组合布局。' +
+      '传入相同 id 可更新已有组件（原地替换 props）。' +
+      '复杂视觉报告请写 HTML 文件并用 attach_content，不要用本工具执行脚本。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['data_table', 'stat_row', 'choice', 'calculator', 'stack'],
+          description:
+            'data_table: 可排序/筛选表格；stat_row: 指标卡；choice: 用户选项；' +
+            'calculator: 本地轻量计算；stack: 组合多个子组件',
+        },
+        props: {
+          type: 'object',
+          description:
+            '组件属性。data_table: {title?, columns:string[], rows:(string|number|null)[][], features?:("sort"|"filter"|"copy"|"sum")[]}；' +
+            'stat_row: {items:{label,value,hint?}[]}；choice: {prompt, options:{id,label}[], multi?}；' +
+            'calculator: {title?, fields:{id,label,value:number}[], formula:string}；' +
+            'stack: {children:{kind,props}[]}',
+        },
+        id: { type: 'string', description: '可选。已有组件 id，传入则更新该组件' },
+        fallbackText: { type: 'string', description: '纯文本降级摘要（可选）' },
+      },
+      required: ['kind', 'props'],
+      additionalProperties: false,
+    },
+    riskLevel: 'safe',
+    source: { type: 'builtin' },
+    async execute(args) {
+      try {
+        const kind = String(args.kind ?? '');
+        const props = validatePresentUiProps(kind, args.props);
+        const fallbackText =
+          typeof args.fallbackText === 'string' && args.fallbackText.trim()
+            ? args.fallbackText.trim().slice(0, 2000)
+            : defaultFallbackText(kind, props);
+        const id =
+          typeof args.id === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(args.id.trim())
+            ? args.id.trim()
+            : undefined;
+        return {
+          contentBlock: {
+            type: 'ui',
+            id,
+            kind,
+            props,
+            fallbackText,
+            content: fallbackText,
+          },
+        };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
     },
   });
 
@@ -353,39 +418,298 @@ export function registerSimpleTools(): void {
   });
 
   // delegate_task
-  unifiedToolRegistry.register({
-    name: 'delegate_task',
-    description: '将独立子任务委托给另一个 Agent 执行。适用于同时搜索多个目录、并发读取多个文件、独立子分析。子代理默认只有只读权限，无权写入文件。可同时发起多个 delegate_task 调用实现并行子代理。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        goal: { type: 'string', description: '子任务的简要目标（一句话）' },
-        prompt: { type: 'string', description: '给子代理的详细指令' },
-        tools: { type: 'array', items: { type: 'string' }, description: '允许子代理使用的工具' },
+  {
+    const roleCatalog = [
+      'explore：工作区只读侦查',
+      'research：联网+本地调研',
+      'coder：读写改代码/文件',
+      'shell：命令执行与诊断',
+      'writer：文档与报告产出',
+      'general：通用宽任务面（默认）',
+    ].join('；');
+    unifiedToolRegistry.register({
+      name: 'delegate_task',
+      description:
+        '将独立子任务委托给专用子代理并行执行。' +
+        `role 选型：${roleCatalog}。` +
+        '子代理继承父任务 auto/plan 权限；tools 可覆盖角色默认工具白名单。' +
+        '可同时发起多个 delegate_task 实现并行。子代理不能再委托。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal: { type: 'string', description: '子任务的简要目标（一句话）' },
+          prompt: { type: 'string', description: '给子代理的详细指令' },
+          role: {
+            type: 'string',
+            enum: ['explore', 'research', 'coder', 'shell', 'writer', 'general'],
+            description: '子代理角色，决定默认工具面与行为；缺省 general',
+          },
+          tools: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '可选：覆盖角色默认工具白名单（权限仍继承父任务）',
+          },
+        },
+        required: ['goal', 'prompt'],
+        additionalProperties: false,
       },
-      required: ['goal', 'prompt'],
-      additionalProperties: false,
-    },
-    riskLevel: 'safe',
-    executionPolicy: { parallelizable: true },
-    source: { type: 'builtin' },
-    async execute(args, context) {
-      const { runSubTask } = await import('../agent/subagent.js');
-      const goal = typeof args.goal === 'string' ? args.goal.trim() : '';
-      const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
-      if (!goal || !prompt) throw new Error('goal 和 prompt 必须是非空字符串');
-      const tools = Array.isArray(args.tools) ? (args.tools as unknown[]).filter((t): t is string => typeof t === 'string') : undefined;
-      const result = await runSubTask({
-        goal, prompt, allowedTools: tools,
-        workspaceDir: context?.workspaceDir ?? process.cwd(),
-      });
-      return {
-        ok: result.ok, subTaskGoal: goal, content: result.content,
-        toolCallCount: result.toolCallCount, iterations: result.iterations, error: result.error,
-        note: result.ok
-          ? `子代理完成，${result.iterations} 轮，${result.toolCallCount} 次工具调用。`
-          : `子代理失败：${result.error ?? '未知错误'}`,
-      };
-    },
+      riskLevel: 'safe',
+      executionPolicy: { parallelizable: true },
+      source: { type: 'builtin' },
+      async execute(args, context) {
+        const { runSubTask } = await import('../agent/subagent.js');
+        const { approvalConfigFromTask } = await import('../agent/approval.js');
+        const { isSubagentRole } = await import('../agent/subagent-profiles.js');
+        const { config } = await import('../config.js');
+        const goal = typeof args.goal === 'string' ? args.goal.trim() : '';
+        const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
+        if (!goal || !prompt) throw new Error('goal 和 prompt 必须是非空字符串');
+        const role = isSubagentRole(args.role) ? args.role : undefined;
+        const tools = Array.isArray(args.tools)
+          ? (args.tools as unknown[]).filter((t): t is string => typeof t === 'string')
+          : undefined;
+        const level = config.autoMode.level === 'plan' ? 'plan' as const : 'auto' as const;
+        const parentTask = context?.task;
+        const approvalConfig = parentTask
+          ? approvalConfigFromTask(parentTask, level)
+          : { autoModeLevel: level, autoModePaused: false, planApproved: level === 'auto' };
+        const result = await runSubTask({
+          goal,
+          prompt,
+          role,
+          allowedTools: tools,
+          workspaceDir: context?.workspaceDir ?? process.cwd(),
+          approvalConfig,
+          parentTask: parentTask
+            ? { id: parentTask.id, autoModeState: parentTask.autoModeState, goal: parentTask.goal }
+            : undefined,
+        });
+        return {
+          ok: result.ok,
+          subTaskGoal: goal,
+          role: result.role,
+          content: result.content,
+          toolCallCount: result.toolCallCount,
+          iterations: result.iterations,
+          error: result.error,
+          note: result.ok
+            ? `子代理(${result.role})完成，${result.iterations} 轮，${result.toolCallCount} 次工具调用（权限继承父任务 ${level}）。`
+            : `子代理(${result.role})失败：${result.error ?? '未知错误'}`,
+        };
+      },
+    });
+  }
+}
+
+// ---- present_ui 校验（白名单 props，防撑爆 UI）----
+
+const UI_KINDS = new Set(['data_table', 'stat_row', 'choice', 'calculator', 'stack']);
+const MAX_TABLE_ROWS = 200;
+const MAX_TABLE_COLS = 20;
+const MAX_CELL_CHARS = 500;
+const MAX_STACK_CHILDREN = 12;
+const MAX_STACK_DEPTH = 3;
+
+function validatePresentUiProps(kind: string, raw: unknown, depth = 0): Record<string, unknown> {
+  if (!UI_KINDS.has(kind)) {
+    throw new Error(`不支持的 UI kind: ${kind}。允许: ${[...UI_KINDS].join(', ')}`);
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('props 必须是对象');
+  }
+  const props = raw as Record<string, unknown>;
+
+  switch (kind) {
+    case 'data_table':
+      return validateDataTableProps(props);
+    case 'stat_row':
+      return validateStatRowProps(props);
+    case 'choice':
+      return validateChoiceProps(props);
+    case 'calculator':
+      return validateCalculatorProps(props);
+    case 'stack':
+      return validateStackProps(props, depth);
+    default:
+      throw new Error(`不支持的 UI kind: ${kind}`);
+  }
+}
+
+function validateDataTableProps(props: Record<string, unknown>): Record<string, unknown> {
+  const columns = props.columns;
+  if (!Array.isArray(columns) || columns.length === 0) {
+    throw new Error('data_table.props.columns 必须是非空字符串数组');
+  }
+  if (columns.length > MAX_TABLE_COLS) {
+    throw new Error(`data_table 列数不能超过 ${MAX_TABLE_COLS}`);
+  }
+  const colStrs = columns.map((c, i) => {
+    if (typeof c !== 'string' || !c.trim()) throw new Error(`columns[${i}] 必须是非空字符串`);
+    return c.trim().slice(0, 80);
   });
+
+  const rows = props.rows;
+  if (!Array.isArray(rows)) throw new Error('data_table.props.rows 必须是数组');
+  if (rows.length > MAX_TABLE_ROWS) {
+    throw new Error(`data_table 行数不能超过 ${MAX_TABLE_ROWS}`);
+  }
+  const normalizedRows = rows.map((row, ri) => {
+    if (!Array.isArray(row)) throw new Error(`rows[${ri}] 必须是数组`);
+    return colStrs.map((_, ci) => normalizeCell(row[ci]));
+  });
+
+  const featuresRaw = props.features;
+  let features: string[] | undefined;
+  if (featuresRaw !== undefined) {
+    if (!Array.isArray(featuresRaw)) throw new Error('features 必须是数组');
+    const allowed = new Set(['sort', 'filter', 'copy', 'sum']);
+    features = [...new Set(featuresRaw.map(String).filter((f) => allowed.has(f)))];
+  }
+
+  return {
+    title: typeof props.title === 'string' ? props.title.trim().slice(0, 120) : undefined,
+    columns: colStrs,
+    rows: normalizedRows,
+    features: features && features.length > 0 ? features : ['sort', 'copy'],
+  };
+}
+
+function normalizeCell(value: unknown): string | number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  const s = String(value);
+  return s.length > MAX_CELL_CHARS ? `${s.slice(0, MAX_CELL_CHARS)}…` : s;
+}
+
+function validateStatRowProps(props: Record<string, unknown>): Record<string, unknown> {
+  const items = props.items;
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error('stat_row.props.items 必须是非空数组');
+  }
+  if (items.length > 12) throw new Error('stat_row items 不能超过 12 个');
+  return {
+    items: items.map((item, i) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error(`items[${i}] 必须是对象`);
+      }
+      const rec = item as Record<string, unknown>;
+      if (typeof rec.label !== 'string' || typeof rec.value !== 'string' && typeof rec.value !== 'number') {
+        throw new Error(`items[${i}] 需要 label 与 value`);
+      }
+      return {
+        label: String(rec.label).slice(0, 80),
+        value: typeof rec.value === 'number' ? rec.value : String(rec.value).slice(0, 120),
+        hint: typeof rec.hint === 'string' ? rec.hint.slice(0, 120) : undefined,
+      };
+    }),
+  };
+}
+
+function validateChoiceProps(props: Record<string, unknown>): Record<string, unknown> {
+  if (typeof props.prompt !== 'string' || !props.prompt.trim()) {
+    throw new Error('choice.props.prompt 必填');
+  }
+  const options = props.options;
+  if (!Array.isArray(options) || options.length === 0) {
+    throw new Error('choice.props.options 必须是非空数组');
+  }
+  if (options.length > 20) throw new Error('choice options 不能超过 20 个');
+  return {
+    prompt: props.prompt.trim().slice(0, 500),
+    multi: props.multi === true,
+    options: options.map((opt, i) => {
+      if (!opt || typeof opt !== 'object' || Array.isArray(opt)) {
+        throw new Error(`options[${i}] 必须是对象`);
+      }
+      const rec = opt as Record<string, unknown>;
+      const id = typeof rec.id === 'string' ? rec.id.trim() : '';
+      const label = typeof rec.label === 'string' ? rec.label.trim() : '';
+      if (!id || !label) throw new Error(`options[${i}] 需要 id 与 label`);
+      return { id: id.slice(0, 64), label: label.slice(0, 120) };
+    }),
+  };
+}
+
+function validateCalculatorProps(props: Record<string, unknown>): Record<string, unknown> {
+  const fields = props.fields;
+  if (!Array.isArray(fields) || fields.length === 0) {
+    throw new Error('calculator.props.fields 必须是非空数组');
+  }
+  if (fields.length > 12) throw new Error('calculator fields 不能超过 12 个');
+  if (typeof props.formula !== 'string' || !props.formula.trim()) {
+    throw new Error('calculator.props.formula 必填');
+  }
+  const formula = props.formula.trim().slice(0, 200);
+  if (!/^[a-zA-Z0-9_+\-*/().\s]+$/.test(formula)) {
+    throw new Error('formula 仅允许字段 id 与 + - * / ( ) 数字空白');
+  }
+  return {
+    title: typeof props.title === 'string' ? props.title.trim().slice(0, 120) : undefined,
+    formula,
+    fields: fields.map((f, i) => {
+      if (!f || typeof f !== 'object' || Array.isArray(f)) throw new Error(`fields[${i}] 必须是对象`);
+      const rec = f as Record<string, unknown>;
+      const id = typeof rec.id === 'string' ? rec.id.trim() : '';
+      const label = typeof rec.label === 'string' ? rec.label.trim() : id;
+      if (!id || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(id)) {
+        throw new Error(`fields[${i}].id 必须是合法标识符`);
+      }
+      const value = typeof rec.value === 'number' && Number.isFinite(rec.value) ? rec.value : 0;
+      return { id: id.slice(0, 32), label: label.slice(0, 80), value };
+    }),
+  };
+}
+
+function validateStackProps(props: Record<string, unknown>, depth: number): Record<string, unknown> {
+  if (depth >= MAX_STACK_DEPTH) {
+    throw new Error(`stack 嵌套不能超过 ${MAX_STACK_DEPTH} 层`);
+  }
+  const children = props.children;
+  if (!Array.isArray(children) || children.length === 0) {
+    throw new Error('stack.props.children 必须是非空数组');
+  }
+  if (children.length > MAX_STACK_CHILDREN) {
+    throw new Error(`stack children 不能超过 ${MAX_STACK_CHILDREN}`);
+  }
+  return {
+    children: children.map((child, i) => {
+      if (!child || typeof child !== 'object' || Array.isArray(child)) {
+        throw new Error(`children[${i}] 必须是对象`);
+      }
+      const rec = child as Record<string, unknown>;
+      const kind = typeof rec.kind === 'string' ? rec.kind : '';
+      if (kind === 'stack') {
+        // 允许嵌套 stack，但计入 depth
+      }
+      return {
+        kind,
+        props: validatePresentUiProps(kind, rec.props, depth + 1),
+      };
+    }),
+  };
+}
+
+function defaultFallbackText(kind: string, props: Record<string, unknown>): string {
+  switch (kind) {
+    case 'data_table': {
+      const cols = props.columns as string[];
+      const rows = props.rows as unknown[];
+      return `表格「${typeof props.title === 'string' ? props.title : '数据'}」：${cols.length} 列 × ${rows.length} 行`;
+    }
+    case 'stat_row': {
+      const items = props.items as Array<{ label: string; value: string | number }>;
+      return items.map((it) => `${it.label}: ${it.value}`).join(' · ');
+    }
+    case 'choice':
+      return `请选择：${String(props.prompt)}`;
+    case 'calculator':
+      return `计算器：${String(props.formula)}`;
+    case 'stack': {
+      const n = (props.children as unknown[]).length;
+      return `组合 UI（${n} 块）`;
+    }
+    default:
+      return `UI: ${kind}`;
+  }
 }
