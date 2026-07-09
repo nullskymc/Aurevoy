@@ -13,7 +13,7 @@ Aurevoy 负责理解目标、拆解任务、调用工具、执行操作并持续
   （OpenAI 兼容 / Anthropic / OpenAI Responses v2）、auto/plan 自动模式、自动规划模式、
   Effect-TS 新一代工具框架（P0-P4）等全套 Agent 能力。
   开发目标是**可交付、可恢复、可审计、可评测的个人 Agent 产品**。
-- 当前版本：v0.5.11-dev（分支 `0.5.11-dev`），最新 tag v0.5.10。
+- 当前版本：v0.6.2（分支 `dev`），最新 tag v0.6.2。
 
 ## 2. 30 秒架构速览
 
