@@ -1062,37 +1062,30 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
     data: { output: toolResult.output },
   });
 
-  // 当 attach_content 工具成功返回时，提取 contentBlock 并推送给前端。
+  // attach_content / present_ui：提取 contentBlock 并挂到 assistant 消息。
   // Pi harness 会把工具原始返回值放到 AgentToolResult.details，不能只看最外层 result。
-  if (!isError && toolName === 'attach_content') {
+  if (!isError && (toolName === 'attach_content' || toolName === 'present_ui')) {
     const raw = extractAttachContentBlock(result, details);
-    if (isRecord(raw) && typeof raw.type === 'string' && typeof raw.content === 'string') {
-      let resolvedContent = String(raw.content);
-      const blockType = (raw.type as string) === 'file_reference' || (raw.type as string) === 'image'
-        ? 'file' : 'url';
-      if (blockType === 'file' && resolvedContent.length > 0 && !resolvedContent.startsWith('/') && !resolvedContent.startsWith('~')) {
-        resolvedContent = join(workspaceDir, resolvedContent);
-      }
-      const block: ContentBlock = {
-        id: randomUUID(),
-        type: raw.type as ContentBlock['type'],
-        content: resolvedContent,
-        name: typeof raw.name === 'string' ? raw.name : undefined,
-        mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : undefined,
-        size: typeof raw.size === 'number' ? raw.size : undefined,
-      };
-      // 找到发起该工具调用的 assistant 消息，将内容块挂载上去
-      let assistantMessageId: string | undefined;
-      for (let i = task.messages.length - 1; i >= 0; i--) {
-        const msg = task.messages[i];
-        if (msg.role === 'assistant' && msg.toolCalls?.some((tc) => tc.id === callId)) {
-          msg.contentBlocks = [...(msg.contentBlocks ?? []), block];
-          assistantMessageId = msg.id;
-          break;
+    if (isRecord(raw) && typeof raw.type === 'string') {
+      const block = buildContentBlockFromTool(raw, workspaceDir, toolName);
+      if (block) {
+        let assistantMessageId: string | undefined;
+        for (let i = task.messages.length - 1; i >= 0; i--) {
+          const msg = task.messages[i];
+          if (msg.role === 'assistant' && msg.toolCalls?.some((tc) => tc.id === callId)) {
+            msg.contentBlocks = upsertContentBlocks(msg.contentBlocks, block);
+            assistantMessageId = msg.id;
+            break;
+          }
+        }
+        saveTask(task);
+        const messageId = assistantMessageId ?? message.id;
+        if (toolName === 'present_ui') {
+          publish({ type: 'content_blocks_upserted', taskId: task.id, messageId, blocks: [block] });
+        } else {
+          publish({ type: 'content_blocks_added', taskId: task.id, messageId, blocks: [block] });
         }
       }
-      saveTask(task);
-      publish({ type: 'content_blocks_added', taskId: task.id, messageId: assistantMessageId ?? message.id, blocks: [block] });
     }
   }
 }
@@ -1125,6 +1118,65 @@ function extractAttachContentBlock(result: unknown, details: unknown): unknown {
   if (isRecord(details) && 'contentBlock' in details) return details.contentBlock;
   if (isRecord(result) && 'contentBlock' in result) return result.contentBlock;
   return undefined;
+}
+
+function upsertContentBlocks(
+  existing: ContentBlock[] | undefined,
+  block: ContentBlock,
+): ContentBlock[] {
+  const list = existing ?? [];
+  const idx = list.findIndex((b) => b.id === block.id);
+  if (idx < 0) return [...list, block];
+  const next = list.slice();
+  next[idx] = block;
+  return next;
+}
+
+function buildContentBlockFromTool(
+  raw: Record<string, unknown>,
+  workspaceDir: string,
+  toolName: string,
+): ContentBlock | null {
+  const type = String(raw.type);
+  if (type === 'ui' || toolName === 'present_ui') {
+    const kind = typeof raw.kind === 'string' ? raw.kind : '';
+    if (!kind) return null;
+    const fallbackText =
+      typeof raw.fallbackText === 'string'
+        ? raw.fallbackText
+        : typeof raw.content === 'string'
+          ? raw.content
+          : '';
+    const id =
+      typeof raw.id === 'string' && raw.id.trim()
+        ? raw.id.trim()
+        : randomUUID();
+    return {
+      id,
+      type: 'ui',
+      content: fallbackText,
+      kind,
+      props: raw.props,
+      fallbackText: fallbackText || undefined,
+    };
+  }
+
+  if (typeof raw.content !== 'string') return null;
+  if (type !== 'file_reference' && type !== 'image' && type !== 'link') return null;
+
+  let resolvedContent = String(raw.content);
+  const isFile = type === 'file_reference' || type === 'image';
+  if (isFile && resolvedContent.length > 0 && !resolvedContent.startsWith('/') && !resolvedContent.startsWith('~')) {
+    resolvedContent = join(workspaceDir, resolvedContent);
+  }
+  return {
+    id: randomUUID(),
+    type: type as ContentBlock['type'],
+    content: resolvedContent,
+    name: typeof raw.name === 'string' ? raw.name : undefined,
+    mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : undefined,
+    size: typeof raw.size === 'number' ? raw.size : undefined,
+  };
 }
 
 function assistantMessageToAurevoy(task: Task, message: PiAssistantMessage): Message {

@@ -584,6 +584,124 @@
   width: 100%;
 }
 
+/* 多 Provider 槽位：与 workMode choice card 同一套视觉语言 */
+.settings-provider-hint {
+  margin: 0 0 var(--ui-space-3);
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
+  line-height: 1.5;
+}
+
+.settings-provider-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.settings-provider-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ui-space-3);
+  min-height: 72px;
+  margin: 0;
+  padding: var(--ui-space-3) var(--ui-space-4);
+  border: var(--ui-border-width) solid var(--border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--card-bg);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.settings-provider-chip:hover {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+.settings-provider-chip:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.settings-provider-chip[data-editing="true"] {
+  border-color: var(--border-strong);
+  background: var(--surface-strong);
+}
+
+.settings-provider-chip[data-active="true"] {
+  border-color: var(--border-strong);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.settings-provider-chip-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-provider-chip-main strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--ui-font-base);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-provider-chip-main small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-provider-chip-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.settings-provider-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border-radius: 999px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+  line-height: 1;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+.settings-provider-badge[data-kind="active"] {
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+}
+
+.settings-provider-badge[data-kind="editing"] {
+  background: var(--surface-strong);
+  color: var(--text-secondary);
+}
+
+.settings-provider-badge[data-kind="ready"] {
+  background: var(--success-soft-bg);
+  color: var(--success-soft-fg);
+}
+
+.settings-provider-badge[data-kind="missing"] {
+  background: var(--warn-soft-bg);
+  color: var(--warn-soft-fg);
+}
+
 .settings-model-manager {
   display: grid;
   gap: var(--ui-space-3);

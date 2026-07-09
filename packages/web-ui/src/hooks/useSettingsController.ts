@@ -80,10 +80,15 @@ export function useSettingsController({
   }
 
   function handleSaveSettings(draft: SettingsDraft): void {
-    const currentEnabled = runtimeSettings?.llm.enabledModels ?? [];
-    const mergedEnabled = currentEnabled.includes(draft.model)
-      ? currentEnabled
-      : [draft.model, ...currentEnabled];
+    // 启用模型列表按 provider 分槽：写入目标 provider 自己的列表，避免把当前激活槽位的模型带过去
+    const targetSlot = runtimeSettings?.llm.providers?.find((slot) => slot.provider === draft.provider);
+    const isSameProvider = runtimeSettings?.llm.provider === draft.provider;
+    const baseEnabled = isSameProvider
+      ? (runtimeSettings?.llm.enabledModels ?? [])
+      : (targetSlot?.enabledModels ?? []);
+    const mergedEnabled = draft.model
+      ? (baseEnabled.includes(draft.model) ? baseEnabled : [draft.model, ...baseEnabled])
+      : baseEnabled;
 
     const body: UpdateRuntimeSettingsRequest = {
       llm: {
@@ -92,13 +97,13 @@ export function useSettingsController({
         model: draft.model,
         visionModel: draft.visionModel,
         enabledModels: mergedEnabled,
-        temperature: draft.temperature,
-        timeoutMs: draft.timeoutMs,
         maxTokens: draft.maxTokens,
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
       },
       workspaceDir: draft.workspaceDir,
       commandExecutionEnabled: draft.commandExecutionEnabled,
+      autoModeSafetyEnabled: draft.autoModeSafetyEnabled,
+      agentToolExecution: draft.agentToolExecution as "sequential" | "parallel",
       mcpServersJson: draft.mcpServersJson,
       cleanupPolicyDays: draft.cleanupPolicyDays,
       embedding: {
@@ -129,7 +134,8 @@ export function useSettingsController({
 
   function handleSaveModelSelection(draft: ModelSelectorDraft): void {
     setSettingsSaving(true);
-    void updateSettings({ llm: { model: draft.model } })
+    // 跨 provider 切换：同时写入 provider + model，后端会激活对应槽位的 key/baseUrl
+    void updateSettings({ llm: { provider: draft.provider, model: draft.model } })
       .then((next) => {
         setRuntimeSettings(next);
         setHealth((previous) =>

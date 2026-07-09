@@ -23,6 +23,7 @@ export function useAgentEventHandler({
   setTasks,
   setTraces,
   updateTaskList,
+  onAttachedPreviewFiles,
 }: {
   closeStream: () => void;
   currentTask: Task | null;
@@ -41,6 +42,8 @@ export function useAgentEventHandler({
   setTasks: Dispatch<SetStateAction<Task[]>>;
   setTraces: Dispatch<SetStateAction<TaskTraceEntry[]>>;
   updateTaskList: (task: Task) => void;
+  /** attach_content 的可预览文件：默认在侧边工作台打开 */
+  onAttachedPreviewFiles?: (paths: string[]) => void;
 }) {
   const liveActivityRef = useRef(createLiveActivityStore());
   const [liveToolActivity, setLiveToolActivity] = useState<ToolActivity[]>([]);
@@ -265,25 +268,32 @@ export function useAgentEventHandler({
         mergeArtifact(event.artifact);
         break;
       case "content_blocks_added":
+      case "content_blocks_upserted": {
+        const upsert = event.type === "content_blocks_upserted";
         setCurrentTask((previous) => {
           if (!previous) return previous;
           const messages = (previous.messages ?? []).map((msg) => {
             if (msg.id !== event.messageId) return msg;
-            const existingIds = new Set((msg.contentBlocks ?? []).map((b) => b.id));
-            const newBlocks = event.blocks.filter((b) => !existingIds.has(b.id));
-            if (newBlocks.length === 0) return msg;
-            return { ...msg, contentBlocks: [...(msg.contentBlocks ?? []), ...newBlocks] };
+            return {
+              ...msg,
+              contentBlocks: mergeContentBlocks(msg.contentBlocks, event.blocks, upsert),
+            };
           });
           const nextTask = { ...previous, messages };
           updateTaskList(nextTask);
           return nextTask;
         });
-        setLiveContentBlocks((prev) => {
-          const existingIds = new Set(prev.map((b) => b.id));
-          const newBlocks = event.blocks.filter((b) => !existingIds.has(b.id));
-          return newBlocks.length > 0 ? [...prev, ...newBlocks] : prev;
-        });
+        setLiveContentBlocks((prev) => mergeContentBlocks(prev, event.blocks, upsert));
+        // attach_content 文件引用：默认在侧边栏打开可预览类型（html/md 等）
+        if (event.type === "content_blocks_added" && onAttachedPreviewFiles) {
+          const paths = event.blocks
+            .filter((b) => b.type === "file_reference" || b.type === "image")
+            .map((b) => b.content)
+            .filter((p): p is string => typeof p === "string" && p.trim().length > 0);
+          if (paths.length > 0) onAttachedPreviewFiles(paths);
+        }
         break;
+      }
       case "checkpoint_created":
         setCurrentTask((previous) => {
           if (!previous) return previous;
@@ -452,4 +462,22 @@ export function useAgentEventHandler({
     liveContentBlocks,
     phaseDetail,
   };
+}
+
+function mergeContentBlocks(
+  existing: ContentBlock[] | undefined,
+  incoming: ContentBlock[],
+  upsert: boolean,
+): ContentBlock[] {
+  if (!upsert) {
+    const prev = existing ?? [];
+    const ids = new Set(prev.map((b) => b.id));
+    const extras = incoming.filter((b) => !ids.has(b.id));
+    return extras.length > 0 ? [...prev, ...extras] : prev;
+  }
+  const map = new Map((existing ?? []).map((b) => [b.id, b]));
+  for (const block of incoming) {
+    map.set(block.id, block);
+  }
+  return [...map.values()];
 }

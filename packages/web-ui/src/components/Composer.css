@@ -93,28 +93,48 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--text-tertiary);
+  background: var(--accent, #6366f1);
   flex: 0 0 auto;
 }
 
-.auto-mode-dot.off {
-  background: var(--text-tertiary);
-}
-
+/* 当前仅 auto | plan 两档 */
 .auto-mode-dot.plan {
   background: #a78bfa;
 }
 
-.auto-mode-dot.auto-edit {
-  background: var(--accent, #6366f1);
-}
-
-.auto-mode-dot.full {
-  background: #22c55e;
-}
-
 .auto-mode-dot.paused {
   background: #f59e0b;
+}
+
+.thinking-level-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  flex: 0 0 auto;
+}
+
+.thinking-level-dot.level-off {
+  background: var(--text-tertiary);
+  opacity: 0.55;
+}
+
+.thinking-level-dot.level-minimal,
+.thinking-level-dot.level-low {
+  background: #94a3b8;
+}
+
+.thinking-level-dot.level-medium {
+  background: #60a5fa;
+}
+
+.thinking-level-dot.level-high {
+  background: #a78bfa;
+}
+
+.thinking-level-dot.level-xhigh {
+  background: #f472b6;
 }
 
 /* Plan auto-approval badge */
@@ -386,6 +406,25 @@
 
 .composer-chip:hover {
   background: var(--hover);
+  color: var(--text);
+}
+
+.thinking-level-chip {
+  max-width: min(200px, 36vw);
+  flex-shrink: 1;
+}
+
+.thinking-level-chip span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thinking-level-chip.is-active {
+  color: var(--text-secondary);
+}
+
+.thinking-level-chip.is-active:hover {
   color: var(--text);
 }
 

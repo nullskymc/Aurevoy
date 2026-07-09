@@ -1,0 +1,292 @@
+/* 对话内限定 UI 组件 */
+
+.gen-ui-root {
+  min-width: 0;
+  width: 100%;
+  max-width: min(100%, 720px);
+}
+
+.gen-ui-stack {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.gen-ui-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-lg, 12px);
+  background: var(--card-bg, var(--surface));
+  padding: 12px 14px;
+}
+
+.gen-ui-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.gen-ui-card-head strong {
+  font-size: var(--ui-font-sm, 13px);
+  font-weight: 650;
+  color: var(--text);
+}
+
+.gen-ui-card-meta {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.gen-ui-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.gen-ui-btn {
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--surface-strong, var(--surface));
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gen-ui-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.gen-ui-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.gen-ui-btn-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.gen-ui-filter {
+  width: min(160px, 40vw);
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg-focus, var(--surface));
+  color: var(--text);
+  font-size: 12px;
+  padding: 0 8px;
+  outline: none;
+}
+
+.gen-ui-table-wrap {
+  overflow-x: auto;
+  max-height: min(40vh, 360px);
+  overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.gen-ui-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.gen-ui-table th,
+.gen-ui-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.gen-ui-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  font-weight: 650;
+  z-index: 1;
+}
+
+.gen-ui-th-btn {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 650;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.gen-ui-th-btn:hover {
+  color: var(--text);
+}
+
+.gen-ui-table-empty {
+  color: var(--text-tertiary);
+  text-align: center !important;
+}
+
+.gen-ui-table-sum {
+  font-weight: 650;
+  background: var(--surface);
+}
+
+.gen-ui-stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.gen-ui-stat-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.gen-ui-stat-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.gen-ui-stat-value {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gen-ui-stat-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.gen-ui-choice-prompt {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--ui-font-sm, 13px);
+  line-height: 1.45;
+}
+
+.gen-ui-choice-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gen-ui-choice-opt {
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gen-ui-choice-opt[data-active="true"] {
+  border-color: var(--border-strong);
+  background: var(--active, var(--surface-strong));
+}
+
+.gen-ui-choice-opt:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.gen-ui-calc-formula {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.gen-ui-calc-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.gen-ui-calc-field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.gen-ui-calc-field input {
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg-focus, var(--surface));
+  color: var(--text);
+  padding: 0 8px;
+  font: inherit;
+}
+
+.gen-ui-calc-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.gen-ui-calc-result span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.gen-ui-calc-result strong {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.gen-ui-calc-result em {
+  color: var(--warn-soft-fg, #8a6100);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.gen-ui-fallback {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.gen-ui-fallback.is-invalid {
+  border-color: color-mix(in srgb, var(--danger-soft-fg, #c44) 40%, var(--border));
+}
+
+.gen-ui-fallback strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.gen-ui-fallback p {
+  margin: 0;
+  color: var(--text-tertiary);
+}

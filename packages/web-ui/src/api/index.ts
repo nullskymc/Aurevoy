@@ -130,6 +130,8 @@ export async function readWorkspaceEntry(options: {
   projectId?: string;
   offset?: number;
   limit?: number;
+  /** 工作台预览：全量读取（不走 agent 工具分页截断） */
+  full?: boolean;
 }): Promise<WorkspaceReadResponse> {
   const params = new URLSearchParams();
   params.set("path", options.path);
@@ -137,6 +139,7 @@ export async function readWorkspaceEntry(options: {
   if (options.projectId) params.set("projectId", options.projectId);
   if (options.offset) params.set("offset", String(options.offset));
   if (options.limit) params.set("limit", String(options.limit));
+  if (options.full) params.set("full", "1");
 
   const res = await fetch(`${BASE_URL}/api/workspace/read?${params.toString()}`);
   if (!res.ok) await throwApiError(res, "read workspace entry failed");

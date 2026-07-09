@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import Fastify from 'fastify';
 import pino, { type Logger } from 'pino';
 import cors from '@fastify/cors';
@@ -123,19 +123,41 @@ export async function buildServer(externalLogger?: Logger) {
   });
 
   app.get<{
-    Querystring: { path?: string; taskId?: string; projectId?: string; offset?: string; limit?: string };
+    Querystring: {
+      path?: string;
+      taskId?: string;
+      projectId?: string;
+      offset?: string;
+      limit?: string;
+      /** full=1：工作台预览全量读取（更高字节上限，不走 agent 工具分页） */
+      full?: string;
+    };
   }>('/api/workspace/read', async (req, reply) => {
-    initializeUnifiedToolFramework();
-    const readTool = unifiedToolRegistry.get('read');
-    if (!readTool) return reply.code(503).send({ error: 'read tool is unavailable' });
-
     const workspace = await resolveWorkspaceForRead(req.query.taskId, req.query.projectId);
     if (!workspace.ok) return reply.code(workspace.status).send({ error: workspace.error });
 
     const path = req.query.path?.trim() || '.';
+    const wantFull = req.query.full === '1' || req.query.full === 'true';
+
+    // 工作台预览：直接读盘，避免 read 工具的 50KB / 2000 行分页截断 HTML·MD 报告
+    // 不改写调用方路径身份，避免文件树/标签定位错乱
+    if (wantFull) {
+      try {
+        return await readWorkspaceFileForWorkbench(workspace.workspaceDir, path);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ error: message });
+      }
+    }
+
+    initializeUnifiedToolFramework();
+    const readTool = unifiedToolRegistry.get('read');
+    if (!readTool) return reply.code(503).send({ error: 'read tool is unavailable' });
+
     const offset = parsePositiveInteger(req.query.offset);
     const limit = parsePositiveInteger(req.query.limit);
     try {
+      // 与历史行为一致：原样把 path 交给 read 工具，不做绝对路径改写
       const output = await readTool.execute(
         {
           path,
@@ -1036,6 +1058,66 @@ function parsePositiveInteger(raw?: string): number | undefined {
   if (!raw) return undefined;
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/** 工作台预览允许的文本体积（HTML 报告等）；与 agent read 工具的 50KB 分页上限分离 */
+const WORKBENCH_FULL_TEXT_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * 工作台全量读：在工作区边界内直接读盘。
+ * 返回的 path 保持调用方原样（不强制改写成相对路径），避免前端 tab/树定位错乱。
+ */
+async function readWorkspaceFileForWorkbench(
+  workspaceDir: string,
+  requestedPath: string,
+): Promise<WorkspaceReadResponse> {
+  const root = resolve(workspaceDir);
+  const raw = requestedPath.trim();
+  if (!raw) throw new Error('path required');
+
+  const abs = isAbsolute(raw) ? resolve(raw) : resolve(root, raw);
+  const relPosix = relative(root, abs).replace(/\\/g, '/');
+  if (!relPosix || relPosix === '..' || relPosix.startsWith('../') || isAbsolute(relPosix)) {
+    throw new Error(`路径越界：${requestedPath}`);
+  }
+
+  const st = await fs.stat(abs);
+  if (st.isDirectory()) {
+    throw new Error('目录请在文件树中浏览');
+  }
+
+  const name = basename(abs);
+  const mimeType = inferMimeType(name);
+  // 保持调用方 path，不改写
+  const displayPath = requestedPath;
+
+  // 图片：与 read 工具一致，走 base64（上限 20MB 由 stat 粗拦）
+  if ((mimeType ?? '').startsWith('image/')) {
+    if (st.size > 20 * 1024 * 1024) {
+      throw new Error('图片过大，无法在工作台预览');
+    }
+    const buf = await fs.readFile(abs);
+    return {
+      root: workspaceDir,
+      path: displayPath,
+      type: 'image',
+      content: buf.toString('base64'),
+      mimeType: mimeType || 'application/octet-stream',
+    };
+  }
+
+  if (st.size > WORKBENCH_FULL_TEXT_MAX_BYTES) {
+    throw new Error(`文件过大（>${WORKBENCH_FULL_TEXT_MAX_BYTES} 字节），无法全量预览`);
+  }
+
+  const content = await fs.readFile(abs, 'utf8');
+  return {
+    root: workspaceDir,
+    path: displayPath,
+    type: 'text',
+    content,
+    truncated: false,
+  };
 }
 
 async function normalizeWorkspaceReadOutput(output: unknown, workspaceDir: string, requestedPath: string): Promise<WorkspaceReadResponse> {

@@ -126,7 +126,8 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 - Provider 未配置或后端返回 `unconfigured` 时，输入区必须明确提示需要配置模型，不能允许提交后再给假回复。
 - Provider/模型入口是轻量 popover，不跳转设置页、不占用右侧工作台；仅在用户点击
   "管理模型列表" 时切换到设置页的"模型配置"。
-- 模型 popover 只展示设置页勾选的 `enabledModels`，列表过长时内部滚动；点击空白处或按 Escape 关闭，
+- 模型 popover 按 Provider 分组展示各槽位勾选的 `enabledModels`，支持跨 provider 一键切换
+  （同时激活对应 API Key / Base URL）；列表过长时内部滚动；点击空白处或按 Escape 关闭，
   不放额外的"关闭"按钮。
 
 ### 3.4 右侧编码工作台（可开关）
@@ -237,10 +238,11 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 - **设置**：作为主区页面切换展示，并隐藏左右栏；读取 `/api/settings`、`/api/tools`、
   `/api/mcp/status`、`/api/data`；保存 Provider、工作区、工具启停、MCP、模型列表和清理策略时
   必须调用后端接口，不能只改前端状态。
-- **模型管理**：设置页手动获取 Provider `/models` 后写入 `availableModels`，用户勾选后写入
-  `enabledModels`；主界面模型菜单只读取 `enabledModels`，不会每次打开都请求后端。
-- **自动模式**：顶栏"自动模式"下拉切换按钮，4 级（off/plan/auto-edit/full），实时生效；
-  plan 等级切换时通过 `PATCH /api/settings` 持久化。
+- **模型管理**：设置页可为多个 Provider 分别保存 Key/Base URL/模型列表；手动获取当前激活
+  Provider 的模型后写入该槽位的 `availableModels`，用户勾选后写入 `enabledModels`。
+  主界面模型菜单读取全部槽位的 `enabledModels`（`RuntimeSettings.llm.providers`），不会每次打开都请求后端。
+- **自动模式**：Composer 切换 **auto | plan** 两档，实时生效并通过 `PATCH /api/settings` 持久化。
+  （旧 4 级 off/auto-edit/full 已淘汰，启动时迁移为 auto。）
 - **安全暂停恢复**：auto mode 连续自动批准达到阈值后自动暂停，UI 显示暂停横幅 +
   "恢复自动模式"按钮，调用 `POST /api/tasks/:id/auto-mode-resume`。
 - **知识库管理**：设置 → 知识库子页面；添加/删除索引目录、查看索引状态、配置 Embedding Provider。
@@ -384,15 +386,21 @@ Aurevoy 使用**主模型 + 视觉子模型**架构：
 | **允许本次** | 仅本次调用通过 | — |
 | **拒绝** | 拒绝本次调用 | — |
 
-auto mode 是主要放行机制：`plan` 只读，`auto-edit` 放行工作区编辑，`full` 放行全部工具；
-审批卡片只处理未被当前 mode 放行的单次调用。
+auto mode 是主要放行机制：`auto` 自动放行工具；`plan` 先确认计划，批准后执行期与 auto 相同；
+审批卡片处理未被当前 mode 放行的单次调用。
 
 ### 7.5 Agent 主动文件输出
 
 Agent 可以将生成的文件（如图表、报告、数据文件）作为消息附件主动推送到对话中。
 前端通过 `content_blocks_added` SSE 事件接收文件对象，在对话流中以文件卡片（缩略图 +
-文件名 + 打开/下载按钮）内联展示。文本内容（如 HTML、Markdown、代码）直接渲染为
-artifact 预览。
+文件名）内联展示，并**默认在右侧工作台打开预览**：Markdown 渲染、HTML 沙箱预览、图片预览等。
+点击对话内文件卡也会在工作台打开。
+
+Agent 还可通过 `present_ui` 推送**限定交互组件**（`ContentBlock.type === 'ui'`）：
+白名单 kind（`data_table` / `stat_row` / `choice` / `calculator` / `stack`）+ schema 校验后
+由前端 React 组件渲染；**禁止**在对话中执行模型生成的 JSX/HTML。同 `id` 再次 present
+会走 `content_blocks_upserted` 原地更新。表格排序/筛选仅本地；`choice` 提交会作为用户消息续聊。
+复杂版式报告仍走工作区 HTML / report-design + `attach_content`。
 
 ### 7.6 技术架构
 

@@ -15,7 +15,9 @@ import type {
   PlanStep,
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { GenerativeUiBlock } from "./generative-ui/GenerativeUiBlock";
 import { usePlatform } from "../platform/context";
+import { t } from "../i18n";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
 import {
@@ -88,7 +90,7 @@ export function detectStepKind(toolName: string): StepKind {
 }
 
 function shouldHideToolFromWorkflow(toolName: string): boolean {
-  return toolName === "attach_content";
+  return toolName === "attach_content" || toolName === "present_ui";
 }
 
 /** 生成聚合摘要文本 */
@@ -934,8 +936,17 @@ function PlanStepGroup({
 
 /* ============ 内容块渲染 ============ */
 
-/** Agent 通过 attach_content 工具附加的富内容块。 */
-function ContentBlockView({ block }: { block: ContentBlock }) {
+/** Agent 通过 attach_content / present_ui 工具附加的富内容块。 */
+function ContentBlockView({
+  block,
+  onUiChoice,
+  onOpenWorkspacePath,
+}: {
+  block: ContentBlock;
+  onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
+  /** 在侧边工作台打开文件预览（attach_content 默认行为） */
+  onOpenWorkspacePath?: (path: string) => void;
+}) {
   const platform = usePlatform();
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -978,6 +989,11 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
   switch (block.type) {
     case "file_reference": {
       const handleFileClick = async () => {
+        if (onOpenWorkspacePath) {
+          onOpenWorkspacePath(block.content);
+          showFeedback(t("workbench.openedInSidebar"));
+          return;
+        }
         try {
           if (platform.openFile) {
             await platform.openFile(block.content);
@@ -1027,8 +1043,10 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
         <>
           <div
             className="content-block is-image"
+            onClick={() => onOpenWorkspacePath?.(block.content)}
             onContextMenu={handleFileContextMenu}
             title={block.content}
+            role={onOpenWorkspacePath ? "button" : undefined}
           >
             <img
               src={src}
@@ -1076,6 +1094,8 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
         </>
       );
     }
+    case "ui":
+      return <GenerativeUiBlock block={block} onChoiceSubmit={onUiChoice} />;
     default:
       return null;
   }
@@ -1094,6 +1114,8 @@ export function AgentRound({
   showWorkflow = true,
   showOutput = true,
   phaseDetail,
+  onUiChoice,
+  onOpenWorkspacePath,
 }: {
   data: AgentRoundData;
   busy?: boolean;
@@ -1101,6 +1123,8 @@ export function AgentRound({
   showWorkflow?: boolean;
   showOutput?: boolean;
   phaseDetail?: string;
+  onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
+  onOpenWorkspacePath?: (path: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
@@ -1127,7 +1151,12 @@ export function AgentRound({
   const contentBlocksNode = showOutput && data.contentBlocks && data.contentBlocks.length > 0 ? (
     <div className="content-blocks">
       {data.contentBlocks.map((block) => (
-        <ContentBlockView key={block.id} block={block} />
+        <ContentBlockView
+          key={block.id}
+          block={block}
+          onUiChoice={onUiChoice}
+          onOpenWorkspacePath={onOpenWorkspacePath}
+        />
       ))}
     </div>
   ) : null;

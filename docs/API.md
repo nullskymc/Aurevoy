@@ -206,7 +206,7 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 ### POST `/api/tasks/:id/auto-mode-resume`
 恢复因安全暂停（连续自动批准数达上限）而暂停的 auto mode。重置连续计数，恢复原有自动等级。
 ```json
-// 200 → { taskId, resumed: true, level: "auto-edit" }
+// 200 → { taskId, resumed: true, level: "auto" }
 ```
 - 任务未处于暂停状态 → `409 {"error":"task is not in auto-mode paused state"}`
 - 任务不存在 → `404`。
@@ -300,19 +300,26 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 
 - `GET /api/settings` → `RuntimeSettings`
 - `PATCH /api/settings`（`UpdateRuntimeSettingsRequest`）→ `RuntimeSettings`
-- `GET /api/settings/models` → `ModelListResponse { models: string[] }`：按当前已保存的
-  Base URL/API Key 手动拉取一次 OpenAI-compatible `/models`，前端不在打开模型菜单时自动请求。
+- `GET /api/settings/models` → `ModelListResponse { models: string[] }`：按**当前激活**
+  Provider 的目录/兼容 `/models` 手动拉取一次，前端不在打开模型菜单时自动请求。
 
-可更新项：OpenAI 兼容 `baseUrl` / `model` / `temperature` / `timeoutMs` / `apiKey`、
-`availableModels` / `enabledModels`、工作区目录、命令执行边界、MCP server JSON、数据清理保留天数。
+可更新项：`provider` / `baseUrl` / `model` / `temperature` / `timeoutMs` / `apiKey` / `maxTokens`、
+`availableModels` / `enabledModels`、工作区目录、是否允许终端命令、MCP server JSON、数据清理保留天数。
 Provider 设置会清空 Provider 缓存，下一轮任务使用新配置；工作区目录会被文件工具实时读取；
 MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空工作区等返回 `400`。
 
+多 Provider 槽位：
+- 每个 Pi provider id 独立保存 baseUrl、model、visionModel、模型列表与 API Key（`llm.apiKey.<provider>`）。
+- `RuntimeSettings.llm.providers: LlmProviderSlot[]` 列出全部已配置槽位（密钥永不回显，仅 `apiKeyConfigured`）。
+- `PATCH` 写入 `provider` 时：先快照当前槽位，再激活目标槽位（恢复其 key/baseUrl/model/lists）；
+  同一请求中的 `model` / `apiKey` 等字段会覆盖到新激活槽位。
+- 主界面模型菜单据此跨 provider 切换：`PATCH { llm: { provider, model } }`。
+
 模型列表字段语义：
-- `availableModels`：最近一次手动 `GET /api/settings/models` 获取到的完整模型列表，由设置页保存。
-- `enabledModels`：用户勾选后允许出现在主界面 Composer 模型菜单中的模型列表。
+- `availableModels` / `enabledModels`：当前**激活** Provider 的列表（与对应 slot 一致）。
 - 后端兼容旧版 `llm.modelOptions` 持久化键；若新 `enabledModels` 尚不存在，会读取旧值作为迁移来源。
 - 后端会保证当前 active `model` 始终包含在 `enabledModels` 中，避免主界面隐藏正在使用的模型。
+- 启动时自动把遗留扁平配置迁移进 multi-provider map。
 
 ### 数据管理 `/api/data`  (M5)
 
@@ -356,7 +363,8 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `unreverted` | `restoredCount` | 撤销编辑：归档消息已恢复 |
 | `branched` | `parentTaskId`, `messageId`, `messageCount` | 会话分支：新任务已从父任务克隆 |
 | `compacted` | `originalCount`, `summaryLength` | 上下文压缩：旧消息已替换为摘要 |
-| `content_blocks_added` | `messageId`, `blocks: ContentBlock[]` | Agent 主动推送文件对象到对话（如图片、附件） |
+| `content_blocks_added` | `messageId`, `blocks: ContentBlock[]` | Agent 主动推送文件/链接等到对话（`attach_content`） |
+| `content_blocks_upserted` | `messageId`, `blocks: ContentBlock[]` | 按 `block.id` 插入或更新内容块（`present_ui` 交互组件） |
 | `auto_mode_state` | `state: AutoModeState` | Auto mode 运行时状态更新（等级切换、暂停、恢复） |
 | `done` | `status: TaskStatus` | 任务结束（completed/failed/cancelled） |
 | `error` | `message: string` | 执行出错 |
@@ -406,8 +414,8 @@ status(running)
   → token × N → message → done
 ```
 工具的风险等级由 `ToolDescriptor.riskLevel`（`safe`|`caution`|`dangerous`，缺省 `safe`）声明，
-`safe` 工具始终自动放行；`plan` 只放行 safe，`auto-edit` 放行 safe/caution 和工作区写入类工具，
-`full` 放行全部工具。审批超时（5 分钟）或任务取消视为拒绝。
+`safe` 工具始终自动放行；`auto` 自动放行工具；`plan` 先确认计划，批准后执行期与 `auto` 相同。
+（旧档位 `auto-edit` / `full` / `off` 已淘汰。）审批超时（5 分钟）或任务取消视为拒绝。
 
 结构化追问（`ask_user`）：
 ```
@@ -584,7 +592,7 @@ OpenAI 兼容专用：
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `AUREVOY_ENABLE_COMMAND_EXECUTION` | `false` | 是否启用基础命令执行工具；默认不提供给模型 |
+| `AUREVOY_ENABLE_COMMAND_EXECUTION` | `false` | 是否允许终端命令工具（设置项「允许运行终端命令」）；默认不提供给模型 |
 | `AUREVOY_COMMAND_TIMEOUT_MS` | `30000` | 命令执行超时 |
 | `AUREVOY_COMMAND_OUTPUT_LIMIT_BYTES` | `65536` | stdout/stderr 输出上限 |
 | `AUREVOY_COMMAND_ENV_ALLOWLIST` | `PATH,HOME,TMPDIR` | 允许传入执行环境的变量名 |

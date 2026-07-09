@@ -26,7 +26,7 @@ import { useShellLayout } from "./hooks/useShellLayout";
 import { useSkills } from "./hooks/useSkills";
 import { useWorkbenchTabs } from "./hooks/useWorkbenchTabs";
 import { useTaskController } from "./hooks/useTaskController";
-import { Composer } from "./components/Composer";
+import { Composer, nextThinkingLevel, type ThinkingUILevel } from "./components/Composer";
 import { Conversation } from "./components/Conversation";
 import { AppTopBar } from "./components/AppTopBar";
 import { ModelSelectorDrawer } from "./components/ModelSelectorDrawer";
@@ -74,6 +74,16 @@ function App() {
     const stored = localStorage.getItem("aurevoy.autoModeLevel");
     if (stored === 'plan') return 'plan';
     return 'auto';
+  });
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingUILevel>(() => {
+    const stored = localStorage.getItem("aurevoy.thinkingLevel");
+    if (
+      stored === "off" || stored === "minimal" || stored === "low" ||
+      stored === "medium" || stored === "high" || stored === "xhigh"
+    ) {
+      return stored;
+    }
+    return "medium";
   });
   const [autoModeState, setAutoModeState] = useState<{ paused?: boolean; pausedReason?: string; autoApprovedCalls?: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -200,6 +210,28 @@ function App() {
     void updateSettings({ autoModeLevel: next }).catch(() => {});
   }
 
+  function cycleThinkingLevel(): void {
+    const next = nextThinkingLevel(thinkingLevel);
+    setThinkingLevel(next);
+    localStorage.setItem("aurevoy.thinkingLevel", next);
+    void updateSettings({ agentThinkingLevel: next }).catch(() => {});
+  }
+
+  // 后端 settings 为推理深度真相源（刷新后与多端一致）
+  useEffect(() => {
+    const level = runtimeSettings?.agentThinkingLevel;
+    if (
+      level === "off" || level === "minimal" || level === "low" ||
+      level === "medium" || level === "high" || level === "xhigh"
+    ) {
+      setThinkingLevel(level);
+      localStorage.setItem("aurevoy.thinkingLevel", level);
+    }
+  }, [runtimeSettings?.agentThinkingLevel]);
+
+  const workbenchTabsRef = useRef(workbenchTabs);
+  workbenchTabsRef.current = workbenchTabs;
+
   const { clearLiveState, derivedLive, handleEvent, liveContentBlocks, phaseDetail } = useAgentEventHandler({
     closeStream,
     currentTask,
@@ -218,11 +250,21 @@ function App() {
     setTasks,
     setTraces,
     updateTaskList,
+    onAttachedPreviewFiles: (paths) => {
+      // attach_content：默认在侧边工作台打开并渲染（html/md 等由 FileViewer 预览）
+      if (paths.length === 0) return;
+      for (const path of paths) {
+        workbenchTabsRef.current.openWorkspaceFile(path);
+      }
+      setActiveView("chat");
+      setWorkbenchOpen(true);
+    },
   });
   const {
     handleBranch,
     handleClarificationAnswer,
     handleComposerSubmit,
+    handleUiChoice,
     handleNewTask,
     handlePlanDecision,
     handleResumeTask,
@@ -491,6 +533,11 @@ function App() {
                 onUnrevert={() => void handleUnrevert()}
                 onBranch={(messageId) => void handleBranch(messageId)}
                 onResume={() => void handleResumeTask()}
+                onUiChoice={handleUiChoice}
+                onOpenWorkspacePath={(path) => {
+                  workbenchTabs.openWorkspaceFile(path);
+                  setWorkbenchOpen(true);
+                }}
               />
             </div>
             <div className="composer-dock">
@@ -526,6 +573,8 @@ function App() {
                 autoModePaused={!!autoModeState?.paused}
                 onCycleAutoMode={cycleAutoModeLevel}
                 onResumeAutoMode={handleResumeAutoMode}
+                thinkingLevel={thinkingLevel}
+                onCycleThinkingLevel={cycleThinkingLevel}
               />
               <ModelSelectorDrawer
                 open={modelDrawerOpen}
@@ -563,6 +612,8 @@ function App() {
               autoModePaused={!!autoModeState?.paused}
               onCycleAutoMode={cycleAutoModeLevel}
               onResumeAutoMode={handleResumeAutoMode}
+              thinkingLevel={thinkingLevel}
+              onCycleThinkingLevel={cycleThinkingLevel}
             />
             <ModelSelectorDrawer
               open={modelDrawerOpen}

@@ -2,6 +2,7 @@ import type {
   AgentThinkingLevel,
   AgentToolExecutionMode,
   AutoModeLevel,
+  LlmProviderSlot,
   RuntimeSettings,
   UpdateRuntimeSettingsRequest,
 } from '@aurevoy/shared';
@@ -13,6 +14,7 @@ import { resetPythonCache } from './python-runtime.js';
 
 const SETTING_KEYS = {
   llmProvider: 'llm.provider',
+  /** 遗留全局 API Key；迁移后按 provider 分槽 `llm.apiKey.<id>` 存储，此项仅作回退。 */
   llmApiKey: 'llm.apiKey',
   llmBaseUrl: 'llm.baseUrl',
   llmModel: 'llm.model',
@@ -21,6 +23,8 @@ const SETTING_KEYS = {
   llmEnabledModels: 'llm.enabledModels',
   /** 旧版本字段：曾同时表示”已获取列表”和”主界面可选列表”，现在只作为迁移来源。 */
   llmModelOptions: 'llm.modelOptions',
+  /** 多 provider 槽位 map：providerId → StoredProviderSlot（不含密钥） */
+  llmProviders: 'llm.providers',
   llmTemperature: 'llm.temperature',
   llmTimeoutMs: 'llm.timeoutMs',
   llmMaxTokens: 'llm.maxTokens',
@@ -43,6 +47,15 @@ const SETTING_KEYS = {
 } as const;
 
 const DEFAULT_CLEANUP_POLICY_DAYS = 30;
+
+/** 持久化中的 provider 槽位（无密钥）。 */
+interface StoredProviderSlot {
+  baseUrl: string;
+  model: string;
+  visionModel: string;
+  availableModels: string[];
+  enabledModels: string[];
+}
 
 export interface SettingsUpdateResult {
   settings: RuntimeSettings;
@@ -91,16 +104,6 @@ export function loadPersistedSettings(): void {
     config.search.apiKey = searchKey;
   }
 
-  const envKey = process.env.AUREVOY_LLM_API_KEY?.trim();
-  if (envKey) {
-    config.llm.apiKey = envKey;
-  } else {
-    const stored = entries[SETTING_KEYS.llmApiKey];
-    if (stored) {
-      config.llm.apiKey = stored;
-    }
-  }
-
   config.llm.provider = normalizeProvider(entries[SETTING_KEYS.llmProvider] || config.llm.provider);
   config.llm.baseUrl = entries[SETTING_KEYS.llmBaseUrl] || config.llm.baseUrl;
   config.llm.model = entries[SETTING_KEYS.llmModel] || config.llm.model;
@@ -114,6 +117,17 @@ export function loadPersistedSettings(): void {
       ? config.sandbox.commandExecutionEnabled
       : entries[SETTING_KEYS.commandExecutionEnabled] === 'true';
   if (mcpJson !== undefined) config.mcpServers = parseMcpServers(mcpJson);
+
+  // 解析 API Key：环境变量 > 分槽 key > 遗留全局 key
+  const envKey = process.env.AUREVOY_LLM_API_KEY?.trim();
+  if (envKey) {
+    config.llm.apiKey = envKey;
+  } else {
+    config.llm.apiKey = readProviderApiKey(config.llm.provider) || entries[SETTING_KEYS.llmApiKey] || '';
+  }
+
+  // 迁移：把当前扁平配置写入多 provider map，并把遗留 key 归到当前 provider 槽
+  migrateLegacyProviderSlots();
 
   const autoModeStored = entries[SETTING_KEYS.autoModeLevel];
   if (autoModeStored === 'auto' || autoModeStored === 'plan') {
@@ -138,18 +152,22 @@ export function loadPersistedSettings(): void {
 }
 
 export function readRuntimeSettings(): RuntimeSettings {
+  const activeProvider = config.llm.provider;
+  const availableModels = readActiveAvailableModels();
+  const enabledModels = readActiveEnabledModels();
   return {
     llm: {
-      provider: config.llm.provider as RuntimeSettings['llm']['provider'],
+      provider: activeProvider as RuntimeSettings['llm']['provider'],
       baseUrl: config.llm.baseUrl,
       model: config.llm.model,
       visionModel: config.llm.visionModel,
-      availableModels: readModelList(SETTING_KEYS.llmAvailableModels),
-      enabledModels: readEnabledModels(),
+      availableModels,
+      enabledModels,
       temperature: config.llm.temperature,
       timeoutMs: config.llm.timeoutMs,
       maxTokens: config.llm.maxTokens,
       apiKeyConfigured: config.llm.apiKey.trim().length > 0,
+      providers: listProviderSlots(),
     },
     workspaceDir: config.workspaceDir,
     commandExecutionEnabled: config.sandbox.commandExecutionEnabled,
@@ -180,11 +198,19 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   let mcpChanged = false;
 
   if (body.llm) {
+    // 1) 若请求切换 provider：先快照当前槽位，再激活目标槽位（恢复其 key/baseUrl/model 等）
     if (body.llm.provider !== undefined) {
-      config.llm.provider = normalizeProvider(body.llm.provider);
-      settingsStore.set(SETTING_KEYS.llmProvider, config.llm.provider);
-      providerChanged = true;
+      const nextProvider = normalizeProvider(body.llm.provider);
+      if (nextProvider !== config.llm.provider) {
+        snapshotActiveProviderSlot();
+        activateProviderSlot(nextProvider);
+        providerChanged = true;
+      } else {
+        config.llm.provider = nextProvider;
+        settingsStore.set(SETTING_KEYS.llmProvider, config.llm.provider);
+      }
     }
+
     if (body.llm.baseUrl !== undefined) {
       config.llm.baseUrl = validateBaseUrl(body.llm.baseUrl, config.llm.provider === 'openai-compatible');
       settingsStore.set(SETTING_KEYS.llmBaseUrl, config.llm.baseUrl);
@@ -226,6 +252,8 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     }
     if (body.llm.apiKey !== undefined) {
       config.llm.apiKey = body.llm.apiKey;
+      writeProviderApiKey(config.llm.provider, body.llm.apiKey);
+      // 同步遗留全局 key，兼容旧读取路径
       if (body.llm.apiKey.trim().length > 0) {
         settingsStore.set(SETTING_KEYS.llmApiKey, body.llm.apiKey, true);
       } else {
@@ -233,6 +261,9 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
       }
       providerChanged = true;
     }
+
+    // 任何 llm 写入都回写当前激活槽位，保证 multi-provider map 与扁平字段一致
+    snapshotActiveProviderSlot();
   }
 
   if (body.workspaceDir !== undefined) {
@@ -347,7 +378,204 @@ export function readCleanupPolicyDays(): number {
   return parseNumber(settingsStore.get(SETTING_KEYS.cleanupPolicyDays), DEFAULT_CLEANUP_POLICY_DAYS);
 }
 
-function readEnabledModels(): string[] {
+// ---- Multi-provider slot helpers ----
+
+function providerApiKeyKey(provider: string): string {
+  return `llm.apiKey.${provider}`;
+}
+
+function readProviderApiKey(provider: string): string {
+  return settingsStore.get(providerApiKeyKey(provider)) ?? '';
+}
+
+function writeProviderApiKey(provider: string, apiKey: string): void {
+  const key = providerApiKeyKey(provider);
+  if (apiKey.trim().length > 0) {
+    settingsStore.set(key, apiKey, true);
+  } else {
+    settingsStore.delete(key);
+  }
+}
+
+function readProviderMap(): Record<string, StoredProviderSlot> {
+  const raw = settingsStore.get(SETTING_KEYS.llmProviders);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const result: Record<string, StoredProviderSlot> = {};
+    for (const [provider, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!isValidPiProviderId(provider)) continue;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const slot = value as Partial<StoredProviderSlot>;
+      result[provider] = {
+        baseUrl: typeof slot.baseUrl === 'string' ? slot.baseUrl : '',
+        model: typeof slot.model === 'string' ? slot.model : '',
+        visionModel: typeof slot.visionModel === 'string' ? slot.visionModel : '',
+        availableModels: Array.isArray(slot.availableModels)
+          ? slot.availableModels.filter((m): m is string => typeof m === 'string')
+          : [],
+        enabledModels: Array.isArray(slot.enabledModels)
+          ? slot.enabledModels.filter((m): m is string => typeof m === 'string')
+          : [],
+      };
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function writeProviderMap(map: Record<string, StoredProviderSlot>): void {
+  settingsStore.set(SETTING_KEYS.llmProviders, JSON.stringify(map));
+}
+
+/** 把当前内存中的激活 provider 配置写入 map + 扁平字段。 */
+function snapshotActiveProviderSlot(): void {
+  const provider = config.llm.provider;
+  if (!isValidPiProviderId(provider)) return;
+  const map = readProviderMap();
+  const availableModels = readActiveAvailableModels();
+  const enabledModels = ensureCurrentModelEnabled(readActiveEnabledModels());
+  map[provider] = {
+    baseUrl: config.llm.baseUrl,
+    model: config.llm.model,
+    visionModel: config.llm.visionModel,
+    availableModels,
+    enabledModels,
+  };
+  writeProviderMap(map);
+  // 同步扁平字段（激活视图）
+  settingsStore.set(SETTING_KEYS.llmProvider, provider);
+  settingsStore.set(SETTING_KEYS.llmBaseUrl, config.llm.baseUrl);
+  settingsStore.set(SETTING_KEYS.llmModel, config.llm.model);
+  if (config.llm.visionModel) {
+    settingsStore.set(SETTING_KEYS.llmVisionModel, config.llm.visionModel);
+  } else {
+    settingsStore.delete(SETTING_KEYS.llmVisionModel);
+  }
+  settingsStore.set(SETTING_KEYS.llmAvailableModels, stringifyModelList(availableModels));
+  settingsStore.set(SETTING_KEYS.llmEnabledModels, stringifyModelList(enabledModels));
+}
+
+/**
+ * 激活指定 provider 槽位：加载其 baseUrl/model/lists/key 到 config 与扁平设置。
+ * 目标槽位不存在时仍切换 provider id，字段保持合理默认。
+ */
+function activateProviderSlot(provider: string): void {
+  const map = readProviderMap();
+  const slot = map[provider];
+  config.llm.provider = provider;
+  settingsStore.set(SETTING_KEYS.llmProvider, provider);
+
+  if (slot) {
+    config.llm.baseUrl = slot.baseUrl;
+    config.llm.model = slot.model || config.llm.model;
+    config.llm.visionModel = slot.visionModel;
+    settingsStore.set(SETTING_KEYS.llmBaseUrl, config.llm.baseUrl);
+    settingsStore.set(SETTING_KEYS.llmModel, config.llm.model);
+    if (config.llm.visionModel) {
+      settingsStore.set(SETTING_KEYS.llmVisionModel, config.llm.visionModel);
+    } else {
+      settingsStore.delete(SETTING_KEYS.llmVisionModel);
+    }
+    settingsStore.set(SETTING_KEYS.llmAvailableModels, stringifyModelList(slot.availableModels));
+    settingsStore.set(
+      SETTING_KEYS.llmEnabledModels,
+      stringifyModelList(ensureCurrentModelEnabled(slot.enabledModels)),
+    );
+  } else {
+    // 新 provider：保留 model 名可能不适用，清空列表，baseUrl 仅 openai-compatible 需要
+    if (provider !== 'openai-compatible') {
+      config.llm.baseUrl = '';
+      settingsStore.set(SETTING_KEYS.llmBaseUrl, '');
+    }
+    settingsStore.set(SETTING_KEYS.llmAvailableModels, stringifyModelList([]));
+    settingsStore.set(SETTING_KEYS.llmEnabledModels, stringifyModelList(ensureCurrentModelEnabled([])));
+  }
+
+  // 切换密钥：分槽 key > 遗留全局 key（仅当目标就是迁移前的 provider）
+  const slottedKey = readProviderApiKey(provider);
+  if (slottedKey) {
+    config.llm.apiKey = slottedKey;
+  } else {
+    // 环境变量始终优先
+    const envKey = process.env.AUREVOY_LLM_API_KEY?.trim();
+    if (envKey) {
+      config.llm.apiKey = envKey;
+    } else {
+      // 无分槽 key 时清空，避免误用其他 provider 的 key
+      config.llm.apiKey = '';
+    }
+  }
+}
+
+function listProviderSlots(): LlmProviderSlot[] {
+  const map = readProviderMap();
+  // 确保当前激活 provider 一定出现在列表中
+  const active = config.llm.provider;
+  if (isValidPiProviderId(active) && !map[active]) {
+    map[active] = {
+      baseUrl: config.llm.baseUrl,
+      model: config.llm.model,
+      visionModel: config.llm.visionModel,
+      availableModels: readActiveAvailableModels(),
+      enabledModels: readActiveEnabledModels(),
+    };
+  }
+
+  return Object.entries(map)
+    .map(([provider, slot]) => {
+      const isActive = provider === active;
+      return {
+        provider,
+        baseUrl: isActive ? config.llm.baseUrl : slot.baseUrl,
+        model: isActive ? config.llm.model : slot.model,
+        visionModel: isActive ? config.llm.visionModel : slot.visionModel,
+        availableModels: isActive ? readActiveAvailableModels() : slot.availableModels,
+        enabledModels: isActive ? readActiveEnabledModels() : slot.enabledModels,
+        apiKeyConfigured: isActive
+          ? config.llm.apiKey.trim().length > 0
+          : readProviderApiKey(provider).trim().length > 0
+            || (process.env.AUREVOY_LLM_API_KEY?.trim().length ?? 0) > 0,
+      } satisfies LlmProviderSlot;
+    })
+    .sort((a, b) => a.provider.localeCompare(b.provider));
+}
+
+/** 首次启动或升级：把扁平配置灌进 multi-provider map。 */
+function migrateLegacyProviderSlots(): void {
+  const map = readProviderMap();
+  const provider = config.llm.provider;
+  if (!isValidPiProviderId(provider)) return;
+
+  if (!map[provider]) {
+    map[provider] = {
+      baseUrl: config.llm.baseUrl,
+      model: config.llm.model,
+      visionModel: config.llm.visionModel,
+      availableModels: readModelList(SETTING_KEYS.llmAvailableModels),
+      enabledModels: readEnabledModelsLegacy(),
+    };
+    writeProviderMap(map);
+  }
+
+  // 遗留全局 key → 分槽（仅当该槽尚无 key）
+  const legacyKey = settingsStore.get(SETTING_KEYS.llmApiKey);
+  if (legacyKey && !readProviderApiKey(provider)) {
+    writeProviderApiKey(provider, legacyKey);
+  }
+}
+
+function readActiveAvailableModels(): string[] {
+  return readModelList(SETTING_KEYS.llmAvailableModels);
+}
+
+function readActiveEnabledModels(): string[] {
+  return readEnabledModelsLegacy();
+}
+
+function readEnabledModelsLegacy(): string[] {
   const explicit = settingsStore.get(SETTING_KEYS.llmEnabledModels);
   if (explicit !== undefined) return parseModelList(explicit);
   return readModelList(SETTING_KEYS.llmModelOptions);
@@ -378,6 +606,10 @@ function ensureCurrentModelEnabled(models: string[]): string[] {
   const currentModel = config.llm.model.trim();
   if (!currentModel) return models;
   return models.includes(currentModel) ? models : [currentModel, ...models];
+}
+
+function isValidPiProviderId(provider: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*$/.test(provider.trim().toLowerCase());
 }
 
 function normalizeProvider(provider: string): string {

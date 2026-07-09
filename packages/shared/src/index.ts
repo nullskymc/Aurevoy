@@ -67,18 +67,33 @@ export interface MessageAttachment {
 }
 
 /** Agent 主动发送到对话框的富内容块类型 */
-export type ContentBlockType = 'file_reference' | 'image' | 'link';
+export type ContentBlockType = 'file_reference' | 'image' | 'link' | 'ui';
 
-/** Agent 主动附加到消息的富内容块，可嵌入对话中呈现为文件引用、图片或超链接。 */
+/**
+ * 对话内限定 UI 组件 kind（前端 registry 白名单）。
+ * 扩展能力靠加 kind，禁止 Agent 输出可执行 JSX。
+ */
+export type UiComponentKind = 'data_table' | 'stat_row' | 'choice' | 'calculator' | 'stack';
+
+/** Agent 主动附加到消息的富内容块，可嵌入对话中呈现为文件引用、图片、超链接或限定 UI。 */
 export interface ContentBlock {
   id: string;
   type: ContentBlockType;
-  /** file_reference: 文件路径; image: 图片路径; link: URL */
+  /**
+   * file_reference / image / link: 路径或 URL。
+   * ui: 可用 fallback 摘要字符串（可空）。
+   */
   content: string;
   /** 显示名称（可选） */
   name?: string;
   mimeType?: string;
   size?: number;
+  /** type==='ui'：registry key */
+  kind?: string;
+  /** type==='ui'：组件 props（前端 zod/校验后渲染） */
+  props?: unknown;
+  /** type==='ui'：纯文本降级（历史导出、未知 kind、校验失败） */
+  fallbackText?: string;
 }
 
 /** 一条对话消息 */
@@ -100,7 +115,7 @@ export interface Message {
   attachments?: MessageAttachment[];
   /** 运行中追加用户消息时的 Pi 队列投递方式。首轮/非运行中消息为空。 */
   delivery?: 'steering' | 'follow_up';
-  /** Agent 主动附加的富内容块（文件引用、图片、超链接），由 attach_content 工具生成 */
+  /** Agent 主动附加的富内容块（文件/图片/链接/ui），由 attach_content / present_ui 生成 */
   contentBlocks?: ContentBlock[];
 }
 
@@ -606,6 +621,8 @@ export type AgentEvent =
   | { type: 'skill_installed'; taskId: string; skillNames: string[]; repoUrl: string }
   | { type: 'skill_uninstalled'; taskId: string; skillName: string }
   | { type: 'content_blocks_added'; taskId: string; messageId: string; blocks: ContentBlock[] }
+  /** 按 block.id upsert（present_ui 更新同一交互组件时使用） */
+  | { type: 'content_blocks_upserted'; taskId: string; messageId: string; blocks: ContentBlock[] }
   | { type: 'auto_mode_state'; taskId: string; state: AutoModeState }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
@@ -1039,22 +1056,47 @@ export interface SearchResultWithCitations {
 // M5 设置、工具管理与数据管理
 // ============================================================
 
+/**
+ * 已保存的单个 LLM Provider 槽位。
+ * 密钥永不回显，仅暴露 apiKeyConfigured。
+ * 主界面模型菜单可跨槽位切换，后端激活对应 provider 的 key/baseUrl/model。
+ */
+export interface LlmProviderSlot {
+  /** Pi provider id, e.g. openai / anthropic / deepseek / openrouter / google. */
+  provider: string;
+  baseUrl: string;
+  /** 该 provider 上次使用的主模型 */
+  model: string;
+  /** 该 provider 的视觉子模型（空则用主模型） */
+  visionModel: string;
+  /** 最近一次从该 Provider 获取到的完整模型列表 */
+  availableModels: string[];
+  /** 用户勾选后允许出现在主界面模型菜单中的模型列表 */
+  enabledModels: string[];
+  apiKeyConfigured: boolean;
+}
+
 export interface RuntimeSettings {
   llm: {
-    /** Pi provider id, e.g. openai / anthropic / deepseek / openrouter / google. */
+    /** 当前激活的 Pi provider id。 */
     provider: string;
     baseUrl: string;
     model: string;
-  /** 视觉子模型：当消息带图片附件时自动切换此模型（空则用主模型） */
+    /** 视觉子模型：当消息带图片附件时自动切换此模型（空则用主模型） */
     visionModel: string;
-  /** 最近一次手动从当前 Provider 获取到的完整模型列表。 */
+    /** 当前激活 Provider 的完整模型列表（与 providers[active].availableModels 一致）。 */
     availableModels: string[];
-  /** 用户勾选后允许出现在主界面模型菜单中的模型列表。 */
+    /** 当前激活 Provider 的已启用模型（与 providers[active].enabledModels 一致）。 */
     enabledModels: string[];
     temperature: number;
     timeoutMs: number;
     maxTokens: number;
     apiKeyConfigured: boolean;
+    /**
+     * 全部已配置过的 Provider 槽位。
+     * 主界面模型菜单据此跨 provider 展示/切换；设置页切换下拉时据此回填字段。
+     */
+    providers: LlmProviderSlot[];
   };
   workspaceDir: string;
   commandExecutionEnabled: boolean;
@@ -1088,18 +1130,22 @@ export interface RuntimeSettings {
 
 export interface UpdateRuntimeSettingsRequest {
   llm?: Partial<{
-    /** Pi provider id, e.g. openai / anthropic / deepseek / openrouter / google. */
+    /**
+     * 切换激活的 Pi provider。
+     * 若该 provider 已有保存槽位，会恢复其 baseUrl/model/key；
+     * 同一请求中的 model/baseUrl/apiKey 等字段会再覆盖到新激活槽位。
+     */
     provider: string;
     baseUrl: string;
     model: string;
-  /** 视觉子模型：空字符串表示清除 */
+    /** 视觉子模型：空字符串表示清除 */
     visionModel: string;
     availableModels: string[];
     enabledModels: string[];
     temperature: number;
     timeoutMs: number;
     maxTokens: number;
-  /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
+    /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。按当前激活 provider 分槽存储。 */
     apiKey: string;
   }>;
   workspaceDir?: string;

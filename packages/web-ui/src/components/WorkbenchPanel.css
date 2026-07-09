@@ -385,17 +385,72 @@
 }
 
 .file-viewer-text {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
+}
+
+.file-viewer-text[data-mode="text"] {
   overflow: auto;
 }
 
-.file-viewer-truncated {
-  border-bottom: 1px solid var(--border);
+/* 源码/预览：悬浮在内容区右上角，不占整行 */
+.file-viewer-mode-fab {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--card-bg, var(--surface)) 88%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  padding: 0 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+
+.file-viewer-mode-fab:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--card-bg, var(--surface));
+}
+
+.file-viewer-truncated-float {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 2;
+  max-width: min(70%, 280px);
+  border-radius: 8px;
   background: var(--warn-soft-bg);
   color: var(--warn-soft-fg);
-  font-size: 12px;
-  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  padding: 6px 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+
+.file-viewer-html-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: none;
+  background: #fff;
+}
+
+.file-viewer-markdown {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
 }
 
 .file-viewer-pre {
@@ -410,11 +465,6 @@
   padding: 14px;
   tab-size: 2;
   white-space: pre;
-}
-
-.file-viewer-markdown {
-  min-height: 100%;
-  padding: 14px;
 }
 
 .file-viewer-image-wrap {

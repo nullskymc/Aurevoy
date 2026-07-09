@@ -58,7 +58,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
     label: 'Explore',
     description:
       '工作区只读侦查：定位文件、搜索代码、梳理结构与依赖。适合并行扫多个目录或模块。',
-    tools: [...READ_TOOLS, 'attach_content'],
+    tools: [...READ_TOOLS, 'attach_content', 'present_ui'],
     systemPromptAddon: [
       '角色：Explore（只读侦查员）',
       '- 只做信息收集与结构梳理，不要修改任何文件',
@@ -74,7 +74,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
     label: 'Research',
     description:
       '联网 + 本地调研：搜索资料、抓取页面，并结合工作区上下文做分析与摘要。',
-    tools: [...READ_TOOLS, ...WEB_TOOLS, 'remember', 'attach_content'],
+    tools: [...READ_TOOLS, ...WEB_TOOLS, 'remember', 'attach_content', 'present_ui'],
     systemPromptAddon: [
       '角色：Research（调研员）',
       '- 结合 web_search / web_fetch 与本地只读工具完成调研',
@@ -96,6 +96,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       ...WRITE_TOOLS,
       'bash',
       'attach_content',
+      'present_ui',
     ],
     systemPromptAddon: [
       '角色：Coder（编码执行者）',
@@ -122,6 +123,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       'get_current_time',
       'write',
       'attach_content',
+      'present_ui',
     ],
     systemPromptAddon: [
       '角色：Shell（命令执行与诊断）',
@@ -148,6 +150,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       'apply_artifact',
       'bundle_report',
       'attach_content',
+      'present_ui',
     ],
     systemPromptAddon: [
       '角色：Writer（文档与报告）',
@@ -173,6 +176,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       'apply_artifact',
       'bundle_report',
       'attach_content',
+      'present_ui',
       'remember',
     ],
     systemPromptAddon: [

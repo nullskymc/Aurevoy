@@ -10,7 +10,7 @@ Aurevoy 负责理解目标、拆解任务、调用工具、执行操作并持续
 
 - 当前阶段：已完成 LLM 驱动规划、并行工具执行、Skill 系统、网页搜索、浏览器自动化（MCP）、
   子代理委托、Diff 编辑、Token 感知压缩、长期记忆向量检索、知识库 RAG、多 Provider LLM
-  （OpenAI 兼容 / Anthropic / OpenAI Responses v2）、4 级自动模式、自动规划模式、
+  （OpenAI 兼容 / Anthropic / OpenAI Responses v2）、auto/plan 自动模式、自动规划模式、
   Effect-TS 新一代工具框架（P0-P4）等全套 Agent 能力。
   开发目标是**可交付、可恢复、可审计、可评测的个人 Agent 产品**。
 - 当前版本：v0.5.11-dev（分支 `0.5.11-dev`），最新 tag v0.5.10。
@@ -102,7 +102,7 @@ npm run regression:m8    # M8 知识库/RAG、嵌入 provider、混合检索
 - ✅ CI/CD：GitHub Actions macOS ARM64 自动构建 + M3-M7 回归
 - ✅ Multimodal：图片/文件拖拽粘贴、视觉模型、图片查看器
 - ✅ LLM Provider：OpenAI 兼容 / Anthropic（Claude Messages API）/ OpenAI Responses API v2 三协议
-- ✅ 自动模式：4 级（off/plan/auto-edit/full）、运行时切换、安全暂停、自动规划降级
+- ✅ 自动模式：auto/plan 两档、运行时切换、安全暂停、计划门禁
 - ✅ 规划模式：自动复杂度检测 → Scout 侦查 → LLM 计划生成 → 审批后自动执行
 - ✅ 工具框架：Effect-TS 新一代工具系统（P0-P4），Schema 驱动输入输出，作用域注册，审批引擎
 - ✅ 记忆向量化：`sqlite-vec` 向量检索 + 混合评分（关键词+向量）+ Dreams 维护管道
