@@ -605,6 +605,48 @@ export interface ProjectListResponse {
   projects: Project[];
 }
 
+export type WorkspaceReadEntryType = 'file' | 'directory';
+export type WorkspaceReadResultType = 'directory' | 'text' | 'image';
+
+export interface WorkspaceReadEntry {
+  name: string;
+  path: string;
+  type: WorkspaceReadEntryType;
+}
+
+export interface WorkspaceReadBaseResponse {
+  root: string;
+  path: string;
+  type: WorkspaceReadResultType;
+}
+
+export interface WorkspaceDirectoryReadResponse extends WorkspaceReadBaseResponse {
+  type: 'directory';
+  entries: WorkspaceReadEntry[];
+  truncated: boolean;
+  next?: number;
+}
+
+export interface WorkspaceTextReadResponse extends WorkspaceReadBaseResponse {
+  type: 'text';
+  content: string;
+  offset?: number;
+  truncated: boolean;
+  next?: number;
+}
+
+export interface WorkspaceImageReadResponse extends WorkspaceReadBaseResponse {
+  type: 'image';
+  content: string;
+  mimeType: string;
+}
+
+/** GET /api/workspace/read — UI-facing adapter over the Pi read tool. */
+export type WorkspaceReadResponse =
+  | WorkspaceDirectoryReadResponse
+  | WorkspaceTextReadResponse
+  | WorkspaceImageReadResponse;
+
 /** GET /api/health */
 export interface HealthResponse {
   status: 'ok';

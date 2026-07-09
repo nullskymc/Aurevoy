@@ -9,6 +9,7 @@ import type {
 } from "@aurevoy/shared";
 import { t, type Locale } from "../i18n";
 import { getTokenUsageReport, setBaseUrl } from "../api";
+import "./SettingsPanel.css";
 
 interface KbDir {
   id: string;

@@ -30,6 +30,7 @@ import {
   buildConversationViewModel,
   type ConversationTurn,
 } from "./conversationWorkflow";
+import "./Conversation.css";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
 export interface ToolActivity {

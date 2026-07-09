@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import Fastify from 'fastify';
 import pino, { type Logger } from 'pino';
 import cors from '@fastify/cors';
@@ -49,6 +49,7 @@ import type {
   UpdateRuntimeSettingsRequest,
   UpdateToolRequest,
   UpdateMemoryRequest,
+  WorkspaceReadResponse,
 } from '@aurevoy/shared';
 import { config } from './config.js';
 import {
@@ -67,12 +68,14 @@ import {
   resumeAutoMode,
   revertTask,
   runHarnessTask,
+  resolveTaskWorkspace,
   unrevertTask,
 } from './agent/harness-controller.js';
 import { taskEvents } from './agent/events.js';
 import { buildTokenUsageReport } from './agent/token-usage.js';
 import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore, invalidateMemorySummary } from './store/db.js';
 import { unifiedToolRegistry } from './tool/unified-registry.js';
+import { createToolContext, initializeUnifiedToolFramework } from './tool/index.js';
 import { skillRegistry } from './skills/registry.js';
 import { installFromGit, uninstallSkill } from './skills/installer.js';
 import { reloadSkillsAndTools } from './skills/reload.js';
@@ -117,6 +120,35 @@ export async function buildServer(externalLogger?: Logger) {
       contextCharBudget: config.agent.contextCharBudget,
       contextTokenBudget: config.agent.contextTokenBudget,
     };
+  });
+
+  app.get<{
+    Querystring: { path?: string; taskId?: string; projectId?: string; offset?: string; limit?: string };
+  }>('/api/workspace/read', async (req, reply) => {
+    initializeUnifiedToolFramework();
+    const readTool = unifiedToolRegistry.get('read');
+    if (!readTool) return reply.code(503).send({ error: 'read tool is unavailable' });
+
+    const workspace = await resolveWorkspaceForRead(req.query.taskId, req.query.projectId);
+    if (!workspace.ok) return reply.code(workspace.status).send({ error: workspace.error });
+
+    const path = req.query.path?.trim() || '.';
+    const offset = parsePositiveInteger(req.query.offset);
+    const limit = parsePositiveInteger(req.query.limit);
+    try {
+      const output = await readTool.execute(
+        {
+          path,
+          ...(offset !== undefined ? { offset } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+        },
+        createToolContext('workspace-read', workspace.workspaceDir, { callId: `workspace-read-${Date.now()}` }),
+      );
+      return normalizeWorkspaceReadOutput(output, workspace.workspaceDir, path);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(400).send({ error: message });
+    }
   });
 
   // 已注册工具列表（调试/前端展示用）
@@ -915,6 +947,110 @@ export async function buildServer(externalLogger?: Logger) {
   });
 
   return app;
+}
+
+type WorkspaceResolution =
+  | { ok: true; workspaceDir: string }
+  | { ok: false; status: 400 | 404; error: string };
+
+async function resolveWorkspaceForRead(taskId?: string, projectId?: string): Promise<WorkspaceResolution> {
+  const normalizedTaskId = taskId?.trim();
+  if (normalizedTaskId) {
+    const task = taskStore.get(normalizedTaskId);
+    if (!task) return { ok: false, status: 404, error: 'task not found' };
+    return { ok: true, workspaceDir: await resolveTaskWorkspace(task) };
+  }
+
+  const normalizedProjectId = projectId?.trim();
+  if (normalizedProjectId) {
+    const project = projectStore.get(normalizedProjectId);
+    if (!project) return { ok: false, status: 404, error: 'project not found' };
+    return { ok: true, workspaceDir: resolve(project.path) };
+  }
+
+  return { ok: true, workspaceDir: resolve(config.workspaceDir) };
+}
+
+function parsePositiveInteger(raw?: string): number | undefined {
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function normalizeWorkspaceReadOutput(output: unknown, workspaceDir: string, requestedPath: string): WorkspaceReadResponse {
+  if (!isRecord(output) || typeof output.type !== 'string') {
+    throw new Error('read tool returned an unsupported response');
+  }
+
+  const path = normalizeWorkspacePath(requestedPath);
+  if (output.type === 'directory') {
+    const entries = Array.isArray(output.entries) ? output.entries : [];
+    return {
+      root: workspaceDir,
+      path,
+      type: 'directory',
+      entries: entries
+        .filter((entry): entry is { path: string; type: 'file' | 'directory' } =>
+          isRecord(entry) &&
+          typeof entry.path === 'string' &&
+          (entry.type === 'file' || entry.type === 'directory'),
+        )
+        .map((entry) => {
+          const name = entry.path.replace(/\/+$/g, '').split('/').pop() || entry.path;
+          return {
+            name,
+            path: normalizeWorkspacePath(path === '.' ? entry.path : join(path, entry.path)),
+            type: entry.type,
+          };
+        }),
+      truncated: output.truncated === true,
+      ...(typeof output.next === 'number' ? { next: output.next } : {}),
+    };
+  }
+
+  if (output.type === 'full-text') {
+    return {
+      root: workspaceDir,
+      path,
+      type: 'text',
+      content: typeof output.content === 'string' ? output.content : '',
+      truncated: false,
+    };
+  }
+
+  if (output.type === 'text-page') {
+    return {
+      root: workspaceDir,
+      path,
+      type: 'text',
+      content: typeof output.content === 'string' ? output.content : '',
+      offset: typeof output.offset === 'number' ? output.offset : undefined,
+      truncated: output.truncated === true,
+      ...(typeof output.next === 'number' ? { next: output.next } : {}),
+    };
+  }
+
+  if (output.type === 'image') {
+    return {
+      root: workspaceDir,
+      path,
+      type: 'image',
+      content: typeof output.content === 'string' ? output.content : '',
+      mimeType: typeof output.mime === 'string' ? output.mime : 'application/octet-stream',
+    };
+  }
+
+  throw new Error(`unsupported read result type: ${output.type}`);
+}
+
+function normalizeWorkspacePath(input: string): string {
+  const normalized = input.replace(/\\/g, '/').replace(/\/+$/g, '');
+  if (!normalized || normalized === '.') return '.';
+  return normalized.replace(/^\.\//, '');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function publishSkillDeactivated(skillName: string): void {

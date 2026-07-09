@@ -4,6 +4,7 @@ import { t } from "../i18n";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
 import { buildTextMenuItems, contextMenuPoint, type ContextMenuState } from "./contextMenuActions";
+import "./MemoryPanel.css";
 
 interface MemoryPanelProps {
   open: boolean;

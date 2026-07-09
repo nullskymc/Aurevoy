@@ -25,6 +25,7 @@ import {
   type RuntimeSettings,
   type Task,
   type TaskArtifact,
+  type TaskArtifactContentResponse,
   type TokenUsageReport,
   type TaskTraceEntry,
   type TaskTraceListResponse,
@@ -38,6 +39,7 @@ import {
   type UpdateProjectRequest,
   type UpdateMemoryRequest,
   type UpdateTaskArtifactRequest,
+  type WorkspaceReadResponse,
 } from '@aurevoy/shared';
 
 /** Agent 引擎地址。优先级：localStorage > 运行时注入 > Vite 环境变量 > 默认值 */
@@ -119,6 +121,25 @@ export async function resumeAutoMode(taskId: string): Promise<void> {
 export async function getTask(taskId: string): Promise<Task> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}`);
   if (!res.ok) await throwApiError(res, "get task failed");
+  return res.json();
+}
+
+export async function readWorkspaceEntry(options: {
+  path: string;
+  taskId?: string;
+  projectId?: string;
+  offset?: number;
+  limit?: number;
+}): Promise<WorkspaceReadResponse> {
+  const params = new URLSearchParams();
+  params.set("path", options.path);
+  if (options.taskId) params.set("taskId", options.taskId);
+  if (options.projectId) params.set("projectId", options.projectId);
+  if (options.offset) params.set("offset", String(options.offset));
+  if (options.limit) params.set("limit", String(options.limit));
+
+  const res = await fetch(`${BASE_URL}/api/workspace/read?${params.toString()}`);
+  if (!res.ok) await throwApiError(res, "read workspace entry failed");
   return res.json();
 }
 
@@ -258,6 +279,12 @@ export async function updateArtifact(
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`update artifact failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getArtifactContent(taskId: string, artifactId: string): Promise<TaskArtifactContentResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/artifacts/${artifactId}/content`);
+  if (!res.ok) await throwApiError(res, "get artifact content failed");
   return res.json();
 }
 

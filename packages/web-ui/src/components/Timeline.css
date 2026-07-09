@@ -1,0 +1,665 @@
+/* ============ Timeline 组件 ============ */
+
+.timeline-agent-round {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+}
+
+.timeline-agent-round.is-live {
+  /* live 模式下增加底部间距便于阅读 */
+  padding-bottom: 4px;
+}
+
+/* Summary 行 */
+.timeline-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 0 2px;
+  color: var(--text-tertiary);
+  font-size: calc(var(--ui-font-size) - 2px);
+  line-height: 1.4;
+}
+
+.timeline-summary-text {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.timeline-summary-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--ui-font-xs);
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  color: var(--text-tertiary);
+}
+
+.timeline-summary-badge.is-failed {
+  background: var(--danger-soft-bg);
+  color: var(--danger-soft-fg);
+}
+
+.timeline-summary-badge.is-running {
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+}
+
+/* Timeline body (plan step groups) */
+.timeline-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.timeline-body::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 30px;
+  bottom: 16px;
+  width: 1px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background 0.4s ease;
+}
+
+.workflow-drawer-body .timeline-body::before {
+  top: 0;
+  bottom: -20px;
+}
+
+.workflow-drawer-body .timeline-agent-round:last-child .timeline-body::before {
+  bottom: 16px;
+}
+
+.timeline-body:has(.timeline-empty)::before {
+  content: none;
+}
+
+/* Plan step group */
+.timeline-plan-group {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.timeline-plan-group[data-status="running"] {
+  background: transparent;
+}
+
+/* 计划步骤描述行 */
+.timeline-plan-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+  padding: 0;
+}
+
+.timeline-plan-connector {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 1px;
+  margin-left: 1px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.timeline-plan-desc {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: calc(var(--ui-font-size) - 2px);
+  font-weight: 600;
+  color: var(--text-tertiary);
+  line-height: 1.3;
+}
+
+.timeline-plan-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.timeline-plan-status-text {
+  font-size: var(--ui-font-xs);
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.timeline-plan-status-text.is-failed {
+  color: var(--danger-soft-fg);
+}
+
+/* 计划步骤尾部连接线 */
+.timeline-plan-trail {
+  display: none;
+  width: 1px;
+  height: 8px;
+  margin-left: 10px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+/* 步骤列表 */
+.timeline-plan-steps {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-left: 0;
+}
+
+.timeline-plan-steps::before {
+  content: none;
+}
+
+/* 单个步骤 */
+.timeline-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-radius: 0;
+  transition: background 0.15s ease;
+}
+
+.timeline-step:hover {
+  background: transparent;
+}
+
+.timeline-step-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 30px;
+}
+
+.timeline-step-glyph {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-top: 3px;
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--text-tertiary);
+  transition: background 0.25s ease, color 0.25s ease, border-color 0.2s ease;
+}
+
+.timeline-step-glyph.is-running {
+  color: var(--accent-soft-fg);
+  animation: timeline-spin 1s linear infinite;
+}
+
+.timeline-step-glyph.is-failed {
+  background: var(--danger-soft-bg);
+  color: var(--danger-soft-fg);
+  font-size: var(--ui-font-sm);
+  font-weight: 700;
+}
+
+.timeline-step-icon.is-pending {
+  border: 2px dashed var(--border-strong);
+  background: transparent;
+}
+
+.timeline-step-icon.is-running {
+  border: none;
+  background: transparent;
+  color: var(--accent-soft-fg);
+}
+
+.timeline-step-icon.is-success {
+  border: none;
+  background: transparent;
+}
+
+.timeline-step-icon.is-failed {
+  border: none;
+  background: transparent;
+}
+
+/* 步骤标题按钮 */
+.timeline-step-title-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--ui-font-size);
+  font-weight: 500;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+  border-radius: var(--ui-radius-sm);
+}
+
+.timeline-step-title-btn:hover {
+  background: transparent;
+}
+
+[data-status="failed"] .timeline-step-title-btn,
+[data-status="failed"] .timeline-step-title {
+  color: var(--danger-soft-fg);
+}
+
+.timeline-step-tool {
+  flex: 0 0 auto;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--ui-font-size);
+  font-weight: 600;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-step-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: calc(var(--ui-font-size) - 1px);
+  font-weight: 500;
+}
+
+.timeline-step-caret {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.timeline-step-caret[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+/* 步骤详情（可折叠） */
+.timeline-step-details {
+  margin: 6px 0 0 32px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+.timeline-step-log {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--ui-font-code);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-md);
+  background: var(--code-bg);
+  padding: 8px 10px;
+}
+
+.timeline-step-log pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.timeline-search-preview {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.timeline-search-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: calc(var(--ui-font-size) - 1px);
+  line-height: 1.35;
+}
+
+.timeline-search-query {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-search-count {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+}
+
+.timeline-search-results {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-md);
+  background: var(--surface);
+}
+
+.timeline-search-result {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) minmax(88px, auto);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 8px 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.timeline-search-result + .timeline-search-result {
+  border-top: 1px solid var(--border);
+}
+
+.timeline-search-result:hover {
+  background: var(--hover);
+}
+
+.timeline-search-favicon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+  font-size: calc(var(--ui-font-size) - 2.5px);
+  font-weight: 700;
+}
+
+.timeline-search-result-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.timeline-search-result-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: calc(var(--ui-font-size) - 0.5px);
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-search-snippet {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: calc(var(--ui-font-size) - 2.5px);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-search-host {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: calc(var(--ui-font-size) - 1.5px);
+  line-height: 1.35;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-search-empty {
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-md);
+  color: var(--text-tertiary);
+  font-size: calc(var(--ui-font-size) - 1.5px);
+  padding: 10px 12px;
+}
+
+.timeline-step-log.is-running {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  min-height: 20px;
+}
+
+.timeline-step-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 0;
+  color: var(--danger-soft-fg);
+  font-size: calc(var(--ui-font-size) - 2px);
+  line-height: 1.45;
+}
+
+.timeline-step-error svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+/* 产物卡片（高亮展示） */
+.timeline-artifact-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 0;
+}
+
+.timeline-artifact-connector {
+  width: 2px;
+  height: 12px;
+  margin-left: 7px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.timeline-artifact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.timeline-artifact-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--ui-radius-md);
+  background: var(--surface);
+}
+
+.timeline-artifact-card[data-status="draft"] {
+  border-color: var(--warn-soft-bg);
+  border-left-color: var(--warn-soft-fg);
+}
+
+.timeline-artifact-card[data-status="applied"] {
+  border-color: var(--success-soft-bg);
+  border-left-color: var(--success-soft-fg);
+}
+
+.timeline-artifact-card[data-status="confirmed"] {
+  border-color: var(--accent-soft-bg);
+}
+
+.timeline-artifact-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.timeline-artifact-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.timeline-artifact-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.timeline-artifact-type {
+  font-size: calc(var(--ui-font-size) - 2.5px);
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+  letter-spacing: 0.3px;
+}
+
+.timeline-artifact-name {
+  font-size: calc(var(--ui-font-size) - 1px);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.timeline-artifact-status {
+  font-size: var(--ui-font-xs);
+  color: var(--text-tertiary);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--pill-bg);
+}
+
+.timeline-artifact-path {
+  font-size: var(--ui-font-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-artifact-toggle {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: var(--ui-radius-sm);
+}
+
+.timeline-artifact-toggle:hover {
+  background: var(--hover);
+}
+
+/* Timeline 空状态 */
+.timeline-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  color: var(--text-tertiary);
+  font-size: calc(var(--ui-font-size) - 2px);
+}
+
+/* Timeline 输出文本（最终回复） */
+.timeline-output {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding-top: 8px;
+  font-size: var(--ui-font-base);
+}
+
+.timeline-output.is-streaming .doc-body {
+  padding-left: 0;
+}
+
+/* 步骤状态文本 */
+.timeline-step-status {
+  display: inline-flex;
+  align-items: center;
+  font-size: calc(var(--ui-font-size) - 2.5px);
+  font-weight: 600;
+  line-height: 1;
+  margin-left: 6px;
+  color: var(--text-tertiary);
+}
+
+.timeline-step-status.is-running {
+  color: var(--accent-soft-fg);
+}
+
+.timeline-step-status.is-failed {
+  color: var(--danger-soft-fg);
+}
+
+.timeline-step-status.is-success {
+  color: var(--success-soft-fg);
+}
+
+/* 步骤汇总执行中旋转 */
+.step-spinner-sm {
+  animation: timeline-spin 1s linear infinite;
+}
+
+@keyframes timeline-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Timeline 无障碍：尊重系统减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .timeline-step,
+  .timeline-plan-group,
+  .timeline-step-details,
+  .timeline-step-glyph,
+  .timeline-step-caret {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .timeline-body::before {
+    transition: none !important;
+  }
+
+  .step-spinner-sm {
+    animation: none !important;
+  }
+}

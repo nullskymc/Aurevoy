@@ -3,6 +3,7 @@ import { t, type TranslationKey } from "../i18n";
 import { usePlatform } from "../platform/context";
 import { ImageViewer } from "./ImageViewer";
 import type { MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
+import "./Composer.css";
 
 interface SlashCommand {
   name: string;

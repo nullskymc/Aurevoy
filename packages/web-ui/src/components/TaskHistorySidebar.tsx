@@ -11,6 +11,7 @@ import {
   copyTextItem,
   type ContextMenuState,
 } from "./contextMenuActions";
+import "./TaskHistorySidebar.css";
 
 type MainView = "chat" | "search" | "skills" | "settings";
 

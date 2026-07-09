@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RuntimeSettings } from "@aurevoy/shared";
 import { t } from "../i18n";
+import "./ModelSelectorDrawer.css";
 
 export interface ModelSelectorDraft {
   model: string;

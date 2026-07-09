@@ -24,6 +24,7 @@ import {
   contextMenuPoint,
   type ContextMenuState,
 } from "./contextMenuActions";
+import "./Timeline.css";
 
 /* ============ 类型定义 ============ */
 
