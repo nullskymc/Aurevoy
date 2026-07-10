@@ -7,6 +7,7 @@ import type {
   PendingToolApproval,
   PlanStep,
   RevertMode,
+  SubagentRun,
   Task,
   TaskPhase,
   TaskStatus,
@@ -288,6 +289,7 @@ export function Conversation({
         output: viewModel.liveOutput,
         phase,
         contentBlocks: liveOnlyContentBlocks,
+        subagentRuns: task.subagentRuns ?? [],
       })
     : null;
   const approvalItems = collectApprovalItems(viewModel.liveToolActivity, task.pendingApprovals ?? []);
@@ -307,6 +309,7 @@ export function Conversation({
             isLiveTurn={hasLiveTail && index === viewModel.turns.length - 1}
             resultMap={resultMap}
             plan={task.plan}
+            subagentRuns={task.subagentRuns ?? []}
             defaultToolDetailsOpen={defaultToolDetailsOpen}
             onToolDecision={onToolDecision}
             onAgentContextMenu={handleAgentContextMenu}
@@ -383,6 +386,7 @@ function ConversationTurnView({
   isLiveTurn,
   resultMap,
   plan,
+  subagentRuns,
   defaultToolDetailsOpen,
   onToolDecision,
   onAgentContextMenu,
@@ -397,6 +401,7 @@ function ConversationTurnView({
   isLiveTurn: boolean;
   resultMap: Map<string, ToolResultInfo>;
   plan: PlanStep[];
+  subagentRuns: SubagentRun[];
   defaultToolDetailsOpen: boolean;
   onToolDecision: ToolDecisionHandler;
   onAgentContextMenu: (event: React.MouseEvent, message: Message) => void;
@@ -451,6 +456,7 @@ function ConversationTurnView({
               phaseDetail={phaseDetail}
               resultMap={resultMap}
               plan={plan}
+              subagentRuns={subagentRuns}
               defaultToolDetailsOpen={defaultToolDetailsOpen}
               onToolDecision={onToolDecision}
               defaultOpen={isLiveTurn}
@@ -473,6 +479,7 @@ function ConversationTurnView({
                     stripProcessNarrationForPresentation(message),
                     resultMap,
                     plan,
+                    subagentRuns,
                   )}
                   busy={false}
                   defaultToolDetailsOpen={defaultToolDetailsOpen}
@@ -679,6 +686,7 @@ function AgentWorkflowDrawer({
   phaseDetail,
   resultMap,
   plan,
+  subagentRuns,
   defaultToolDetailsOpen,
   onToolDecision,
   defaultOpen = false,
@@ -692,6 +700,7 @@ function AgentWorkflowDrawer({
   phaseDetail?: string;
   resultMap: Map<string, ToolResultInfo>;
   plan: PlanStep[];
+  subagentRuns: SubagentRun[];
   defaultToolDetailsOpen: boolean;
   onToolDecision: ToolDecisionHandler;
   defaultOpen?: boolean;
@@ -700,7 +709,12 @@ function AgentWorkflowDrawer({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const rounds = assistantMessages.map((message) =>
-    buildAgentRoundFromMessage(stripPresentationBlocksForWorkflow(message, presentationMessageIds), resultMap, plan),
+    buildAgentRoundFromMessage(
+      stripPresentationBlocksForWorkflow(message, presentationMessageIds),
+      resultMap,
+      plan,
+      subagentRuns,
+    ),
   );
   const failed = rounds.some((round) => round.status === "failed") ||
     standaloneToolMessages.some((message) => !parseToolResultContent(message.content).ok) ||

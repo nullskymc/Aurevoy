@@ -315,6 +315,46 @@ export interface PendingToolApproval {
   autoModeReason?: 'blocked_by_rule' | 'not_covered' | 'paused';
 }
 
+/** 内置子代理角色。角色只决定任务面，权限始终继承父任务。 */
+export type SubagentRole = 'explore' | 'research' | 'coder' | 'shell' | 'writer' | 'general';
+
+export type SubagentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export type SubagentStopReason = 'completed' | 'error' | 'timeout' | 'cancelled' | 'max_iterations';
+
+/** 子代理内部工具活动；只持久化用户可解释的元数据，不复制大段工具输出。 */
+export interface SubagentActivity {
+  id: string;
+  toolName: string;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  error?: string;
+}
+
+/** 与父 delegate call 关联的子代理运行快照，供 SSE、历史回放和前端工作组使用。 */
+export interface SubagentRun {
+  id: string;
+  parentCallId: string;
+  role: SubagentRole;
+  goal: string;
+  status: SubagentRunStatus;
+  currentActivity?: string;
+  activities: SubagentActivity[];
+  iterations: number;
+  toolCallCount: number;
+  maxIterations?: number;
+  stopReason?: SubagentStopReason;
+  result?: string;
+  error?: string;
+  truncated?: boolean;
+  durationMs?: number;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * 侧栏/列表用的会话显示标题最大长度（字符）。
  * 对齐 Pi 会话名提案量级（~60–70），防止超长 goal 撑开布局。
@@ -392,6 +432,8 @@ export interface Task {
   projectId?: string;
   /** 自动模式运行时统计与状态 */
   autoModeState?: AutoModeState;
+  /** 子代理运行历史；通过 parentCallId 关联到触发它的 assistant 消息。 */
+  subagentRuns?: SubagentRun[];
   createdAt: string;
   updatedAt: string;
 }
@@ -594,6 +636,7 @@ export type AgentEvent =
   | { type: 'message'; taskId: string; message: Message } // 一条完整消息
   | { type: 'tool_call'; taskId: string; call: ToolCall }
   | { type: 'tool_result'; taskId: string; result: ToolResult }
+  | { type: 'subagent_updated'; taskId: string; run: SubagentRun }
   | {
       type: 'tool_progress';
       taskId: string;

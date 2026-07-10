@@ -1,17 +1,13 @@
+import type { SubagentRole } from '@aurevoy/shared';
+
 /**
  * 内置子代理角色定义。
  *
  * 权限仍只继承父任务的 auto/plan；此处只定义「任务面」——角色说明 + 工具白名单。
- * 子代理默认禁止再委托（不含 delegate / delegate_task），避免递归爆炸。
+ * 子代理默认禁止再委托（不含 delegate；同时屏蔽旧名 delegate_task），避免递归爆炸。
  */
 
-export type SubagentRole =
-  | 'explore'
-  | 'research'
-  | 'coder'
-  | 'shell'
-  | 'writer'
-  | 'general';
+export type { SubagentRole } from '@aurevoy/shared';
 
 export interface SubagentProfile {
   role: SubagentRole;
@@ -25,6 +21,8 @@ export interface SubagentProfile {
   systemPromptAddon: string;
   /** 子 harness 超时（毫秒） */
   timeoutMs: number;
+  /** 子 harness 最大模型轮次；到达后在当前工具批次结束处停止 */
+  maxIterations: number;
   /** 结果截断字符数 */
   maxOutputChars: number;
 }
@@ -66,6 +64,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 输出：关键路径、发现摘要、风险/缺口；必要时列出后续建议步骤',
     ].join('\n'),
     timeoutMs: 60_000,
+    maxIterations: 12,
     maxOutputChars: 24_000,
   },
 
@@ -83,6 +82,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 不要修改工作区文件',
     ].join('\n'),
     timeoutMs: 90_000,
+    maxIterations: 16,
     maxOutputChars: 32_000,
   },
 
@@ -106,6 +106,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 完成后列出变更文件与验证方式',
     ].join('\n'),
     timeoutMs: 120_000,
+    maxIterations: 24,
     maxOutputChars: 40_000,
   },
 
@@ -133,6 +134,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 输出：执行了什么、结果、结论与建议下一步',
     ].join('\n'),
     timeoutMs: 90_000,
+    maxIterations: 16,
     maxOutputChars: 32_000,
   },
 
@@ -159,6 +161,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 引用本地路径或 URL；不要编造未验证的事实',
     ].join('\n'),
     timeoutMs: 120_000,
+    maxIterations: 20,
     maxOutputChars: 48_000,
   },
 
@@ -186,6 +189,7 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 不要调用其他子代理；不要安装 skill 或跑全局维护任务',
     ].join('\n'),
     timeoutMs: 120_000,
+    maxIterations: 24,
     maxOutputChars: 48_000,
   },
 };
@@ -205,7 +209,7 @@ export function listSubagentProfiles(): SubagentProfile[] {
   return (Object.keys(PROFILES) as SubagentRole[]).map((role) => PROFILES[role]);
 }
 
-/** 写入 delegate_task 工具描述的简表 */
+/** 生成 delegate 工具可复用的角色目录。 */
 export function formatSubagentRoleCatalogForTool(): string {
   return listSubagentProfiles()
     .map((p) => `- ${p.role}（${p.label}）：${p.description}`)

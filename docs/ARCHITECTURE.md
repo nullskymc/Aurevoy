@@ -85,7 +85,7 @@ Aurevoy/  (npm workspaces monorepo)
 | `src/server.ts` | HTTP 路由 + SSE 端点（见 `docs/API.md`） |
 | `src/agent/harness-controller.ts` | **Pi harness 控制器**：`createTask` 建任务；`runHarnessTask` 委托 `pi-harness.ts`，保留任务恢复、取消、revert/branch/compact 和 SSE 事件桥接 |
 | `src/agent/pi-harness.ts` | **Pi AgentHarness 适配层**：把 Aurevoy task/messages/tools/approval 映射到 `@earendil-works/pi-agent-core` 的 `AgentHarness`，并把 Pi 事件转换回现有 SSE 契约 |
-| `src/agent/subagent.ts` | **Pi 子代理执行引擎**：`delegate_task` 使用 Pi Agent；仅 safe 只读工具，60s 超时，结果 20KB 截断 |
+| `src/agent/subagent.ts` | **Pi 子代理执行引擎**：`delegate` 使用独立 Pi session；角色化最小工具面，继承父权限/任务上下文，支持并发闸门、父级取消、轮次与超时限制、结果截断和父任务 trace 关联 |
 | `src/agent/context.ts` | **上下文窗口 + 记忆注入**。 P4: `estimateTokens()` 轻量 token 估算；预算超限时做本地确定性摘要。 P5/M8: 记忆相关性评分、缓存与注入 |
 | `src/agent/m6-state.ts` | Agent 交付状态辅助：预算、token usage、追问、artifact、checkpoint 的创建与状态更新 |
 | `src/agent/events.ts` | `TaskEventBus`：按 `taskId` 发布/订阅 `AgentEvent`，桥接执行与 SSE |
@@ -157,7 +157,7 @@ API 请求响应、运行时常量（默认地址端口）。
 | 加运行设置 | `runtime/settings.ts` + `store/db.ts` + `packages/shared` API 类型 | 前端静态表单、只改 `.env.example` |
 | 改任务/事件结构 | 改 `packages/shared` 并 `build:shared` | 前后端各自重定义 |
 | 加编辑重跑/分支 | `agent/harness-controller.ts` 的 `revertTask`/`branchTask`/`compactTask`，`store/db.ts` 加列，`shared` 加类型 | 前端直接操作消息数组 |
-| 加子代理能力 | `agent/subagent.ts` 修改约束/轮次/超时；`tool/simple-tools.ts` 的 `delegate_task` 描述 | 在子代理中开放写入工具 |
+| 加子代理能力 | `agent/subagent.ts` 修改运行边界；`agent/subagent-profiles.ts` 修改角色；`tool/tools/delegate/` 修改工具契约 | 绕过父权限/上下文继承，或恢复第二套委托入口 |
 | 加记忆引用/评分 | `agent/context.ts` 的 `scoreMemories`/`parseMemoryLinks`；`store/db.ts` 的 `findByNameSlug` | 直接改评分公式不跑回归 |
 | 加 Diff 编辑 | `tool/tools/edit/` 的 `edit` 工具 | 绕过唯一性校验直接写文件 |
 | 加记忆向量/RAG | `memory/` 或 `knowledge-base/` + `store/db.ts` 加表 + `embedding/` Provider | 混合评分参数不跑回归 |

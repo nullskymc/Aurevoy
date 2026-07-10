@@ -206,6 +206,17 @@ export function useAgentEventHandler({
         });
         scheduleLiveActivitySync();
         break;
+      case "subagent_updated":
+        setCurrentTask((previous) => {
+          if (!previous) return previous;
+          const nextTask = {
+            ...previous,
+            subagentRuns: mergeById(previous.subagentRuns ?? [], event.run),
+          };
+          updateTaskList(nextTask);
+          return nextTask;
+        });
+        break;
       case "approval_request":
         liveActivityRef.current.upsert(event.call.id, {
           name: event.call.toolName,

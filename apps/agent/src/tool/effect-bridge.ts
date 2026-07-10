@@ -33,6 +33,9 @@ export function registerEffectTool(tool: AnyTool): void {
         toolCallID: ctx.callId,
         workspaceDir: ctx.workspaceDir,
         externalPaths: ctx.externalPaths ?? [],
+        abortSignal: ctx.abortSignal,
+        publishEvent: ctx.publishEvent,
+        task: ctx.task,
       });
       return result.output;
     },

@@ -10,15 +10,23 @@ const Input = Schema.Struct({
     description: "Sub-agent role: explore | research | coder | shell | writer | general (default).",
   })),
   tools: Schema.optional(Schema.Array(Schema.String).annotations({ description: "Optional tool allowlist override." })),
-  maxIterations: Schema.optional(Schema.Number.annotations({ description: "Maximum iterations for the sub-agent (reserved)." })),
+  maxIterations: Schema.optional(
+    Schema.Number.pipe(Schema.int(), Schema.between(1, 100)).annotations({
+      description: "Maximum model turns for the sub-agent (1-100).",
+    }),
+  ),
 })
 
 const Output = Schema.Struct({
+  runId: Schema.String,
   completed: Schema.Boolean,
   result: Schema.String,
   role: Schema.optional(Schema.String),
   toolCallCount: Schema.optional(Schema.Number),
   iterations: Schema.optional(Schema.Number),
+  stopReason: Schema.optional(Schema.String),
+  durationMs: Schema.optional(Schema.Number),
+  truncated: Schema.optional(Schema.Boolean),
 })
 
 export const delegateTool = make({
@@ -27,7 +35,8 @@ export const delegateTool = make({
     "Delegate a sub-task to a specialized sub-agent. " +
     "Roles: explore (readonly scout), research (web+local), coder (edit code), " +
     "shell (commands), writer (docs/reports), general (broad default). " +
-    "Inherits parent auto/plan permissions; cannot nest further delegates.",
+    "Use multiple calls in one turn only for independent parallel work. " +
+    "Inherits parent context and auto/plan permissions; cannot nest further delegates.",
   input: Input,
   output: Output,
   execute: async (input, ctx) => {
@@ -36,16 +45,23 @@ export const delegateTool = make({
     const { isSubagentRole } = await import("../../../agent/subagent-profiles.js")
     const { config } = await import("../../../config.js")
     const { taskStore } = await import("../../../store/db.js")
+    const { completeSubagentRun, recordSubagentProgress } = await import("../../../agent/subagent-state.js")
 
     const goal = input.goal.trim()
     const prompt = (input.prompt?.trim() || goal)
     if (!goal) {
-      return { completed: false, result: "goal must be a non-empty string" }
+      return {
+        runId: "not-started",
+        completed: false,
+        result: "goal must be a non-empty string",
+        stopReason: "error",
+      }
     }
 
     const role = isSubagentRole(input.role) ? input.role : undefined
+    const subagentRole = role ?? "general"
     const level = config.autoMode.level === "plan" ? ("plan" as const) : ("auto" as const)
-    const parentTask = ctx.taskID ? taskStore.get(ctx.taskID) : undefined
+    const parentTask = ctx.task ?? (ctx.taskID ? taskStore.get(ctx.taskID) : undefined)
     const approvalConfig = parentTask
       ? approvalConfigFromTask(parentTask, level)
       : { autoModeLevel: level, autoModePaused: false, planApproved: level === "auto" }
@@ -56,20 +72,41 @@ export const delegateTool = make({
       role,
       allowedTools: input.tools ? [...input.tools] : undefined,
       workspaceDir: ctx.workspaceDir || process.cwd(),
+      maxIterations: input.maxIterations,
+      signal: ctx.abortSignal,
+      parentCallId: ctx.toolCallID,
+      externalPaths: [...ctx.externalPaths],
+      publishEvent: ctx.publishEvent,
+      onProgress: (progress) => {
+        if (parentTask && progress.phase !== "completed") {
+          recordSubagentProgress(parentTask, ctx.toolCallID, subagentRole, goal, progress)
+        }
+        ctx.publishEvent?.({
+          type: "tool_progress",
+          taskId: ctx.taskID,
+          callId: ctx.toolCallID,
+          message: progress.message,
+        })
+      },
       approvalConfig,
-      parentTask: parentTask
-        ? { id: parentTask.id, autoModeState: parentTask.autoModeState, goal: parentTask.goal }
-        : undefined,
+      parentTask,
     })
+    if (parentTask) {
+      completeSubagentRun(parentTask, ctx.toolCallID, result.role, goal, result)
+    }
 
     return {
+      runId: result.runId,
       completed: result.ok,
       result: result.ok
         ? result.content
-        : (result.error ?? (result.content || "sub-agent failed")),
+        : [result.error, result.content].filter(Boolean).join("\n\n") || "sub-agent failed",
       role: result.role,
       toolCallCount: result.toolCallCount,
       iterations: result.iterations,
+      stopReason: result.stopReason,
+      durationMs: result.durationMs,
+      truncated: result.truncated,
     }
   },
   toModelOutput: (_in, out): ReadonlyArray<ContentPart> => [

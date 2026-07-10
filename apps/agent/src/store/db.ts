@@ -47,6 +47,7 @@ db.exec(`
     budget     TEXT,
     budget_usage TEXT,
     token_usage TEXT,
+    subagent_runs TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -153,6 +154,7 @@ const taskColumnMigrations: Array<{ name: string; sql: string }> = [
   { name: 'context_tokens', sql: 'ALTER TABLE tasks ADD COLUMN context_tokens INTEGER' },
   { name: 'title', sql: 'ALTER TABLE tasks ADD COLUMN title TEXT' },
   { name: 'title_source', sql: 'ALTER TABLE tasks ADD COLUMN title_source TEXT' },
+  { name: 'subagent_runs', sql: "ALTER TABLE tasks ADD COLUMN subagent_runs TEXT NOT NULL DEFAULT '[]'" },
 ];
 for (const migration of taskColumnMigrations) {
   if (!taskColumns.some((column) => column.name === migration.name)) {
@@ -242,6 +244,7 @@ interface TaskRow {
   project_id: string | null;
   plan_mode: string | null;
   context_tokens: number | null;
+  subagent_runs: string;
   created_at: string;
   updated_at: string;
 }
@@ -296,6 +299,7 @@ function rowToTask(row: TaskRow): Task {
     parentTaskId: row.parent_task_id ?? undefined,
     projectId: row.project_id ?? undefined,
     contextTokens: row.context_tokens ?? undefined,
+    subagentRuns: (parseJsonColumn(row.subagent_runs) as Task['subagentRuns']) ?? [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -346,13 +350,13 @@ export const taskStore = {
       `INSERT INTO tasks (
          id, goal, title, title_source, status, phase, plan, messages, artifacts, clarifications, pending_approvals, checkpoints,
          budget, budget_usage, lifetime_budget, lifetime_usage, budget_exceeded, token_usage, archived_messages, parent_task_id, project_id,
-         plan_mode, context_tokens, created_at, updated_at
+         plan_mode, context_tokens, subagent_runs, created_at, updated_at
        )
        VALUES (
          @id, @goal, @title, @titleSource, @status, @phase, @plan, @messages, @artifacts, @clarifications,
          @pendingApprovals, @checkpoints, @budget, @budgetUsage, @lifetimeBudget, @lifetimeUsage, @budgetExceeded,
          @tokenUsage, @archivedMessages, @parentTaskId,
-         @projectId, @planMode, @contextTokens, @createdAt, @updatedAt
+         @projectId, @planMode, @contextTokens, @subagentRuns, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
          goal=excluded.goal, title=excluded.title, title_source=excluded.title_source,
@@ -367,6 +371,7 @@ export const taskStore = {
          parent_task_id=excluded.parent_task_id, project_id=excluded.project_id,
          plan_mode=excluded.plan_mode,
          context_tokens=excluded.context_tokens,
+         subagent_runs=excluded.subagent_runs,
          updated_at=excluded.updated_at`,
     ).run({
       id: task.id,
@@ -392,6 +397,7 @@ export const taskStore = {
       projectId: task.projectId ?? null,
       planMode: null,
       contextTokens: task.contextTokens ?? null,
+      subagentRuns: JSON.stringify(task.subagentRuns ?? []),
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });
@@ -402,7 +408,7 @@ export const taskStore = {
    * 传入的 fields 只会 SET 对应列，updated_at 自动刷新。
    * 高频场景（每轮 touch）用此替代 save()。
    */
-  patch(taskId: string, fields: Partial<Pick<Task, 'status' | 'phase' | 'budgetUsage' | 'lifetimeUsage' | 'tokenUsage' | 'contextTokens' | 'pendingApprovals'>>): void {
+  patch(taskId: string, fields: Partial<Pick<Task, 'status' | 'phase' | 'budgetUsage' | 'lifetimeUsage' | 'tokenUsage' | 'contextTokens' | 'pendingApprovals' | 'subagentRuns'>>): void {
     const now = new Date().toISOString();
     const assignments: string[] = ['updated_at = ?'];
     const values: unknown[] = [now];
@@ -414,6 +420,7 @@ export const taskStore = {
     if (fields.tokenUsage !== undefined) { assignments.push('token_usage = ?'); values.push(JSON.stringify(fields.tokenUsage)); }
     if (fields.contextTokens !== undefined) { assignments.push('context_tokens = ?'); values.push(fields.contextTokens); }
     if (fields.pendingApprovals !== undefined) { assignments.push('pending_approvals = ?'); values.push(JSON.stringify(fields.pendingApprovals)); }
+    if (fields.subagentRuns !== undefined) { assignments.push('subagent_runs = ?'); values.push(JSON.stringify(fields.subagentRuns)); }
 
     values.push(taskId);
     db.prepare(`UPDATE tasks SET ${assignments.join(', ')} WHERE id = ?`).run(...values);

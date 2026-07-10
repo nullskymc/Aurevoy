@@ -906,6 +906,7 @@ export async function buildServer(externalLogger?: Logger) {
       'clarification_request', 'clarification_resolved',
       'approval_request',
       'tool_call', 'tool_result', 'message',
+      'subagent_updated',
     ]);
 
     const send = (event: AgentEvent) => {

@@ -1,5 +1,6 @@
 import { Schema, Data } from "effect"
 import { fromAST } from "effect/JSONSchema"
+import type { Task } from "@aurevoy/shared"
 
 export interface ToolContext {
   readonly sessionID: string
@@ -9,6 +10,12 @@ export interface ToolContext {
   readonly toolCallID: string
   readonly workspaceDir: string
   readonly externalPaths: readonly string[]
+  /** 由主 harness 透传，确保 delegate 等长任务能随父任务取消。 */
+  readonly abortSignal?: AbortSignal
+  /** 仅供需要渐进反馈的工具发布既有 SSE 事件。 */
+  readonly publishEvent?: (event: Record<string, unknown>) => void
+  /** 父任务快照；工具不得绕过 store 把它当作独立真相源。 */
+  readonly task?: Task
 }
 
 export class ToolFailure extends Data.TaggedError("ToolFailure")<{

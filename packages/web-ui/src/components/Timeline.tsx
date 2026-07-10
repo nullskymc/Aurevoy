@@ -13,6 +13,8 @@ import type {
   Message,
   MessageToolCall,
   PlanStep,
+  SubagentRole,
+  SubagentRun,
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { GenerativeUiBlock } from "./generative-ui/GenerativeUiBlock";
@@ -70,6 +72,7 @@ export interface AgentRoundData {
   summary: string;
   markdownOutput?: string;
   contentBlocks?: ContentBlock[];
+  subagentRuns?: SubagentRun[];
   status: "pending" | "running" | "completed" | "failed";
 }
 
@@ -90,7 +93,7 @@ export function detectStepKind(toolName: string): StepKind {
 }
 
 function shouldHideToolFromWorkflow(toolName: string): boolean {
-  return toolName === "attach_content" || toolName === "present_ui";
+  return toolName === "attach_content" || toolName === "present_ui" || toolName === "delegate";
 }
 
 /** 生成聚合摘要文本 */
@@ -286,6 +289,93 @@ function formatOutput(value: unknown): string {
   catch { return String(value); }
 }
 
+function resolveHistoricalSubagentRuns(
+  toolCalls: MessageToolCall[],
+  resultMap: Map<string, { ok: boolean; output?: unknown; error?: string }>,
+  persistedRuns: SubagentRun[],
+  createdAt: string,
+): SubagentRun[] {
+  const delegateCalls = toolCalls.filter((call) => call.function.name === "delegate");
+  const callIds = new Set(delegateCalls.map((call) => call.id));
+  const runs = persistedRuns.filter((run) => callIds.has(run.parentCallId));
+
+  for (const call of delegateCalls) {
+    if (runs.some((run) => run.parentCallId === call.id)) continue;
+    let args: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(call.function.arguments || "{}");
+      if (isRecord(parsed)) args = parsed;
+    } catch {
+      // 旧消息参数损坏时仍保留一个可诊断的委托卡片。
+    }
+    const result = resultMap.get(call.id);
+    const output = isRecord(result?.output) ? result.output : undefined;
+    const completed = output?.completed === true;
+    const role = normalizeSubagentRole(output?.role ?? args.role);
+    const error = !completed
+      ? (typeof output?.result === "string" ? output.result : result?.error)
+      : undefined;
+    runs.push({
+      id: typeof output?.runId === "string" ? output.runId : `legacy-${call.id}`,
+      parentCallId: call.id,
+      role,
+      goal: typeof args.goal === "string" ? args.goal : "委托子任务",
+      status: completed ? "completed" : "failed",
+      currentActivity: completed ? "已完成并返回结果" : error ?? "子代理运行失败",
+      activities: [],
+      iterations: typeof output?.iterations === "number" ? output.iterations : 0,
+      toolCallCount: typeof output?.toolCallCount === "number" ? output.toolCallCount : 0,
+      maxIterations: typeof args.maxIterations === "number" ? args.maxIterations : undefined,
+      stopReason: typeof output?.stopReason === "string"
+        ? output.stopReason as SubagentRun["stopReason"]
+        : completed ? "completed" : "error",
+      result: completed && typeof output?.result === "string" ? output.result : undefined,
+      error,
+      truncated: output?.truncated === true,
+      durationMs: typeof output?.durationMs === "number" ? output.durationMs : undefined,
+      createdAt,
+      startedAt: createdAt,
+      completedAt: createdAt,
+    });
+  }
+  return runs;
+}
+
+function subagentRunFromLiveActivity(activity: {
+  id: string;
+  args: unknown;
+  status: string;
+  progress?: { message: string };
+}): SubagentRun {
+  const args = isRecord(activity.args) ? activity.args : {};
+  const now = new Date().toISOString();
+  return {
+    id: `pending-${activity.id}`,
+    parentCallId: activity.id,
+    role: normalizeSubagentRole(args.role),
+    goal: typeof args.goal === "string" ? args.goal : "准备委托子任务",
+    status: activity.status === "error" ? "failed" : "queued",
+    currentActivity: activity.progress?.message ?? "正在创建子代理",
+    activities: [],
+    iterations: 0,
+    toolCallCount: 0,
+    maxIterations: typeof args.maxIterations === "number" ? args.maxIterations : undefined,
+    error: activity.status === "error" ? "子代理未能启动" : undefined,
+    createdAt: now,
+  };
+}
+
+function normalizeSubagentRole(value: unknown): SubagentRole {
+  return value === "explore" || value === "research" || value === "coder"
+    || value === "shell" || value === "writer" || value === "general"
+    ? value
+    : "general";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /* ============ 数据构建函数 ============ */
 
 /** 从历史消息构建 AgentRoundData */
@@ -293,10 +383,17 @@ export function buildAgentRoundFromMessage(
   message: Message,
   resultMap: Map<string, { ok: boolean; output?: unknown; error?: string }>,
   planSteps: PlanStep[],
+  persistedSubagentRuns: SubagentRun[] = [],
 ): AgentRoundData {
   const toolCalls = message.toolCalls ?? [];
   const steps = buildStepsFromToolCalls(toolCalls, resultMap);
   const summary = computeSummaryFromSteps(steps);
+  const subagentRuns = resolveHistoricalSubagentRuns(
+    toolCalls,
+    resultMap,
+    persistedSubagentRuns,
+    message.createdAt,
+  );
 
   // 按 planStepId 分组
   const groupsByPlanStepId = new Map<string, TimelineStepData[]>();
@@ -356,7 +453,11 @@ export function buildAgentRoundFromMessage(
     summary,
     markdownOutput: message.content,
     contentBlocks: message.contentBlocks,
-    status: steps.some((step) => step.status === "failed") ? "failed" : "completed",
+    subagentRuns,
+    status: steps.some((step) => step.status === "failed")
+      || subagentRuns.some((run) => run.status === "failed" || run.status === "cancelled")
+      ? "failed"
+      : "completed",
   };
 }
 
@@ -367,8 +468,16 @@ export function buildLiveAgentRoundData(params: {
   output?: string;
   phase?: string | null;
   contentBlocks?: ContentBlock[];
+  subagentRuns?: SubagentRun[];
 }): AgentRoundData {
-  const { plan, liveToolActivity, output, phase, contentBlocks } = params;
+  const { plan, liveToolActivity, output, phase, contentBlocks, subagentRuns = [] } = params;
+  const delegateActivities = liveToolActivity.filter((activity) => activity.name === "delegate");
+  const delegateCallIds = new Set(delegateActivities.map((activity) => activity.id));
+  const visibleSubagentRuns = subagentRuns.filter((run) => delegateCallIds.has(run.parentCallId));
+  for (const activity of delegateActivities) {
+    if (visibleSubagentRuns.some((run) => run.parentCallId === activity.id)) continue;
+    visibleSubagentRuns.push(subagentRunFromLiveActivity(activity));
+  }
   const steps: TimelineStepData[] = liveToolActivity.filter((act) => !shouldHideToolFromWorkflow(act.name)).map((act) => {
     const kind = detectStepKind(act.name);
     const args = typeof act.args === "object" && act.args !== null
@@ -471,7 +580,14 @@ export function buildLiveAgentRoundData(params: {
     summary,
     markdownOutput: output,
     contentBlocks,
-    status: isFailed ? "failed" : (steps.some((s) => s.status === "running") || isActivePhase) ? "running" : "completed",
+    subagentRuns: visibleSubagentRuns,
+    status: isFailed || visibleSubagentRuns.some((run) => run.status === "failed" || run.status === "cancelled")
+      ? "failed"
+      : (steps.some((s) => s.status === "running")
+        || visibleSubagentRuns.some((run) => run.status === "running" || run.status === "queued")
+        || isActivePhase)
+        ? "running"
+        : "completed",
   };
 }
 
@@ -1100,6 +1216,185 @@ function ContentBlockView({
       return null;
   }
 }
+/* ============ 子代理工作组 ============ */
+
+const SUBAGENT_ROLE_META: Record<SubagentRole, { label: string; glyph: string }> = {
+  explore: { label: "侦查", glyph: "E" },
+  research: { label: "调研", glyph: "R" },
+  coder: { label: "编码", glyph: "C" },
+  shell: { label: "验证", glyph: "S" },
+  writer: { label: "写作", glyph: "W" },
+  general: { label: "通用", glyph: "A" },
+};
+
+function SubagentWorkgroup({ runs }: { runs: SubagentRun[] }) {
+  const runningCount = runs.filter((run) => run.status === "running" || run.status === "queued").length;
+  const failedCount = runs.filter((run) => run.status === "failed" || run.status === "cancelled").length;
+  const completedCount = runs.filter((run) => run.status === "completed").length;
+  const groupStatus = runningCount > 0 ? "running" : failedCount > 0 ? "failed" : "completed";
+  const statusText = runningCount > 0
+    ? `${runningCount} 个执行中`
+    : failedCount > 0
+      ? `${completedCount} 个完成 · ${failedCount} 个异常`
+      : `${completedCount} 个已完成`;
+
+  return (
+    <section className="subagent-workgroup" data-status={groupStatus} aria-label="子代理协作工作组">
+      <div className="subagent-workgroup-head">
+        <span className="subagent-workgroup-mark" aria-hidden="true">
+          <svg viewBox="0 0 20 20" width="16" height="16" fill="none">
+            <circle cx="6" cy="6" r="2.4" stroke="currentColor" strokeWidth="1.4" />
+            <circle cx="14" cy="6" r="2.4" stroke="currentColor" strokeWidth="1.4" />
+            <circle cx="10" cy="14" r="2.4" stroke="currentColor" strokeWidth="1.4" />
+            <path d="M7.8 7.5l1.2 4M12.2 7.5l-1.2 4M8.4 6h3.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="subagent-workgroup-title">协作工作组</span>
+        <span className="subagent-workgroup-count">{runs.length}</span>
+        <span className="subagent-workgroup-status">{statusText}</span>
+      </div>
+      <div className="subagent-workgroup-list">
+        {runs.map((run) => <SubagentRunCard key={run.id} run={run} />)}
+      </div>
+    </section>
+  );
+}
+
+function SubagentRunCard({ run }: { run: SubagentRun }) {
+  const [open, setOpen] = useState(run.status === "running" || run.status === "failed" || run.status === "cancelled");
+  const [now, setNow] = useState(() => Date.now());
+  const previousStatus = useRef(run.status);
+  const role = SUBAGENT_ROLE_META[run.role];
+  const hasDetails = run.activities.length > 0 || Boolean(run.result || run.error || run.currentActivity);
+
+  useEffect(() => {
+    if (run.status !== "running" && run.status !== "queued") return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [run.status]);
+
+  useEffect(() => {
+    const previous = previousStatus.current;
+    previousStatus.current = run.status;
+    if (run.status === "running" || run.status === "failed" || run.status === "cancelled") {
+      setOpen(true);
+    } else if ((previous === "running" || previous === "queued") && run.status === "completed") {
+      const timer = window.setTimeout(() => setOpen(false), 900);
+      return () => window.clearTimeout(timer);
+    }
+  }, [run.status]);
+
+  const durationMs = run.durationMs ?? elapsedFrom(run.startedAt ?? run.createdAt, now);
+  const statusLabel = subagentStatusLabel(run);
+  const iterationLabel = run.maxIterations
+    ? `${run.iterations}/${run.maxIterations} 轮`
+    : `${run.iterations} 轮`;
+
+  return (
+    <article className="subagent-run-card" data-status={run.status}>
+      <button
+        type="button"
+        className="subagent-run-toggle"
+        onClick={() => hasDetails && setOpen((value) => !value)}
+        aria-expanded={hasDetails ? open : undefined}
+      >
+        <span className="subagent-role-glyph" aria-hidden="true">{role.glyph}</span>
+        <span className="subagent-run-main">
+          <span className="subagent-run-identity">
+            <strong>{role.label}</strong>
+            <span>{run.goal}</span>
+          </span>
+          {(run.status === "running" || run.status === "queued") && run.currentActivity && (
+            <span className="subagent-run-current">{run.currentActivity}</span>
+          )}
+        </span>
+        <span className="subagent-run-metrics">
+          <span>{formatDuration(durationMs)}</span>
+          <span>{iterationLabel}</span>
+          <span>{run.toolCallCount} 次工具</span>
+        </span>
+        <span className="subagent-run-status" data-status={run.status}>
+          <span className="subagent-run-status-dot" aria-hidden="true" />
+          {statusLabel}
+        </span>
+        {hasDetails && (
+          <span className="subagent-run-caret" data-open={open} aria-hidden="true">
+            <svg viewBox="0 0 12 12" width="10" height="10" fill="none">
+              <path d="M4 3L8 6L4 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+        )}
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && hasDetails && (
+          <motion.div
+            className="subagent-run-details"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ height: { duration: 0.2, ease: "easeOut" }, opacity: { duration: 0.12 } }}
+          >
+            {run.activities.length > 0 && (
+              <div className="subagent-activity-list" aria-label="子代理工具活动">
+                {run.activities.map((activity) => (
+                  <div className="subagent-activity" data-status={activity.status} key={activity.id}>
+                    <span className="subagent-activity-dot" aria-hidden="true" />
+                    <span className="subagent-activity-name">{activity.toolName}</span>
+                    <span className="subagent-activity-state">
+                      {activity.status === "running" ? "执行中" : activity.status === "failed" ? "失败" : "完成"}
+                    </span>
+                    {activity.durationMs != null && <span>{formatDuration(activity.durationMs)}</span>}
+                    {activity.error && <span className="subagent-activity-error">{activity.error}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {run.error && <div className="subagent-run-error">{run.error}</div>}
+            {run.result && (
+              <div className="subagent-run-result">
+                <div className="subagent-run-result-label">
+                  返回给主代理{run.truncated ? " · 已截断" : ""}
+                </div>
+                <MarkdownRenderer content={run.result} />
+              </div>
+            )}
+            {!run.result && !run.error && run.currentActivity && (
+              <div className="subagent-run-progress">
+                <span className="stream-caret" aria-hidden="true" />
+                <span>{run.currentActivity}</span>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </article>
+  );
+}
+
+function subagentStatusLabel(run: SubagentRun): string {
+  if (run.status === "queued") return "等待中";
+  if (run.status === "running") return "执行中";
+  if (run.status === "completed") return "已完成";
+  if (run.status === "cancelled") return "已取消";
+  if (run.stopReason === "timeout") return "已超时";
+  if (run.stopReason === "max_iterations") return "轮次耗尽";
+  return "失败";
+}
+
+function elapsedFrom(value: string, now: number): number {
+  const startedAt = Date.parse(value);
+  return Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : 0;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) return "<1s";
+  const seconds = Math.floor(durationMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s`;
+}
+
 /* ============ 主组件 ============ */
 
 /**
@@ -1128,9 +1423,11 @@ export function AgentRound({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
+  const subagentRuns = data.subagentRuns ?? [];
   const phaseLabel = phaseDetail?.trim();
-  const shouldShowWorkflow = showWorkflow && (data.planStepGroups.length > 0 || busy);
+  const shouldShowWorkflow = showWorkflow && (data.planStepGroups.length > 0 || subagentRuns.length > 0 || busy);
   const shouldLeadWithWorkflow = busy && data.planStepGroups.length === 0;
+  const shouldShowTimeline = data.planStepGroups.length > 0 || (busy && subagentRuns.length === 0);
   const autoOpenRunningTools = true;
   const outputNode = showOutput && data.markdownOutput ? (
     <article className="timeline-output">
@@ -1162,15 +1459,19 @@ export function AgentRound({
   ) : null;
   const workflowNode = shouldShowWorkflow ? (
     <LayoutGroup>
+      {subagentRuns.length > 0 && <SubagentWorkgroup runs={subagentRuns} />}
+
       {/* Summary 行 */}
-      <AgentRoundSummary
-        summary={data.summary}
-        status={data.status}
-        stepCount={stepCount}
-      />
+      {stepCount > 0 && (
+        <AgentRoundSummary
+          summary={data.summary}
+          status={data.status}
+          stepCount={stepCount}
+        />
+      )}
 
       {/* 时间线区域 */}
-      <motion.div className="timeline-body" layout>
+      {shouldShowTimeline && <motion.div className="timeline-body" layout>
         {data.planStepGroups.length > 0 ? (
           data.planStepGroups.map((group, i) => (
             <PlanStepGroup
@@ -1189,7 +1490,7 @@ export function AgentRound({
             <span>{phaseLabel || "思考中…"}</span>
           </div>
         )}
-      </motion.div>
+      </motion.div>}
     </LayoutGroup>
   ) : null;
 
