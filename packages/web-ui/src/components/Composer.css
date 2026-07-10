@@ -357,6 +357,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--ui-space-3);
+  min-width: 0;
 }
 
 .composer-tools-left,
@@ -364,6 +365,16 @@
   display: flex;
   align-items: center;
   gap: var(--ui-space-2);
+  min-width: 0;
+}
+
+.composer-tools-left {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.composer-tools-right {
+  flex: 0 0 auto;
 }
 
 .composer-icon-btn {
@@ -395,6 +406,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--ui-space-2);
+  min-width: 0;
   min-height: var(--ui-control-sm);
   border: none;
   border-radius: var(--ui-radius-md);
@@ -402,6 +414,50 @@
   color: var(--text-secondary);
   font-size: var(--ui-font-sm);
   padding: 0 var(--ui-space-2);
+}
+
+.composer-model-chip {
+  max-width: min(240px, 100%);
+  flex-shrink: 1;
+}
+
+.composer-model-chip > svg {
+  flex: 0 0 auto;
+}
+
+.composer-model-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-provider-icon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  overflow: hidden;
+  background: var(--card-bg, transparent);
+  box-shadow: inset 0 0 0 1px var(--border-subtle, var(--border));
+  padding: 2px;
+}
+
+.composer-provider-icon .provider-icon-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.composer-provider-icon .provider-icon-monogram {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .composer-chip:hover {

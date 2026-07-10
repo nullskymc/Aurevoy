@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
   AutoModeLevel,
+  ContinueBudgetRequest,
   Message,
   MessageAttachment,
   PlanStep,
@@ -26,8 +27,12 @@ import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval, waitForPlanA
 import { createInitialAutoModeState, syncAutoModeState } from './approval.js';
 import { taskStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
-import { initialBudgetUsage, normalizeBudget } from './m6-state.js';
-import { getPiProviderName } from '../llm/pi-provider.js';
+import {
+  ensureLifetimeAllowsAnotherRun,
+  initialBudgetUsage,
+  mergeBudget,
+  snapshotTaskBudgets,
+} from './m6-state.js';
 import { initialTaskTitle, isTitleStillAuto } from './task-title.js';
 
 /** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
@@ -86,9 +91,15 @@ export function prepareTaskForResume(task: Task): Task {
   const previousPhase = task.phase;
   const patchedToolResults = patchDanglingToolResults(task.messages).length;
   const lastCheckpoint = task.checkpoints?.at(-1);
+  // 预算触顶恢复：保证寿命额度还能再跑一整轮
+  if (previousPhase === 'waiting_budget' || task.budgetExceeded) {
+    ensureLifetimeAllowsAnotherRun(task);
+  }
   task.status = 'pending';
   task.phase = 'initializing';
   task.pendingApprovals = [];
+  task.budgetExceeded = undefined;
+  // run 用量在 runPiHarnessTask 入口 beginRunBudget 清零
   task.plan = resumePlanFromCheckpoint(task.plan, lastCheckpoint?.stepId);
   task.updatedAt = now;
   taskStore.save(task);
@@ -100,6 +111,23 @@ export function prepareTaskForResume(task: Task): Task {
     data: { previousStatus, previousPhase, patchedToolResults, checkpoint: lastCheckpoint },
   });
   return task;
+}
+
+/**
+ * 预算触顶后续跑：可选扩容寿命 / 覆盖 run 预算，再 prepare + 由调用方 runHarnessTask。
+ */
+export function prepareTaskForBudgetContinue(
+  task: Task,
+  body?: ContinueBudgetRequest,
+): Task {
+  if (body?.runBudget) {
+    task.budget = mergeBudget(
+      snapshotTaskBudgets({ budget: task.budget }).budget,
+      body.runBudget,
+    );
+  }
+  ensureLifetimeAllowsAnotherRun(task, body?.additionalLifetime);
+  return prepareTaskForResume(task);
 }
 
 /** 编辑重跑：截断目标消息及其之后的对话，等待用户继续输入后由 Pi 重新生成。 */
@@ -203,6 +231,10 @@ export function branchTask(
 
   const now = new Date().toISOString();
   const branchGoal = goalOverride ?? parentTask.goal;
+  const budgets = snapshotTaskBudgets({
+    budget: parentTask.budget,
+    lifetimeBudget: parentTask.lifetimeBudget,
+  });
   const task: Task = {
     id: randomUUID(),
     goal: branchGoal,
@@ -216,9 +248,11 @@ export function branchTask(
     clarifications: [],
     pendingApprovals: [],
     checkpoints: [],
-    budget: parentTask.budget,
+    budget: budgets.budget,
     budgetUsage: initialBudgetUsage(),
-    tokenUsage: { available: false, provider: getPiProviderName(), model: config.llm.model },
+    lifetimeBudget: budgets.lifetimeBudget,
+    lifetimeUsage: initialBudgetUsage(),
+    tokenUsage: { available: false, provider: config.llm.provider, model: config.llm.model },
     parentTaskId: parentTask.id,
     projectId: parentTask.projectId,
     // 分支任务重新走权限门禁，不继承父任务的 planApproved
@@ -415,6 +449,7 @@ export function createTask(
   budget?: TaskBudget,
   projectId?: string,
   attachments?: MessageAttachment[],
+  lifetimeBudget?: TaskBudget,
 ): Task {
   const now = new Date().toISOString();
   const parsed = parseSlashCommand(goal);
@@ -427,6 +462,7 @@ export function createTask(
     attachments,
   };
   const autoModeLevel = currentAutoModeLevel();
+  const budgets = snapshotTaskBudgets({ budget, lifetimeBudget });
   const task: Task = {
     id: randomUUID(),
     goal: taskGoal,
@@ -440,9 +476,11 @@ export function createTask(
     clarifications: [],
     pendingApprovals: [],
     checkpoints: [],
-    budget: normalizeBudget(budget),
+    budget: budgets.budget,
     budgetUsage: initialBudgetUsage(),
-    tokenUsage: { available: false, provider: getPiProviderName(), model: config.llm.model },
+    lifetimeBudget: budgets.lifetimeBudget,
+    lifetimeUsage: initialBudgetUsage(),
+    tokenUsage: { available: false, provider: config.llm.provider, model: config.llm.model },
     projectId: projectId ?? undefined,
     autoModeState: createInitialAutoModeState(autoModeLevel),
     createdAt: now,
@@ -452,7 +490,12 @@ export function createTask(
   writeTrace(task.id, 'phase', 'initializing', {
     ok: true,
     summary: '任务已创建，等待 Pi harness 执行',
-    data: { goal: taskGoal, autoModeLevel },
+    data: {
+      goal: taskGoal,
+      autoModeLevel,
+      budget: budgets.budget,
+      lifetimeBudget: budgets.lifetimeBudget,
+    },
   });
   return task;
 }

@@ -3,10 +3,15 @@ import type { ThemeMode, WorkMode } from "./types";
 
 export const MIN_SIDEBAR_WIDTH = 260;
 export const MAX_SIDEBAR_WIDTH = 420;
+export const DEFAULT_SIDEBAR_WIDTH = 280;
 /** Coding workbench (explorer + editor). Wide enough for tree + preview. */
-export const MIN_WORKBENCH_WIDTH = 520;
+export const MIN_WORKBENCH_WIDTH = 320;
 export const MAX_WORKBENCH_WIDTH = 1100;
-export const DEFAULT_WORKBENCH_WIDTH = 720;
+/** Default stays modest so sidebar + main + workbench fit a typical desktop window. */
+export const DEFAULT_WORKBENCH_WIDTH = 520;
+/** Minimum main column width; shell layout shrinks side panels before going below this. */
+export const MIN_MAIN_WIDTH = 360;
+export const RESIZE_HANDLE_WIDTH = 6;
 export const DEFAULT_CHAT_FONT_SIZE = 14;
 export const DEFAULT_UI_FONT_SIZE = 12.5;
 export const DEFAULT_CODE_FONT_SIZE = 12;

@@ -6,7 +6,9 @@
   grid-column: 5;
   width: auto;
   min-width: 0;
+  max-width: 100%;
   height: 100vh;
+  overflow: hidden;
   border-left: 1px solid var(--border);
   background: var(--bg);
 }
@@ -25,7 +27,8 @@
 }
 
 .workbench[data-explorer-open="true"] .workbench-body {
-  grid-template-columns: minmax(0, 1fr) 6px var(--workbench-explorer-width, 220px);
+  /* Explorer max tracks preferred width but can shrink with a narrow workbench. */
+  grid-template-columns: minmax(0, 1fr) 6px minmax(0, var(--workbench-explorer-width, 220px));
 }
 
 .workbench-explorer {

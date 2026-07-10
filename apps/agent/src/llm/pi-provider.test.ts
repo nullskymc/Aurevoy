@@ -59,4 +59,17 @@ describe("createPiModel", () => {
       expect(model.name).toBe("vision-model")
     })
   })
+
+  it("applies configured baseUrl to builtin openai models (multi-provider gateway)", () => {
+    withLlmConfig({
+      provider: "openai",
+      baseUrl: "https://gateway.example.test/v1",
+      model: "gpt-4o-mini",
+    }, () => {
+      const model = createPiModel()
+      expect(model.baseUrl?.replace(/\/+$/, "")).toBe("https://gateway.example.test/v1")
+      // 网关通常只有 chat/completions；不能继续用 catalog 的 responses API
+      expect(model.api).toBe("openai-completions")
+    })
+  })
 })

@@ -1,161 +1,186 @@
-/* ============ 模型选择弹层 ============ */
-.model-popover {
+/* ============ 模型选择菜单 — 与 Composer / ContextMenu 同一设计语言 ============ */
+.model-menu {
   position: fixed;
-  z-index: 30;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  overflow: hidden;
-  border: var(--ui-border-width) solid var(--border);
-  border-radius: var(--ui-radius-md);
-  background: var(--card-bg);
-  box-shadow: var(--ui-shadow-popover);
-}
-
-.model-popover-main {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 6px;
-  min-height: 0;
-  overflow: hidden;
-  padding: 10px;
-}
-
-.model-popover-head {
+  z-index: 40;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--ui-space-2);
+  flex-direction: column;
+  /* 仅 body 内部滚动；菜单本体不要 overflow:hidden，否则圆角外阴影易被裁切 */
+  overflow: visible;
   min-width: 0;
-}
-
-.model-popover-title {
-  margin: 0;
+  padding: var(--ui-space-1);
+  border: var(--ui-border-width) solid var(--border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--card-bg);
+  /* 向上弹出时，大 y 偏移阴影会只剩下半边；改用四周更均匀的浮层阴影 */
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text) 4%, transparent),
+    0 2px 8px color-mix(in srgb, var(--text) 6%, transparent),
+    0 8px 24px color-mix(in srgb, var(--text) 10%, transparent);
   color: var(--text);
   font-size: var(--ui-font-sm);
-  font-weight: 650;
-  line-height: 1.25;
+  line-height: 1.3;
+  animation: model-menu-in 100ms ease-out;
 }
 
-.model-popover-provider {
-  min-width: 0;
-  overflow: hidden;
+@keyframes model-menu-in {
+  from {
+    opacity: 0;
+    /* 不用 scale：部分环境里 transform 会让阴影/合成层看起来被裁半 */
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---- Search（模型多时） ---- */
+.model-menu-search {
+  flex: 0 0 auto;
+  padding: 2px 2px 4px;
+}
+
+.model-menu-search-input {
+  width: 100%;
+  height: var(--ui-control-sm);
+  padding: 0 var(--ui-space-2);
+  border: none;
+  border-radius: var(--ui-radius-sm);
+  background: var(--hover);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--ui-font-sm);
+  outline: none;
+}
+
+.model-menu-search-input::placeholder {
   color: var(--text-tertiary);
-  font-size: var(--ui-font-xs);
+}
+
+/* ---- List ---- */
+.model-menu-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: inherit;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: calc(var(--ui-radius-lg) - 2px);
+  scrollbar-width: thin;
+}
+
+.model-menu-group {
+  padding: 0;
+}
+
+.model-menu-group + .model-menu-group {
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: var(--ui-border-width) solid var(--border);
+}
+
+.model-menu-group-label {
+  margin: 0;
+  padding: 6px var(--ui-space-2) 2px;
+  color: var(--text-tertiary);
+  font-size: calc(var(--ui-font-sm) - 1px);
+  font-weight: 500;
   line-height: 1.25;
+  letter-spacing: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: none;
 }
 
-.model-popover-list {
-  display: grid;
-  gap: 6px;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.model-popover-group {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.model-popover-group-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 0;
-  padding: 4px 8px 2px;
-  color: var(--text-tertiary);
-  font-size: var(--ui-font-xs);
-  font-weight: 650;
-  letter-spacing: 0.02em;
-  text-transform: none;
-}
-
-.model-popover-group-warn {
-  color: var(--warn-soft-fg);
-  font-style: normal;
-  font-weight: 600;
-}
-
-.model-popover-item,
-.model-popover-action {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--ui-space-2);
+/* 与 composer-chip / ctx-item 同规格 */
+.model-menu-item {
+  display: block;
   width: 100%;
-  min-height: 30px;
+  min-height: var(--ui-control-sm);
+  margin: 0;
+  padding: 0 var(--ui-space-2);
   border: none;
-  border-radius: var(--ui-radius-md);
+  border-radius: var(--ui-radius-sm);
   background: transparent;
-  color: var(--text);
+  color: var(--text-secondary);
+  font: inherit;
+  font-family: inherit;
   font-size: var(--ui-font-sm);
   font-weight: 500;
-  line-height: 1.3;
-  padding: 5px var(--ui-space-2);
+  line-height: 1;
   text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+  outline: none;
+  transition: background 80ms ease, color 80ms ease;
 }
 
-.model-popover-item:hover:not(:disabled),
-.model-popover-action:hover {
+.model-menu-item:hover:not(:disabled),
+.model-menu-item[data-highlight="true"]:not(:disabled) {
   background: var(--hover);
-}
-
-.model-popover-item[data-active="true"] {
-  background: var(--active);
   color: var(--text);
 }
 
-.model-popover-item:disabled {
+.model-menu-item[data-active="true"] {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.model-menu-item:disabled {
+  color: var(--text-tertiary);
+  opacity: 0.55;
   cursor: default;
 }
 
-.model-popover-model {
+/* ---- Empty / foot ---- */
+.model-menu-empty {
   display: grid;
-  gap: 2px;
-  min-width: 0;
+  gap: 6px;
+  padding: var(--ui-space-2);
 }
 
-.model-popover-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.model-menu-empty p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
+  line-height: 1.4;
+}
+
+.model-menu-foot {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: var(--ui-border-width) solid var(--border);
+}
+
+.model-menu-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--ui-control-sm);
+  padding: 0 var(--ui-space-2);
+  border: none;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--ui-font-sm);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
   white-space: nowrap;
 }
 
-.model-popover-current {
-  color: var(--text-tertiary);
-  font-size: var(--ui-font-xs);
-  font-weight: 500;
-}
-
-.model-popover-empty {
-  margin: 0;
-  padding: var(--ui-space-1) 0 var(--ui-space-2);
+.model-menu-link:hover {
+  background: var(--hover);
   color: var(--text-secondary);
-  font-size: var(--ui-font-sm);
-  line-height: 1.45;
 }
 
-.model-popover-footer {
-  display: grid;
-  gap: var(--ui-space-1);
-  border-top: var(--ui-border-width) solid var(--border);
-  padding: 8px 10px;
-}
-
-.model-popover-action {
-  justify-content: center;
-  min-height: 32px;
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: var(--ui-font-sm);
-  font-weight: 600;
-}
-
+/* ---- Legacy: tool card bits still imported via this stylesheet ---- */
 .toast-close {
   flex: 0 0 auto;
   border: none;

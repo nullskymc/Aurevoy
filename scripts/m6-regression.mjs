@@ -100,12 +100,29 @@ async function caseBudgetExceeded() {
   const created = await postJson('/api/tasks', {
     goal: 'M6_BUDGET exceed iteration',
     budget: { maxIterations: 1 },
+    lifetimeBudget: { maxIterations: 10 },
   });
   await collectTaskStream(created.task.id);
   const task = await getJson(`/api/tasks/${created.task.id}`);
   const traces = await getTraces(created.task.id);
-  assert(task.status === 'failed', '预算超限未失败');
-  assert(traces.some((trace) => trace.errorMessage?.includes('预算超限')), '预算超限缺少 trace');
+  assert(task.status === 'paused', '预算超限应暂停而非失败');
+  assert(task.phase === 'waiting_budget', '预算超限 phase 应为 waiting_budget');
+  assert(task.budgetExceeded?.limitName === 'maxIterations', 'budgetExceeded 缺少 limitName');
+  assert(
+    traces.some((trace) =>
+      (trace.summary && trace.summary.includes('预算')) ||
+      (trace.errorCategory === 'budget'),
+    ),
+    '预算超限缺少 trace',
+  );
+
+  // 续跑：本轮用量重置，寿命累计；再给 1 轮应再次触顶
+  const continued = await postJson(`/api/tasks/${created.task.id}/budget/continue`, {});
+  assert(continued.task, 'budget/continue 未返回 task');
+  await collectTaskStream(created.task.id);
+  const after = await getJson(`/api/tasks/${created.task.id}`);
+  assert(after.status === 'paused' || after.status === 'completed', '续跑后应暂停或完成');
+  assert((after.lifetimeUsage?.iterations ?? 0) >= 1, '寿命用量应累计');
 }
 
 async function caseTokenUsageRecorded() {
@@ -214,7 +231,11 @@ async function startLlmFixture() {
       return;
     }
     const body = JSON.parse(await readRequestBody(req));
-    const userText = body.messages.find((message) => message.role === 'user')?.content ?? '';
+    // 汇总所有 user 文本：Pi 可能把 content 编成 multipart / 对象，不能直接 String.includes
+    const userText = body.messages
+      .filter((message) => message.role === 'user')
+      .map((message) => extractMessageText(message.content))
+      .join('\n');
     const toolMessages = body.messages.filter((message) => message.role === 'tool');
     const hasToolResult = toolMessages.length > 0;
 
@@ -237,12 +258,38 @@ async function startLlmFixture() {
   return { server, url: `http://127.0.0.1:${server.address().port}` };
 }
 
+function extractMessageText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object') {
+          if (typeof part.text === 'string') return part.text;
+          if (typeof part.content === 'string') return part.content;
+        }
+        return '';
+      })
+      .join('\n');
+  }
+  if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') return content.text;
+    if (typeof content.content === 'string') return content.content;
+    try {
+      return JSON.stringify(content);
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
 function chooseFirstTool(userText) {
   if (userText.includes('M6_ASK')) {
     return {
       id: 'call_ask',
       name: 'ask_user',
-      args: { question: '保存到哪个路径？', context: '需要写入路径才能继续。' },
+      args: { message: '保存到哪个路径？', context: '需要写入路径才能继续。' },
     };
   }
   if (userText.includes('M6_ARTIFACT')) {

@@ -272,18 +272,35 @@ export function useAgentEventHandler({
         const upsert = event.type === "content_blocks_upserted";
         setCurrentTask((previous) => {
           if (!previous) return previous;
-          const messages = (previous.messages ?? []).map((msg) => {
-            if (msg.id !== event.messageId) return msg;
-            return {
-              ...msg,
-              contentBlocks: mergeContentBlocks(msg.contentBlocks, event.blocks, upsert),
-            };
-          });
+          const previousMessages = previous.messages ?? [];
+          const hitIndex = previousMessages.findIndex((msg) => msg.id === event.messageId);
+          let messages = previousMessages;
+          if (hitIndex >= 0) {
+            messages = previousMessages.map((msg, index) =>
+              index === hitIndex
+                ? { ...msg, contentBlocks: mergeContentBlocks(msg.contentBlocks, event.blocks, upsert) }
+                : msg,
+            );
+          } else {
+            // messageId 未命中：挂到最近一条 assistant，避免块只活在 live tail、归属错乱
+            const next = previousMessages.slice();
+            for (let i = next.length - 1; i >= 0; i--) {
+              if (next[i].role !== "assistant") continue;
+              next[i] = {
+                ...next[i],
+                contentBlocks: mergeContentBlocks(next[i].contentBlocks, event.blocks, upsert),
+              };
+              messages = next;
+              break;
+            }
+          }
           const nextTask = { ...previous, messages };
           updateTaskList(nextTask);
           return nextTask;
         });
-        setLiveContentBlocks((prev) => mergeContentBlocks(prev, event.blocks, upsert));
+        // 历史消息已承载这些块时，立刻从 live tail 移除，防止「所有消息底部都挂同一文件卡」
+        const blockIds = new Set(event.blocks.map((block) => block.id));
+        setLiveContentBlocks((prev) => prev.filter((block) => !blockIds.has(block.id)));
         // attach_content 文件引用：默认在侧边栏打开可预览类型（html/md 等）
         if (event.type === "content_blocks_added" && onAttachedPreviewFiles) {
           const paths = event.blocks
@@ -306,7 +323,26 @@ export function useAgentEventHandler({
         });
         break;
       case "budget_usage":
-        patchCurrentTask({ budgetUsage: event.usage, budget: event.budget });
+        patchCurrentTask({
+          budgetUsage: event.usage,
+          budget: event.budget,
+          lifetimeUsage: event.lifetimeUsage,
+          lifetimeBudget: event.lifetimeBudget,
+        });
+        break;
+      case "budget_exceeded":
+        setStatus("paused");
+        setPhase("waiting_budget");
+        setPhaseDetail(event.info.reason);
+        patchCurrentTask({
+          status: "paused",
+          phase: "waiting_budget",
+          budgetExceeded: event.info,
+          budgetUsage: event.info.runUsage,
+          lifetimeUsage: event.info.lifetimeUsage,
+          budget: event.info.runBudget,
+          lifetimeBudget: event.info.lifetimeBudget,
+        });
         break;
       case "token_usage":
         patchCurrentTask({ tokenUsage: event.usage });
@@ -368,27 +404,24 @@ export function useAgentEventHandler({
           clearLiveState();
         }
         break;
-      case "done":
+      case "done": {
         clearLiveState();
         setStatus(event.status);
-        setPhase(
+        const donePhase: TaskPhase =
           event.status === "cancelled"
             ? "cancelled"
             : event.status === "failed"
               ? "failed"
-              : "finalizing",
-        );
-        setPhaseDetail("");
+              : event.status === "paused"
+                ? "waiting_budget"
+                : "finalizing";
+        setPhase(donePhase);
+        if (event.status !== "paused") setPhaseDetail("");
         setBusy(false);
         setAutoModeState(null);
         patchCurrentTask({
           status: event.status,
-          phase:
-            event.status === "cancelled"
-              ? "cancelled"
-              : event.status === "failed"
-                ? "failed"
-                : "finalizing",
+          phase: donePhase,
         });
         closeStream();
         void refreshRuntime();
@@ -397,11 +430,17 @@ export function useAgentEventHandler({
           .then((full) => {
             setCurrentTask((previous) => (previous?.id === full.id ? full : previous));
             updateTaskList(full);
+            if (full.status === "paused" && full.phase === "waiting_budget") {
+              setStatus("paused");
+              setPhase("waiting_budget");
+              if (full.budgetExceeded?.reason) setPhaseDetail(full.budgetExceeded.reason);
+            }
           })
           .catch(() => {
             /* 3 次重试后仍失败：核心数据已通过 SSE message 事件覆盖 */
           });
         break;
+      }
       case "error":
         setStatus("failed");
         setPhase("failed");

@@ -9,6 +9,7 @@ import {
   type Models as PiModels,
 } from '@earendil-works/pi-ai';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
+import { filterChatModelIds } from '@aurevoy/shared';
 import { config } from '../config.js';
 
 // ---- Dynamic model discovery via Pi's createProvider + refreshModels ----
@@ -81,6 +82,30 @@ export function assertPiLLMConfigured(): void {
   }
 }
 
+/**
+ * 运行时模型端点：设置/环境里的 baseUrl 优先于 Pi 内置 catalog。
+ * 多 Provider 槽位会把用户网关写进 config.llm.baseUrl；若仍用 catalog 默认
+ * api.openai.com 等地址，会导致请求打到错误端点，usage 也拿不到。
+ */
+export function resolveModelBaseUrl(modelBaseUrl?: string): string {
+  const configured = config.llm.baseUrl?.trim().replace(/\/+$/, '');
+  if (configured) return configured;
+  return (modelBaseUrl ?? '').replace(/\/+$/, '');
+}
+
+/**
+ * 非官方 OpenAI 主机时，把 catalog 里的 Responses API 降级为 chat/completions。
+ * 多数第三方网关只实现 /v1/chat/completions；强行走 /v1/responses 会直接失败，
+ * 任务虽能「看起来结束」但 token usage 永远为空。
+ */
+export function resolveModelApi(api: string | undefined, baseUrl: string, provider: string): string {
+  const resolved = api || fallbackApiForProvider(provider);
+  if (!isOfficialOpenAIHost(baseUrl) && (resolved === 'openai-responses' || resolved === 'openai-codex-responses')) {
+    return 'openai-completions';
+  }
+  return resolved;
+}
+
 export function createPiModel(modelOverride?: string): PiModel<any> {
   const provider = normalizePiProvider(config.llm.provider);
   const modelId = modelOverride?.trim() || config.llm.model;
@@ -89,9 +114,12 @@ export function createPiModel(modelOverride?: string): PiModel<any> {
     modelId,
   );
   if (builtin) {
-    const withBaseUrl = config.llm.provider === 'openai-compatible'
-      ? { ...builtin, baseUrl: config.llm.baseUrl || builtin.baseUrl }
-      : builtin;
+    const baseUrl = resolveModelBaseUrl(builtin.baseUrl);
+    const withBaseUrl = {
+      ...builtin,
+      baseUrl,
+      api: resolveModelApi(builtin.api, baseUrl, provider) as typeof builtin.api,
+    };
     // 确保 DeepSeek / Qwen builtin 模型在 compat 缺失时仍有 reasoning_content 重放字段
     const needCompat = (
       withBaseUrl.provider === 'deepseek' ||
@@ -110,16 +138,17 @@ export function createPiModel(modelOverride?: string): PiModel<any> {
     }
     return withBaseUrl;
   }
-  const api = fallbackApiForProvider(provider);
+  const baseUrl = resolveModelBaseUrl();
+  const api = resolveModelApi(fallbackApiForProvider(provider), baseUrl, provider);
   const openAICompat = api === 'openai-completions'
-    ? openAICompletionsFallbackCompat(provider, config.llm.baseUrl, modelId)
+    ? openAICompletionsFallbackCompat(provider, baseUrl, modelId)
     : undefined;
   return {
     id: modelId,
     name: modelId,
     api,
     provider,
-    baseUrl: config.llm.baseUrl,
+    baseUrl,
     reasoning: openAICompat?.reasoning ?? false,
     ...(openAICompat?.thinkingLevelMap ? { thinkingLevelMap: openAICompat.thinkingLevelMap } : {}),
     input: ['text', 'image'],
@@ -142,9 +171,11 @@ export async function listPiProviderModels(): Promise<string[]> {
     }
   }
 
-  const ids = models.getModels(normalized).map((m) => m.id).filter(Boolean);
+  const ids = filterChatModelIds(models.getModels(normalized).map((m) => m.id).filter(Boolean));
   if (ids.length > 0) return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
-  return config.llm.model.trim() ? [config.llm.model.trim()] : [];
+  // 回退：当前主模型即使像 embedding 也保留，避免空列表卡死配置
+  const fallback = config.llm.model.trim();
+  return fallback ? [fallback] : [];
 }
 
 export function resetPiProviderCache(): void {
@@ -235,6 +266,11 @@ function safeHost(url: string): string {
   } catch {
     return '';
   }
+}
+
+function isOfficialOpenAIHost(baseUrl: string): boolean {
+  const host = safeHost(baseUrl);
+  return host === 'api.openai.com' || host.endsWith('.openai.azure.com');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -148,10 +148,16 @@ function App() {
     handleCreateMemory,
     handleDeleteMemory,
     handleEditMemory,
+    handleActivateProviderModel,
     handleFetchModels,
+    handleFetchModelsForProvider,
+    handleRemoveProvider,
     handleSaveEnabledModels,
+    handleSaveSlotEnabledModels,
     handleSaveModelSelection,
+    handleSaveProviderConnection,
     handleSaveSettings,
+    handleSaveVisionModel,
     handleToggleMemory,
     refreshMemories,
     refreshSettings,
@@ -341,7 +347,7 @@ function App() {
 
   function handleOpenFullSettingsFromModelDrawer(): void {
     setModelDrawerOpen(false);
-    handleOpenSettings("provider");
+    handleOpenSettings("models");
   }
 
   function handleOpenSearch(): void {
@@ -405,7 +411,8 @@ function App() {
     currentTask.status !== "completed" &&
     currentTask.status !== "running" &&
     currentTask.status !== "planning" &&
-    currentTask.status !== "paused";
+    // 普通 paused（审批/追问）由对应 UI 处理；预算触顶 paused 可 resume 续跑
+    (currentTask.status !== "paused" || currentTask.phase === "waiting_budget");
 
   const hasLiveTail =
     busy ||
@@ -492,10 +499,16 @@ function App() {
             initialSection={settingsInitialSection}
             onClose={handleCloseSettings}
             onSave={handleSaveSettings}
+            onSaveConnection={handleSaveProviderConnection}
             onCleanup={handleCleanupData}
             onRefresh={refreshSettings}
             onFetchModels={handleFetchModels}
+            onFetchModelsForProvider={handleFetchModelsForProvider}
             onSaveEnabledModels={handleSaveEnabledModels}
+            onSaveSlotEnabledModels={handleSaveSlotEnabledModels}
+            onSelectModel={handleActivateProviderModel}
+            onSaveVisionModel={handleSaveVisionModel}
+            onRemoveProvider={handleRemoveProvider}
             onChatFontSizeChange={handleChatFontSizeChange}
             onUiFontSizeChange={handleUiFontSizeChange}
             onCodeFontSizeChange={handleCodeFontSizeChange}

@@ -22,12 +22,11 @@ import {
 import type { ModelSelectorDraft } from "../components/ModelSelectorDrawer";
 import type { SettingsDraft } from "../components/SettingsPanel";
 import type { AutoModeLevel } from "../app/types";
-import { parseProviderModel } from "../app/taskUtils";
 import { t } from "../i18n";
 import type { DataStatus } from "./useSettings";
 
 export function useSettingsController({
-  health,
+  health: _health,
   refreshRuntime,
   runtimeSettings,
   setAutoModeLevel,
@@ -79,24 +78,37 @@ export function useSettingsController({
     }
   }
 
-  function handleSaveSettings(draft: SettingsDraft): void {
-    // 启用模型列表按 provider 分槽：写入目标 provider 自己的列表，避免把当前激活槽位的模型带过去
-    const targetSlot = runtimeSettings?.llm.providers?.find((slot) => slot.provider === draft.provider);
-    const isSameProvider = runtimeSettings?.llm.provider === draft.provider;
-    const baseEnabled = isSameProvider
-      ? (runtimeSettings?.llm.enabledModels ?? [])
-      : (targetSlot?.enabledModels ?? []);
-    const mergedEnabled = draft.model
-      ? (baseEnabled.includes(draft.model) ? baseEnabled : [draft.model, ...baseEnabled])
-      : baseEnabled;
+  /** Provider 连接：只写密钥 / Base URL / maxTokens，不改默认模型、启用列表、视觉模型。 */
+  function handleSaveProviderConnection(draft: SettingsDraft): void {
+    const body: UpdateRuntimeSettingsRequest = {
+      llm: {
+        provider: draft.provider,
+        baseUrl: draft.baseUrl,
+        maxTokens: draft.maxTokens,
+        ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+      },
+    };
+    setSettingsSaving(true);
+    void updateSettings(body)
+      .then((next) => {
+        setRuntimeSettings(next);
+        setHealth((previous) =>
+          previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
+        );
+        setNotice(t("notice.settingsSaved"));
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setSettingsSaving(false));
+  }
 
+  function handleSaveSettings(draft: SettingsDraft): void {
+    // 不强制把 model 并入 enabled：启用勾选与「正在使用」解耦
     const body: UpdateRuntimeSettingsRequest = {
       llm: {
         provider: draft.provider,
         baseUrl: draft.baseUrl,
         model: draft.model,
-        visionModel: draft.visionModel,
-        enabledModels: mergedEnabled,
         maxTokens: draft.maxTokens,
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
       },
@@ -106,6 +118,18 @@ export function useSettingsController({
       agentToolExecution: draft.agentToolExecution as "sequential" | "parallel",
       mcpServersJson: draft.mcpServersJson,
       cleanupPolicyDays: draft.cleanupPolicyDays,
+      budget: {
+        run: {
+          maxIterations: draft.budgetRunMaxIterations,
+          maxToolCalls: draft.budgetRunMaxToolCalls,
+          maxWallTimeMs: draft.budgetRunMaxWallTimeMin * 60_000,
+        },
+        lifetime: {
+          maxIterations: draft.budgetLifetimeMaxIterations,
+          maxToolCalls: draft.budgetLifetimeMaxToolCalls,
+          maxWallTimeMs: draft.budgetLifetimeMaxWallTimeMin * 60_000,
+        },
+      },
       embedding: {
         provider: draft.embeddingProvider as "openai" | "off",
         model: draft.embeddingModel,
@@ -132,9 +156,25 @@ export function useSettingsController({
       .finally(() => setSettingsSaving(false));
   }
 
+  /**
+   * 全局视觉模型：只写 visionModel，不切换激活 provider。
+   * 值推荐 namespace：`provider:model`；空字符串表示清除（回退主模型）。
+   */
+  function handleSaveVisionModel(visionModel: string): void {
+    setSettingsSaving(true);
+    void updateSettings({ llm: { visionModel } })
+      .then((next) => {
+        setRuntimeSettings(next);
+        setNotice(t("notice.settingsSaved"));
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setSettingsSaving(false));
+  }
+
   function handleSaveModelSelection(draft: ModelSelectorDraft): void {
     setSettingsSaving(true);
-    // 跨 provider 切换：同时写入 provider + model，后端会激活对应槽位的 key/baseUrl
+    // 跨 provider 切换：写入 provider + model；后端会激活槽位、持久化，并自动启用该模型
     void updateSettings({ llm: { provider: draft.provider, model: draft.model } })
       .then((next) => {
         setRuntimeSettings(next);
@@ -143,30 +183,26 @@ export function useSettingsController({
         );
         onModelSaved?.();
         setNotice(t("notice.modelSwitched"));
-        return refreshRuntime();
+        return Promise.all([refreshSettings(), refreshRuntime()]);
       })
       .catch((err) => setNotice(`${t("notice.switchModelFailed")}${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setSettingsSaving(false));
   }
 
+  /** 仅刷新 availableModels；保留仍有效的启用勾选，不强制勾选默认模型。 */
   function handleFetchModels(): void {
     setFetchingModels(true);
     void listProviderModels()
       .then((models) => {
-        const currentModel = runtimeSettings?.llm.model ?? parseProviderModel(health?.provider);
         const existingEnabled = runtimeSettings?.llm.enabledModels ?? [];
-        const firstFetch = (runtimeSettings?.llm.availableModels.length ?? 0) === 0;
-        const enabledModels = !firstFetch && existingEnabled.length > 0
-          ? existingEnabled.filter((model) => models.includes(model))
-          : [];
-        if (currentModel && models.includes(currentModel) && !enabledModels.includes(currentModel)) {
-          enabledModels.unshift(currentModel);
-        }
+        const enabledModels = existingEnabled.filter((model) => models.includes(model));
         return updateSettings({ llm: { availableModels: models, enabledModels } });
       })
       .then((next) => {
         setRuntimeSettings(next);
-        setNotice(`${t("notice.fetchedModelsPrefix")} ${next.llm.availableModels.length} ${t("notice.fetchedModelsMid")} ${next.llm.enabledModels.length} ${t("notice.fetchedModelsSuffix")}`);
+        setNotice(
+          `${t("notice.fetchedModelsPrefix")}${next.llm.availableModels.length}${t("notice.fetchedModelsSuffix")}`,
+        );
         return refreshSettings();
       })
       .catch((err) => setNotice(`${t("notice.fetchModelsFailed")}${err instanceof Error ? err.message : String(err)}`))
@@ -174,16 +210,115 @@ export function useSettingsController({
   }
 
   function handleSaveEnabledModels(models: string[]): void {
-    const currentModel = runtimeSettings?.llm.model;
-    const enabledModels = currentModel && !models.includes(currentModel) ? [currentModel, ...models] : models;
     setSettingsSaving(true);
-    void updateSettings({ llm: { enabledModels } })
+    void updateSettings({ llm: { enabledModels: models } })
       .then((next) => {
         setRuntimeSettings(next);
         setNotice(`${t("notice.enabledModelsPrefix")} ${next.llm.enabledModels.length} ${t("notice.enabledModelsSuffix")}`);
         return refreshSettings();
       })
       .catch((err) => setNotice(`${t("notice.saveModelListFailed")}${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setSettingsSaving(false));
+  }
+
+  /**
+   * 更新任意槽位的 enabledModels（允许空列表）。
+   * 统一走 slotEnabledModels，后端同时维护 map + 激活槽扁平字段。
+   */
+  function handleSaveSlotEnabledModels(provider: string, models: string[]): void {
+    const enabledModels = [...models];
+    void updateSettings({ llm: { slotEnabledModels: { provider, enabledModels } } })
+      .then((next) => {
+        setRuntimeSettings(next);
+        const count =
+          next.llm.providers.find((item) => item.provider === provider)?.enabledModels.length
+          ?? (next.llm.provider === provider ? next.llm.enabledModels.length : 0);
+        setNotice(`${t("notice.enabledModelsPrefix")} ${count} ${t("notice.enabledModelsSuffix")}`);
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`${t("notice.saveModelListFailed")}${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  /**
+   * 为指定 provider 拉取模型列表（只写 availableModels；保留仍有效的启用勾选，不强制勾选）。
+   * 非当前激活槽时会先切换激活再拉取（listProviderModels 依赖当前激活 provider）。
+   */
+  function handleFetchModelsForProvider(provider: string): void {
+    setFetchingModels(true);
+    const priorSlot = runtimeSettings?.llm.providers?.find((s) => s.provider === provider);
+    const priorEnabled =
+      runtimeSettings?.llm.provider === provider
+        ? (runtimeSettings.llm.enabledModels ?? [])
+        : (priorSlot?.enabledModels ?? []);
+
+    const ensureActive =
+      runtimeSettings?.llm.provider === provider
+        ? Promise.resolve(runtimeSettings)
+        : updateSettings({ llm: { provider } }).then((next) => {
+            setRuntimeSettings(next);
+            setHealth((previous) =>
+              previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
+            );
+            return next;
+          });
+
+    void ensureActive
+      .then(() => listProviderModels())
+      .then((models) => {
+        const enabledModels = priorEnabled.filter((model) => models.includes(model));
+        return updateSettings({ llm: { availableModels: models, enabledModels } });
+      })
+      .then((next) => {
+        setRuntimeSettings(next);
+        setNotice(
+          `${t("notice.fetchedModelsPrefix")}${next.llm.availableModels.length}${t("notice.fetchedModelsSuffix")}`,
+        );
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`${t("notice.fetchModelsFailed")}${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setFetchingModels(false));
+  }
+
+  /**
+   * 设置某槽位默认模型：不切换激活 provider（避免误切）。
+   * 若就是当前激活槽，则同时更新全局主模型。
+   */
+  function handleSaveSlotDefaultModel(provider: string, model: string): void {
+    setSettingsSaving(true);
+    void updateSettings({ llm: { slotModel: { provider, model } } })
+      .then((next) => {
+        setRuntimeSettings(next);
+        if (next.llm.provider === provider) {
+          setHealth((previous) =>
+            previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
+          );
+        }
+        setNotice(t("notice.settingsSaved"));
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setSettingsSaving(false));
+  }
+
+  /** 切换到指定 provider + model 并持久化（设置页点模型名 / 与抽屉切换同一路径）。 */
+  function handleActivateProviderModel(provider: string, model: string): void {
+    handleSaveModelSelection({ provider, model });
+  }
+
+  function handleRemoveProvider(provider: string): void {
+    setSettingsSaving(true);
+    void updateSettings({ llm: { removeProvider: provider } })
+      .then((next) => {
+        setRuntimeSettings(next);
+        setHealth((previous) =>
+          previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
+        );
+        setNotice(t("notice.providerDisconnected"));
+        return refreshSettings();
+      })
+      .catch((err) =>
+        setNotice(`${t("notice.disconnectProviderFailed")}${err instanceof Error ? err.message : String(err)}`),
+      )
       .finally(() => setSettingsSaving(false));
   }
 
@@ -221,14 +356,21 @@ export function useSettingsController({
   }
 
   return {
+    handleActivateProviderModel,
     handleCleanupData,
     handleCreateMemory,
     handleDeleteMemory,
     handleEditMemory,
     handleFetchModels,
+    handleFetchModelsForProvider,
     handleSaveEnabledModels,
+    handleSaveSlotDefaultModel,
+    handleSaveSlotEnabledModels,
+    handleRemoveProvider,
     handleSaveModelSelection,
+    handleSaveProviderConnection,
     handleSaveSettings,
+    handleSaveVisionModel,
     handleToggleMemory,
     refreshMemories,
     refreshSettings,

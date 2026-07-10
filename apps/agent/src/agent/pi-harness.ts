@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import { extname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   AgentHarness,
@@ -35,6 +35,7 @@ import { createModels, createProvider } from '@earendil-works/pi-ai';
 import type {
   AgentEvent,
   AggregatedTokenUsage,
+  BudgetExceededInfo,
   ContentBlock,
   Message,
   MessageAttachment,
@@ -65,9 +66,25 @@ import {
   TOOLS_KEEP_VERBATIM,
   compactToolResult,
 } from './context.js';
-import { createCheckpoint, createClarification, effectiveBudget, initialBudgetUsage, resolveClarification, updateWallTime } from './m6-state.js';
+import {
+  beginRunBudget,
+  createArtifact,
+  createCheckpoint,
+  createClarification,
+  effectiveBudget,
+  effectiveLifetimeBudget,
+  evaluateBudgetStop,
+  finalizeRunWallTime,
+  initialBudgetUsage,
+  markArtifactApplied,
+  recordIteration,
+  recordOutputBytes,
+  recordToolCall,
+  resolveClarification,
+  updateWallTime,
+} from './m6-state.js';
 import { waitForPiApproval } from './pi-approval.js';
-import { assertPiLLMConfigured, createPiModel } from '../llm/pi-provider.js';
+import { assertPiLLMConfigured, createPiModel, resolveModelApi } from '../llm/pi-provider.js';
 import { approvalConfigFromTask, decideToolPermission } from './approval.js';
 import { skillRegistry } from '../skills/registry.js';
 import { scheduleTaskTitleRefine } from './task-title.js';
@@ -94,7 +111,10 @@ const TEXT_EXTENSIONS = new Set([
 const MAX_ATTACHMENT_CONTENT_CHARS = 30_000;
 const activePiControllers = new Map<string, ActivePiTaskController>();
 const pendingClarificationResolvers = new Map<string, Map<string, (answer: string) => void>>();
-const budgetStopReasons = new Map<string, string>();
+/** 本 run 因预算触顶而中止时暂存详情；harness.prompt 返回后转 waiting_budget。 */
+const budgetStopByTask = new Map<string, BudgetExceededInfo>();
+/** 本 run 开始时已累计的寿命墙钟，用于叠加上本 run 墙钟。 */
+const lifetimeWallAtRunStartByTask = new Map<string, number>();
 const invalidPiToolCallErrors = new Map<string, Map<string, string>>();
 
 /**
@@ -193,12 +213,15 @@ export function resolvePiHarnessClarificationAnswer(taskId: string, clarificatio
 
 export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): Promise<void> {
   task.pendingApprovals = [];
-  task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
+  const { lifetimeWallAtRunStart } = beginRunBudget(task);
+  lifetimeWallAtRunStartByTask.set(task.id, lifetimeWallAtRunStart);
+  budgetStopByTask.delete(task.id);
   setTaskState(task, 'running', 'initializing');
   updateContextSnapshot(task);
   saveTask(task);
   publish({ type: 'status', taskId: task.id, status: 'running' });
   publish({ type: 'phase', taskId: task.id, phase: 'initializing', detail: '准备 Pi harness' });
+  publishBudgetUsage(task);
   publish({ type: 'context_snapshot', taskId: task.id, tokens: task.contextTokens ?? 0 });
   await publishScoutReport(task, options.workspaceDir);
 
@@ -225,22 +248,31 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
       activePiControllers.delete(task.id);
       invalidPiToolCallErrors.delete(task.id);
       cachePrefixByTask.delete(task.id);
+      const wallStart = lifetimeWallAtRunStartByTask.get(task.id) ?? 0;
+      finalizeRunWallTime(task, wallStart, options.taskStartedAtMs);
+      lifetimeWallAtRunStartByTask.delete(task.id);
     }
 
     if (options.signal.aborted) {
       finishCancelled(task);
       return;
     }
-    const budgetStopReason = budgetStopReasons.get(task.id);
-    if (budgetStopReason) {
-      budgetStopReasons.delete(task.id);
-      finishFailed(task, new Error(`预算超限：${budgetStopReason}`), 'timeout');
+    const budgetStop = budgetStopByTask.get(task.id);
+    if (budgetStop) {
+      budgetStopByTask.delete(task.id);
+      finishBudgetPaused(task, budgetStop);
       return;
     }
     finishCompleted(task);
   } catch (err) {
     if (options.signal.aborted) {
       finishCancelled(task);
+      return;
+    }
+    const budgetStop = budgetStopByTask.get(task.id);
+    if (budgetStop) {
+      budgetStopByTask.delete(task.id);
+      finishBudgetPaused(task, budgetStop);
       return;
     }
     const message = err instanceof Error ? err.message : String(err);
@@ -305,24 +337,34 @@ async function createPiHarness(
 }
 
 export function createAurevoyPiModels(selectedModel: PiModel<any>): PiModels {
+  // 请求侧端点：config.llm.baseUrl（设置槽位）优先，避免 catalog 默认官方 URL 盖住用户网关
+  const requestBaseUrl = (config.llm.baseUrl?.trim() || selectedModel.baseUrl || '').replace(/\/+$/, '');
+  const requestApi = resolveModelApi(selectedModel.api, requestBaseUrl, selectedModel.provider);
+  const modelForRequest = {
+    ...selectedModel,
+    baseUrl: requestBaseUrl || selectedModel.baseUrl,
+    api: requestApi as typeof selectedModel.api,
+  };
   const provider = createProvider({
-    id: selectedModel.provider,
-    name: selectedModel.provider,
-    baseUrl: selectedModel.baseUrl,
+    id: modelForRequest.provider,
+    name: modelForRequest.provider,
+    baseUrl: modelForRequest.baseUrl,
     auth: {
       apiKey: {
         name: 'Aurevoy API Key',
         resolve: async () => ({
           auth: {
             apiKey: config.llm.apiKey,
-            baseUrl: selectedModel.baseUrl ?? config.llm.baseUrl,
+            // 必须优先用设置里的 baseUrl；否则 builtin 模型会把请求打回官方域名，
+            // 多 Provider 网关下既可能鉴权失败，也可能拿不到 stream usage。
+            baseUrl: modelForRequest.baseUrl,
           },
           source: 'AUREVOY_LLM_API_KEY',
         }),
       },
     },
-    models: [selectedModel],
-    api: getApiForApiName(selectedModel.api),
+    models: [modelForRequest],
+    api: getApiForApiName(modelForRequest.api),
   });
   const models = createModels();
   models.setProvider(provider);
@@ -409,28 +451,43 @@ function createHarnessSkills(): PiHarnessSkill[] {
 }
 
 function shouldStopAfterTurn(task: Task, taskStartedAtMs: number): boolean {
-  task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
-  updateWallTime(task, taskStartedAtMs);
-  const usage = task.budgetUsage;
-  const budget = effectiveBudget(task);
-  const reason =
-    usage.iterations >= budget.maxIterations ? `达到最大轮次 ${budget.maxIterations}` :
-    usage.toolCalls >= budget.maxToolCalls ? `达到最大工具调用数 ${budget.maxToolCalls}` :
-    usage.wallTimeMs >= budget.maxWallTimeMs ? `达到最大运行时间 ${budget.maxWallTimeMs}ms` :
-    usage.outputBytes >= budget.maxOutputBytes ? `达到最大输出字节数 ${budget.maxOutputBytes}` :
-    null;
-  if (!reason) return false;
+  const lifetimeWallAtRunStart = lifetimeWallAtRunStartByTask.get(task.id) ?? 0;
+  const info = evaluateBudgetStop(task, taskStartedAtMs, lifetimeWallAtRunStart);
+  if (!info) return false;
 
-  budgetStopReasons.set(task.id, reason);
+  // 仅记录停步意图；budget_exceeded 事件在 finishBudgetPaused 统一发出，避免重复推送
+  budgetStopByTask.set(task.id, info);
+  task.budgetExceeded = info;
   saveTask(task);
-  publish({ type: 'budget_usage', taskId: task.id, usage, budget: task.budget });
+  publishBudgetUsage(task);
   writePiTrace(task, 'phase', {
     ok: true,
     phase: task.phase,
-    summary: `本轮结束后主动停步：${reason}`,
-    data: { usage, budget },
+    errorCategory: 'budget',
+    summary: `本轮结束后主动停步：${info.reason}`,
+    data: {
+      scope: info.scope,
+      limitName: info.limitName,
+      used: info.used,
+      limit: info.limit,
+      runUsage: info.runUsage,
+      lifetimeUsage: info.lifetimeUsage,
+      runBudget: info.runBudget,
+      lifetimeBudget: info.lifetimeBudget,
+    },
   });
   return true;
+}
+
+function publishBudgetUsage(task: Task): void {
+  publish({
+    type: 'budget_usage',
+    taskId: task.id,
+    usage: task.budgetUsage ?? initialBudgetUsage(),
+    budget: effectiveBudget(task),
+    lifetimeUsage: task.lifetimeUsage ?? initialBudgetUsage(),
+    lifetimeBudget: effectiveLifetimeBudget(task),
+  });
 }
 
 async function publishScoutReport(task: Task, workspaceDir: string): Promise<void> {
@@ -522,7 +579,27 @@ function selectPiModelForTask(task: Task): PiModel<any> {
   const hasImageAttachment = task.messages.some((message) =>
     message.attachments?.some((attachment) => attachment.type === 'image'),
   );
-  return createPiModel(hasImageAttachment && config.llm.visionModel ? config.llm.visionModel : undefined);
+  if (!hasImageAttachment || !config.llm.visionModel.trim()) {
+    return createPiModel();
+  }
+  // 全局视觉：支持 namespace `provider:model`，也兼容裸 model id
+  const visionRef = parseModelNamespace(config.llm.visionModel);
+  return createPiModel(visionRef.model);
+}
+
+/** 解析 `provider:model`；provider 段需为合法 id，否则整串当作 model id。 */
+function parseModelNamespace(value: string): { provider?: string; model: string } {
+  const raw = value.trim();
+  if (!raw) return { model: '' };
+  const [maybeProvider, rest] = raw.split(/:(.*)/s);
+  if (
+    rest !== undefined &&
+    rest.length > 0 &&
+    /^[a-z0-9][a-z0-9-]*$/.test(maybeProvider)
+  ) {
+    return { provider: maybeProvider, model: rest };
+  }
+  return { model: raw };
 }
 
 function assertPiModelSupportsAttachments(task: Task, model: PiModel<any>): void {
@@ -586,6 +663,13 @@ function createPiTools(task: Task, options: PiHarnessOptions): AgentTool[] {
         }
         if (agentTool.name === 'ask_user') {
           const result = await executeAskUserTool(task, toolCallId, params, signal ?? options.signal);
+          return {
+            content: [{ type: 'text' as const, text: formatUnknown(result) }],
+            details: result,
+          };
+        }
+        if (agentTool.name === 'create_artifact') {
+          const result = await executeCreateArtifactTool(task, toolCallId, params, options.workspaceDir);
           return {
             content: [{ type: 'text' as const, text: formatUnknown(result) }],
             details: result,
@@ -690,6 +774,57 @@ function paramsForPiTool(toolName: string, params: unknown): unknown {
   return { ...rest, pattern: query };
 }
 
+async function executeCreateArtifactTool(
+  task: Task,
+  callId: string,
+  params: unknown,
+  workspaceDir: string,
+): Promise<unknown> {
+  const args = isRecord(params) ? params : {};
+  const name = typeof args.name === 'string' && args.name.trim() ? args.name.trim() : 'artifact.txt';
+  const content = typeof args.content === 'string' ? args.content : '';
+  const mimeType = typeof args.mimeType === 'string' ? args.mimeType : undefined;
+  const type =
+    args.type === 'text' || args.type === 'file' || args.type === 'diff' || args.type === 'url'
+      ? args.type
+      : 'file';
+  const applyPath = typeof args.path === 'string' && args.path.trim() ? args.path.trim() : undefined;
+
+  const artifact = createArtifact({
+    name,
+    content,
+    type,
+    mimeType,
+    sourceCallId: callId,
+  });
+  task.artifacts = [...(task.artifacts ?? []), artifact];
+  saveTask(task);
+  publish({ type: 'artifact_created', taskId: task.id, artifact });
+
+  if (applyPath) {
+    const abs = join(workspaceDir, applyPath);
+    await fs.mkdir(dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content, 'utf8');
+    const applied = markArtifactApplied(task, artifact.id, applyPath);
+    if (applied) {
+      saveTask(task);
+      publish({ type: 'artifact_updated', taskId: task.id, artifact: applied });
+      return {
+        artifactId: applied.id,
+        path: applyPath,
+        status: applied.status,
+        appliedPath: applyPath,
+      };
+    }
+  }
+
+  return {
+    artifactId: artifact.id,
+    path: applyPath ?? name,
+    status: artifact.status,
+  };
+}
+
 async function executeAskUserTool(
   task: Task,
   callId: string,
@@ -697,7 +832,10 @@ async function executeAskUserTool(
   signal: AbortSignal,
 ): Promise<unknown> {
   const args = isRecord(params) ? params : {};
-  const question = typeof args.question === 'string' ? args.question : '请补充完成任务所需的信息。';
+  const question =
+    (typeof args.message === 'string' && args.message.trim()) ||
+    (typeof args.question === 'string' && args.question.trim()) ||
+    '请补充完成任务所需的信息。';
   const options = Array.isArray(args.options) ? args.options.filter((item): item is string => typeof item === 'string') : undefined;
   const context = typeof args.context === 'string' ? args.context : undefined;
   const clarification = createClarification({ callId, question, options, context });
@@ -898,8 +1036,7 @@ async function handlePiEvent(
       break;
     case 'tool_execution_start':
       setTaskState(task, 'running', 'calling_tool');
-      task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
-      task.budgetUsage.toolCalls += 1;
+      recordToolCall(task);
       saveTask(task);
       {
         const rawCall = toAurevoyToolCall(task, event.toolCallId, event.toolName, event.args);
@@ -931,12 +1068,11 @@ async function handlePiEvent(
       appendToolResult(task, event.toolCallId, event.toolName, event.result, event.isError, workspaceDir);
       break;
     case 'turn_end':
-      task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
-      task.budgetUsage.iterations += 1;
+      recordIteration(task);
       updateWallTime(task, taskStartedAtMs);
       updateContextSnapshot(task);
       saveTask(task);
-      publish({ type: 'budget_usage', taskId: task.id, usage: task.budgetUsage, budget: task.budget });
+      publishBudgetUsage(task);
       publish({ type: 'context_snapshot', taskId: task.id, tokens: task.contextTokens ?? 0 });
       if (shouldStopAfterTurn(task, taskStartedAtMs)) {
         controller.abort();
@@ -974,8 +1110,7 @@ function publishPiMessageDelta(task: Task, event: PiAssistantMessageEvent): void
 }
 
 function addOutputBytes(task: Task, delta: string): void {
-  task.budgetUsage = task.budgetUsage ?? initialBudgetUsage();
-  task.budgetUsage.outputBytes += Buffer.byteLength(delta, 'utf8');
+  recordOutputBytes(task, delta);
 }
 
 function writePiTrace(
@@ -1062,8 +1197,8 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
     data: { output: toolResult.output },
   });
 
-  // attach_content / present_ui：提取 contentBlock 并挂到 assistant 消息。
-  // Pi harness 会把工具原始返回值放到 AgentToolResult.details，不能只看最外层 result。
+  // attach_content / present_ui：提取 contentBlock 并挂到「发起该 tool_call 的 assistant」消息。
+  // 禁止回退挂到 tool 消息 id——前端交付面只渲染 assistant，挂错会导致文件卡丢归属/反复出现在 live tail。
   if (!isError && (toolName === 'attach_content' || toolName === 'present_ui')) {
     const raw = extractAttachContentBlock(result, details);
     if (isRecord(raw) && typeof raw.type === 'string') {
@@ -1078,12 +1213,13 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
             break;
           }
         }
-        saveTask(task);
-        const messageId = assistantMessageId ?? message.id;
-        if (toolName === 'present_ui') {
-          publish({ type: 'content_blocks_upserted', taskId: task.id, messageId, blocks: [block] });
-        } else {
-          publish({ type: 'content_blocks_added', taskId: task.id, messageId, blocks: [block] });
+        if (assistantMessageId) {
+          saveTask(task);
+          if (toolName === 'present_ui') {
+            publish({ type: 'content_blocks_upserted', taskId: task.id, messageId: assistantMessageId, blocks: [block] });
+          } else {
+            publish({ type: 'content_blocks_added', taskId: task.id, messageId: assistantMessageId, blocks: [block] });
+          }
         }
       }
     }
@@ -1280,24 +1416,26 @@ function planStepIdForToolCall(task: Task, callId: string): string | undefined {
 
 function aggregatePiUsage(
   current: AggregatedTokenUsage | undefined,
-  usage: PiUsage | null | undefined,
+  usage: PiUsage | null | undefined | Record<string, unknown>,
   provider: string,
   model: string,
 ): AggregatedTokenUsage {
   const normalized = normalizePiUsage(usage);
+  const resolvedProvider = provider?.trim() || current?.provider || config.llm.provider;
+  const resolvedModel = model?.trim() || current?.model || config.llm.model;
   if (!normalized) {
     return {
       ...(current ?? {}),
       available: current?.available ?? false,
-      provider,
-      model,
+      provider: resolvedProvider,
+      model: resolvedModel,
       updatedAt: new Date().toISOString(),
     };
   }
   return {
     available: true,
-    provider,
-    model,
+    provider: resolvedProvider,
+    model: resolvedModel,
     promptTokens: (current?.promptTokens ?? 0) + normalized.promptTokens,
     completionTokens: (current?.completionTokens ?? 0) + normalized.completionTokens,
     totalTokens: (current?.totalTokens ?? 0) + normalized.totalTokens,
@@ -1309,22 +1447,53 @@ function aggregatePiUsage(
   };
 }
 
-function normalizePiUsage(usage: PiUsage | null | undefined): Required<Pick<
+/**
+ * 归一化多种 usage 形态：
+ * - Pi Usage：{ input, output, cacheRead, cacheWrite, totalTokens, cost }
+ * - OpenAI raw：{ prompt_tokens, completion_tokens, total_tokens }
+ * - 字符串数字（部分网关）
+ */
+function normalizePiUsage(usage: PiUsage | null | undefined | Record<string, unknown>): Required<Pick<
   AggregatedTokenUsage,
   'promptTokens' | 'completionTokens' | 'totalTokens' | 'reasoningTokens' | 'cacheReadTokens' | 'cacheWriteTokens' | 'estimatedCostUsd'
 >> | null {
-  if (!usage) return null;
-  const input = safeUsageNumber(usage.input);
-  const output = safeUsageNumber(usage.output);
-  const cacheRead = safeUsageNumber(usage.cacheRead);
-  const cacheWrite = safeUsageNumber(usage.cacheWrite);
-  const total = safeUsageNumber(usage.totalTokens) || input + output + cacheRead + cacheWrite;
-  const reasoning = safeUsageNumber(usage.reasoning);
-  const cost = safeUsageNumber(usage.cost?.total);
+  if (!usage || typeof usage !== 'object') return null;
+  const raw = usage as Record<string, unknown>;
+  const costObj = isRecord(raw.cost) ? raw.cost : undefined;
+
+  const cacheRead = firstUsageNumber(
+    raw.cacheRead,
+    isRecord(raw.prompt_tokens_details) ? raw.prompt_tokens_details.cached_tokens : undefined,
+    raw.prompt_cache_hit_tokens,
+  );
+  const cacheWrite = firstUsageNumber(
+    raw.cacheWrite,
+    isRecord(raw.prompt_tokens_details) ? raw.prompt_tokens_details.cache_write_tokens : undefined,
+  );
+  // Pi: input 不含 cache；OpenAI prompt_tokens 通常含 cache hit
+  const promptRaw = firstUsageNumber(raw.input, raw.prompt_tokens, raw.promptTokens);
+  const input = raw.input !== undefined && raw.input !== null
+    ? firstUsageNumber(raw.input)
+    : Math.max(0, promptRaw - cacheRead - cacheWrite);
+  const output = firstUsageNumber(
+    raw.output,
+    raw.completion_tokens,
+    raw.completionTokens,
+  );
+  const reasoning = firstUsageNumber(
+    raw.reasoning,
+    isRecord(raw.completion_tokens_details) ? raw.completion_tokens_details.reasoning_tokens : undefined,
+    raw.reasoningTokens,
+  );
+  const total = firstUsageNumber(raw.totalTokens, raw.total_tokens)
+    || (input + output + cacheRead + cacheWrite);
+  const cost = firstUsageNumber(costObj?.total, raw.estimatedCostUsd);
+
   if (total <= 0 && input <= 0 && output <= 0 && cacheRead <= 0 && cacheWrite <= 0 && reasoning <= 0 && cost <= 0) {
     return null;
   }
   return {
+    // 与既有口径一致：promptTokens = 非 cache 输入 + cache 读写
     promptTokens: input + cacheRead + cacheWrite,
     completionTokens: output,
     totalTokens: total,
@@ -1335,8 +1504,21 @@ function normalizePiUsage(usage: PiUsage | null | undefined): Required<Pick<
   };
 }
 
-function safeUsageNumber(value: number | undefined): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+function firstUsageNumber(...values: unknown[]): number {
+  for (const value of values) {
+    const n = coerceUsageNumber(value);
+    if (n > 0) return n;
+  }
+  return 0;
+}
+
+function coerceUsageNumber(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
 }
 
 async function buildAttachmentContextMessage(task: Task): Promise<{ content: string } | null> {
@@ -1418,12 +1600,50 @@ function setTaskState(task: Task, status: TaskStatus, phase: TaskPhase): void {
 }
 
 function finishCompleted(task: Task): void {
+  task.budgetExceeded = undefined;
   setTaskState(task, 'completed', 'finalizing');
   saveTask(task);
+  publishBudgetUsage(task);
   publish({ type: 'status', taskId: task.id, status: 'completed' });
   publish({ type: 'phase', taskId: task.id, phase: 'finalizing', detail: '任务完成' });
   publish({ type: 'done', taskId: task.id, status: 'completed' });
   writePiTrace(task, 'done', { ok: true, summary: '任务完成' });
+}
+
+/**
+ * 预算触顶：本 run 结束，任务进入可续跑暂停态。
+ * 发出 done(status=paused) 以便 SSE / 前端结束 busy，用户可 resume 或 budget/continue。
+ */
+function finishBudgetPaused(task: Task, info: BudgetExceededInfo): void {
+  task.budgetExceeded = info;
+  const message: Message = {
+    id: randomUUID(),
+    role: 'assistant',
+    content: `${info.reason}。可点击「继续执行」在完整上下文上续跑（本轮用量已清零；寿命预算不足时会自动扩容）。`,
+    createdAt: new Date().toISOString(),
+  };
+  task.messages.push(message);
+  setTaskState(task, 'paused', 'waiting_budget');
+  saveTask(task);
+  publishBudgetUsage(task);
+  publish({ type: 'budget_exceeded', taskId: task.id, info });
+  publish({ type: 'message', taskId: task.id, message });
+  publish({ type: 'status', taskId: task.id, status: 'paused' });
+  publish({ type: 'phase', taskId: task.id, phase: 'waiting_budget', detail: info.reason });
+  publish({ type: 'done', taskId: task.id, status: 'paused' });
+  writePiTrace(task, 'phase', {
+    ok: true,
+    phase: 'waiting_budget',
+    errorCategory: 'budget',
+    summary: info.reason,
+    data: info,
+  });
+  writePiTrace(task, 'done', {
+    ok: true,
+    phase: 'waiting_budget',
+    errorCategory: 'budget',
+    summary: `预算暂停：${info.reason}`,
+  });
 }
 
 function finishCancelled(task: Task): void {

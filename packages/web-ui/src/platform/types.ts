@@ -56,4 +56,11 @@ export interface PlatformAdapter {
    * 浏览器环境无需实现。
    */
   setupWindowDrag?(dragSelector: string, noDragSelector?: string): void;
+
+  /**
+   * 确保当前窗口逻辑宽度至少为 minWidth（单位 CSS px）。
+   * 桌面壳在窄窗打开右侧工作台时调用，主动拉宽窗口以免挤占主区。
+   * 已最大化或已足够宽时为 no-op；浏览器可忽略。
+   */
+  ensureWindowMinWidth?(minWidth: number): void | Promise<void>;
 }

@@ -81,4 +81,20 @@ describe("buildTokenUsageReport", () => {
     expect(report.totalTokens).toBe(0)
     expect(report.breakdown).toEqual([])
   })
+
+  it("counts usage even when provider field was polluted with provider:model legacy format", () => {
+    const report = buildTokenUsageReport([
+      task("legacy", {
+        available: true,
+        provider: "openai:gpt-4o-mini",
+        model: "gpt-4o-mini",
+        promptTokens: 10,
+        completionTokens: 2,
+        totalTokens: 12,
+      }),
+    ])
+    expect(report.available).toBe(true)
+    expect(report.totalTokens).toBe(12)
+    expect(report.breakdown[0]?.provider).toBe("openai:gpt-4o-mini")
+  })
 })

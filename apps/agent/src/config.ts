@@ -161,6 +161,27 @@ export const config = {
     level: 'auto' as string,
   },
 
+  /**
+   * 任务执行预算默认值。
+   * - run：单次 harness 执行上限（用户发言 / resume 开启的一轮）
+   * - lifetime：任务全生命周期累计上限（跨续聊与多次 resume）
+   * 创建任务时会快照到 Task.budget / Task.lifetimeBudget。
+   */
+  budget: {
+    run: {
+      maxIterations: parseNumber(process.env.AUREVOY_BUDGET_RUN_MAX_ITERATIONS, 120),
+      maxToolCalls: parseNumber(process.env.AUREVOY_BUDGET_RUN_MAX_TOOL_CALLS, 300),
+      maxWallTimeMs: parseNumber(process.env.AUREVOY_BUDGET_RUN_MAX_WALL_TIME_MS, 45 * 60 * 1000),
+      maxOutputBytes: parseNumber(process.env.AUREVOY_BUDGET_RUN_MAX_OUTPUT_BYTES, 2 * 1024 * 1024),
+    },
+    lifetime: {
+      maxIterations: parseNumber(process.env.AUREVOY_BUDGET_LIFETIME_MAX_ITERATIONS, 500),
+      maxToolCalls: parseNumber(process.env.AUREVOY_BUDGET_LIFETIME_MAX_TOOL_CALLS, 1500),
+      maxWallTimeMs: parseNumber(process.env.AUREVOY_BUDGET_LIFETIME_MAX_WALL_TIME_MS, 3 * 60 * 60 * 1000),
+      maxOutputBytes: parseNumber(process.env.AUREVOY_BUDGET_LIFETIME_MAX_OUTPUT_BYTES, 10 * 1024 * 1024),
+    },
+  },
+
   network: {
     /**
      * web_fetch 默认拒绝本机/私网地址；这里仅给受控开发或企业内网场景提供显式放行。

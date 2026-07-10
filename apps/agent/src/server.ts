@@ -16,6 +16,8 @@ import type {
   ClarificationAnswerResponse,
   CompactTaskRequest,
   CompactTaskResponse,
+  ContinueBudgetRequest,
+  ContinueBudgetResponse,
   ContinueTaskRequest,
   ContinueTaskResponse,
   CreateMemoryRequest,
@@ -60,6 +62,7 @@ import {
   createTask,
   isTaskRunning,
   markInterruptedTasksAfterRestart,
+  prepareTaskForBudgetContinue,
   prepareTaskForResume,
   queueRunningUserTurn,
   resolveApproval,
@@ -424,7 +427,13 @@ export async function buildServer(externalLogger?: Logger) {
       if (!project) return reply.code(404).send({ error: 'project not found' });
     }
 
-    const task = createTask(goal, req.body?.budget, projectId, req.body?.attachments);
+    const task = createTask(
+      goal,
+      req.body?.budget,
+      projectId,
+      req.body?.attachments,
+      req.body?.lifetimeBudget,
+    );
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runHarnessTask(task);
 
@@ -481,7 +490,11 @@ export async function buildServer(externalLogger?: Logger) {
       return reply.code(409).send({ error: '已完成任务不需要恢复' });
     }
 
-    const resumed = prepareTaskForResume(task);
+    // waiting_budget 走专用续跑路径：自动保证寿命额度够再跑一轮
+    const resumed =
+      task.phase === 'waiting_budget' || task.budgetExceeded
+        ? prepareTaskForBudgetContinue(task)
+        : prepareTaskForResume(task);
     void runHarnessTask(resumed);
 
     const body: ResumeTaskResponse = {
@@ -490,6 +503,33 @@ export async function buildServer(externalLogger?: Logger) {
     };
     return reply.code(202).send(body);
   });
+
+  // 预算触顶后续跑：可选扩容寿命 / 覆盖 run 预算，再进入 harness。
+  app.post<{ Params: { id: string }; Body: ContinueBudgetRequest }>(
+    '/api/tasks/:id/budget/continue',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      if (isTaskRunning(req.params.id)) {
+        return reply.code(409).send({ error: '任务正在运行，不能重复续跑' });
+      }
+      if (task.status === 'completed') {
+        return reply.code(409).send({ error: '已完成任务不需要续跑' });
+      }
+      if (task.status === 'cancelled') {
+        return reply.code(409).send({ error: '已取消任务不能续跑' });
+      }
+
+      const continued = prepareTaskForBudgetContinue(task, req.body);
+      void runHarnessTask(continued);
+
+      const body: ContinueBudgetResponse = {
+        task: continued,
+        streamUrl: `/api/tasks/${continued.id}/stream`,
+      };
+      return reply.code(202).send(body);
+    },
+  );
 
   // 恢复已暂停的 auto mode（重置连续计数，继续自动执行）
   app.post<{ Params: { id: string } }>('/api/tasks/:id/auto-mode-resume', (req, reply) => {
@@ -919,8 +959,18 @@ export async function buildServer(externalLogger?: Logger) {
     if (task.plan.length > 0) {
       sendSnapshot({ type: 'plan', taskId: task.id, plan: task.plan });
     }
-    if (task.budgetUsage) {
-      sendSnapshot({ type: 'budget_usage', taskId: task.id, usage: task.budgetUsage, budget: task.budget });
+    if (task.budgetUsage || task.lifetimeUsage || task.budget || task.lifetimeBudget) {
+      sendSnapshot({
+        type: 'budget_usage',
+        taskId: task.id,
+        usage: task.budgetUsage ?? { iterations: 0, toolCalls: 0, wallTimeMs: 0, outputBytes: 0 },
+        budget: task.budget,
+        lifetimeUsage: task.lifetimeUsage,
+        lifetimeBudget: task.lifetimeBudget,
+      });
+    }
+    if (task.budgetExceeded) {
+      sendSnapshot({ type: 'budget_exceeded', taskId: task.id, info: task.budgetExceeded });
     }
     if (task.tokenUsage) {
       sendSnapshot({ type: 'token_usage', taskId: task.id, usage: task.tokenUsage });
@@ -947,7 +997,11 @@ export async function buildServer(externalLogger?: Logger) {
     for (const approval of task.pendingApprovals ?? []) {
       sendSnapshot({ type: 'approval_request', taskId: task.id, call: approval.call, riskLevel: approval.riskLevel });
     }
-    if (['completed', 'failed', 'cancelled'].includes(task.status)) {
+    // 终态，或预算触顶暂停（本 run 已结束，前端应解除 busy）
+    if (
+      ['completed', 'failed', 'cancelled'].includes(task.status) ||
+      (task.status === 'paused' && task.phase === 'waiting_budget')
+    ) {
       replayingSnapshot = false;
       sendSnapshot({ type: 'done', taskId: task.id, status: task.status });
       return;

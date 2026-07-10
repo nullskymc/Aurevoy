@@ -1,6 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { LlmProviderSlot, RuntimeSettings } from "@aurevoy/shared";
 import { t } from "../i18n";
+import { providerLabel } from "./providerIcons";
 import "./ModelSelectorDrawer.css";
 
 export interface ModelSelectorDraft {
@@ -19,13 +27,15 @@ interface ModelSelectorDrawerProps {
   onSave: (draft: ModelSelectorDraft) => void;
 }
 
-const POPOVER_GAP = 8;
+const POPOVER_GAP = 6;
 const VIEWPORT_MARGIN = 12;
-const POPOVER_FALLBACK_WIDTH = 280;
-const POPOVER_MIN_WIDTH = 248;
-const POPOVER_MAX_WIDTH = 320;
-const POPOVER_MAX_HEIGHT = 420;
-const POPOVER_MIN_HEIGHT = 180;
+const POPOVER_FALLBACK_WIDTH = 220;
+const POPOVER_MIN_WIDTH = 180;
+const POPOVER_MAX_WIDTH = 280;
+const POPOVER_MAX_HEIGHT = 320;
+const POPOVER_MIN_HEIGHT = 100;
+/** 超过此数量才显示搜索框，保持菜单轻量 */
+const SEARCH_THRESHOLD = 8;
 
 interface PopoverPosition {
   left: number;
@@ -40,6 +50,12 @@ interface SelectableModel {
   key: string;
 }
 
+interface ModelGroup {
+  provider: string;
+  apiKeyConfigured: boolean;
+  models: SelectableModel[];
+}
+
 export function ModelSelectorDrawer({
   open,
   provider,
@@ -52,13 +68,43 @@ export function ModelSelectorDrawer({
 }: ModelSelectorDrawerProps) {
   const activeProvider = settings?.llm.provider ?? parseProviderLabel(provider);
   const currentModel = settings?.llm.model ?? parseProviderModel(provider);
-  const groups = useMemo(
-    () => buildModelGroups(settings),
-    [settings],
-  );
+  const groups = useMemo(() => buildModelGroups(settings), [settings]);
   const totalModels = groups.reduce((sum, group) => sum + group.models.length, 0);
+  const showSearch = totalModels > SEARCH_THRESHOLD;
+
+  const [query, setQuery] = useState("");
+  const [highlightKey, setHighlightKey] = useState<string | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<PopoverPosition | null>(null);
+
+  const filteredGroups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return groups;
+    return groups
+      .map((group) => {
+        const providerHit = providerLabel(group.provider).toLowerCase().includes(q)
+          || group.provider.toLowerCase().includes(q);
+        const models = providerHit
+          ? group.models
+          : group.models.filter((item) => item.model.toLowerCase().includes(q));
+        return { ...group, models };
+      })
+      .filter((group) => group.models.length > 0);
+  }, [groups, query]);
+
+  const flatItems = useMemo(
+    () => filteredGroups.flatMap((group) => group.models.map((item) => ({
+      ...item,
+      apiKeyConfigured: group.apiKeyConfigured,
+    }))),
+    [filteredGroups],
+  );
+
+  const currentKey = activeProvider && currentModel
+    ? `${activeProvider}:${currentModel}`
+    : null;
 
   const computePosition = useCallback(() => {
     const anchor = anchorRef?.current;
@@ -67,10 +113,13 @@ export function ModelSelectorDrawer({
     const popoverRect = popoverRef.current?.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    const anchorWidth = Math.ceil(anchorRect.width);
+    // 宽度贴近触发 chip，略宽一点避免模型 id 被裁切
     const popoverWidth = Math.max(
       POPOVER_MIN_WIDTH,
-      Math.min(POPOVER_MAX_WIDTH, anchorWidth + 24, popoverRect?.width ?? POPOVER_FALLBACK_WIDTH),
+      Math.min(
+        POPOVER_MAX_WIDTH,
+        Math.max(anchorRect.width + 48, popoverRect?.width ?? POPOVER_FALLBACK_WIDTH),
+      ),
     );
     const measuredHeight = popoverRect?.height ?? POPOVER_MAX_HEIGHT;
     const availableAbove = anchorRect.top - VIEWPORT_MARGIN - POPOVER_GAP;
@@ -82,6 +131,7 @@ export function ModelSelectorDrawer({
       Math.min(POPOVER_MAX_HEIGHT, openAbove ? availableAbove : availableBelow),
     );
     const renderedHeight = Math.min(measuredHeight, availableHeight);
+    // 与触发按钮左对齐，偏菜单风格
     const preferredLeft = anchorRect.left;
     const left = Math.max(
       VIEWPORT_MARGIN,
@@ -105,7 +155,28 @@ export function ModelSelectorDrawer({
       return;
     }
     computePosition();
-  }, [computePosition, open, totalModels, currentModel, activeProvider]);
+  }, [computePosition, open, totalModels, currentModel, activeProvider, filteredGroups.length, query]);
+
+  useEffect(() => {
+    if (!open) {
+      setQuery("");
+      setHighlightKey(null);
+      return;
+    }
+    setHighlightKey(currentKey);
+    if (showSearch) {
+      const timer = window.setTimeout(() => {
+        searchRef.current?.focus();
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [open, currentKey, showSearch]);
+
+  useEffect(() => {
+    if (!open || !highlightKey) return;
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(highlightKey)}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [open, highlightKey, filteredGroups]);
 
   useEffect(() => {
     if (!open) return;
@@ -120,7 +191,34 @@ export function ModelSelectorDrawer({
     }
 
     function handleKeyDown(event: globalThis.KeyboardEvent): void {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (flatItems.length === 0) return;
+
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const index = Math.max(0, flatItems.findIndex((item) => item.key === highlightKey));
+        const next = event.key === "ArrowDown"
+          ? (index + 1) % flatItems.length
+          : (index - 1 + flatItems.length) % flatItems.length;
+        setHighlightKey(flatItems[next]!.key);
+        return;
+      }
+
+      if (event.key === "Enter") {
+        const item = flatItems.find((entry) => entry.key === highlightKey) ?? flatItems[0];
+        if (!item || saving) return;
+        if (!item.apiKeyConfigured) return;
+        if (item.key === currentKey) {
+          onClose();
+          return;
+        }
+        event.preventDefault();
+        onSave({ provider: item.provider, model: item.model });
+      }
     }
 
     window.addEventListener("pointerdown", handlePointerDown);
@@ -133,78 +231,113 @@ export function ModelSelectorDrawer({
       window.removeEventListener("resize", computePosition);
       window.removeEventListener("scroll", computePosition, { capture: true });
     };
-  }, [anchorRef, onClose, open, computePosition]);
+  }, [
+    anchorRef,
+    onClose,
+    open,
+    computePosition,
+    flatItems,
+    highlightKey,
+    saving,
+    currentKey,
+    onSave,
+  ]);
 
   if (!open) return null;
+
+  function selectItem(item: SelectableModel, apiKeyConfigured: boolean): void {
+    if (saving) return;
+    if (!apiKeyConfigured) return;
+    if (item.key === currentKey) {
+      onClose();
+      return;
+    }
+    onSave({ provider: item.provider, model: item.model });
+  }
 
   return (
     <div
       ref={popoverRef}
-      className="model-popover"
-      role="dialog"
+      className="model-menu"
+      role="listbox"
       aria-label={t("model.dialogLabel")}
       style={pos ? { left: pos.left, top: pos.top, width: pos.width, maxHeight: pos.maxHeight } : undefined}
     >
-      <div className="model-popover-main">
-        <header className="model-popover-head">
-          <p className="model-popover-title">{t("model.label")}</p>
-          <span className="model-popover-provider">{activeProvider || t("composer.providerUnconfigured")}</span>
-        </header>
+      {showSearch && (
+        <div className="model-menu-search">
+          <input
+            ref={searchRef}
+            type="search"
+            className="model-menu-search-input"
+            value={query}
+            placeholder={t("model.searchPlaceholder")}
+            aria-label={t("model.searchPlaceholder")}
+            onChange={(event) => {
+              setQuery(event.currentTarget.value);
+              setHighlightKey(null);
+            }}
+          />
+        </div>
+      )}
+
+      <div ref={listRef} className="model-menu-body">
         {totalModels === 0 ? (
-          <p className="model-popover-empty">{t("model.empty")}</p>
-        ) : (
-          <div className="model-popover-list">
-            {groups.map((group) => (
-              <div key={group.provider} className="model-popover-group">
-                {groups.length > 1 && (
-                  <p className="model-popover-group-label">
-                    <span>{group.provider}</span>
-                    {!group.apiKeyConfigured && (
-                      <em className="model-popover-group-warn">{t("model.providerNoKey")}</em>
-                    )}
-                  </p>
-                )}
-                {group.models.map((item) => {
-                  const active = item.provider === activeProvider && item.model === currentModel;
-                  const disabled = saving || active || !group.apiKeyConfigured;
-                  return (
-                    <button
-                      key={item.key}
-                      type="button"
-                      className="model-popover-item"
-                      data-active={active}
-                      disabled={disabled}
-                      title={!group.apiKeyConfigured ? t("model.providerNoKeyHint") : undefined}
-                      onClick={() => onSave({ provider: item.provider, model: item.model })}
-                    >
-                      <span className="model-popover-model">
-                        <span className="model-popover-name">{item.model}</span>
-                        {active && <span className="model-popover-current">{t("settings.modelCurrent")}</span>}
-                      </span>
-                      {active && <CheckIcon />}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+          <div className="model-menu-empty">
+            <p>{t("model.empty")}</p>
+            <button type="button" className="model-menu-link" onClick={onOpenFullSettings}>
+              {t("model.gotoEnable")}
+            </button>
           </div>
+        ) : filteredGroups.length === 0 ? (
+          <div className="model-menu-empty">
+            <p>{t("model.noMatch")}</p>
+          </div>
+        ) : (
+          filteredGroups.map((group) => (
+            <section key={group.provider} className="model-menu-group">
+              <div className="model-menu-group-label">
+                {providerLabel(group.provider)}
+              </div>
+              {group.models.map((item) => {
+                const active = item.key === currentKey;
+                const highlighted = item.key === (highlightKey ?? currentKey);
+                const disabled = saving || !group.apiKeyConfigured;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    data-key={item.key}
+                    data-active={active}
+                    data-highlight={highlighted}
+                    className="model-menu-item"
+                    disabled={disabled && !active}
+                    title={!group.apiKeyConfigured ? t("model.providerNoKeyHint") : item.model}
+                    onMouseEnter={() => setHighlightKey(item.key)}
+                    onClick={() => selectItem(item, group.apiKeyConfigured)}
+                  >
+                    {item.model}
+                  </button>
+                );
+              })}
+            </section>
+          ))
         )}
       </div>
 
-      <div className="model-popover-footer">
-        <button type="button" className="model-popover-action" onClick={onOpenFullSettings}>
-          {totalModels === 0 ? t("model.gotoEnable") : t("model.manage")}
-        </button>
-      </div>
+      {totalModels > 0 && (
+        <div className="model-menu-foot">
+          <button type="button" className="model-menu-link" onClick={onOpenFullSettings}>
+            {t("model.manage")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-function buildModelGroups(settings: RuntimeSettings | null): Array<{
-  provider: string;
-  apiKeyConfigured: boolean;
-  models: SelectableModel[];
-}> {
+function buildModelGroups(settings: RuntimeSettings | null): ModelGroup[] {
   if (!settings) return [];
 
   const slots: LlmProviderSlot[] = settings.llm.providers?.length
@@ -219,20 +352,18 @@ function buildModelGroups(settings: RuntimeSettings | null): Array<{
         apiKeyConfigured: settings.llm.apiKeyConfigured,
       }];
 
-  const groups: Array<{ provider: string; apiKeyConfigured: boolean; models: SelectableModel[] }> = [];
+  const groups: ModelGroup[] = [];
 
   for (const slot of slots) {
+    // 只展示用户勾选的 enabled；激活槽额外保证当前主模型可见（便于回切），
+    // 其它 Provider 允许 0 个勾选，则不出现在菜单中。
     const enabled = [...slot.enabledModels];
-    // 保证当前模型始终可见
     if (
       slot.provider === settings.llm.provider &&
       settings.llm.model &&
       !enabled.includes(settings.llm.model)
     ) {
       enabled.unshift(settings.llm.model);
-    } else if (slot.model && !enabled.includes(slot.model) && enabled.length === 0) {
-      // 槽位只有 last model、尚未勾选 enabled 时，至少展示 last model
-      enabled.push(slot.model);
     }
     if (enabled.length === 0) continue;
     groups.push({
@@ -246,11 +377,10 @@ function buildModelGroups(settings: RuntimeSettings | null): Array<{
     });
   }
 
-  // 当前激活 provider 排前面
   groups.sort((a, b) => {
     if (a.provider === settings.llm.provider) return -1;
     if (b.provider === settings.llm.provider) return 1;
-    return a.provider.localeCompare(b.provider);
+    return providerLabel(a.provider).localeCompare(providerLabel(b.provider));
   });
 
   return groups;
@@ -266,12 +396,4 @@ function parseProviderLabel(provider?: string): string {
   if (!provider || provider === "unconfigured") return "";
   const [kind] = provider.split(/:(.*)/s);
   return kind || provider;
-}
-
-function CheckIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
-      <path d="M4.5 10.5l3.2 3.2L15.5 6" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
 }
