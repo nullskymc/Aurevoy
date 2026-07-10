@@ -932,28 +932,29 @@ export interface ResumeTaskResponse {
   streamUrl: string;
 }
 
-/** 编辑重跑的恢复模式。 */
+/** 编辑重试的恢复范围。 */
 export type RevertMode =
   | 'code_and_conv' // 截断对话 + 清除 checkpoint/artifact/plan
-  | 'conv_only'; // 仅截断对话，保留 plan/checkpoint/artifact（文件改动没问题，只想重新推理）
+  | 'conv_only'; // 仅截断对话，保留 plan/checkpoint/artifact
 
 /**
- * POST /api/tasks/:id/revert — 编辑重跑（Claude Code Rewind，Phase 1：对话截断语义）。
+ * POST /api/tasks/:id/revert — 编辑重试的截断步骤（对话截断语义）。
  *
  * 把 messageId 及其之后的所有消息从活跃历史移除，任务回到该消息发送前的状态。
- * 不回滚已落盘文件。返回被移除首条消息内容，供前端回填编辑框；随后前端再调用
- * continue 端点把编辑后的文本作为该点的新输入，带上下文重新生成。
+ * 不回滚已落盘文件。前端在用户确认内联编辑后调用本接口，再立刻用编辑后的文案
+ * 调用 continue（`POST /api/tasks/:id/messages`）完成一步「修改并重试」。
+ * `removedContent` 供诊断/兼容；UI 应以用户提交的编辑稿为准，不要回填覆盖。
  */
 export interface RevertTaskRequest {
   /** 要截断到的目标消息 id（该消息及其之后都会被移除） */
   messageId: string;
-  /** 恢复模式；Phase 1 仅支持 'code_and_conv' */
+  /** 恢复模式：`code_and_conv` 清 plan/checkpoint；`conv_only` 仅截断对话 */
   mode?: RevertMode;
 }
 
 export interface RevertTaskResponse {
   task: Task;
-  /** 被移除的目标消息内容（user 消息时有值），供前端回填编辑框 */
+  /** 被移除的目标消息原文（user 消息时有值）；不应覆盖用户已编辑的稿 */
   removedContent: string | null;
   /** 被移除的目标消息 id */
   removedMessageId: string | null;
@@ -965,7 +966,7 @@ export interface RevertTaskResponse {
  * POST /api/tasks/:id/unrevert — 撤销上一次 revert。
  *
  * 从 archivedMessages 恢复被截断的消息到活跃历史。
- * 仅在没有新的 continue 操作时可用（即 revert 后尚未提交编辑）。
+ * 仅在 revert 成功、continue 尚未写入新消息时可用（例如 continue 失败后的恢复）。
  */
 export interface UnrevertTaskResponse {
   task: Task;

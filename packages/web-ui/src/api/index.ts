@@ -211,7 +211,7 @@ export async function resumeTask(taskId: string): Promise<ResumeTaskResponse> {
   return res.json();
 }
 
-/** 编辑重跑（Phase 1）：截断到目标消息之前，返回被移除消息内容供回填 */
+/** 编辑重试的截断步骤；前端确认内联编辑后调用，再立刻 continue 编辑稿 */
 export async function revertTask(
   taskId: string,
   messageId: string,
@@ -226,7 +226,7 @@ export async function revertTask(
   return res.json();
 }
 
-/** 撤销上一次 revert：从归档恢复被截断的消息 */
+/** 撤销上一次 revert（continue 尚未提交新消息时）；从归档恢复被截断消息 */
 export async function unrevertTask(taskId: string): Promise<UnrevertTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/unrevert`, {
     method: 'POST',

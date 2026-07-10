@@ -89,7 +89,6 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
   const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
@@ -286,7 +285,6 @@ function App() {
     closeStream,
     currentTask,
     draftProjectId,
-    editingMessageId,
     goal,
     handleEvent,
     openStream,
@@ -297,7 +295,6 @@ function App() {
     setBusy,
     setCurrentTask,
     setDraftProjectId,
-    setEditingMessageId,
     setGoal,
     setModelDrawerOpen,
     setNotice,
@@ -542,7 +539,9 @@ function App() {
                 onClarificationAnswer={handleClarificationAnswer}
                 canResume={canResume}
                 hasArchivedMessages={(currentTask?.archivedMessages?.length ?? 0) > 0}
-                onUserMessageEdit={(messageId, content, mode) => void handleRevertAndEdit(messageId, content, mode)}
+                onUserMessageEdit={(messageId, content, mode, messageAttachments) =>
+                  void handleRevertAndEdit(messageId, content, mode, messageAttachments)
+                }
                 onUnrevert={() => void handleUnrevert()}
                 onBranch={(messageId) => void handleBranch(messageId)}
                 onResume={() => void handleResumeTask()}
@@ -565,17 +564,11 @@ function App() {
                 online={online}
                 variant="docked"
                 projectName={draftProjectName}
-                isEditing={editingMessageId !== null}
                 skills={skills}
                 attachments={attachments}
                 onAttachmentsChange={setAttachments}
                 onPasteFiles={(files) => void handlePasteFiles(files)}
                 onPickAttachments={() => void handlePickAttachments()}
-                onCancelEdit={() => {
-                  setEditingMessageId(null);
-                  setGoal("");
-                  setAttachments([]);
-                }}
                 provider={health?.provider}
                 onChange={setGoal}
                 onSubmit={handleComposerSubmit}

@@ -130,7 +130,7 @@ export function prepareTaskForBudgetContinue(
   return prepareTaskForResume(task);
 }
 
-/** 编辑重跑：截断目标消息及其之后的对话，等待用户继续输入后由 Pi 重新生成。 */
+/** 编辑重试截断：移除目标消息及其之后的对话；前端再立刻 continue 编辑稿。 */
 export function revertTask(
   task: Task,
   messageId: string,
@@ -175,7 +175,7 @@ export function revertTask(
   });
   writeTrace(task.id, 'phase', null, {
     ok: true,
-    summary: `编辑重跑(mode=${mode})：截断到消息 ${messageId} 之前，移除 ${removedMessages.length} 条消息`,
+    summary: `编辑重试截断(mode=${mode})：截断到消息 ${messageId} 之前，移除 ${removedMessages.length} 条消息`,
     data: { messageId, mode, removedCount: removedMessages.length },
   });
 
@@ -187,7 +187,7 @@ export function revertTask(
   };
 }
 
-/** 撤销上一次 revert：从 archivedMessages 恢复被截断的消息。 */
+/** 撤销上一次 revert：从 archivedMessages 恢复（仅 continue 尚未提交时）。 */
 export function unrevertTask(task: Task): { task: Task; restoredCount: number } {
   const archived = task.archivedMessages ?? [];
   if (archived.length === 0) return { task, restoredCount: 0 };
@@ -202,7 +202,7 @@ export function unrevertTask(task: Task): { task: Task; restoredCount: number } 
   taskEvents.publish({ type: 'unreverted', taskId: task.id, restoredCount: archived.length });
   writeTrace(task.id, 'phase', null, {
     ok: true,
-    summary: `撤销编辑重跑：恢复 ${archived.length} 条归档消息到活跃历史`,
+    summary: `撤销编辑重试截断：恢复 ${archived.length} 条归档消息到活跃历史`,
     data: { restoredCount: archived.length },
   });
   return { task, restoredCount: archived.length };
@@ -365,6 +365,8 @@ export function addUserTurn(
     attachments,
   };
   task.messages.push(userMsg);
+  // continue 一旦写入新用户消息，上一次 revert 的归档不再可撤销
+  task.archivedMessages = [];
   task.status = 'pending';
   task.phase = 'initializing';
   task.pendingApprovals = [];
