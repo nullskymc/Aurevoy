@@ -1,6 +1,6 @@
 import type { PlatformAdapter } from '@aurevoy/web-ui';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { LogicalSize, currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
 
 const registeredWindowDragHandlers = new Set<string>();
 
@@ -145,5 +145,34 @@ export const tauriPlatformAdapter: PlatformAdapter = {
       }
     }
     return null;
+  },
+
+  async ensureWindowMinWidth(minWidth: number): Promise<void> {
+    if (!Number.isFinite(minWidth) || minWidth <= 0) return;
+    const win = getCurrentWindow();
+    if (await win.isMaximized()) return;
+
+    const [physical, scale] = await Promise.all([win.innerSize(), win.scaleFactor()]);
+    const currentLogical = physical.width / scale;
+    if (currentLogical >= minWidth - 0.5) return;
+
+    let target = minWidth;
+    try {
+      const monitor = await currentMonitor();
+      if (monitor) {
+        const workAreaLogical = monitor.workArea.size.width / monitor.scaleFactor;
+        // Leave a small margin so the frame does not hug the display edge.
+        target = Math.min(target, Math.max(currentLogical, workAreaLogical - 16));
+      }
+    } catch {
+      // Monitor query is best-effort.
+    }
+
+    if (target <= currentLogical + 0.5) return;
+
+    const heightLogical = physical.height / scale;
+    // Requires core:window:allow-set-size in capabilities — do not swallow errors so
+    // callers can detect a failed expand (otherwise workbench opens then auto-collapses).
+    await win.setSize(new LogicalSize(Math.ceil(target), Math.ceil(heightLogical)));
   },
 };

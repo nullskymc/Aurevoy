@@ -27,6 +27,8 @@ export type TaskPhase =
   | 'calling_tool'
   | 'waiting_approval'
   | 'waiting_clarification'
+  /** 本轮或任务寿命预算触顶，等待用户续跑 / 扩容。 */
+  | 'waiting_budget'
   | 'finalizing'
   | 'failed'
   | 'cancelled';
@@ -198,7 +200,12 @@ export interface ClarificationRequest {
   answeredAt?: string;
 }
 
-/** 单个任务的硬预算，超限后 runtime 必须可解释地暂停或失败。 */
+/**
+ * 执行预算上限（run 级或 lifetime 级共用同一形状）。
+ * - run：单次 harness 执行（用户发言 / resume 开启的一轮工作）
+ * - lifetime：任务全生命周期累计（跨续聊与多次 resume）
+ * 触顶后 runtime 可解释地暂停（waiting_budget），而非直接失败。
+ */
 export interface TaskBudget {
   maxIterations?: number;
   maxToolCalls?: number;
@@ -206,12 +213,31 @@ export interface TaskBudget {
   maxOutputBytes?: number;
 }
 
-/** 当前任务已经消耗的预算计数。 */
+/** 预算消耗计数；run 与 lifetime 各持一份。 */
 export interface BudgetUsage {
   iterations: number;
   toolCalls: number;
   wallTimeMs: number;
   outputBytes: number;
+}
+
+/** 预算作用域：本轮执行 vs 任务寿命。 */
+export type BudgetScope = 'run' | 'lifetime';
+
+/** 预算维度名称（与 TaskBudget / BudgetUsage 字段对应）。 */
+export type BudgetLimitName = keyof Required<TaskBudget>;
+
+/** 预算触顶详情，供 SSE / 轨迹 / UI 续跑使用。 */
+export interface BudgetExceededInfo {
+  scope: BudgetScope;
+  limitName: BudgetLimitName;
+  used: number;
+  limit: number;
+  reason: string;
+  runUsage: BudgetUsage;
+  lifetimeUsage: BudgetUsage;
+  runBudget: Required<TaskBudget>;
+  lifetimeBudget: Required<TaskBudget>;
 }
 
 /** 任务级 token 汇总；不支持 usage 的 Provider 保持字段缺省而不是伪造。 */
@@ -335,8 +361,22 @@ export interface Task {
   /** Agent 拆解出的计划步骤 */
   plan: PlanStep[];
   messages: Message[];
+  /**
+   * 单次 harness 执行预算（创建时快照；未设字段由引擎默认补齐）。
+   * 每次 run 开始时 budgetUsage 清零，不跨续聊累计。
+   */
   budget?: TaskBudget;
+  /** 当前这一次 harness 执行已消耗的预算。 */
   budgetUsage?: BudgetUsage;
+  /**
+   * 任务寿命预算（创建时快照）。跨 resume / 续聊累计，
+   * 防止无限续跑；触顶后需扩容再继续。
+   */
+  lifetimeBudget?: TaskBudget;
+  /** 任务全生命周期累计预算消耗。 */
+  lifetimeUsage?: BudgetUsage;
+  /** 最近一次预算触顶详情；续跑成功后清除。 */
+  budgetExceeded?: BudgetExceededInfo;
   artifacts?: TaskArtifact[];
   clarifications?: ClarificationRequest[];
   pendingApprovals?: PendingToolApproval[];
@@ -425,6 +465,7 @@ export type TaskErrorCategory =
   | 'tool'
   | 'permission'
   | 'timeout'
+  | 'budget'
   | 'cancelled'
   | 'parse'
   | 'unknown';
@@ -584,7 +625,19 @@ export type AgentEvent =
   | { type: 'artifact_created'; taskId: string; artifact: TaskArtifact }
   | { type: 'artifact_updated'; taskId: string; artifact: TaskArtifact }
   | { type: 'checkpoint_created'; taskId: string; checkpoint: TaskCheckpoint }
-  | { type: 'budget_usage'; taskId: string; usage: BudgetUsage; budget?: TaskBudget }
+  | {
+      type: 'budget_usage';
+      taskId: string;
+      usage: BudgetUsage;
+      budget?: TaskBudget;
+      lifetimeUsage?: BudgetUsage;
+      lifetimeBudget?: TaskBudget;
+    }
+  | {
+      type: 'budget_exceeded';
+      taskId: string;
+      info: BudgetExceededInfo;
+    }
   | { type: 'token_usage'; taskId: string; usage: AggregatedTokenUsage }
   | { type: 'context_snapshot'; taskId: string; tokens: number }
   | {
@@ -635,9 +688,33 @@ export type AgentEvent =
 /** POST /api/tasks — 创建并启动一个任务 */
 export interface CreateTaskRequest {
   goal: string;
+  /** 单次执行预算覆盖；未提供字段使用引擎默认。 */
   budget?: TaskBudget;
+  /** 任务寿命预算覆盖；未提供字段使用引擎默认。 */
+  lifetimeBudget?: TaskBudget;
   projectId?: string;
   attachments?: MessageAttachment[];
+}
+
+/**
+ * POST /api/tasks/:id/budget/continue — 预算触顶后续跑。
+ * 引擎会在寿命预算不足时自动扩容一份额度，并重新进入 harness。
+ */
+export interface ContinueBudgetRequest {
+  /**
+   * 额外授予的寿命预算增量（可选）。
+   * 未提供时，若寿命已触顶则自动追加一份额度（等于当前 run budget）。
+   */
+  additionalLifetime?: TaskBudget;
+  /**
+   * 覆盖下一 run 的预算上限（可选）；未提供则沿用任务已快照的 run budget。
+   */
+  runBudget?: TaskBudget;
+}
+
+export interface ContinueBudgetResponse {
+  task: Task;
+  streamUrl: string;
 }
 
 export interface CreateTaskResponse {
@@ -1067,7 +1144,10 @@ export interface LlmProviderSlot {
   baseUrl: string;
   /** 该 provider 上次使用的主模型 */
   model: string;
-  /** 该 provider 的视觉子模型（空则用主模型） */
+  /**
+   * @deprecated 视觉模型已改为全局（llm.visionModel），不按槽位区分。
+   * API 仍回显全局值以兼容旧客户端；写入槽位时忽略。
+   */
   visionModel: string;
   /** 最近一次从该 Provider 获取到的完整模型列表 */
   availableModels: string[];
@@ -1082,7 +1162,10 @@ export interface RuntimeSettings {
     provider: string;
     baseUrl: string;
     model: string;
-    /** 视觉子模型：当消息带图片附件时自动切换此模型（空则用主模型） */
+    /**
+     * 全局视觉模型（namespace：`provider:model`，或裸 model id）。
+     * 消息带图片附件时自动切换；空则用主模型。不随 provider 槽位切换而改变。
+     */
     visionModel: string;
     /** 当前激活 Provider 的完整模型列表（与 providers[active].availableModels 一致）。 */
     availableModels: string[];
@@ -1110,6 +1193,14 @@ export interface RuntimeSettings {
   agentThinkingLevel: AgentThinkingLevel;
   /** Pi harness 工具执行策略。 */
   agentToolExecution: AgentToolExecutionMode;
+  /**
+   * 新建任务时的默认执行预算（写入任务快照）。
+   * 运行中任务不受此处后续修改影响。
+   */
+  budget: {
+    run: Required<TaskBudget>;
+    lifetime: Required<TaskBudget>;
+  };
   dbPath: string;
   /** M8: Embedding Provider 配置（OpenAI 兼容接口） */
   embedding: {
@@ -1138,7 +1229,7 @@ export interface UpdateRuntimeSettingsRequest {
     provider: string;
     baseUrl: string;
     model: string;
-    /** 视觉子模型：空字符串表示清除 */
+    /** 全局视觉模型：`provider:model` 或裸 id；空字符串表示清除 */
     visionModel: string;
     availableModels: string[];
     enabledModels: string[];
@@ -1147,6 +1238,28 @@ export interface UpdateRuntimeSettingsRequest {
     maxTokens: number;
     /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。按当前激活 provider 分槽存储。 */
     apiKey: string;
+    /**
+     * 删除指定 provider 槽位（含分槽 API Key）。
+     * 若删除的是当前激活槽位，会自动切换到剩余槽位之一；
+     * 若无剩余槽位，则回落到 openai 空配置。
+     */
+    removeProvider: string;
+    /**
+     * 更新指定槽位的 enabledModels，不切换当前激活 provider。
+     * 若 provider 为当前激活槽，会同步扁平字段。
+     */
+    slotEnabledModels: {
+      provider: string;
+      enabledModels: string[];
+    };
+    /**
+     * 更新指定槽位的默认 model，不强制切换激活 provider。
+     * 若 provider 为当前激活槽，会同步扁平 model 字段。
+     */
+    slotModel: {
+      provider: string;
+      model: string;
+    };
   }>;
   workspaceDir?: string;
   commandExecutionEnabled?: boolean;
@@ -1156,6 +1269,11 @@ export interface UpdateRuntimeSettingsRequest {
   autoModeSafetyEnabled?: boolean;
   agentThinkingLevel?: AgentThinkingLevel;
   agentToolExecution?: AgentToolExecutionMode;
+  /** 覆盖默认任务预算；仅影响此后新建的任务。 */
+  budget?: {
+    run?: Partial<TaskBudget>;
+    lifetime?: Partial<TaskBudget>;
+  };
   /** M8: Embedding Provider 配置（OpenAI 兼容接口） */
   embedding?: Partial<{
     provider: 'openai' | 'off';
@@ -1247,6 +1365,73 @@ export interface KbIndexStatus {
 export interface AddKbDirRequest {
   dirPath: string;
   recursive?: boolean;
+}
+
+// ============================================================
+// 模型目录工具
+// ============================================================
+
+/**
+ * 判断模型 id 是否更像「对话/补全」模型，而非 embedding / TTS / 图像生成等。
+ * 用于过滤 Provider `/models` 混目录，避免 text-embedding 等出现在主模型列表。
+ */
+export function isChatModelId(modelId: string): boolean {
+  const id = modelId.trim().toLowerCase();
+  if (!id) return false;
+  // embedding / vector
+  if (
+    id.includes('embed')
+    || id.includes('embedding')
+    || id.includes('bge-')
+    || id.includes('e5-')
+    || id.includes('nomic-embed')
+    || id.includes('text-embedding')
+  ) {
+    return false;
+  }
+  // speech / audio
+  if (
+    id.includes('tts')
+    || id.includes('whisper')
+    || id.includes('transcri')
+    || id.includes('speech')
+    || id.includes('audio')
+    || id.includes('realtime')
+  ) {
+    return false;
+  }
+  // image / video gen
+  if (
+    id.includes('dall-e')
+    || id.includes('dalle')
+    || id.includes('stable-diffusion')
+    || id.includes('sdxl')
+    || id.includes('image-')
+    || id.includes('imagen')
+    || id.includes('sora')
+    || id.includes('flux')
+    || /(^|[-_/])(t2i|i2i|t2v|i2v)([-_/]|$)/.test(id)
+  ) {
+    return false;
+  }
+  // moderation / rerank / classify
+  if (id.includes('moderation') || id.includes('rerank') || id.includes('classifier')) {
+    return false;
+  }
+  return true;
+}
+
+/** 过滤出适合对话的模型 id 列表（保序、去重）。 */
+export function filterChatModelIds(modelIds: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of modelIds) {
+    const id = typeof raw === 'string' ? raw.trim() : '';
+    if (!id || seen.has(id) || !isChatModelId(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
 }
 
 // ============================================================

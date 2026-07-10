@@ -77,7 +77,8 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 // 请求体 CreateTaskRequest
 {
   "goal": "帮我整理这周的会议纪要",
-  "budget": { "maxIterations": 12, "maxToolCalls": 40, "maxWallTimeMs": 300000, "maxOutputBytes": 262144 }
+  "budget": { "maxIterations": 120, "maxToolCalls": 300, "maxWallTimeMs": 2700000, "maxOutputBytes": 2097152 },
+  "lifetimeBudget": { "maxIterations": 500, "maxToolCalls": 1500, "maxWallTimeMs": 10800000, "maxOutputBytes": 10485760 }
 }
 ```
 ```json
@@ -85,8 +86,14 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 { "task": { /* Task */ }, "streamUrl": "/api/tasks/<id>/stream" }
 ```
 - `goal` 为空 → `400 {"error":"goal is required"}`
-- `budget` 可选；非法或非正数预算字段会被忽略，未提供字段使用后端默认值。
+- `budget` 可选：单次 harness 执行预算；创建时与引擎默认合并并**快照**到任务上。
+- `lifetimeBudget` 可选：任务寿命累计预算；跨续聊 / resume 累计。
+- 非法或非正数预算字段会被忽略。默认值见环境变量 `AUREVOY_BUDGET_*` 或设置页「任务预算」。
 - 返回后任务在后台执行，进度通过 `streamUrl` 的 SSE 推送。
+- **预算语义**：
+  - **run**：每次用户发言启动或 resume 时 `budgetUsage` 清零。
+  - **lifetime**：`lifetimeUsage` 跨 run 累计；触顶后可 `POST .../budget/continue` 或普通 resume 自动扩容后再跑。
+  - 触顶后任务 `status=paused`、`phase=waiting_budget`，并推送 `budget_exceeded` + `done(status=paused)`，**不是** failed。
 
 ### POST `/api/tasks/:id/messages`
 在**同一任务内追加一轮用户输入并继续执行**（多轮对话）。后端保留该任务的完整
@@ -109,6 +116,7 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 `messages` 重新进入 Agent 循环；若上次中断发生在 assistant `tool_calls` 之后且工具结果尚未写入，
 恢复前会补一条可解释的 `role:"tool"` 失败结果，保证 Provider 协议合法且轨迹可回看。
 若任务已有 `checkpoints`，恢复 trace 会记录最近 checkpoint，便于用户理解从哪里继续。
+当 `phase=waiting_budget` 时，resume 会自动保证寿命预算够再跑一整轮 run budget（与 `budget/continue` 同类）。
 ```json
 // 202 → ResumeTaskResponse
 { "task": { /* Task（已回到 pending/initializing） */ }, "streamUrl": "/api/tasks/<id>/stream" }
@@ -116,6 +124,22 @@ M7 起，MCP 工具描述会做长度截断和 prompt injection 关键词净化�
 - 任务不存在 → `404 {"error":"task not found"}`
 - 任务正在运行 → `409 {"error":"任务正在运行，不能重复恢复"}`
 - 任务已完成 → `409 {"error":"已完成任务不需要恢复"}`
+
+### POST `/api/tasks/:id/budget/continue`
+预算触顶后续跑：重置本轮用量、必要时扩容寿命预算，再进入 harness。
+```json
+// 请求体 ContinueBudgetRequest（均可选）
+{
+  "additionalLifetime": { "maxIterations": 120 },
+  "runBudget": { "maxIterations": 200 }
+}
+```
+```json
+// 202 → ContinueBudgetResponse
+{ "task": { /* Task */ }, "streamUrl": "/api/tasks/<id>/stream" }
+```
+- 未提供 `additionalLifetime` 时，若寿命不足以再跑满一轮 run budget，引擎会自动抬升寿命上限。
+- 任务不存在 → `404`；正在运行 / 已完成 / 已取消 → `409`。
 - 引擎启动时会扫描 SQLite 中遗留的 `pending | planning | running | paused` 任务；
   这些任务说明上次进程中断前未正常收尾，会被标记为 `failed/failed` 并写入可解释恢复轨迹，
   之后可由该端点显式恢复。
@@ -357,7 +381,8 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `artifact_created` | `artifact: TaskArtifact` | 创建 draft 任务产物 |
 | `artifact_updated` | `artifact: TaskArtifact` | 产物状态或写入路径变化 |
 | `checkpoint_created` | `checkpoint: TaskCheckpoint` | 关键步骤完成后创建恢复点 |
-| `budget_usage` | `usage: BudgetUsage`, `budget?` | 预算使用量更新 |
+| `budget_usage` | `usage`, `budget?`, `lifetimeUsage?`, `lifetimeBudget?` | 本轮与寿命预算用量 |
+| `budget_exceeded` | `info: BudgetExceededInfo` | 预算触顶（随后 `done(status=paused)`） |
 | `token_usage` | `usage: AggregatedTokenUsage` | Provider token usage 汇总更新 |
 | `reverted` | `messageId`, `removedCount`, `archivedCount` | 编辑重跑：消息已截断并归档 |
 | `unreverted` | `restoredCount` | 撤销编辑：归档消息已恢复 |
@@ -371,7 +396,7 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 
 `TaskStatus`：`pending | planning | running | paused | completed | failed | cancelled`
 
-`TaskPhase`：`initializing | planning | thinking | calling_tool | waiting_approval | waiting_clarification | finalizing | failed | cancelled`
+`TaskPhase`：`initializing | planning | thinking | calling_tool | waiting_approval | waiting_clarification | waiting_budget | finalizing | failed | cancelled`
 
 ### 典型事件序列
 
@@ -474,6 +499,8 @@ interface Task {
   id: string; goal: string; status: TaskStatus; phase: TaskPhase | null;
   plan: PlanStep[]; messages: Message[];
   budget?: TaskBudget; budgetUsage?: BudgetUsage;
+  lifetimeBudget?: TaskBudget; lifetimeUsage?: BudgetUsage;
+  budgetExceeded?: BudgetExceededInfo;
   artifacts?: TaskArtifact[]; clarifications?: ClarificationRequest[];
   checkpoints?: TaskCheckpoint[]; tokenUsage?: AggregatedTokenUsage;
   archivedMessages?: Message[];   // revert 归档的消息（unrevert 恢复来源）
@@ -504,6 +531,13 @@ interface ClarificationRequest {
 }
 interface TaskBudget { maxIterations?: number; maxToolCalls?: number; maxWallTimeMs?: number; maxOutputBytes?: number; }
 interface BudgetUsage { iterations: number; toolCalls: number; wallTimeMs: number; outputBytes: number; }
+interface BudgetExceededInfo {
+  scope: 'run' | 'lifetime';
+  limitName: 'maxIterations' | 'maxToolCalls' | 'maxWallTimeMs' | 'maxOutputBytes';
+  used: number; limit: number; reason: string;
+  runUsage: BudgetUsage; lifetimeUsage: BudgetUsage;
+  runBudget: Required<TaskBudget>; lifetimeBudget: Required<TaskBudget>;
+}
 interface AggregatedTokenUsage {
   available: boolean; provider?: string; model?: string; updatedAt?: string;
   promptTokens?: number; completionTokens?: number; totalTokens?: number; reasoningTokens?: number;
@@ -538,7 +572,7 @@ interface TaskTraceEntry {
   `POST /api/tasks/:id/clarifications/:clarificationId`，不能把追问当作新任务。
 - **产物事件 `artifact_created` / `artifact_updated`**：只表示任务产物状态变化；写入真实文件仍由
   `apply_artifact` 工具承担，并受审批和工作区限制。
-- **预算与 token**：`budget_usage` 是后端 runtime 强制计量；`token_usage.available=false`
+- **预算与 token**：`budget_usage` / `lifetimeUsage` 由 runtime 强制计量；触顶进入 `waiting_budget` 可续跑，不伪造成功。`token_usage.available=false`
   表示 Provider 未返回 usage，不允许前端伪造成本。
 - **破坏性改动**：改字段语义/删字段时，前后端要同一次提交内联动，并 `npm run build:shared`。
 - **鉴权**：当前为本机单用户、无鉴权。若未来引擎需被其它客户端访问，必须先加鉴权（token/本地 socket 校验），不可裸暴露。

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import type {
   DataStatusResponse,
   McpServerStatus,
@@ -7,8 +7,14 @@ import type {
   RuntimeSettings,
   TokenUsageReport,
 } from "@aurevoy/shared";
-import { t, type Locale } from "../i18n";
+import { filterChatModelIds, isChatModelId } from "@aurevoy/shared";
+import { t, type Locale, type TranslationKey } from "../i18n";
 import { getTokenUsageReport, setBaseUrl } from "../api";
+import {
+  PI_PROVIDER_OPTIONS,
+  ProviderIcon,
+  providerLabel,
+} from "./providerIcons";
 import "./SettingsPanel.css";
 
 interface KbDir {
@@ -40,6 +46,13 @@ interface SettingsDraft {
   agentToolExecution: string;
   mcpServersJson: string;
   cleanupPolicyDays: number;
+  /** 新建任务默认：单次执行 / 任务寿命预算 */
+  budgetRunMaxIterations: number;
+  budgetRunMaxToolCalls: number;
+  budgetRunMaxWallTimeMin: number;
+  budgetLifetimeMaxIterations: number;
+  budgetLifetimeMaxToolCalls: number;
+  budgetLifetimeMaxWallTimeMin: number;
   embeddingProvider: string;
   embeddingModel: string;
   embeddingBaseUrl: string;
@@ -48,45 +61,6 @@ interface SettingsDraft {
   searchBaseUrl: string;
   searchApiKey: string;
 }
-
-const PI_PROVIDER_OPTIONS = [
-  { value: "openai", label: "OpenAI" },
-  { value: "openai-compatible", label: "OpenAI-compatible / Custom" },
-  { value: "azure-openai-responses", label: "Azure OpenAI Responses" },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "ant-ling", label: "Ant Ling" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "openrouter", label: "OpenRouter" },
-  { value: "google", label: "Google Gemini" },
-  { value: "google-vertex", label: "Google Vertex" },
-  { value: "xai", label: "xAI" },
-  { value: "groq", label: "Groq" },
-  { value: "cerebras", label: "Cerebras" },
-  { value: "mistral", label: "Mistral" },
-  { value: "moonshotai", label: "Moonshot AI" },
-  { value: "moonshotai-cn", label: "Moonshot AI CN" },
-  { value: "zai", label: "Z.ai" },
-  { value: "zai-coding-cn", label: "Z.ai Coding CN" },
-  { value: "xiaomi", label: "Xiaomi" },
-  { value: "xiaomi-token-plan-cn", label: "Xiaomi Token Plan CN" },
-  { value: "xiaomi-token-plan-ams", label: "Xiaomi Token Plan AMS" },
-  { value: "xiaomi-token-plan-sgp", label: "Xiaomi Token Plan SGP" },
-  { value: "minimax", label: "MiniMax" },
-  { value: "minimax-cn", label: "MiniMax CN" },
-  { value: "together", label: "Together AI" },
-  { value: "fireworks", label: "Fireworks" },
-  { value: "huggingface", label: "Hugging Face" },
-  { value: "nvidia", label: "NVIDIA" },
-  { value: "vercel-ai-gateway", label: "Vercel AI Gateway" },
-  { value: "github-copilot", label: "GitHub Copilot" },
-  { value: "openai-codex", label: "OpenAI Codex" },
-  { value: "amazon-bedrock", label: "Amazon Bedrock" },
-  { value: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway" },
-  { value: "cloudflare-workers-ai", label: "Cloudflare Workers AI" },
-  { value: "opencode", label: "OpenCode" },
-  { value: "opencode-go", label: "OpenCode Go" },
-  { value: "kimi-coding", label: "Kimi Coding" },
-] as const;
 
 interface SettingsPanelProps {
   settings: RuntimeSettings | null;
@@ -104,10 +78,18 @@ interface SettingsPanelProps {
   initialSection?: SettingsSectionId;
   onClose: () => void;
   onSave: (draft: SettingsDraft) => void;
+  /** Provider 连接专用：只保存 key / baseUrl / maxTokens */
+  onSaveConnection: (draft: SettingsDraft) => void;
   onCleanup: (olderThanDays: number) => void;
   onRefresh: () => void;
   onFetchModels: () => void;
+  onFetchModelsForProvider: (provider: string) => void;
   onSaveEnabledModels: (models: string[]) => void;
+  onSaveSlotEnabledModels: (provider: string, models: string[]) => void;
+  /** 点击模型名：切换并保存当前主模型 */
+  onSelectModel: (provider: string, model: string) => void;
+  onSaveVisionModel: (visionModel: string) => void;
+  onRemoveProvider: (provider: string) => void;
   onChatFontSizeChange: (size: number) => void;
   onUiFontSizeChange: (size: number) => void;
   onCodeFontSizeChange: (size: number) => void;
@@ -121,10 +103,31 @@ interface SettingsPanelProps {
   onConnectionChange?: () => void;
 }
 
-type SettingsSectionId = "general" | "appearance" | "provider" | "mcp" | "data" | "memory" | "kb" | "search" | "usage";
+type SettingsSectionId =
+  | "general"
+  | "appearance"
+  | "provider"
+  | "models"
+  | "mcp"
+  | "data"
+  | "memory"
+  | "kb"
+  | "search"
+  | "usage";
 type ThemeMode = "system" | "light" | "dark";
 type WorkMode = "coding" | "daily";
-const SETTINGS_SECTION_IDS: SettingsSectionId[] = ["general", "appearance", "provider", "mcp", "data", "memory", "kb", "search", "usage"];
+const SETTINGS_SECTION_IDS: SettingsSectionId[] = [
+  "general",
+  "appearance",
+  "provider",
+  "models",
+  "mcp",
+  "data",
+  "memory",
+  "kb",
+  "search",
+  "usage",
+];
 
 /** 每次调用都会重新计算 t()，确保语言切换后侧边栏标签即时更新 */
 function getSettingsGroups(): Array<{
@@ -137,12 +140,13 @@ function getSettingsGroups(): Array<{
     items: [
       { id: "general", label: t("settings.nav.general"), icon: "sliders" },
       { id: "appearance", label: t("settings.nav.appearance"), icon: "appearance" },
-      { id: "provider", label: t("settings.nav.provider"), icon: "spark" },
     ],
   },
   {
-    label: t("settings.group.integration"),
+    label: t("settings.group.server"),
     items: [
+      { id: "provider", label: t("settings.nav.provider"), icon: "spark" },
+      { id: "models", label: t("settings.nav.models"), icon: "models" },
       { id: "mcp", label: t("settings.nav.mcp"), icon: "server" },
       { id: "search", label: t("settings.nav.search"), icon: "search" },
     ],
@@ -159,7 +163,17 @@ function getSettingsGroups(): Array<{
 ];
 }
 
-type SettingsIconName = "appearance" | "database" | "kb" | "memory" | "search" | "server" | "sliders" | "spark" | "usage";
+type SettingsIconName =
+  | "appearance"
+  | "database"
+  | "kb"
+  | "memory"
+  | "models"
+  | "search"
+  | "server"
+  | "sliders"
+  | "spark"
+  | "usage";
 
 export function SettingsPanel({
   settings,
@@ -177,10 +191,16 @@ export function SettingsPanel({
   initialSection = "general",
   onClose,
   onSave,
+  onSaveConnection,
   onCleanup,
   onRefresh,
-  onFetchModels,
-  onSaveEnabledModels,
+  onFetchModels: _onFetchModels,
+  onFetchModelsForProvider,
+  onSaveEnabledModels: _onSaveEnabledModels,
+  onSaveSlotEnabledModels,
+  onSelectModel,
+  onSaveVisionModel,
+  onRemoveProvider,
   onChatFontSizeChange,
   onUiFontSizeChange,
   onCodeFontSizeChange,
@@ -289,9 +309,21 @@ export function SettingsPanel({
               saving={saving}
               fetchingModels={fetchingModels}
               onDraftChange={setDraft}
-              onSave={onSave}
-              onFetchModels={onFetchModels}
-              onSaveEnabledModels={onSaveEnabledModels}
+              onSaveConnection={onSaveConnection}
+              onFetchModelsForProvider={onFetchModelsForProvider}
+              onRemoveProvider={onRemoveProvider}
+            />
+          )}
+
+          {activeSection === "models" && (
+            <ModelsSettings
+              settings={settings}
+              saving={saving}
+              fetchingModels={fetchingModels}
+              onFetchModelsForProvider={onFetchModelsForProvider}
+              onSaveSlotEnabledModels={onSaveSlotEnabledModels}
+              onSelectModel={onSelectModel}
+              onSaveVisionModel={onSaveVisionModel}
             />
           )}
 
@@ -406,6 +438,20 @@ function SettingsNavIcon({ name }: { name: SettingsIconName }) {
           strokeLinejoin="round"
         />
         <path d="M15.2 13.2l.5 1.3 1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5.5-1.3z" fill="currentColor" />
+      </svg>
+    );
+  }
+
+  if (name === "models") {
+    return (
+      <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+        <path
+          d="M10 2.8l2.1 4.3 4.7.7-3.4 3.3.8 4.7L10 13.6 5.8 15.8l.8-4.7L3.2 7.8l4.7-.7L10 2.8z"
+          stroke="currentColor"
+          strokeWidth="1.35"
+          fill="none"
+          strokeLinejoin="round"
+        />
       </svg>
     );
   }
@@ -569,7 +615,63 @@ function GeneralSettings({
           ]}
           onChange={(value) => onDraftChange({ ...draft, agentToolExecution: value })}
         />
-        <p className="settings-provider-hint">{t("settings.thinkingLevelMovedHint")}</p>
+        <SettingsNoteRow title={t("settings.thinkingLevelTitle")} description={t("settings.thinkingLevelMovedHint")} />
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.taskBudget")}>
+        <SettingsNoteRow title={t("settings.taskBudget")} description={t("settings.taskBudgetHint")} />
+        <div className="settings-budget-block">
+          <div className="settings-budget-block-head">
+            <strong>{t("settings.budgetRunSection")}</strong>
+            <small>{t("settings.budgetRunSectionDesc")}</small>
+          </div>
+          <div className="settings-budget-grid">
+            <SettingsBudgetField
+              label={t("settings.budgetRunIterations")}
+              hint={t("settings.budgetUnitTurns")}
+              value={draft.budgetRunMaxIterations}
+              onChange={(value) => onDraftChange({ ...draft, budgetRunMaxIterations: value })}
+            />
+            <SettingsBudgetField
+              label={t("settings.budgetRunToolCalls")}
+              hint={t("settings.budgetUnitCalls")}
+              value={draft.budgetRunMaxToolCalls}
+              onChange={(value) => onDraftChange({ ...draft, budgetRunMaxToolCalls: value })}
+            />
+            <SettingsBudgetField
+              label={t("settings.budgetRunWallMin")}
+              hint={t("settings.budgetUnitMinutes")}
+              value={draft.budgetRunMaxWallTimeMin}
+              onChange={(value) => onDraftChange({ ...draft, budgetRunMaxWallTimeMin: value })}
+            />
+          </div>
+        </div>
+        <div className="settings-budget-block is-last">
+          <div className="settings-budget-block-head">
+            <strong>{t("settings.budgetLifetimeSection")}</strong>
+            <small>{t("settings.budgetLifetimeSectionDesc")}</small>
+          </div>
+          <div className="settings-budget-grid">
+            <SettingsBudgetField
+              label={t("settings.budgetLifetimeIterations")}
+              hint={t("settings.budgetUnitTurns")}
+              value={draft.budgetLifetimeMaxIterations}
+              onChange={(value) => onDraftChange({ ...draft, budgetLifetimeMaxIterations: value })}
+            />
+            <SettingsBudgetField
+              label={t("settings.budgetLifetimeToolCalls")}
+              hint={t("settings.budgetUnitCalls")}
+              value={draft.budgetLifetimeMaxToolCalls}
+              onChange={(value) => onDraftChange({ ...draft, budgetLifetimeMaxToolCalls: value })}
+            />
+            <SettingsBudgetField
+              label={t("settings.budgetLifetimeWallMin")}
+              hint={t("settings.budgetUnitMinutes")}
+              value={draft.budgetLifetimeMaxWallTimeMin}
+              onChange={(value) => onDraftChange({ ...draft, budgetLifetimeMaxWallTimeMin: value })}
+            />
+          </div>
+        </div>
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.general")}>
@@ -822,51 +924,49 @@ function ProviderSettings({
   saving,
   fetchingModels,
   onDraftChange,
-  onSave,
-  onFetchModels,
-  onSaveEnabledModels,
+  onSaveConnection,
+  onFetchModelsForProvider,
+  onRemoveProvider,
 }: {
   draft: SettingsDraft;
   settings: RuntimeSettings | null;
   saving: boolean;
   fetchingModels: boolean;
   onDraftChange: (draft: SettingsDraft) => void;
-  onSave: (draft: SettingsDraft) => void;
-  onFetchModels: () => void;
-  onSaveEnabledModels: (models: string[]) => void;
+  onSaveConnection: (draft: SettingsDraft) => void;
+  onFetchModelsForProvider: (provider: string) => void;
+  onRemoveProvider: (provider: string) => void;
 }) {
-  // 编辑中的 draft.provider 可能与当前激活不同；列表/勾选以“当前正在编辑的槽位”为准
+  const [connectionOpen, setConnectionOpen] = useState(false);
+
+  useEffect(() => {
+    if (!connectionOpen) return;
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === "Escape") setConnectionOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [connectionOpen]);
+
+  // 编辑中的 draft.provider 可能与当前激活不同
   const editingSlot = settings?.llm.providers?.find((slot) => slot.provider === draft.provider);
   const isEditingActive = !settings || draft.provider === settings.llm.provider;
-  const availableModels = isEditingActive
-    ? (settings?.llm.availableModels ?? [])
-    : (editingSlot?.availableModels ?? []);
-  const enabledModels = isEditingActive
-    ? (settings?.llm.enabledModels ?? [])
-    : (editingSlot?.enabledModels ?? []);
-  const currentModel = isEditingActive
-    ? (settings?.llm.model ?? draft.model)
-    : (editingSlot?.model ?? draft.model);
   const apiKeyConfigured = isEditingActive
     ? Boolean(settings?.llm.apiKeyConfigured)
     : Boolean(editingSlot?.apiKeyConfigured);
-  const modelInputOptions = [...new Set([currentModel, draft.model, ...availableModels].filter(Boolean))];
-  const currentModelMissing = Boolean(currentModel && availableModels.length > 0 && !availableModels.includes(currentModel));
-  const enabledSet = new Set(enabledModels);
+  const availableCount = isEditingActive
+    ? (settings?.llm.availableModels.length ?? 0)
+    : (editingSlot?.availableModels.length ?? 0);
   const configuredProviders = settings?.llm.providers ?? [];
+  const connectedIds = new Set(configuredProviders.map((slot) => slot.provider));
+  const availableToConnect = PI_PROVIDER_OPTIONS.filter((item) => !connectedIds.has(item.value));
+  const popularToConnect = availableToConnect.filter((item) => item.popular);
+  const moreToConnect = availableToConnect.filter((item) => !item.popular);
+  // 已连接且（本会话已配 key 或槽位已有 key）才允许拉取目录
+  const canFetchModels =
+    connectedIds.has(draft.provider) && (apiKeyConfigured || draft.apiKey.trim().length > 0);
 
-  function toggleEnabledModel(model: string, checked: boolean): void {
-    // 模型启用列表只对“已激活并保存”的 provider 生效；编辑未保存槽位时先提示保存
-    if (!isEditingActive) return;
-    if (model === currentModel && !checked) return;
-    const next = checked
-      ? [...new Set([...enabledModels, model])]
-      : enabledModels.filter((item) => item !== model);
-    onSaveEnabledModels(next);
-  }
-
-  function handleProviderChange(nextProvider: string): void {
-    if (nextProvider === draft.provider) return;
+  function selectProvider(nextProvider: string): void {
     const slot = settings?.llm.providers?.find((item) => item.provider === nextProvider);
     const isActive = settings?.llm.provider === nextProvider;
     onDraftChange({
@@ -877,293 +977,610 @@ function ProviderSettings({
         ?? (isActive ? (settings?.llm.baseUrl ?? "") : ""),
       model: slot?.model
         ?? (isActive ? (settings?.llm.model ?? "") : draft.model),
-      visionModel: slot?.visionModel
-        ?? (isActive ? (settings?.llm.visionModel ?? "") : ""),
+      // 视觉模型全局，不随槽位回填
+      visionModel: settings?.llm.visionModel ?? "",
       apiKey: "",
     });
   }
 
+  function openConnection(nextProvider: string): void {
+    selectProvider(nextProvider);
+    setConnectionOpen(true);
+  }
+
+  function closeConnection(): void {
+    setConnectionOpen(false);
+  }
+
+  function handleDisconnect(provider: string, event: MouseEvent): void {
+    event.stopPropagation();
+    if (saving) return;
+    if (!confirm(t("settings.disconnectConfirm").replace("{name}", providerLabel(provider)))) return;
+    if (draft.provider === provider) {
+      setConnectionOpen(false);
+    }
+    onRemoveProvider(provider);
+  }
+
+  function handleSaveConnection(): void {
+    // 保存后保持弹窗打开，便于继续「获取模型列表」
+    onSaveConnection(draft);
+  }
+
+  function providerKindLabel(slot: { provider: string; baseUrl: string; apiKeyConfigured: boolean }): string {
+    if (slot.provider === "openai-compatible" || slot.baseUrl.trim()) {
+      return t("settings.providerKindCustom");
+    }
+    return t("settings.providerKindApiKey");
+  }
+
+  function slotModelSummary(slot: {
+    model: string;
+    availableModels: string[];
+    apiKeyConfigured: boolean;
+  }): string {
+    const parts: string[] = [];
+    parts.push(
+      slot.apiKeyConfigured
+        ? t("settings.apiKeyConfiguredShort")
+        : t("settings.apiKeyMissingShort"),
+    );
+    if (slot.availableModels.length > 0) {
+      parts.push(
+        `${t("settings.modelDescFetchedPrefix")}${slot.availableModels.length}${t("settings.modelListCountSuffix")}`,
+      );
+    } else {
+      parts.push(t("settings.modelEmptyShort"));
+    }
+    return parts.join(" · ");
+  }
+
   return (
     <>
-    {configuredProviders.length > 0 && (
-      <SettingsChoiceGroup title={t("settings.configuredProviders")}>
-        <p className="settings-provider-hint">{t("settings.multiProviderHint")}</p>
-        <div className="settings-provider-slots" aria-label={t("settings.configuredProviders")}>
+    <SettingsChoiceGroup title={t("settings.connectedProviders")}>
+      {configuredProviders.length === 0 ? (
+        <div className="settings-provider-empty">
+          <p>{t("settings.connectedProvidersEmpty")}</p>
+        </div>
+      ) : (
+        <div className="settings-provider-sheet" role="list" aria-label={t("settings.connectedProviders")}>
           {configuredProviders.map((slot) => {
             const active = slot.provider === settings?.llm.provider;
-            const editing = slot.provider === draft.provider;
-            const label = PI_PROVIDER_OPTIONS.find((opt) => opt.value === slot.provider)?.label ?? slot.provider;
+            const label = providerLabel(slot.provider);
             return (
-              <button
+              <div
                 key={slot.provider}
-                type="button"
-                className="settings-provider-chip"
+                className="settings-provider-line"
                 data-active={active}
-                data-editing={editing}
-                onClick={() => handleProviderChange(slot.provider)}
-                title={`${slot.provider}${slot.model ? ` · ${slot.model}` : ""}`}
+                role="listitem"
               >
-                <span className="settings-provider-chip-main">
-                  <strong>{label}</strong>
-                  <small>{slot.model || t("settings.providerNoModel")}</small>
-                </span>
-                <span className="settings-provider-chip-meta">
-                  {active && <em className="settings-provider-badge" data-kind="active">{t("settings.providerActive")}</em>}
-                  {editing && !active && (
-                    <em className="settings-provider-badge" data-kind="editing">{t("settings.providerEditing")}</em>
-                  )}
-                  <em
-                    className="settings-provider-badge"
-                    data-kind={slot.apiKeyConfigured ? "ready" : "missing"}
-                  >
-                    {slot.apiKeyConfigured ? t("settings.apiKeyConfiguredShort") : t("settings.apiKeyMissingShort")}
-                  </em>
-                </span>
-              </button>
+                <button
+                  type="button"
+                  className="settings-provider-line-main"
+                  onClick={() => openConnection(slot.provider)}
+                  title={`${slot.provider}${slot.model ? ` · ${slot.model}` : ""}`}
+                >
+                  <ProviderIcon provider={slot.provider} />
+                  <span className="settings-provider-line-text">
+                    <span className="settings-provider-line-title">
+                      <strong>{label}</strong>
+                      <em className="settings-provider-kind">{providerKindLabel(slot)}</em>
+                      {active && (
+                        <em className="settings-provider-kind" data-kind="active">
+                          {t("settings.providerActive")}
+                        </em>
+                      )}
+                    </span>
+                    <small>{slotModelSummary(slot)}</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="settings-provider-line-action"
+                  disabled={saving}
+                  onClick={(event) => handleDisconnect(slot.provider, event)}
+                >
+                  {t("settings.disconnectProvider")}
+                </button>
+              </div>
             );
           })}
+        </div>
+      )}
+    </SettingsChoiceGroup>
+
+    {(popularToConnect.length > 0 || moreToConnect.length > 0) && (
+      <SettingsChoiceGroup title={t("settings.popularProviders")}>
+        <div className="settings-provider-sheet" role="list" aria-label={t("settings.popularProviders")}>
+          {[...popularToConnect, ...moreToConnect].map((item) => (
+            <div key={item.value} className="settings-provider-line" role="listitem">
+              <div className="settings-provider-line-main" data-static="true">
+                <ProviderIcon provider={item.value} />
+                <span className="settings-provider-line-text">
+                  <span className="settings-provider-line-title">
+                    <strong>{item.label}</strong>
+                  </span>
+                  <small>{t(item.descKey as TranslationKey)}</small>
+                </span>
+              </div>
+              <button
+                type="button"
+                className="settings-provider-connect-btn"
+                disabled={saving}
+                onClick={() => openConnection(item.value)}
+              >
+                <span aria-hidden="true">+</span>
+                {t("settings.connectProvider")}
+              </button>
+            </div>
+          ))}
         </div>
       </SettingsChoiceGroup>
     )}
 
-    <SettingsGroup title={t("settings.providerConfig")}>
-      <SettingsActionRow
-        title={t("settings.providerTitle")}
-        description={t("settings.providerDesc")}
-        control={
-          <select
-            className="settings-inline-select"
-            value={draft.provider}
-            onChange={(event) => handleProviderChange(event.currentTarget.value)}
-          >
-            {PI_PROVIDER_OPTIONS.map((provider) => (
-              <option key={provider.value} value={provider.value}>{provider.label}</option>
-            ))}
-            {/* 已保存但不在静态列表中的自定义 provider id */}
-            {configuredProviders
-              .filter((slot) => !PI_PROVIDER_OPTIONS.some((opt) => opt.value === slot.provider))
-              .map((slot) => (
-                <option key={slot.provider} value={slot.provider}>{slot.provider}</option>
-              ))}
-          </select>
-        }
-      />
-      <SettingsActionRow
-        title="Base URL"
-        description={t("settings.baseUrlDesc")}
-        control={
-          <input
-            className="settings-inline-input"
-            value={draft.baseUrl}
-            onChange={(event) => onDraftChange({ ...draft, baseUrl: event.currentTarget.value })}
-          />
-        }
-      />
-      <SettingsActionRow
-        title="Model"
-        description={
-          availableModels.length > 0
-            ? `${t("settings.modelDescFetchedPrefix")} ${availableModels.length} ${t("settings.modelDescFetchedMid")} ${enabledModels.length} ${t("settings.modelDescFetchedSuffix")}`
-            : t("settings.modelDescDefault")
-        }
-        control={
-          <div className="settings-model-input">
-            <input
-              className="settings-inline-input"
-              list="settings-model-options"
-              value={draft.model}
-              onChange={(event) => onDraftChange({ ...draft, model: event.currentTarget.value })}
-            />
-            <datalist id="settings-model-options">
-              {modelInputOptions.map((model) => (
-                <option key={model} value={model} />
-              ))}
-            </datalist>
-          </div>
-        }
-      />
-      <SettingsActionRow
-        title={t("settings.visionModelTitle")}
-        description={t("settings.visionModelDesc")}
-        control={
-          <div className="settings-model-input">
-            <input
-              className="settings-inline-input"
-              list="settings-vision-model-options"
-              value={draft.visionModel}
-              placeholder={t("settings.visionModelPlaceholder")}
-              onChange={(event) => onDraftChange({ ...draft, visionModel: event.currentTarget.value })}
-            />
-            <datalist id="settings-vision-model-options">
-              <option value="" />
-              {availableModels.map((model) => (
-                <option key={model} value={model} />
-              ))}
-            </datalist>
-          </div>
-        }
-      />
-      <SettingsActionRow
-        title={t("settings.fetchModelsTitle")}
-        description={
-          isEditingActive
-            ? t("settings.fetchModelsDesc")
-            : t("settings.fetchModelsNeedSave")
-        }
-        control={
-          <button
-            type="button"
-            className="settings-secondary-btn"
-            disabled={fetchingModels || !isEditingActive}
-            onClick={onFetchModels}
-          >
-            {fetchingModels ? t("settings.fetching") : t("settings.fetchModels")}
-          </button>
-        }
-      />
-      <div className="settings-model-manager">
-        <div className="settings-model-manager-head">
-          <span>
-            <strong>{t("settings.enabledModelsTitle")}</strong>
-            <small>
-              {isEditingActive ? t("settings.enabledModelsDesc") : t("settings.enabledModelsNeedSave")}
-            </small>
-          </span>
-          <em>{enabledModels.length}/{availableModels.length}</em>
-        </div>
-        {currentModelMissing && (
-          <p className="settings-model-warning">
-            {t("settings.modelMissingPrefix")}{currentModel}{t("settings.modelMissingSuffix")}
-          </p>
-        )}
-        {availableModels.length === 0 ? (
-          <p className="settings-model-empty">{t("settings.modelEmpty")}</p>
-        ) : (
-          <div className="settings-model-list" role="list" aria-label={t("settings.enableModelListLabel")}>
-            {availableModels.map((model) => {
-              const isCurrent = model === currentModel && isEditingActive;
-              return (
-                <label key={model} className="settings-model-option" data-current={isCurrent}>
-                  <input
-                    type="checkbox"
-                    checked={enabledSet.has(model) || isCurrent}
-                    disabled={saving || isCurrent || !isEditingActive}
-                    onChange={(event) => toggleEnabledModel(model, event.currentTarget.checked)}
-                  />
-                  <span>{model}</span>
-                  {isCurrent && <em>{t("settings.modelCurrent")}</em>}
-                </label>
-              );
-            })}
-          </div>
-        )}
-      </div>
-      <SettingsActionRow
-        title="API Key"
-        description={
-          apiKeyConfigured
-            ? `${t("settings.apiKeyConfigured")} · ${draft.provider}`
-            : `${t("settings.apiKeyMissing")} · ${draft.provider}`
-        }
-        control={
-          <input
-            className="settings-inline-input"
-            type="password"
-            value={draft.apiKey}
-            placeholder={apiKeyConfigured ? t("settings.apiKeyKeepPlaceholder") : t("settings.apiKeyInputPlaceholder")}
-            onChange={(event) => onDraftChange({ ...draft, apiKey: event.currentTarget.value })}
-          />
-        }
-      />
-      <SettingsActionRow
-        title={t("settings.maxTokensTitle")}
-        description={t("settings.maxTokensDesc")}
-        control={
-          <input
-            className="settings-number-input"
-            type="number"
-            min={256}
-            step={256}
-            value={draft.maxTokens}
-            onChange={(event) => onDraftChange({ ...draft, maxTokens: Number(event.currentTarget.value) })}
-          />
-        }
-      />
-      <SettingsActionRow
-        title={t("settings.saveProviderTitle")}
-        description={t("settings.saveProviderDesc")}
-        control={
-          <button
-            type="button"
-            className="settings-primary-btn"
-            disabled={saving}
-            onClick={() => onSave(draft)}
-          >
-            {saving ? t("settings.saving") : t("action.save")}
-          </button>
-        }
-      />
-    </SettingsGroup>
+    {connectionOpen && (
+      <div
+        className="settings-modal-backdrop"
+        role="presentation"
+        onClick={closeConnection}
+      >
+        <div
+          className="settings-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="settings-connection-dialog-title"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <header className="settings-modal-head">
+            <div className="settings-modal-title-row">
+              <ProviderIcon provider={draft.provider} />
+              <div>
+                <h2 id="settings-connection-dialog-title">
+                  {t("settings.connectionConfig")}
+                </h2>
+                <p>{providerLabel(draft.provider)}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="settings-modal-close"
+              onClick={closeConnection}
+              aria-label={t("action.close")}
+            >
+              ×
+            </button>
+          </header>
 
-    <SettingsGroup title={t("settings.embeddingTitle")}>
-      <SettingsActionRow
-        title={t("settings.embeddingProviderTitle")}
-        description={t("settings.embeddingProviderDesc")}
-        control={
-          <select
-            className="settings-inline-select"
-            value={draft.embeddingProvider}
-            onChange={(event) => onDraftChange({ ...draft, embeddingProvider: event.currentTarget.value })}
-          >
-            <option value="off">{t("settings.embeddingProviderOff")}</option>
-            <option value="openai">OpenAI Compatible</option>
-          </select>
-        }
-      />
-      {draft.embeddingProvider !== "off" && (
-        <>
-          <SettingsActionRow
-            title={t("settings.embeddingModelTitle")}
-            description={t("settings.embeddingModelDesc")}
-            control={
+          <div className="settings-modal-body">
+            <label className="settings-modal-field">
+              <span>API Key</span>
+              <small>
+                {apiKeyConfigured
+                  ? t("settings.apiKeyConfigured")
+                  : t("settings.apiKeyMissing")}
+              </small>
               <input
-                className="settings-inline-input"
-                value={draft.embeddingModel}
-                placeholder="nomic-embed-text"
-                onChange={(event) => onDraftChange({ ...draft, embeddingModel: event.currentTarget.value })}
-              />
-            }
-          />
-          <SettingsActionRow
-            title={t("settings.embeddingBaseUrlTitle")}
-            description={t("settings.embeddingBaseUrlDesc")}
-            control={
-              <input
-                className="settings-inline-input"
-                value={draft.embeddingBaseUrl}
-                placeholder="http://127.0.0.1:11434/v1"
-                onChange={(event) => onDraftChange({ ...draft, embeddingBaseUrl: event.currentTarget.value })}
-              />
-            }
-          />
-          <SettingsActionRow
-            title={t("settings.embeddingApiKeyTitle")}
-            description={t("settings.embeddingApiKeyDesc")}
-            control={
-              <input
-                className="settings-inline-input"
+                className="settings-modal-input"
                 type="password"
-                value={draft.embeddingApiKey}
-                placeholder={t("settings.apiKeyKeepPlaceholder")}
-                onChange={(event) => onDraftChange({ ...draft, embeddingApiKey: event.currentTarget.value })}
+                value={draft.apiKey}
+                autoFocus
+                placeholder={
+                  apiKeyConfigured
+                    ? t("settings.apiKeyKeepPlaceholder")
+                    : t("settings.apiKeyInputPlaceholder")
+                }
+                onChange={(event) => onDraftChange({ ...draft, apiKey: event.currentTarget.value })}
               />
-            }
-          />
-        </>
-      )}
-    </SettingsGroup>
+            </label>
+
+            <label className="settings-modal-field">
+              <span>Base URL</span>
+              <small>{t("settings.baseUrlDesc")}</small>
+              <input
+                className="settings-modal-input"
+                value={draft.baseUrl}
+                onChange={(event) => onDraftChange({ ...draft, baseUrl: event.currentTarget.value })}
+              />
+            </label>
+
+            <label className="settings-modal-field">
+              <span>{t("settings.maxTokensTitle")}</span>
+              <small>{t("settings.maxTokensDesc")}</small>
+              <input
+                className="settings-modal-input settings-modal-input-narrow"
+                type="number"
+                min={256}
+                step={256}
+                value={draft.maxTokens}
+                onChange={(event) =>
+                  onDraftChange({ ...draft, maxTokens: Number(event.currentTarget.value) })
+                }
+              />
+            </label>
+
+            <div className="settings-modal-field">
+              <span>{t("settings.fetchModelsTitle")}</span>
+              <small>
+                {canFetchModels
+                  ? availableCount > 0
+                    ? `${t("settings.modelDescFetchedPrefix")}${availableCount}${t("settings.modelListCountSuffix")} · ${t("settings.fetchModelsNoSetHint")}`
+                    : t("settings.fetchModelsDesc")
+                  : t("settings.fetchModelsNeedSave")}
+              </small>
+              <button
+                type="button"
+                className="settings-secondary-btn settings-modal-fetch-btn"
+                disabled={saving || fetchingModels || !canFetchModels}
+                onClick={() => onFetchModelsForProvider(draft.provider)}
+              >
+                {fetchingModels ? t("settings.fetching") : t("settings.fetchModels")}
+              </button>
+            </div>
+          </div>
+
+          <footer className="settings-modal-foot">
+            <button type="button" className="settings-secondary-btn" onClick={closeConnection}>
+              {t("action.cancel")}
+            </button>
+            <button
+              type="button"
+              className="settings-primary-btn"
+              disabled={saving}
+              onClick={handleSaveConnection}
+            >
+              {saving ? t("settings.saving") : t("settings.saveConnectionTitle")}
+            </button>
+          </footer>
+        </div>
+      </div>
+    )}
     </>
   );
+}
+
+function ModelsSettings({
+  settings,
+  saving,
+  fetchingModels,
+  onFetchModelsForProvider,
+  onSaveSlotEnabledModels,
+  onSelectModel,
+  onSaveVisionModel,
+}: {
+  settings: RuntimeSettings | null;
+  saving: boolean;
+  fetchingModels: boolean;
+  onFetchModelsForProvider: (provider: string) => void;
+  onSaveSlotEnabledModels: (provider: string, models: string[]) => void;
+  onSelectModel: (provider: string, model: string) => void;
+  onSaveVisionModel: (visionModel: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  /** 本地乐观启用列表：取消勾选立即生效，不被 saving/回写时序弹回 */
+  const [enabledLocal, setEnabledLocal] = useState<Record<string, string[]>>({});
+
+  const providers = settings?.llm.providers ?? [];
+  const activeProvider = settings?.llm.provider;
+  const activeModel = settings?.llm.model ?? "";
+  /** 全局视觉：namespace `provider:model` 或裸 id */
+  const globalVision = settings?.llm.visionModel ?? "";
+  const normalizedQuery = query.trim().toLowerCase();
+
+  // 服务端 settings 变化时同步本地勾选（仅当与本地无冲突的 pending 时）
+  useEffect(() => {
+    if (!settings) return;
+    setEnabledLocal((prev) => {
+      const next: Record<string, string[]> = { ...prev };
+      for (const slot of settings.llm.providers) {
+        const serverList = filterChatModelIds(
+          slot.provider === settings.llm.provider
+            ? (settings.llm.enabledModels ?? [])
+            : (slot.enabledModels ?? []),
+        );
+        // 若本地没有该 key，或服务端已追上本地，则采用服务端
+        if (prev[slot.provider] === undefined) {
+          next[slot.provider] = serverList;
+          continue;
+        }
+        const localList = prev[slot.provider] ?? [];
+        const same =
+          localList.length === serverList.length
+          && localList.every((m) => serverList.includes(m));
+        if (same) next[slot.provider] = serverList;
+        // 否则保留本地乐观值，等待下一次服务端一致
+      }
+      return next;
+    });
+  }, [settings]);
+
+  function slotAvailable(provider: string): string[] {
+    const raw =
+      provider === activeProvider
+        ? (settings?.llm.availableModels ?? [])
+        : (settings?.llm.providers?.find((item) => item.provider === provider)?.availableModels ?? []);
+    // 前端再滤一层，兼容尚未重新拉取的历史脏列表
+    return filterChatModelIds(raw);
+  }
+
+  function slotEnabled(provider: string): string[] {
+    if (enabledLocal[provider] !== undefined) {
+      return enabledLocal[provider]!;
+    }
+    const raw =
+      provider === activeProvider
+        ? (settings?.llm.enabledModels ?? [])
+        : (settings?.llm.providers?.find((item) => item.provider === provider)?.enabledModels ?? []);
+    return filterChatModelIds(raw);
+  }
+
+  function slotDefaultModel(provider: string): string {
+    if (provider === activeProvider) {
+      return activeModel;
+    }
+    return settings?.llm.providers?.find((item) => item.provider === provider)?.model ?? "";
+  }
+
+  function commitEnabled(provider: string, models: string[]): void {
+    const next = filterChatModelIds(models);
+    setEnabledLocal((prev) => ({ ...prev, [provider]: next }));
+    onSaveSlotEnabledModels(provider, next);
+  }
+
+  function toggleModel(provider: string, model: string, checked: boolean): void {
+    const enabled = new Set(slotEnabled(provider));
+    if (checked) enabled.add(model);
+    else enabled.delete(model);
+    commitEnabled(provider, [...enabled]);
+  }
+
+  function enableAll(provider: string): void {
+    const available = slotAvailable(provider);
+    if (available.length === 0) return;
+    commitEnabled(provider, available);
+  }
+
+  /** 清空该 Provider 在主界面菜单中的勾选（可全不选）。 */
+  function enableNone(provider: string): void {
+    commitEnabled(provider, []);
+  }
+
+  /** 跨 provider 的视觉候选：namespace 保证同名模型不冲突 */
+  const visionOptions = useMemo(() => {
+    const options: Array<{ value: string; label: string }> = [];
+    const seen = new Set<string>();
+    for (const slot of providers) {
+      const models = new Set([
+        ...slotAvailable(slot.provider),
+        ...slotEnabled(slot.provider),
+        ...(slotDefaultModel(slot.provider) ? [slotDefaultModel(slot.provider)] : []),
+      ]);
+      for (const model of models) {
+        if (!isChatModelId(model)) continue;
+        const value = modelNamespace(slot.provider, model);
+        if (seen.has(value)) continue;
+        seen.add(value);
+        options.push({
+          value,
+          label: `${providerLabel(slot.provider)} / ${model}`,
+        });
+      }
+    }
+    if (globalVision && !seen.has(globalVision)) {
+      const parsed = parseModelNamespace(globalVision);
+      options.unshift({
+        value: globalVision,
+        label: parsed.provider
+          ? `${providerLabel(parsed.provider)} / ${parsed.model}`
+          : globalVision,
+      });
+    }
+    return options;
+  }, [providers, settings, globalVision, activeProvider, activeModel]);
+
+  const visionSelectValue = (() => {
+    if (!globalVision) return "";
+    if (visionOptions.some((opt) => opt.value === globalVision)) return globalVision;
+    if (activeProvider) {
+      const ns = modelNamespace(activeProvider, globalVision);
+      if (visionOptions.some((opt) => opt.value === ns)) return ns;
+    }
+    const bare = visionOptions.find((opt) => parseModelNamespace(opt.value).model === globalVision);
+    return bare?.value ?? globalVision;
+  })();
+
+  const groups = providers
+    .map((slot) => {
+      const available = slotAvailable(slot.provider);
+      const models = normalizedQuery
+        ? available.filter((model) => {
+            const ns = modelNamespace(slot.provider, model).toLowerCase();
+            const label = providerLabel(slot.provider).toLowerCase();
+            return (
+              model.toLowerCase().includes(normalizedQuery)
+              || ns.includes(normalizedQuery)
+              || label.includes(normalizedQuery)
+            );
+          })
+        : available;
+      return { slot, models };
+    })
+    .filter((group) => group.models.length > 0 || !normalizedQuery)
+    .sort((a, b) => {
+      if (a.slot.provider === activeProvider) return -1;
+      if (b.slot.provider === activeProvider) return 1;
+      return a.slot.provider.localeCompare(b.slot.provider);
+    });
+
+  return (
+    <>
+      <p className="settings-models-hint">{t("settings.modelsPageHint")}</p>
+
+      <div className="settings-models-search-wrap">
+        <input
+          className="settings-models-search"
+          type="search"
+          value={query}
+          placeholder={t("settings.searchModels")}
+          onChange={(event) => setQuery(event.currentTarget.value)}
+          aria-label={t("settings.searchModels")}
+        />
+      </div>
+
+      {providers.length > 0 && (
+        <label className="settings-models-vision settings-models-vision-global">
+          <span>
+            <strong>{t("settings.visionModelTitle")}</strong>
+            <small>{t("settings.visionModelDesc")}</small>
+          </span>
+          <select
+            className="settings-models-vision-select"
+            value={visionSelectValue}
+            disabled={saving || visionOptions.length === 0}
+            onChange={(event) => onSaveVisionModel(event.currentTarget.value)}
+          >
+            <option value="">{t("settings.visionModelPlaceholder")}</option>
+            {visionOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {providers.length === 0 ? (
+        <div className="settings-provider-empty">
+          <p>{t("settings.modelsNeedProvider")}</p>
+        </div>
+      ) : groups.length === 0 ? (
+        <div className="settings-provider-empty">
+          <p>{t("settings.modelsNoMatch")}</p>
+        </div>
+      ) : (
+        groups.map(({ slot, models }) => {
+          const enabledSet = new Set(slotEnabled(slot.provider));
+          const current = slotDefaultModel(slot.provider);
+          const available = slotAvailable(slot.provider);
+          const isActiveSlot = slot.provider === activeProvider;
+          const visionParsed = parseModelNamespace(globalVision);
+          const allEnabled = available.length > 0 && available.every((m) => enabledSet.has(m));
+          return (
+            <section key={slot.provider} className="settings-models-group">
+              <header className="settings-models-group-head">
+                <ProviderIcon provider={slot.provider} />
+                <div className="settings-models-group-title">
+                  <strong>{providerLabel(slot.provider)}</strong>
+                  <small>
+                    <span className="settings-models-ns">{slot.provider}</span>
+                    {" · "}
+                    {enabledSet.size}/{available.length || models.length}
+                    {isActiveSlot ? ` · ${t("settings.providerActive")}` : ""}
+                  </small>
+                </div>
+                <div className="settings-models-group-actions">
+                  <button
+                    type="button"
+                    className="settings-secondary-btn"
+                    disabled={fetchingModels || saving}
+                    onClick={() => onFetchModelsForProvider(slot.provider)}
+                  >
+                    {fetchingModels ? t("settings.fetching") : t("settings.fetchModels")}
+                  </button>
+                  {available.length > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        className="settings-secondary-btn"
+                        disabled={saving || allEnabled}
+                        onClick={() => enableAll(slot.provider)}
+                      >
+                        {t("settings.enableAllModels")}
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-secondary-btn"
+                        disabled={saving || enabledSet.size === 0}
+                        onClick={() => enableNone(slot.provider)}
+                      >
+                        {t("settings.enableNoneModels")}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </header>
+
+              {available.length === 0 ? (
+                <div className="settings-provider-empty settings-models-empty-inline">
+                  <p>{t("settings.modelEmptyFetchHere")}</p>
+                </div>
+              ) : (
+                <div className="settings-provider-sheet settings-models-sheet" role="list">
+                  {models.map((model) => {
+                    const isCurrent = isActiveSlot && model === current;
+                    // 勾选 = 出现在输入框模型菜单；点名称 = 切换并保存为当前主模型
+                    const checked = enabledSet.has(model);
+                    const ns = modelNamespace(slot.provider, model);
+                    const isVision =
+                      globalVision === ns
+                      || (visionParsed.provider === slot.provider && visionParsed.model === model)
+                      || (!visionParsed.provider && globalVision === model);
+                    return (
+                      <div
+                        key={ns}
+                        className="settings-models-row"
+                        data-current={isCurrent}
+                        role="listitem"
+                      >
+                        <button
+                          type="button"
+                          className="settings-models-row-main"
+                          disabled={saving || isCurrent}
+                          title={isCurrent ? ns : t("settings.clickToUseModel")}
+                          onClick={() => {
+                            if (!isCurrent) onSelectModel(slot.provider, model);
+                          }}
+                        >
+                          <span className="settings-models-row-id" title={ns}>{model}</span>
+                          {isCurrent && <em>{t("settings.modelCurrent")}</em>}
+                          {isVision && !isCurrent && <em>{t("settings.modelVisionTag")}</em>}
+                        </button>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => {
+                            event.stopPropagation();
+                            toggleModel(slot.provider, model, event.currentTarget.checked);
+                          }}
+                          aria-label={`${ns} ${t("settings.enableModelListLabel")}`}
+                          title={t("settings.enabledModelsDesc")}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          );
+        })
+      )}
+    </>
+  );
+}
+
+/** provider:model — model 段可含冒号；provider 为合法 id */
+function modelNamespace(provider: string, model: string): string {
+  return `${provider}:${model}`;
+}
+
+function parseModelNamespace(value: string): { provider?: string; model: string } {
+  const raw = value.trim();
+  if (!raw) return { model: "" };
+  const [maybeProvider, rest] = raw.split(/:(.*)/s);
+  if (rest !== undefined && rest.length > 0 && /^[a-z0-9][a-z0-9-]*$/.test(maybeProvider)) {
+    return { provider: maybeProvider, model: rest };
+  }
+  return { model: raw };
 }
 
 function McpSettings({
@@ -1797,6 +2214,46 @@ function SettingsInfoRow({
   );
 }
 
+/** 卡片内说明行：与 settings-row 同结构，无右侧控件。 */
+function SettingsNoteRow({ description, title }: { description: string; title: string }) {
+  return (
+    <div className="settings-row settings-row-note">
+      <span>
+        <strong>{title}</strong>
+        <small>{description}</small>
+      </span>
+    </div>
+  );
+}
+
+function SettingsBudgetField({
+  hint,
+  label,
+  value,
+  onChange,
+}: {
+  hint: string;
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="settings-budget-field">
+      <span className="settings-budget-field-label">{label}</span>
+      <span className="settings-budget-field-control">
+        <input
+          className="settings-budget-input"
+          type="number"
+          min={1}
+          value={value}
+          onChange={(event) => onChange(Math.max(1, Number(event.currentTarget.value) || 1))}
+        />
+        <span className="settings-budget-field-hint">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
 function SettingsActionRow({
   control,
   description,
@@ -1887,6 +2344,18 @@ function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
     agentToolExecution: settings?.agentToolExecution ?? "parallel",
     mcpServersJson: settings?.mcpServersJson ?? "",
     cleanupPolicyDays: settings?.cleanupPolicyDays ?? 30,
+    budgetRunMaxIterations: settings?.budget?.run.maxIterations ?? 120,
+    budgetRunMaxToolCalls: settings?.budget?.run.maxToolCalls ?? 300,
+    budgetRunMaxWallTimeMin: Math.max(
+      1,
+      Math.round((settings?.budget?.run.maxWallTimeMs ?? 45 * 60 * 1000) / 60_000),
+    ),
+    budgetLifetimeMaxIterations: settings?.budget?.lifetime.maxIterations ?? 500,
+    budgetLifetimeMaxToolCalls: settings?.budget?.lifetime.maxToolCalls ?? 1500,
+    budgetLifetimeMaxWallTimeMin: Math.max(
+      1,
+      Math.round((settings?.budget?.lifetime.maxWallTimeMs ?? 3 * 60 * 60 * 1000) / 60_000),
+    ),
     // 默认复用 LLM 配置（都是 OpenAI 兼容 API）
     embeddingProvider: settings?.embedding?.provider ?? "off",
     embeddingModel: settings?.embedding?.model ?? "nomic-embed-text",

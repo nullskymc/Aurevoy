@@ -3,6 +3,7 @@ import { t, type TranslationKey } from "../i18n";
 import { usePlatform } from "../platform/context";
 import { ImageViewer } from "./ImageViewer";
 import type { MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
+import { ProviderIcon, providerLabel } from "./providerIcons";
 import "./Composer.css";
 
 interface SlashCommand {
@@ -98,6 +99,18 @@ export function Composer({
   const [viewingImage, setViewingImage] = useState<string | null>(null);
   const providerConfigured = provider !== "unconfigured";
   const canSend = value.trim().length > 0 && !busy && online !== false && providerConfigured;
+  /** health.provider 形如 "openai:gpt-4o-mini" 或纯 provider id */
+  const providerId = provider && provider !== "unconfigured"
+    ? (provider.includes(":") ? provider.split(":")[0]! : provider)
+    : null;
+  const modelId = provider && provider.includes(":")
+    ? provider.slice(provider.indexOf(":") + 1)
+    : null;
+  const providerChipLabel = !providerId
+    ? (provider === "unconfigured" ? t("composer.providerUnconfigured") : t("composer.providerDisconnected"))
+    : modelId
+      ? modelId
+      : providerLabel(providerId);
 
   const slashCommands = useMemo<SlashCommand[]>(() => {
     const commands: SlashCommand[] = [
@@ -368,13 +381,17 @@ export function Composer({
             <button
               ref={modelButtonRef}
               type="button"
-              className="composer-chip"
-              title={t("composer.selectModel")}
+              className="composer-chip composer-model-chip"
+              title={provider && provider !== "unconfigured" ? provider : providerChipLabel}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={onOpenModelSelector}
             >
-              <GearIcon />
-              <span>{provider ? (provider === "unconfigured" ? t("composer.providerUnconfigured") : provider) : t("composer.providerDisconnected")}</span>
+              {providerId ? (
+                <ProviderIcon provider={providerId} className="composer-provider-icon" />
+              ) : (
+                <GearIcon />
+              )}
+              <span>{providerChipLabel}</span>
             </button>
           </div>
 

@@ -274,13 +274,20 @@ export function Conversation({
     output,
     hasLiveTail,
   });
+  // 已落到历史消息上的 contentBlocks 不再塞进 live tail，避免「每条消息底部都挂同一文件卡」
+  const historicalContentBlockIds = new Set(
+    messages.flatMap((message) => (message.contentBlocks ?? []).map((block) => block.id)),
+  );
+  const liveOnlyContentBlocks = liveContentBlocks.filter(
+    (block) => !historicalContentBlockIds.has(block.id),
+  );
   const liveRoundData = hasLiveTail
     ? buildLiveAgentRoundData({
         plan,
         liveToolActivity: viewModel.liveToolActivity,
         output: viewModel.liveOutput,
         phase,
-        contentBlocks: liveContentBlocks,
+        contentBlocks: liveOnlyContentBlocks,
       })
     : null;
   const approvalItems = collectApprovalItems(viewModel.liveToolActivity, task.pendingApprovals ?? []);
@@ -403,13 +410,13 @@ function ConversationTurnView({
   const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
   const attachContentToolCallIds = collectAttachContentToolCallIds(turn.agentMessages);
   const finalMessage = isLiveTurn ? null : findFinalAssistantMessage(turn.agentMessages);
-  const finalMessages = finalMessage
-    ? [stripProcessNarrationForPresentation(finalMessage)].filter(isRenderableAssistantMessage)
-    : [];
-  const presentationMessages = assistantMessages.filter(
-    (message) => message.id !== finalMessage?.id && isPresentationAssistantMessage(message),
-  ).map(stripProcessNarrationForPresentation).filter(isRenderableAssistantMessage);
-  const presentationMessageIds = new Set(presentationMessages.map((message) => message.id));
+  /**
+   * 用户可见交付面：按消息时间序渲染正文 + 文件卡。
+   * 旧逻辑把所有 presentation 统一甩到 final 之后，导致 attach_content 文件卡永远贴在
+   * 本轮最底部，看起来「跟哪条消息都无关」。
+   */
+  const deliveryMessages = buildDeliveryMessages(assistantMessages, finalMessage);
+  const deliveryMessageIds = new Set(deliveryMessages.map((message) => message.id));
   const finalProcessMessages = finalMessage && isPresentationOnlyAssistantMessage(finalMessage) && hasProcessNarration(finalMessage)
     ? [finalMessage]
     : [];
@@ -433,12 +440,12 @@ function ConversationTurnView({
         />
       )}
 
-      {(finalMessages.length > 0 || presentationMessages.length > 0 || workflowMessages.length > 0 || standaloneToolMessages.length > 0 || liveRoundData) && (
+      {(deliveryMessages.length > 0 || workflowMessages.length > 0 || standaloneToolMessages.length > 0 || liveRoundData) && (
         <div className="agent-turn">
           {(workflowMessages.length > 0 || standaloneToolMessages.length > 0 || liveRoundData) && (
             <AgentWorkflowDrawer
               assistantMessages={workflowMessages}
-              presentationMessageIds={presentationMessageIds}
+              presentationMessageIds={deliveryMessageIds}
               standaloneToolMessages={standaloneToolMessages}
               liveRoundData={liveRoundData}
               phaseDetail={phaseDetail}
@@ -452,55 +459,80 @@ function ConversationTurnView({
             />
           )}
 
-          {/*
-            正文（final）必须在附件/UI 块（presentation）之前。
-            present_ui / attach_content 挂在「发起 tool_call 的中间 assistant 消息」上，
-            真正的提问/总结往往在后续无 tool 的 final 消息里；若先画 presentation，
-            会出现 choice 等回答 UI 压在 Agent 问题文字上方。
-          */}
-          {finalMessages.map((message) => (
+          {deliveryMessages.map((message) => (
             <div
               key={message.id}
               className="agent-final-response"
               onContextMenu={(event) => onAgentContextMenu(event, message)}
             >
-                  {getFailureInfo(message) ? (
-                    <AgentFailureCard message={message} />
-                  ) : (
-                    <>
-                  <AgentRound
-                    data={buildAgentRoundFromMessage(message, resultMap, plan)}
-                    busy={false}
-                    defaultToolDetailsOpen={defaultToolDetailsOpen}
-                    showWorkflow={false}
-                    onUiChoice={onUiChoice}
-                    onOpenWorkspacePath={onOpenWorkspacePath}
-                  />
-                </>
+              {getFailureInfo(message) ? (
+                <AgentFailureCard message={message} />
+              ) : (
+                <AgentRound
+                  data={buildAgentRoundFromMessage(
+                    stripProcessNarrationForPresentation(message),
+                    resultMap,
+                    plan,
+                  )}
+                  busy={false}
+                  defaultToolDetailsOpen={defaultToolDetailsOpen}
+                  showWorkflow={false}
+                  onUiChoice={onUiChoice}
+                  onOpenWorkspacePath={onOpenWorkspacePath}
+                />
               )}
-            </div>
-          ))}
-
-          {presentationMessages.map((message) => (
-            <div
-              key={`presentation-${message.id}`}
-              className="agent-final-response"
-              onContextMenu={(event) => onAgentContextMenu(event, message)}
-            >
-              <AgentRound
-                data={buildAgentRoundFromMessage(message, resultMap, plan)}
-                busy={false}
-                defaultToolDetailsOpen={defaultToolDetailsOpen}
-                showWorkflow={false}
-                onUiChoice={onUiChoice}
-                onOpenWorkspacePath={onOpenWorkspacePath}
-              />
             </div>
           ))}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * 组装本 turn 对用户可见的交付消息（正文 / 文件 / UI），保持与消息历史一致的时序。
+ * - file_reference / image / link：跟发起 attach 的那条 assistant 消息走
+ * - 纯 present_ui（只有 ui 块、无正文）：仍放到「有正文的最终回复」之后，避免 choice 压住提问
+ */
+function buildDeliveryMessages(
+  assistantMessages: Message[],
+  finalMessage: Message | null,
+): Message[] {
+  const candidates = assistantMessages.filter((message) => {
+    if (getFailureInfo(message)) return true;
+    if (message.content.trim().length > 0) return true;
+    if ((message.contentBlocks?.length ?? 0) > 0) return true;
+    return false;
+  });
+
+  const primary: Message[] = [];
+  const deferredUiOnly: Message[] = [];
+
+  for (const message of candidates) {
+    const blocks = message.contentBlocks ?? [];
+    const hasText = message.content.trim().length > 0 || Boolean(getFailureInfo(message));
+    const hasNonUiBlocks = blocks.some((block) => block.type !== "ui");
+    const hasUiBlocks = blocks.some((block) => block.type === "ui");
+
+    // 纯 UI 交互块：延后，保持「先说清问题再出 choice」
+    if (!hasText && !hasNonUiBlocks && hasUiBlocks) {
+      deferredUiOnly.push(message);
+      continue;
+    }
+    primary.push(message);
+  }
+
+  // 若还没有 final 正文（直播中），ui 块仍按时间序跟在当前已有交付后面
+  if (!finalMessage) {
+    return [...primary, ...deferredUiOnly];
+  }
+
+  // 有 final 时：先按时间序输出正文/文件，再把纯 UI 放到末尾（通常 final 已在 primary 内）
+  const primaryIds = new Set(primary.map((message) => message.id));
+  if (finalMessage && !primaryIds.has(finalMessage.id) && isRenderableAssistantMessage(finalMessage)) {
+    primary.push(finalMessage);
+  }
+  return [...primary, ...deferredUiOnly];
 }
 
 function findFinalAssistantMessage(messages: Message[]): Message | null {
@@ -542,17 +574,57 @@ function getFailureInfo(message: Message): { message: string; category?: string 
   };
 }
 
+function failureCategoryLabel(category?: string): string | null {
+  if (!category) return null;
+  switch (category) {
+    case "timeout":
+      return t("failure.category.timeout");
+    case "budget":
+      return t("failure.category.budget");
+    case "configuration":
+      return t("failure.category.configuration");
+    case "model":
+      return t("failure.category.model");
+    case "tool":
+      return t("failure.category.tool");
+    case "permission":
+      return t("failure.category.permission");
+    case "cancelled":
+      return t("failure.category.cancelled");
+    case "parse":
+      return t("failure.category.parse");
+    default:
+      return category;
+  }
+}
+
 function AgentFailureCard({ message }: { message: Message }) {
   const failure = getFailureInfo(message);
   if (!failure) return null;
+  const categoryLabel = failureCategoryLabel(failure.category);
+  const isBudget =
+    failure.category === "budget" ||
+    /预算|budget|最大轮次|maxIterations/i.test(failure.message);
   return (
-    <section className="agent-failure-card" role="alert" aria-label="任务失败">
+    <section
+      className="agent-failure-card"
+      data-kind={isBudget ? "budget" : failure.category || "unknown"}
+      role="alert"
+      aria-label={t("failure.title")}
+    >
       <div className="agent-failure-head">
-        <span className="agent-failure-rule" aria-hidden="true" />
-        <strong>运行失败</strong>
-        {failure.category && <span>{failure.category}</span>}
+        <span className="agent-failure-icon" aria-hidden="true">
+          {isBudget ? <BudgetIcon /> : <FailureIcon />}
+        </span>
+        <div className="agent-failure-titles">
+          <strong>{isBudget ? t("failure.budgetTitle") : t("failure.title")}</strong>
+          {categoryLabel && <span className="agent-failure-badge">{categoryLabel}</span>}
+        </div>
       </div>
       <div className="agent-failure-message">{failure.message}</div>
+      {isBudget && (
+        <p className="agent-failure-tip">{t("failure.budgetTip")}</p>
+      )}
     </section>
   );
 }
@@ -567,10 +639,6 @@ function isPresentationToolName(name: string): boolean {
 function isPresentationOnlyAssistantMessage(message: Message): boolean {
   const toolCalls = message.toolCalls ?? [];
   return toolCalls.length > 0 && toolCalls.every((toolCall) => isPresentationToolName(toolCall.function.name));
-}
-
-function isPresentationAssistantMessage(message: Message): boolean {
-  return isPresentationOnlyAssistantMessage(message) || (message.contentBlocks?.length ?? 0) > 0;
 }
 
 function hasProcessNarration(message: Message): boolean {
@@ -702,8 +770,11 @@ function AgentWorkflowDrawer({
 }
 
 function stripPresentationBlocksForWorkflow(message: Message, presentationMessageIds: Set<string>): Message {
-  if (!presentationMessageIds.has(message.id) && !(message.contentBlocks?.length)) return message;
-  return { ...message, contentBlocks: undefined };
+  // 交付面已单独渲染 contentBlocks；workflow 抽屉只保留工具过程，避免同一文件卡出现两次
+  if (presentationMessageIds.has(message.id) || (message.contentBlocks?.length ?? 0) > 0) {
+    return { ...message, contentBlocks: undefined };
+  }
+  return message;
 }
 
 function ClarificationCard({
@@ -849,7 +920,8 @@ function UserBubble({
     const trimmed = draft.trim();
     if (!trimmed) return;
     setEditing(false);
-    if (trimmed && trimmed !== content) onEdit?.(messageId, trimmed, "code_and_conv");
+    // 允许原文重试（例如预算触顶后改措辞或原样再跑）
+    onEdit?.(messageId, trimmed, "code_and_conv");
   }
 
   function cancel(): void {
@@ -858,17 +930,24 @@ function UserBubble({
   }
 
   if (editing) {
+    const lineCount = Math.max(1, draft.split("\n").length);
+    const canSubmit = draft.trim().length > 0;
     return (
       <div className="user-bubble-row is-editing">
-        <div className="user-bubble-edit">
+        <div className="user-edit-card" role="form" aria-label={t("action.editAndRetry")}>
+          <div className="user-edit-card-head">
+            <span className="user-edit-card-title">{t("editRetry.title")}</span>
+            <span className="user-edit-card-hint">{t("editRetry.hint")}</span>
+          </div>
           <textarea
-            className="user-bubble-input"
+            className="user-edit-card-input"
             value={draft}
             autoFocus
-            rows={Math.min(8, Math.max(1, draft.split("\n").length))}
+            rows={Math.min(10, Math.max(2, lineCount))}
+            placeholder={t("editRetry.placeholder")}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 confirmSave();
               } else if (event.key === "Escape") {
@@ -876,13 +955,22 @@ function UserBubble({
               }
             }}
           />
-          <div className="msg-actions">
-            <IconButton label={t("action.cancel")} onClick={cancel}>
-              <CloseIcon />
-            </IconButton>
-            <IconButton label={t("action.editAndRetry")} onClick={confirmSave} className="is-confirm">
-              <CheckIcon />
-            </IconButton>
+          <div className="user-edit-card-footer">
+            <span className="user-edit-card-keys">{t("editRetry.keys")}</span>
+            <div className="user-edit-card-actions">
+              <button type="button" className="user-edit-btn is-ghost" onClick={cancel}>
+                {t("action.cancel")}
+              </button>
+              <button
+                type="button"
+                className="user-edit-btn is-primary"
+                onClick={confirmSave}
+                disabled={!canSubmit}
+              >
+                <RetryIcon />
+                <span>{t("action.editAndRetry")}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1057,10 +1145,41 @@ function CheckIcon() {
   );
 }
 
-function CloseIcon() {
+function RetryIcon() {
   return (
-    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
-      <path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" />
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+      <path
+        d="M4.5 8.5a5.5 5.5 0 019.2-3.1M15.5 4.5v3h-3M15.5 11.5a5.5 5.5 0 01-9.2 3.1M4.5 15.5v-3h3"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function FailureIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.4" fill="none" />
+      <path d="M10 6.5v4.2M10 13.2h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function BudgetIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+      <path
+        d="M4 5.5h12v9H4zM7 5.5V4.2a1 1 0 011-1h4a1 1 0 011 1v1.3"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        fill="none"
+        strokeLinejoin="round"
+      />
+      <path d="M4 9.5h12" stroke="currentColor" strokeWidth="1.4" />
     </svg>
   );
 }

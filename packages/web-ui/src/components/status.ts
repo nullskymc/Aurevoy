@@ -34,6 +34,8 @@ export function getPhaseLabel(phase: TaskPhase | null): string {
       return t("phase.waiting_approval");
     case "waiting_clarification":
       return t("phase.waiting_clarification");
+    case "waiting_budget":
+      return t("phase.waiting_budget");
     case "finalizing":
       return t("phase.finalizing");
     case "failed":

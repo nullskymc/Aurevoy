@@ -141,6 +141,9 @@ const taskColumnMigrations: Array<{ name: string; sql: string }> = [
   { name: 'checkpoints', sql: "ALTER TABLE tasks ADD COLUMN checkpoints TEXT NOT NULL DEFAULT '[]'" },
   { name: 'budget', sql: 'ALTER TABLE tasks ADD COLUMN budget TEXT' },
   { name: 'budget_usage', sql: 'ALTER TABLE tasks ADD COLUMN budget_usage TEXT' },
+  { name: 'lifetime_budget', sql: 'ALTER TABLE tasks ADD COLUMN lifetime_budget TEXT' },
+  { name: 'lifetime_usage', sql: 'ALTER TABLE tasks ADD COLUMN lifetime_usage TEXT' },
+  { name: 'budget_exceeded', sql: 'ALTER TABLE tasks ADD COLUMN budget_exceeded TEXT' },
   { name: 'token_usage', sql: 'ALTER TABLE tasks ADD COLUMN token_usage TEXT' },
   { name: 'archived_messages', sql: "ALTER TABLE tasks ADD COLUMN archived_messages TEXT NOT NULL DEFAULT '[]'" },
   { name: 'parent_task_id', sql: 'ALTER TABLE tasks ADD COLUMN parent_task_id TEXT' },
@@ -230,6 +233,9 @@ interface TaskRow {
   checkpoints: string;
   budget: string | null;
   budget_usage: string | null;
+  lifetime_budget: string | null;
+  lifetime_usage: string | null;
+  budget_exceeded: string | null;
   token_usage: string | null;
   archived_messages: string;
   parent_task_id: string | null;
@@ -282,6 +288,9 @@ function rowToTask(row: TaskRow): Task {
     checkpoints: (parseJsonColumn(row.checkpoints) as Task['checkpoints']) ?? [],
     budget: (parseJsonColumn(row.budget) as Task['budget']) ?? undefined,
     budgetUsage: (parseJsonColumn(row.budget_usage) as Task['budgetUsage']) ?? undefined,
+    lifetimeBudget: (parseJsonColumn(row.lifetime_budget) as Task['lifetimeBudget']) ?? undefined,
+    lifetimeUsage: (parseJsonColumn(row.lifetime_usage) as Task['lifetimeUsage']) ?? undefined,
+    budgetExceeded: (parseJsonColumn(row.budget_exceeded) as Task['budgetExceeded']) ?? undefined,
     tokenUsage: (parseJsonColumn(row.token_usage) as Task['tokenUsage']) ?? undefined,
     archivedMessages: (parseJsonColumn(row.archived_messages) as Task['archivedMessages']) ?? [],
     parentTaskId: row.parent_task_id ?? undefined,
@@ -336,12 +345,13 @@ export const taskStore = {
     db.prepare(
       `INSERT INTO tasks (
          id, goal, title, title_source, status, phase, plan, messages, artifacts, clarifications, pending_approvals, checkpoints,
-         budget, budget_usage, token_usage, archived_messages, parent_task_id, project_id,
+         budget, budget_usage, lifetime_budget, lifetime_usage, budget_exceeded, token_usage, archived_messages, parent_task_id, project_id,
          plan_mode, context_tokens, created_at, updated_at
        )
        VALUES (
          @id, @goal, @title, @titleSource, @status, @phase, @plan, @messages, @artifacts, @clarifications,
-         @pendingApprovals, @checkpoints, @budget, @budgetUsage, @tokenUsage, @archivedMessages, @parentTaskId,
+         @pendingApprovals, @checkpoints, @budget, @budgetUsage, @lifetimeBudget, @lifetimeUsage, @budgetExceeded,
+         @tokenUsage, @archivedMessages, @parentTaskId,
          @projectId, @planMode, @contextTokens, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
@@ -351,6 +361,8 @@ export const taskStore = {
          clarifications=excluded.clarifications, pending_approvals=excluded.pending_approvals,
          checkpoints=excluded.checkpoints,
          budget=excluded.budget, budget_usage=excluded.budget_usage,
+         lifetime_budget=excluded.lifetime_budget, lifetime_usage=excluded.lifetime_usage,
+         budget_exceeded=excluded.budget_exceeded,
          token_usage=excluded.token_usage, archived_messages=excluded.archived_messages,
          parent_task_id=excluded.parent_task_id, project_id=excluded.project_id,
          plan_mode=excluded.plan_mode,
@@ -371,6 +383,9 @@ export const taskStore = {
       checkpoints: JSON.stringify(task.checkpoints ?? []),
       budget: task.budget === undefined ? null : JSON.stringify(task.budget),
       budgetUsage: task.budgetUsage === undefined ? null : JSON.stringify(task.budgetUsage),
+      lifetimeBudget: task.lifetimeBudget === undefined ? null : JSON.stringify(task.lifetimeBudget),
+      lifetimeUsage: task.lifetimeUsage === undefined ? null : JSON.stringify(task.lifetimeUsage),
+      budgetExceeded: task.budgetExceeded === undefined ? null : JSON.stringify(task.budgetExceeded),
       tokenUsage: task.tokenUsage === undefined ? null : JSON.stringify(task.tokenUsage),
       archivedMessages: JSON.stringify(task.archivedMessages ?? []),
       parentTaskId: task.parentTaskId ?? null,
@@ -387,7 +402,7 @@ export const taskStore = {
    * 传入的 fields 只会 SET 对应列，updated_at 自动刷新。
    * 高频场景（每轮 touch）用此替代 save()。
    */
-  patch(taskId: string, fields: Partial<Pick<Task, 'status' | 'phase' | 'budgetUsage' | 'tokenUsage' | 'contextTokens' | 'pendingApprovals'>>): void {
+  patch(taskId: string, fields: Partial<Pick<Task, 'status' | 'phase' | 'budgetUsage' | 'lifetimeUsage' | 'tokenUsage' | 'contextTokens' | 'pendingApprovals'>>): void {
     const now = new Date().toISOString();
     const assignments: string[] = ['updated_at = ?'];
     const values: unknown[] = [now];
@@ -395,6 +410,7 @@ export const taskStore = {
     if (fields.status !== undefined) { assignments.push('status = ?'); values.push(fields.status); }
     if (fields.phase !== undefined) { assignments.push('phase = ?'); values.push(fields.phase); }
     if (fields.budgetUsage !== undefined) { assignments.push('budget_usage = ?'); values.push(JSON.stringify(fields.budgetUsage)); }
+    if (fields.lifetimeUsage !== undefined) { assignments.push('lifetime_usage = ?'); values.push(JSON.stringify(fields.lifetimeUsage)); }
     if (fields.tokenUsage !== undefined) { assignments.push('token_usage = ?'); values.push(JSON.stringify(fields.tokenUsage)); }
     if (fields.contextTokens !== undefined) { assignments.push('context_tokens = ?'); values.push(fields.contextTokens); }
     if (fields.pendingApprovals !== undefined) { assignments.push('pending_approvals = ?'); values.push(JSON.stringify(fields.pendingApprovals)); }
