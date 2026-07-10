@@ -17,6 +17,7 @@ describe('subagent profiles', () => {
     for (const profile of profiles) {
       expect(profile.tools.length).toBeGreaterThan(0);
       expect(profile.timeoutMs).toBeGreaterThan(0);
+      expect(profile.maxIterations).toBeGreaterThan(0);
       expect(profile.systemPromptAddon.length).toBeGreaterThan(0);
     }
   });

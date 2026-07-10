@@ -228,6 +228,14 @@ export function branchTask(
     toolCalls: msg.toolCalls?.map((tc) => ({ ...tc, id: idMap.get(tc.id) ?? randomUUID() })),
     toolCallId: msg.toolCallId ? (idMap.get(msg.toolCallId) ?? msg.toolCallId) : undefined,
   }));
+  const clonedSubagentRuns = (parentTask.subagentRuns ?? [])
+    .filter((run) => idMap.has(run.parentCallId))
+    .map((run) => ({
+      ...run,
+      id: randomUUID(),
+      parentCallId: idMap.get(run.parentCallId)!,
+      activities: run.activities.map((activity) => ({ ...activity, id: randomUUID() })),
+    }));
 
   const now = new Date().toISOString();
   const branchGoal = goalOverride ?? parentTask.goal;
@@ -247,6 +255,7 @@ export function branchTask(
     artifacts: [],
     clarifications: [],
     pendingApprovals: [],
+    subagentRuns: clonedSubagentRuns,
     checkpoints: [],
     budget: budgets.budget,
     budgetUsage: initialBudgetUsage(),

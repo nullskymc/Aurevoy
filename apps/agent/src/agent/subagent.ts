@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   AgentHarness,
   InMemorySessionRepo,
@@ -5,22 +6,51 @@ import {
   type AgentTool,
 } from '@earendil-works/pi-agent-core';
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node';
+import type {
+  AutoModeLevel,
+  SubagentStopReason,
+  Task,
+  TaskErrorCategory,
+} from '@aurevoy/shared';
+import { config } from '../config.js';
+import { createTaskLogger, type TaskLogger } from '../logging/trace.js';
 import { createPiModel } from '../llm/pi-provider.js';
-import { unifiedToolRegistry, type UnifiedToolContext } from '../tool/unified-registry.js';
+import {
+  unifiedToolRegistry,
+  validateToolInputSchema,
+  type UnifiedToolContext,
+} from '../tool/unified-registry.js';
 import { createAurevoyPiModels } from './pi-harness.js';
 import {
   approvalConfigFromTask,
   decideToolPermission,
   type ApprovalConfig,
 } from './approval.js';
-import type { AutoModeLevel, Task } from '@aurevoy/shared';
-import { config } from '../config.js';
+import { SubagentConcurrencyLimiter } from './subagent-limiter.js';
 import {
   DEFAULT_SUBAGENT_ROLE,
   getSubagentProfile,
   resolveSubagentTools,
   type SubagentRole,
 } from './subagent-profiles.js';
+
+const MAX_REQUESTED_ITERATIONS = 100;
+const subagentLimiter = new SubagentConcurrencyLimiter(
+  () => config.agent.subagentMaxConcurrency,
+);
+
+export interface SubTaskProgress {
+  runId: string;
+  phase: 'queued' | 'running' | 'tool_started' | 'tool_completed' | 'completed';
+  message: string;
+  iteration?: number;
+  maxIterations?: number;
+  toolCallId?: string;
+  toolName?: string;
+  toolStatus?: 'completed' | 'failed';
+  toolDurationMs?: number;
+  error?: string;
+}
 
 export interface SubTask {
   goal: string;
@@ -30,75 +60,211 @@ export interface SubTask {
   /** 显式工具白名单（若提供则覆盖角色默认集） */
   allowedTools?: string[];
   workspaceDir: string;
-  /**
-   * 父任务权限配置。子代理继承父代理 auto/plan 与 paused/planApproved。
-   * 未传时从 parentTask 推导，再不行则按全局 config 推导。
-   */
+  /** 父任务权限配置。子代理继承父代理 auto/plan 与 paused/planApproved。 */
   approvalConfig?: ApprovalConfig;
-  /** 父任务（用于继承权限与上下文） */
-  parentTask?: Pick<Task, 'id' | 'autoModeState' | 'goal'>;
-  /** 覆盖角色默认超时 */
+  /** 父任务快照，用于权限、工具上下文与审计关联。 */
+  parentTask?: Task;
+  /** 父 delegate 调用 ID，用于把内部进度归并到同一 UI 卡片。 */
+  parentCallId?: string;
+  /** 允许访问的附件/显式外部路径，继承自父任务工具上下文。 */
+  externalPaths?: string[];
+  /** 覆盖角色默认超时。 */
   timeoutMs?: number;
+  /** 覆盖角色默认模型轮次，上限 100。 */
+  maxIterations?: number;
+  /** 父工具取消信号。 */
+  signal?: AbortSignal;
+  /** 渐进反馈；回调异常不会影响子代理执行。 */
+  onProgress?: (progress: SubTaskProgress) => void;
+  /** 透传既有 SSE 事件，供子代理内部工具报告进度。 */
+  publishEvent?: (event: Record<string, unknown>) => void;
 }
 
 export interface SubTaskResult {
+  runId: string;
   ok: boolean;
   content: string;
   toolCallCount: number;
   iterations: number;
   role: SubagentRole;
+  stopReason: SubagentStopReason;
+  durationMs: number;
+  truncated: boolean;
   error?: string;
 }
 
-/** 使用 Pi AgentHarness 执行子任务；权限继承自父代理，任务面由 role 决定。 */
+/** 使用 Pi AgentHarness 执行隔离子任务，并强制应用并发、取消、轮次和权限边界。 */
 export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
+  const runId = randomUUID();
+  const startedAtMs = Date.now();
   const role = subTask.role ?? DEFAULT_SUBAGENT_ROLE;
   const profile = getSubagentProfile(role);
-  const allowedTools = resolveSubagentTools(role, subTask.allowedTools);
+  const requestedTools = resolveSubagentTools(role, subTask.allowedTools);
+  const allowedTools = requestedTools.filter(
+    (name) => !!unifiedToolRegistry.get(name) && unifiedToolRegistry.isEnabled(name),
+  );
   const approvalConfig = resolveSubagentApprovalConfig(subTask);
-  const timeoutMs = subTask.timeoutMs ?? profile.timeoutMs;
-  const maxOutputChars = profile.maxOutputChars;
+  const timeoutMs = normalizePositiveInteger(subTask.timeoutMs, profile.timeoutMs);
+  const maxIterations = normalizeSubagentMaxIterations(
+    subTask.maxIterations,
+    profile.maxIterations,
+  );
+  const logger = subTask.parentTask?.id
+    ? createTaskLogger(subTask.parentTask.id)
+    : undefined;
+
+  if (allowedTools.length === 0) {
+    const unavailable = requestedTools.length > 0 ? `：${requestedTools.join(', ')}` : '';
+    return buildResult({
+      runId,
+      startedAtMs,
+      role,
+      stopReason: 'error',
+      error: `子代理角色 ${role} 没有已启用的可用工具${unavailable}`,
+    });
+  }
+
+  emitProgress(subTask, {
+    runId,
+    phase: 'queued',
+    message: `子代理 ${role} 等待执行槽位（并发上限 ${config.agent.subagentMaxConcurrency}）`,
+    maxIterations,
+  });
+
+  let releaseSlot: (() => void) | undefined;
+  try {
+    releaseSlot = await subagentLimiter.acquire(subTask.signal);
+  } catch {
+    return buildResult({
+      runId,
+      startedAtMs,
+      role,
+      stopReason: 'cancelled',
+      error: '父任务已取消，子代理未启动',
+    });
+  }
 
   let content = '';
   let toolCallCount = 0;
   let iterations = 0;
   let error: string | undefined;
+  let forcedStopReason: Exclude<SubagentStopReason, 'completed' | 'error'> | undefined;
   let harness: AgentHarness | undefined;
-  const timeoutId = setTimeout(() => {
+  const toolStartedAt = new Map<string, number>();
+
+  /** 强制停止只接受第一个原因，避免 timeout 与父取消竞态覆盖诊断。 */
+  const forceStop = (
+    reason: Exclude<SubagentStopReason, 'completed' | 'error'>,
+    message: string,
+  ): void => {
+    if (forcedStopReason) return;
+    forcedStopReason = reason;
+    error = message;
     void harness?.abort();
+  };
+
+  const timeoutId = setTimeout(() => {
+    forceStop('timeout', `子代理执行超过 ${timeoutMs}ms，已终止`);
   }, timeoutMs);
+  const onParentAbort = () => forceStop('cancelled', '父任务已取消，子代理同步终止');
+  subTask.signal?.addEventListener('abort', onParentAbort, { once: true });
+  if (subTask.signal?.aborted) onParentAbort();
+
+  traceSubagent(logger, runId, subTask, role, 'running', true, startedAtMs, {
+    allowedTools,
+    maxIterations,
+    timeoutMs,
+  });
+  emitProgress(subTask, {
+    runId,
+    phase: 'running',
+    message: `子代理 ${role} 已启动（最多 ${maxIterations} 轮）`,
+    maxIterations,
+  });
 
   try {
-    if (allowedTools.length === 0) {
-      return {
-        ok: false,
-        content: '',
-        toolCallCount: 0,
-        iterations: 0,
-        role,
-        error: `子代理角色 ${role} 没有可用工具`,
-      };
-    }
-
     const model = createPiModel();
-    const session = await new InMemorySessionRepo().create();
+    const session = await new InMemorySessionRepo().create({ id: runId });
     harness = new AgentHarness({
       env: new NodeExecutionEnv({ cwd: subTask.workspaceDir, shellEnv: process.env }),
       session,
       models: createAurevoyPiModels(model),
-      systemPrompt: buildSubagentSystemPrompt(subTask, role, allowedTools, approvalConfig),
+      systemPrompt: buildSubagentSystemPrompt(
+        subTask,
+        role,
+        allowedTools,
+        approvalConfig,
+        maxIterations,
+      ),
       model,
       thinkingLevel: 'off',
-      tools: createSubagentPiTools(allowedTools, subTask.workspaceDir, subTask.parentTask?.id),
+      tools: createSubagentPiTools(allowedTools, subTask),
+      streamOptions: {
+        timeoutMs: Math.min(timeoutMs, config.llm.timeoutMs),
+        maxRetries: 2,
+        maxRetryDelayMs: 30_000,
+        cacheRetention: 'short',
+      },
     });
 
     harness.subscribe((event) => {
       if (!isPiAgentEvent(event)) return;
       const captured = captureSubagentEvent(event);
-      if (captured.content) content = captured.content.slice(0, maxOutputChars);
+      if (captured.content) content = captured.content;
       toolCallCount += captured.toolCalls;
       iterations += captured.turns;
-      if (captured.error) error = captured.error;
+      if (captured.error && !forcedStopReason) error = captured.error;
+
+      if (event.type === 'tool_execution_start') {
+        toolStartedAt.set(event.toolCallId, Date.now());
+        traceSubagentTool(logger, runId, role, event.toolCallId, event.toolName, 'tool_call', {
+          ok: true,
+          data: { args: event.args },
+        });
+        emitProgress(subTask, {
+          runId,
+          phase: 'tool_started',
+          message: `子代理 ${role} 正在调用 ${event.toolName}`,
+          iteration: iterations,
+          maxIterations,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+        });
+      }
+      if (event.type === 'tool_execution_end') {
+        traceSubagentTool(logger, runId, role, event.toolCallId, event.toolName, 'tool_result', {
+          ok: !event.isError,
+          startedAtMs: toolStartedAt.get(event.toolCallId),
+          errorCategory: event.isError ? 'tool' : undefined,
+          errorMessage: event.isError ? piContentToText(event.result.content) : undefined,
+        });
+        emitProgress(subTask, {
+          runId,
+          phase: 'tool_completed',
+          message: event.isError
+            ? `子代理 ${role} 调用 ${event.toolName} 失败`
+            : `子代理 ${role} 已完成 ${event.toolName}`,
+          iteration: iterations,
+          maxIterations,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          toolStatus: event.isError ? 'failed' : 'completed',
+          toolDurationMs: Math.max(0, Date.now() - (toolStartedAt.get(event.toolCallId) ?? Date.now())),
+          error: event.isError ? piContentToText(event.result.content) : undefined,
+        });
+        toolStartedAt.delete(event.toolCallId);
+      }
+      if (
+        event.type === 'turn_end'
+        && event.message.role === 'assistant'
+        && iterations >= maxIterations
+        && hasPiToolCalls(event.message.content)
+      ) {
+        forceStop(
+          'max_iterations',
+          `子代理达到最大模型轮次 ${maxIterations}，已在当前工具批次后停止`,
+        );
+      }
     });
     harness.on('tool_call', (event) => {
       if (!allowedTools.includes(event.toolName)) {
@@ -116,36 +282,92 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
       return undefined;
     });
 
+    if (forcedStopReason) throw new Error(error ?? '子代理已取消');
     await harness.prompt(`子任务目标：${subTask.goal}\n\n详细指令：${subTask.prompt}`);
 
-    return {
-      ok: !error,
-      content: content.slice(0, maxOutputChars),
+    const stopReason: SubagentStopReason = forcedStopReason ?? (error ? 'error' : 'completed');
+    const truncatedContent = truncateResultContent(content, profile.maxOutputChars);
+    const result = buildResult({
+      runId,
+      startedAtMs,
+      role,
+      stopReason,
+      content: truncatedContent.content,
+      truncated: truncatedContent.truncated,
       toolCallCount,
       iterations,
-      role,
       error,
-    };
+    });
+    traceSubagent(logger, runId, subTask, role, stopReason, result.ok, startedAtMs, {
+      iterations,
+      toolCallCount,
+      truncated: result.truncated,
+      error: result.error,
+    });
+    emitProgress(subTask, {
+      runId,
+      phase: 'completed',
+      message: result.ok
+        ? `子代理 ${role} 已完成：${iterations} 轮，${toolCallCount} 次工具调用`
+        : `子代理 ${role} 已停止：${result.error ?? stopReason}`,
+      iteration: iterations,
+      maxIterations,
+    });
+    return result;
   } catch (err) {
-    return {
-      ok: false,
-      content: content.slice(0, maxOutputChars),
+    const stopReason: SubagentStopReason = forcedStopReason ?? 'error';
+    const caught = err instanceof Error ? err.message : String(err);
+    const finalError = error ?? caught;
+    const truncatedContent = truncateResultContent(content, profile.maxOutputChars);
+    const result = buildResult({
+      runId,
+      startedAtMs,
+      role,
+      stopReason,
+      content: truncatedContent.content,
+      truncated: truncatedContent.truncated,
       toolCallCount,
       iterations,
-      role,
-      error: err instanceof Error ? err.message : String(err),
-    };
+      error: finalError,
+    });
+    traceSubagent(logger, runId, subTask, role, stopReason, false, startedAtMs, {
+      iterations,
+      toolCallCount,
+      error: finalError,
+    });
+    emitProgress(subTask, {
+      runId,
+      phase: 'completed',
+      message: `子代理 ${role} 执行失败：${finalError}`,
+      iteration: iterations,
+      maxIterations,
+    });
+    return result;
   } finally {
     clearTimeout(timeoutId);
+    subTask.signal?.removeEventListener('abort', onParentAbort);
+    releaseSlot();
   }
+}
+
+export function normalizeSubagentMaxIterations(
+  requested: number | undefined,
+  fallback: number,
+): number {
+  const normalizedFallback = normalizePositiveInteger(fallback, 12);
+  if (requested === undefined) return Math.min(normalizedFallback, MAX_REQUESTED_ITERATIONS);
+  return Math.min(normalizePositiveInteger(requested, normalizedFallback), MAX_REQUESTED_ITERATIONS);
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return Math.max(1, Math.floor(fallback));
+  return Math.max(1, Math.floor(value));
 }
 
 function resolveSubagentApprovalConfig(subTask: SubTask): ApprovalConfig {
   if (subTask.approvalConfig) return subTask.approvalConfig;
   const level: AutoModeLevel = config.autoMode.level === 'plan' ? 'plan' : 'auto';
-  if (subTask.parentTask) {
-    return approvalConfigFromTask(subTask.parentTask, level);
-  }
+  if (subTask.parentTask) return approvalConfigFromTask(subTask.parentTask, level);
   return {
     autoModeLevel: level,
     autoModePaused: false,
@@ -158,17 +380,19 @@ function buildSubagentSystemPrompt(
   role: SubagentRole,
   allowedTools: string[],
   approvalConfig: ApprovalConfig,
+  maxIterations: number,
 ): string {
   const profile = getSubagentProfile(role);
   const permissionLine =
     approvalConfig.autoModeLevel === 'auto' || approvalConfig.planApproved
       ? '权限：继承父代理，当前可在工具白名单内自动执行（含写入/命令，若白名单包含）。'
-      : '权限：继承父代理 Plan 模式且计划尚未批准，非 safe 工具会被拦截。';
+      : '权限：继承父代理 Plan 模式且计划尚未批准，非 safe 工具会被 runtime 拦截。';
 
   return [
     `你是 Aurevoy 的子代理（角色：${profile.label} / ${role}）。`,
-    '你的任务是完成主代理委托给你的独立子任务。',
+    '你的任务是完成主代理委托给你的独立子任务；主代理仍持有用户对话与最终答复权。',
     `工作区：${subTask.workspaceDir}`,
+    subTask.parentTask?.goal ? `父任务目标：${subTask.parentTask.goal}` : '',
     `当前环境：${process.platform} ${process.arch}`,
     `当前时间：${new Date().toISOString()}`,
     '',
@@ -177,30 +401,44 @@ function buildSubagentSystemPrompt(
     '约束：',
     `- 只能使用提供的工具：${allowedTools.join(', ')}`,
     `- ${permissionLine}`,
-    '- 简洁回复，不要过度分析',
+    `- 最多 ${maxIterations} 个模型轮次；优先收敛，不要重复无效调用`,
+    '- 只返回主代理完成任务所需的结论、变更与验证；不要回传大段原始工具输出',
+    '- 无法完成时明确说明阻塞原因和已经验证的事实',
     '- 完成任务后直接输出最终结果',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
-function createSubagentPiTools(
-  allowedTools: string[],
-  workspaceDir: string,
-  parentTaskId?: string,
-): AgentTool[] {
-  // 只注册实际存在的工具；忽略配置里尚未加载的名称
-  const existing = allowedTools.filter((name) => !!unifiedToolRegistry.get(name));
-  const agentTools = unifiedToolRegistry.toAgentTools(existing);
+function createSubagentPiTools(allowedTools: string[], subTask: SubTask): AgentTool[] {
+  const agentTools = unifiedToolRegistry.toAgentTools(allowedTools);
 
   return agentTools.map((agentTool): AgentTool => {
     const def = unifiedToolRegistry.get(agentTool.name)!;
     return {
       ...agentTool,
       execute: async (toolCallId, params, signal) => {
+        const validationError = validateToolInputSchema(def.inputSchema, params);
+        if (validationError) throw new Error(`schema_validation_failed: ${validationError}`);
+
         const context: UnifiedToolContext = {
-          taskId: parentTaskId ?? '',
-          workspaceDir,
+          taskId: subTask.parentTask?.id ?? '',
+          taskGoal: subTask.parentTask?.goal,
+          workspaceDir: subTask.workspaceDir,
+          externalPaths: subTask.externalPaths,
           abortSignal: signal,
           callId: toolCallId,
+          task: subTask.parentTask,
+          publishEvent: (event) => {
+            // 子工具进度归并到父 delegate 卡片；其它已有事件保持原始归属。
+            if (event.type === 'tool_progress' && subTask.parentCallId) {
+              subTask.publishEvent?.({
+                ...event,
+                taskId: subTask.parentTask?.id ?? event.taskId,
+                callId: subTask.parentCallId,
+              });
+              return;
+            }
+            subTask.publishEvent?.(event);
+          },
         };
         try {
           const result = await def.execute(params as Record<string, unknown>, context);
@@ -232,13 +470,16 @@ function isPiAgentEvent(event: { type: string }): event is AgentEvent {
   );
 }
 
-function captureSubagentEvent(event: AgentEvent): { content?: string; toolCalls: number; turns: number; error?: string } {
-  if (event.type === 'tool_execution_end') {
-    return { toolCalls: 1, turns: 0 };
-  }
+function captureSubagentEvent(event: AgentEvent): {
+  content?: string;
+  toolCalls: number;
+  turns: number;
+  error?: string;
+} {
+  if (event.type === 'tool_execution_end') return { toolCalls: 1, turns: 0 };
   if (event.type === 'turn_end') {
     const message = event.message;
-    if (message.role !== 'assistant') return { toolCalls: 0, turns: 1 };
+    if (message.role !== 'assistant') return { toolCalls: 0, turns: 0 };
     return {
       content: piContentToText(message.content),
       toolCalls: 0,
@@ -249,6 +490,11 @@ function captureSubagentEvent(event: AgentEvent): { content?: string; toolCalls:
   return { toolCalls: 0, turns: 0 };
 }
 
+function hasPiToolCalls(content: unknown): boolean {
+  return Array.isArray(content)
+    && content.some((block) => isRecord(block) && block.type === 'toolCall');
+}
+
 function piContentToText(content: unknown): string {
   if (!Array.isArray(content)) return '';
   return content.map((block) => {
@@ -256,6 +502,105 @@ function piContentToText(content: unknown): string {
     if (isRecord(block) && block.type === 'thinking' && typeof block.thinking === 'string') return block.thinking;
     return '';
   }).join('');
+}
+
+function truncateResultContent(content: string, maxChars: number): { content: string; truncated: boolean } {
+  if (content.length <= maxChars) return { content, truncated: false };
+  const marker = '\n\n[子代理结果已按上下文预算截断]';
+  return {
+    content: `${content.slice(0, Math.max(0, maxChars - marker.length))}${marker}`,
+    truncated: true,
+  };
+}
+
+function buildResult(input: {
+  runId: string;
+  startedAtMs: number;
+  role: SubagentRole;
+  stopReason: SubagentStopReason;
+  content?: string;
+  toolCallCount?: number;
+  iterations?: number;
+  truncated?: boolean;
+  error?: string;
+}): SubTaskResult {
+  return {
+    runId: input.runId,
+    ok: input.stopReason === 'completed' && !input.error,
+    content: input.content ?? '',
+    toolCallCount: input.toolCallCount ?? 0,
+    iterations: input.iterations ?? 0,
+    role: input.role,
+    stopReason: input.stopReason,
+    durationMs: Math.max(0, Date.now() - input.startedAtMs),
+    truncated: input.truncated ?? false,
+    error: input.error,
+  };
+}
+
+function emitProgress(subTask: SubTask, progress: SubTaskProgress): void {
+  try {
+    subTask.onProgress?.(progress);
+  } catch {
+    // UI/日志回调不是执行真相源，反馈失败不能中断子代理。
+  }
+}
+
+function traceSubagent(
+  logger: TaskLogger | undefined,
+  runId: string,
+  subTask: SubTask,
+  role: SubagentRole,
+  stopReason: string,
+  ok: boolean,
+  startedAtMs: number,
+  data: Record<string, unknown>,
+): void {
+  logger?.trace('phase', null, {
+    ok,
+    callId: subTask.parentCallId,
+    toolName: 'delegate',
+    startedAtMs,
+    finishReason: stopReason,
+    errorCategory: ok ? undefined : stopReasonToErrorCategory(stopReason),
+    errorMessage: typeof data.error === 'string' ? data.error : undefined,
+    summary: stopReason === 'running'
+      ? `子代理 ${role} 已启动`
+      : `子代理 ${role} 结束：${stopReason}`,
+    data: { subagentRunId: runId, role, goal: subTask.goal, ...data },
+  });
+}
+
+function traceSubagentTool(
+  logger: TaskLogger | undefined,
+  runId: string,
+  role: SubagentRole,
+  callId: string,
+  toolName: string,
+  kind: 'tool_call' | 'tool_result',
+  entry: {
+    ok: boolean;
+    startedAtMs?: number;
+    errorCategory?: TaskErrorCategory;
+    errorMessage?: string;
+    data?: unknown;
+  },
+): void {
+  logger?.trace(kind, null, {
+    ...entry,
+    callId: `${runId}:${callId}`,
+    toolName,
+    riskLevel: unifiedToolRegistry.riskLevelOf(toolName),
+    summary: `子代理 ${role} ${kind === 'tool_call' ? '调用' : '完成'}工具 ${toolName}`,
+    data: { subagentRunId: runId, role, details: entry.data },
+  });
+}
+
+function stopReasonToErrorCategory(stopReason: string): TaskErrorCategory {
+  if (stopReason === 'timeout') return 'timeout';
+  if (stopReason === 'cancelled') return 'cancelled';
+  if (stopReason === 'max_iterations') return 'budget';
+  return 'unknown';
 }
 
 function formatUnknown(value: unknown): string {

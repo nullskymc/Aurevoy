@@ -376,6 +376,7 @@ MCP JSON 改动会触发 MCP 工具重载。非法 URL、非法 MCP JSON、空�
 | `tool_call` | `call: ToolCall` | 发起一次工具调用 |
 | `approval_request` | `call: ToolCall`, `riskLevel` | 非 safe 工具执行前请求用户确认 |
 | `tool_result` | `result: ToolResult` | 工具返回结果 |
+| `subagent_updated` | `run: SubagentRun` | 子代理运行快照 upsert；含角色、目标、状态、内部工具元数据和最终摘要 |
 | `clarification_request` | `clarification: ClarificationRequest` | Agent 信息不足，暂停等待用户补充 |
 | `clarification_resolved` | `clarification: ClarificationRequest` | 用户已回复、超时或取消追问 |
 | `artifact_created` | `artifact: TaskArtifact` | 创建 draft 任务产物 |
@@ -427,6 +428,7 @@ status(running)
   每个工具有独立 `invokeWithTimeout`（默认 30s）。
 - 计划以降级优先方式呈现：LLM 规划失败时回退到正则启发式。
 - 一轮可能有多个并行 `tool_call`（各带独立 `id`），对应多个 `tool_result`。
+- `delegate` 执行期间会穿插 `subagent_updated`；`run.parentCallId` 与父级 `tool_call.id` 关联，多个并行委托可独立更新。
 - 取消时以 `status(cancelled)` + `done(cancelled)` 收尾。
 - `phase` 是诊断和 UI 解释用的细粒度阶段，必须来自后端真实状态转换，不能由前端猜测。
 

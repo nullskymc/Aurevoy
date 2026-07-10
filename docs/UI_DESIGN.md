@@ -201,6 +201,7 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 | `message` | 合并消息，避免按 id 重复插入 |
 | `tool_call` | 写入事件流与工具调用区；在对话流中以「调用工具：<name>」轻量卡片就地呈现 |
 | `tool_result` | 写入事件流与工具调用区；更新对应 `tool_call` 卡片为结果（成功/失败） |
+| `subagent_updated` | 按 `run.id` upsert 子代理运行快照，并按 `parentCallId` 归入触发委托的 assistant 轮次 |
 | `approval_request` | 展示审批卡片；用户批准/拒绝后调用 `POST /api/tasks/:id/approvals` |
 | `done` | 设置最终状态，关闭 EventSource，刷新历史 |
 | `error` | 展示错误文案，停止忙碌态 |
@@ -212,6 +213,18 @@ Agent 的核心职责仍是推动任务完成，但交互入口是对话。界�
 > - **思考内容**：assistant 的 `reasoningContent`（DeepSeek 思考模式）默认不在主对话区展示，
 >   可在对话卡片内以可选折叠区呈现，避免干扰主回复。
 > - **最简实现**：工具事件以对话流内联卡片呈现即满足「过程透明」；无需单独运行详情栏。
+
+#### 子代理协作工作组
+
+`delegate` 不作为普通工具步骤重复展示，而是在触发它的主 Agent 轮次内聚合成一个“协作工作组”：
+
+- 同一轮并行发起的多个子代理展示为同组列表，每个运行独立显示角色、目标和状态。
+- 默认层只展示用户可理解的信息：排队/执行/完成/失败、实时耗时、轮次和工具调用次数。
+- 运行中和失败项默认展开；成功项完成后自动收起，用户仍可展开查看内部工具活动与返回摘要。
+- 子代理的原始 token 不混入主对话正文；只显示 runtime 提供的结构化进度和最终返回结果。
+- `Task.subagentRuns` 是历史回放真相源，通过 `parentCallId` 与 assistant 的 delegate tool call 关联。
+- 刷新或迟到订阅时，`task_created.task.subagentRuns` 恢复完整工作组；实时更新使用 `subagent_updated`。
+- 窄窗口隐藏次要统计列，但保留角色、目标、状态与展开能力。
 
 ### 4.4 SSE 快照回放
 

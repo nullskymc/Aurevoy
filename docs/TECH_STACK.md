@@ -65,7 +65,7 @@ Aurevoy 的重点是本地 runtime、工具协议、状态恢复、安全治理�
 主 Agent loop 使用 `@earendil-works/pi-agent-core`，Aurevoy 后端只保留本地 HTTP/SSE 控制面、
 工具注册表、审批桥接、任务持久化和 Pi 事件适配。旧的手写 ReAct stream/provider 后端已移除。
 
-- **统一运行时**：主任务和 `delegate_task` 子代理都走 Pi Agent。
+- **统一运行时**：主任务和 `delegate` 子代理都走 Pi Agent。
 - **保留本地治理**：工具沙箱、审批、任务事件和 SQLite 审计仍在 Aurevoy 控制面执行。
 - **Provider 入口**：`AUREVOY_LLM_*` 配置映射为 Pi `Model`，不再维护第二套 `LLMProvider` 抽象。
 

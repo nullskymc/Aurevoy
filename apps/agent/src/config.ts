@@ -73,6 +73,11 @@ export const config = {
     thinkingLevel: parseAgentThinkingLevel(process.env.AUREVOY_AGENT_THINKING_LEVEL),
     /** Pi harness 工具执行策略。 */
     toolExecution: parseAgentToolExecution(process.env.AUREVOY_AGENT_TOOL_EXECUTION),
+    /** 子代理全局并发上限；超出的 delegate 调用进入可取消等待队列。 */
+    subagentMaxConcurrency: Math.max(
+      1,
+      Math.floor(parseNumber(process.env.AUREVOY_SUBAGENT_MAX_CONCURRENCY, 4)),
+    ),
     /**
      * 会话级短期记忆的上下文字符预算（M4.2）。
      * 单轮喂给 LLM 的历史消息总字符超过此值时触发确定性压缩，避免裸拼接撑爆上下文。
