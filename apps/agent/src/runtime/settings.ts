@@ -150,6 +150,13 @@ export function loadPersistedSettings(): void {
   // 迁移：把当前扁平配置写入多 provider map，并把遗留 key 归到当前 provider 槽
   migrateLegacyProviderSlots();
 
+  // 以多 provider 槽位 map 为真相源，回放当前激活槽到扁平字段。
+  // 否则重启会沿用全局 llm.baseUrl，把 openai-compatible 的网关串到 opencode-go 等槽。
+  if (isValidPiProviderId(config.llm.provider)) {
+    activateProviderSlot(config.llm.provider);
+    snapshotActiveProviderSlot();
+  }
+
   const autoModeStored = entries[SETTING_KEYS.autoModeLevel];
   if (autoModeStored === 'auto' || autoModeStored === 'plan') {
     config.autoMode.level = autoModeStored;
@@ -242,20 +249,40 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   let mcpChanged = false;
 
   if (body.llm) {
+    // 切换 provider 时若前端 draft 误带上一槽 baseUrl，丢弃该字段，避免污染新槽。
+    let ignoreIncomingBaseUrl = false;
+
     // 1) 若请求切换 provider：先快照当前槽位，再激活目标槽位（恢复其 key/baseUrl/model 等）
     if (body.llm.provider !== undefined) {
       const nextProvider = normalizeProvider(body.llm.provider);
       if (nextProvider !== config.llm.provider) {
+        const previousBaseUrl = config.llm.baseUrl.trim();
         snapshotActiveProviderSlot();
         activateProviderSlot(nextProvider);
         providerChanged = true;
+
+        if (body.llm.baseUrl !== undefined) {
+          const incoming = String(body.llm.baseUrl).trim().replace(/\/+$/, '');
+          const prev = previousBaseUrl.replace(/\/+$/, '');
+          const slotBase = (readProviderMap()[nextProvider]?.baseUrl ?? '').trim().replace(/\/+$/, '');
+          // 与切换前扁平 baseUrl 相同、且与新槽已存值不同 → 视为 draft 残留串槽
+          // openai-compatible 必须允许提交 baseUrl（首次接入网关的常见路径）
+          if (
+            nextProvider !== 'openai-compatible'
+            && incoming.length > 0
+            && incoming === prev
+            && incoming !== slotBase
+          ) {
+            ignoreIncomingBaseUrl = true;
+          }
+        }
       } else {
         config.llm.provider = nextProvider;
         settingsStore.set(SETTING_KEYS.llmProvider, config.llm.provider);
       }
     }
 
-    if (body.llm.baseUrl !== undefined) {
+    if (body.llm.baseUrl !== undefined && !ignoreIncomingBaseUrl) {
       config.llm.baseUrl = validateBaseUrl(body.llm.baseUrl, config.llm.provider === 'openai-compatible');
       settingsStore.set(SETTING_KEYS.llmBaseUrl, config.llm.baseUrl);
       providerChanged = true;

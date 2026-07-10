@@ -80,10 +80,24 @@ export function useSettingsController({
 
   /** Provider 连接：只写密钥 / Base URL / maxTokens，不改默认模型、启用列表、视觉模型。 */
   function handleSaveProviderConnection(draft: SettingsDraft): void {
+    // 跨槽保存时：若 baseUrl 仍等于当前激活槽网关、且与目标槽已存值不同，视为 draft 残留，回落目标槽
+    const activeBase = (runtimeSettings?.llm.baseUrl ?? "").replace(/\/+$/, "");
+    const slotBase = (
+      runtimeSettings?.llm.providers?.find((s) => s.provider === draft.provider)?.baseUrl ?? ""
+    ).replace(/\/+$/, "");
+    const draftBase = draft.baseUrl.trim().replace(/\/+$/, "");
+    const baseUrl =
+      draft.provider !== runtimeSettings?.llm.provider
+      && draft.provider !== "openai-compatible"
+      && draftBase.length > 0
+      && draftBase === activeBase
+      && draftBase !== slotBase
+        ? slotBase
+        : draft.baseUrl;
     const body: UpdateRuntimeSettingsRequest = {
       llm: {
         provider: draft.provider,
-        baseUrl: draft.baseUrl,
+        baseUrl,
         maxTokens: draft.maxTokens,
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
       },

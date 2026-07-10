@@ -32,11 +32,13 @@ const Output = Schema.Struct({
 export const delegateTool = make({
   name: "delegate",
   description:
-    "Delegate a sub-task to a specialized sub-agent. " +
+    "Delegate an independent sub-task to a specialized sub-agent; you keep the user conversation and final answer. " +
     "Roles: explore (readonly scout), research (web+local), coder (edit code), " +
     "shell (commands), writer (docs/reports), general (broad default). " +
-    "Use multiple calls in one turn only for independent parallel work. " +
-    "Inherits parent context and auto/plan permissions; cannot nest further delegates.",
+    "Use for parallel scouting/research or focused coding/docs work that would bloat your context. " +
+    "Issue multiple delegate calls in one turn only for independent parallel work. " +
+    "Skip for trivial single-file edits or tightly sequential steps. " +
+    "Inherits parent auto/plan permissions; cannot nest further delegates.",
   input: Input,
   output: Output,
   execute: async (input, ctx) => {

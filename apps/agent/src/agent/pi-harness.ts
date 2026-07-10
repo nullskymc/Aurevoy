@@ -60,6 +60,7 @@ import { taskStore, projectStore } from '../store/db.js';
 import { unifiedToolRegistry, validateToolInputSchema } from '../tool/unified-registry.js';
 import { initializeUnifiedToolFramework, getAgentToolsForPi, createToolContext } from '../tool/index.js';
 import {
+  buildAgentIdentityMessage,
   buildSkillCatalogMessage,
   buildSystemContextMessage,
   buildToolGuidanceMessage,
@@ -92,7 +93,7 @@ import {
   completePlanOnSuccess,
   failOpenPlanSteps,
 } from './plan-progress.js';
-import { assertPiLLMConfigured, createPiModel, resolveModelApi } from '../llm/pi-provider.js';
+import { assertPiLLMConfigured, createPiModel, resolveModelApi, resolveModelBaseUrl } from '../llm/pi-provider.js';
 import { approvalConfigFromTask, decideToolPermission } from './approval.js';
 import { skillRegistry } from '../skills/registry.js';
 import { scheduleTaskTitleRefine } from './task-title.js';
@@ -345,8 +346,9 @@ async function createPiHarness(
 }
 
 export function createAurevoyPiModels(selectedModel: PiModel<any>): PiModels {
-  // 请求侧端点：config.llm.baseUrl（设置槽位）优先，避免 catalog 默认官方 URL 盖住用户网关
-  const requestBaseUrl = (config.llm.baseUrl?.trim() || selectedModel.baseUrl || '').replace(/\/+$/, '');
+  // 端点已由 createPiModel → resolveModelBaseUrl 按 provider 槽解析；
+  // 禁止再拿扁平 config.llm.baseUrl 压过，否则会把 openai-compatible 的网关串到 opencode-go 等槽。
+  const requestBaseUrl = resolveModelBaseUrl(selectedModel.baseUrl, selectedModel.provider);
   const requestApi = resolveModelApi(selectedModel.api, requestBaseUrl, selectedModel.provider);
   const modelForRequest = {
     ...selectedModel,
@@ -646,13 +648,7 @@ async function inferScoutTechStack(workspaceDir: string): Promise<string[]> {
 async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<string> {
   const projectInfo = task.projectId ? projectStore.get(task.projectId) : undefined;
   const messages = [
-    {
-      content: [
-        'You are Aurevoy, a personal AI agent desktop runtime.',
-        'Use tools to inspect and change the local workspace when needed.',
-        'Do not claim completed work unless the tool results support it.',
-      ].join('\n'),
-    },
+    buildAgentIdentityMessage(),
     buildSystemContextMessage(
       workspaceDir,
       undefined,
@@ -672,9 +668,10 @@ function selectPiModelForTask(task: Task): PiModel<any> {
   if (!hasImageAttachment || !config.llm.visionModel.trim()) {
     return createPiModel();
   }
-  // 全局视觉：支持 namespace `provider:model`，也兼容裸 model id
+  // 全局视觉：支持 namespace `provider:model`，也兼容裸 model id；
+  // 跨槽时必须带 provider，否则会误用当前激活槽的 baseUrl/key 路由。
   const visionRef = parseModelNamespace(config.llm.visionModel);
-  return createPiModel(visionRef.model);
+  return createPiModel(visionRef.model, visionRef.provider);
 }
 
 /** 解析 `provider:model`；provider 段需为合法 id，否则整串当作 model id。 */

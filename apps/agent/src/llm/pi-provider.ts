@@ -13,6 +13,7 @@ import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { filterChatModelIds, type PiProviderCatalogEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
 import { hasStoredCredential } from './credential-store.js';
+import { settingsStore } from '../store/db.js';
 
 // ---- Dynamic model discovery via Pi's createProvider + refreshModels ----
 
@@ -127,14 +128,49 @@ export function assertPiLLMConfigured(): void {
 }
 
 /**
- * 运行时模型端点：设置/环境里的 baseUrl 优先于 Pi 内置 catalog。
- * 多 Provider 槽位会把用户网关写进 config.llm.baseUrl；若仍用 catalog 默认
- * api.openai.com 等地址，会导致请求打到错误端点，usage 也拿不到。
+ * 按 provider 槽位解析请求端点，避免扁平 `config.llm.baseUrl` 跨槽串用。
+ *
+ * 优先级：
+ * 1. `llm.providers[provider].baseUrl`（槽存在时：空串 = 明确使用 catalog 默认）
+ * 2. 仅当请求的是**当前激活** provider 且槽不存在时，回退扁平 `config.llm.baseUrl`
+ * 3. 模型 catalog / 调用方传入的默认 baseUrl
  */
-export function resolveModelBaseUrl(modelBaseUrl?: string): string {
-  const configured = config.llm.baseUrl?.trim().replace(/\/+$/, '');
-  if (configured) return configured;
+export function resolveModelBaseUrl(modelBaseUrl?: string, provider?: string): string {
+  const providerId = (provider ?? config.llm.provider).trim();
+  const slotBaseUrl = readProviderSlotBaseUrl(providerId);
+  if (slotBaseUrl !== undefined) {
+    const fromSlot = slotBaseUrl.trim().replace(/\/+$/, '');
+    if (fromSlot) return fromSlot;
+    return (modelBaseUrl ?? '').replace(/\/+$/, '');
+  }
+
+  // 槽位尚未建立时：激活 provider 可用扁平字段（兼容迁移中）
+  if (providerId === config.llm.provider) {
+    const configured = config.llm.baseUrl?.trim().replace(/\/+$/, '');
+    if (configured) return configured;
+  }
   return (modelBaseUrl ?? '').replace(/\/+$/, '');
+}
+
+/**
+ * 读取多 provider map 中某槽的 baseUrl。
+ * - `undefined`：map 中无该 provider（未建槽）
+ * - `''`：已建槽且明确未配置自定义网关
+ */
+function readProviderSlotBaseUrl(provider: string): string | undefined {
+  if (!provider) return undefined;
+  const raw = settingsStore.get('llm.providers');
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const slot = (parsed as Record<string, unknown>)[provider];
+    if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return undefined;
+    const baseUrl = (slot as { baseUrl?: unknown }).baseUrl;
+    return typeof baseUrl === 'string' ? baseUrl : '';
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -158,15 +194,19 @@ export function resolveModelApi(api: string | undefined, baseUrl: string, provid
   return resolved;
 }
 
-export function createPiModel(modelOverride?: string): PiModel<any> {
-  const provider = normalizePiProvider(config.llm.provider);
+/**
+ * @param modelOverride 覆盖模型 id（如全局视觉模型）
+ * @param providerOverride 覆盖 provider（视觉 `provider:model` 跨槽时必须带上，避免用激活槽 baseUrl）
+ */
+export function createPiModel(modelOverride?: string, providerOverride?: string): PiModel<any> {
+  const provider = normalizePiProvider(providerOverride?.trim() || config.llm.provider);
   const modelId = modelOverride?.trim() || config.llm.model;
   const builtin = (getModel as (provider: string, model: string) => PiModel<any> | undefined)(
     provider,
     modelId,
   );
   if (builtin) {
-    const baseUrl = resolveModelBaseUrl(builtin.baseUrl);
+    const baseUrl = resolveModelBaseUrl(builtin.baseUrl, provider);
     const withBaseUrl = {
       ...builtin,
       baseUrl,
@@ -190,7 +230,7 @@ export function createPiModel(modelOverride?: string): PiModel<any> {
     }
     return withBaseUrl;
   }
-  const baseUrl = resolveModelBaseUrl();
+  const baseUrl = resolveModelBaseUrl(undefined, provider);
   const api = resolveModelApi(fallbackApiForProvider(provider), baseUrl, provider);
   const openAICompat = api === 'openai-completions'
     ? openAICompletionsFallbackCompat(provider, baseUrl, modelId)
