@@ -32,6 +32,8 @@ import {
   type Usage as PiUsage,
 } from '@earendil-works/pi-ai/compat';
 import { createModels, createProvider } from '@earendil-works/pi-ai';
+import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
+import { aurevoyCredentialStore } from '../llm/credential-store.js';
 import type {
   AgentEvent,
   AggregatedTokenUsage,
@@ -58,6 +60,7 @@ import { taskStore, projectStore } from '../store/db.js';
 import { unifiedToolRegistry, validateToolInputSchema } from '../tool/unified-registry.js';
 import { initializeUnifiedToolFramework, getAgentToolsForPi, createToolContext } from '../tool/index.js';
 import {
+  buildAgentIdentityMessage,
   buildSkillCatalogMessage,
   buildSystemContextMessage,
   buildToolGuidanceMessage,
@@ -84,7 +87,13 @@ import {
   updateWallTime,
 } from './m6-state.js';
 import { waitForPiApproval } from './pi-approval.js';
-import { assertPiLLMConfigured, createPiModel, resolveModelApi } from '../llm/pi-provider.js';
+import {
+  advancePlanAfterFinalAnswer,
+  advancePlanAfterTool,
+  completePlanOnSuccess,
+  failOpenPlanSteps,
+} from './plan-progress.js';
+import { assertPiLLMConfigured, createPiModel, resolveModelApi, resolveModelBaseUrl } from '../llm/pi-provider.js';
 import { approvalConfigFromTask, decideToolPermission } from './approval.js';
 import { skillRegistry } from '../skills/registry.js';
 import { scheduleTaskTitleRefine } from './task-title.js';
@@ -279,7 +288,7 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
     const isConfigError =
       message.includes('未配置 LLM') ||
       message.includes('未支持的 Provider') ||
-      message.includes('AUREVOY_LLM_API_KEY');
+      message.includes('未配置 LLM');
     finishFailed(task, err, isConfigError ? 'configuration' : 'unknown');
   }
 }
@@ -337,14 +346,35 @@ async function createPiHarness(
 }
 
 export function createAurevoyPiModels(selectedModel: PiModel<any>): PiModels {
-  // 请求侧端点：config.llm.baseUrl（设置槽位）优先，避免 catalog 默认官方 URL 盖住用户网关
-  const requestBaseUrl = (config.llm.baseUrl?.trim() || selectedModel.baseUrl || '').replace(/\/+$/, '');
+  // 端点已由 createPiModel → resolveModelBaseUrl 按 provider 槽解析；
+  // 禁止再拿扁平 config.llm.baseUrl 压过，否则会把 openai-compatible 的网关串到 opencode-go 等槽。
+  const requestBaseUrl = resolveModelBaseUrl(selectedModel.baseUrl, selectedModel.provider);
   const requestApi = resolveModelApi(selectedModel.api, requestBaseUrl, selectedModel.provider);
   const modelForRequest = {
     ...selectedModel,
     baseUrl: requestBaseUrl || selectedModel.baseUrl,
     api: requestApi as typeof selectedModel.api,
   };
+
+  // 内置 provider：使用 Pi 原生 auth（API Key env + OAuth + CredentialStore 自动 refresh）
+  const builtin = findBuiltinProvider(modelForRequest.provider);
+  const models = createModels({ credentials: aurevoyCredentialStore });
+
+  if (builtin) {
+    const provider = createProvider({
+      id: builtin.id,
+      name: builtin.name || builtin.id,
+      baseUrl: modelForRequest.baseUrl || builtin.baseUrl,
+      headers: builtin.headers,
+      auth: wrapBuiltinAuth(builtin.auth, modelForRequest.baseUrl),
+      models: [modelForRequest],
+      api: getApiForApiName(modelForRequest.api),
+    });
+    models.setProvider(provider);
+    return models;
+  }
+
+  // 自定义 / 未知 provider：仅 API Key
   const provider = createProvider({
     id: modelForRequest.provider,
     name: modelForRequest.provider,
@@ -352,23 +382,85 @@ export function createAurevoyPiModels(selectedModel: PiModel<any>): PiModels {
     auth: {
       apiKey: {
         name: 'Aurevoy API Key',
-        resolve: async () => ({
-          auth: {
-            apiKey: config.llm.apiKey,
-            // 必须优先用设置里的 baseUrl；否则 builtin 模型会把请求打回官方域名，
-            // 多 Provider 网关下既可能鉴权失败，也可能拿不到 stream usage。
-            baseUrl: modelForRequest.baseUrl,
-          },
-          source: 'AUREVOY_LLM_API_KEY',
-        }),
+        resolve: async () => {
+          if (!config.llm.apiKey?.trim()) return undefined;
+          return {
+            auth: {
+              apiKey: config.llm.apiKey,
+              baseUrl: modelForRequest.baseUrl,
+            },
+            source: 'settings',
+          };
+        },
       },
     },
     models: [modelForRequest],
     api: getApiForApiName(modelForRequest.api),
   });
-  const models = createModels();
   models.setProvider(provider);
   return models;
+}
+
+function findBuiltinProvider(providerId: string) {
+  return builtinProviders().find((p) => p.id === providerId);
+}
+
+/**
+ * 保留 Pi 原生 apiKey/oauth；在 resolve 结果上叠加用户设置的 baseUrl，
+ * 并在无 CredentialStore 凭证时回退到 Aurevoy 槽位/环境里的 apiKey。
+ *
+ * openai-codex 等「仅 OAuth」provider：不要注入 sk- API Key 回退，
+ * 否则 extractAccountId 会把非 JWT 当成 access token 并报
+ * Failed to extract accountId from token。
+ */
+function wrapBuiltinAuth(
+  auth: import('@earendil-works/pi-ai').ProviderAuth,
+  requestBaseUrl: string,
+): import('@earendil-works/pi-ai').ProviderAuth {
+  const base = requestBaseUrl.replace(/\/+$/, '');
+  const oauthOnly = Boolean(auth.oauth) && !auth.apiKey;
+
+  return {
+    apiKey: auth.apiKey
+      ? {
+          ...auth.apiKey,
+          resolve: async (input) => {
+            const result = await auth.apiKey!.resolve(input);
+            if (result) {
+              return {
+                ...result,
+                auth: {
+                  ...result.auth,
+                  baseUrl: base || result.auth.baseUrl,
+                },
+              };
+            }
+            // CredentialStore / env 未命中 → Aurevoy 扁平配置
+            if (config.llm.apiKey?.trim()) {
+              return {
+                auth: {
+                  apiKey: config.llm.apiKey,
+                  baseUrl: base || undefined,
+                },
+                source: 'settings',
+              };
+            }
+            return undefined;
+          },
+        }
+      : oauthOnly
+        ? undefined
+        : config.llm.apiKey?.trim()
+          ? {
+              name: 'Aurevoy API Key',
+              resolve: async () => ({
+                auth: { apiKey: config.llm.apiKey, baseUrl: base || undefined },
+                source: 'settings',
+              }),
+            }
+          : undefined,
+    oauth: auth.oauth,
+  };
 }
 
 function getApiForApiName(api: string) {
@@ -556,13 +648,7 @@ async function inferScoutTechStack(workspaceDir: string): Promise<string[]> {
 async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<string> {
   const projectInfo = task.projectId ? projectStore.get(task.projectId) : undefined;
   const messages = [
-    {
-      content: [
-        'You are Aurevoy, a personal AI agent desktop runtime.',
-        'Use tools to inspect and change the local workspace when needed.',
-        'Do not claim completed work unless the tool results support it.',
-      ].join('\n'),
-    },
+    buildAgentIdentityMessage(),
     buildSystemContextMessage(
       workspaceDir,
       undefined,
@@ -582,9 +668,10 @@ function selectPiModelForTask(task: Task): PiModel<any> {
   if (!hasImageAttachment || !config.llm.visionModel.trim()) {
     return createPiModel();
   }
-  // 全局视觉：支持 namespace `provider:model`，也兼容裸 model id
+  // 全局视觉：支持 namespace `provider:model`，也兼容裸 model id；
+  // 跨槽时必须带 provider，否则会误用当前激活槽的 baseUrl/key 路由。
   const visionRef = parseModelNamespace(config.llm.visionModel);
-  return createPiModel(visionRef.model);
+  return createPiModel(visionRef.model, visionRef.provider);
 }
 
 /** 解析 `provider:model`；provider 段需为合法 id，否则整串当作 model id。 */
@@ -1149,11 +1236,15 @@ function appendPiMessage(task: Task, message: AgentMessage): void {
   const mapped = assistantMessageToAurevoy(task, message);
   task.messages.push(mapped);
   task.tokenUsage = aggregatePiUsage(task.tokenUsage, message.usage, message.provider, message.model);
+  const hasToolCalls = (mapped.toolCalls?.length ?? 0) > 0;
+  // 无工具的助手回复视为终稿推进：跳过未完成中间步，进入 deliver
+  if (!hasToolCalls && !mapped.failure) {
+    advancePlanAfterFinalAnswer(task);
+  }
   saveTask(task);
   publish({ type: 'message', taskId: task.id, message: mapped });
   publish({ type: 'token_usage', taskId: task.id, usage: task.tokenUsage });
 
-  const hasToolCalls = (mapped.toolCalls?.length ?? 0) > 0;
   writePiTrace(task, 'llm', {
     ok: !mapped.failure,
     finishReason: hasToolCalls ? 'tool_use' : mapped.failure ? 'error' : 'stop',
@@ -1184,6 +1275,7 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
   task.messages.push(message);
   if (!isError) {
     maybeCreateToolCheckpoint(task, callId, toolName);
+    advancePlanAfterTool(task, toolName, true);
   }
   saveTask(task);
   publish({ type: 'tool_result', taskId: task.id, result: toolResult });
@@ -1601,6 +1693,7 @@ function setTaskState(task: Task, status: TaskStatus, phase: TaskPhase): void {
 
 function finishCompleted(task: Task): void {
   task.budgetExceeded = undefined;
+  completePlanOnSuccess(task);
   setTaskState(task, 'completed', 'finalizing');
   saveTask(task);
   publishBudgetUsage(task);
@@ -1647,6 +1740,7 @@ function finishBudgetPaused(task: Task, info: BudgetExceededInfo): void {
 }
 
 function finishCancelled(task: Task): void {
+  failOpenPlanSteps(task);
   setTaskState(task, 'cancelled', 'cancelled');
   saveTask(task);
   publish({ type: 'status', taskId: task.id, status: 'cancelled' });
@@ -1664,6 +1758,7 @@ function finishFailed(task: Task, err: unknown, errorCategory: TaskErrorCategory
     failure: { message, category: errorCategory },
     createdAt: new Date().toISOString(),
   };
+  failOpenPlanSteps(task);
   setTaskState(task, 'failed', 'failed');
   task.messages.push(failureMessage);
   saveTask(task);

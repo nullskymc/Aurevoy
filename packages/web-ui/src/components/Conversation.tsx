@@ -77,8 +77,15 @@ interface ConversationProps {
   canResume?: boolean;
   /** 当前任务是否有可撤销的 revert（archivedMessages 非空） */
   hasArchivedMessages?: boolean;
-  /** 编辑某条用户消息并重新发起（编辑即等同于"重试"） */
-  onUserMessageEdit?: (messageId: string, content: string, mode: RevertMode) => void;
+  /** 内联编辑用户消息后立刻 revert + continue 重试 */
+  onUserMessageEdit?: (
+    messageId: string,
+    content: string,
+    mode: RevertMode,
+    attachments?: MessageAttachment[],
+  ) => void;
+  /** 任务运行中时禁用编辑入口 */
+  editDisabled?: boolean;
   /** 撤销上一次 revert */
   onUnrevert?: () => void;
   /** 从指定消息处分支 */
@@ -198,6 +205,7 @@ export function Conversation({
   phaseDetail,
   plan,
   output,
+  busy,
   liveToolActivity,
   hasLiveTail,
   defaultToolDetailsOpen = false,
@@ -207,6 +215,7 @@ export function Conversation({
   canResume = false,
   hasArchivedMessages = false,
   onUserMessageEdit,
+  editDisabled,
   onUnrevert,
   onBranch,
   onResume,
@@ -214,6 +223,7 @@ export function Conversation({
   onUiChoice,
   onOpenWorkspacePath,
 }: ConversationProps) {
+  const messageEditDisabled = editDisabled ?? busy;
   const platform = usePlatform();
   const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -314,6 +324,7 @@ export function Conversation({
             onToolDecision={onToolDecision}
             onAgentContextMenu={handleAgentContextMenu}
             onUserMessageEdit={onUserMessageEdit}
+            editDisabled={messageEditDisabled}
             onBranch={onBranch}
             liveRoundData={hasLiveTail && index === viewModel.turns.length - 1 ? liveRoundData : null}
             phaseDetail={hasLiveTail && index === viewModel.turns.length - 1 ? phaseDetail : undefined}
@@ -391,6 +402,7 @@ function ConversationTurnView({
   onToolDecision,
   onAgentContextMenu,
   onUserMessageEdit,
+  editDisabled,
   onBranch,
   liveRoundData,
   phaseDetail,
@@ -405,7 +417,13 @@ function ConversationTurnView({
   defaultToolDetailsOpen: boolean;
   onToolDecision: ToolDecisionHandler;
   onAgentContextMenu: (event: React.MouseEvent, message: Message) => void;
-  onUserMessageEdit?: (messageId: string, content: string, mode: RevertMode) => void;
+  onUserMessageEdit?: (
+    messageId: string,
+    content: string,
+    mode: RevertMode,
+    attachments?: MessageAttachment[],
+  ) => void;
+  editDisabled?: boolean;
   onBranch?: (messageId: string) => void;
   liveRoundData?: AgentRoundData | null;
   phaseDetail?: string;
@@ -441,6 +459,7 @@ function ConversationTurnView({
           attachments={turn.user.attachments}
           delivery={turn.user.delivery}
           onEdit={onUserMessageEdit}
+          editDisabled={editDisabled}
           onBranch={onBranch}
         />
       )}
@@ -846,7 +865,7 @@ function ClarificationCard({
 
 
 
-/** 用户消息气泡：可复制；可编辑，编辑后选择恢复模式再提交。 */
+/** 用户消息气泡：可复制；内联轻量编辑后立刻重试（revert + continue）。 */
 function formatFileSize(size: number): string {
   if (!Number.isFinite(size) || size <= 0) return "";
   if (size < 1024) return `${size} B`;
@@ -860,43 +879,55 @@ function UserBubble({
   attachments,
   delivery,
   onEdit,
+  editDisabled,
   onBranch,
 }: {
   content: string;
   messageId: string;
   attachments?: MessageAttachment[];
   delivery?: Message["delivery"];
-  onEdit?: (messageId: string, content: string, mode: RevertMode) => void;
+  onEdit?: (
+    messageId: string,
+    content: string,
+    mode: RevertMode,
+    attachments?: MessageAttachment[],
+  ) => void;
+  editDisabled?: boolean;
   onBranch?: (messageId: string) => void;
 }) {
   const platform = usePlatform();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(content);
+  const [mode, setMode] = useState<RevertMode>("code_and_conv");
   const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   // User bubble context menu
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
+
+  function beginEdit(): void {
+    if (editDisabled || !onEdit) return;
+    setDraft(content);
+    setMode("code_and_conv");
+    setEditing(true);
+  }
 
   function handleUserBubbleContextMenu(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     const items: ContextMenuItem[] = [
       ...buildTextMenuItems({ text: content, copyLabel: t("action.copy") }),
-      ...(onEdit
+      ...(onEdit && !editDisabled
         ? [
             {
               type: "item" as const,
               id: "edit",
               label: t("action.edit"),
               icon: <PencilIcon />,
-              action: () => {
-                setDraft(content);
-                setEditing(true);
-              },
+              action: beginEdit,
             },
           ]
         : []),
-      ...(onBranch
+      ...(onBranch && !editDisabled
         ? [
             {
               type: "item" as const,
@@ -932,20 +963,26 @@ function UserBubble({
 
   function confirmSave(): void {
     const trimmed = draft.trim();
-    if (!trimmed) return;
+    if (!trimmed || editDisabled) return;
     setEditing(false);
-    // 允许原文重试（例如预算触顶后改措辞或原样再跑）
-    onEdit?.(messageId, trimmed, "code_and_conv");
+    // 允许原文重试；附件随原消息一并续跑
+    onEdit?.(
+      messageId,
+      trimmed,
+      mode,
+      attachments && attachments.length > 0 ? attachments : undefined,
+    );
   }
 
   function cancel(): void {
     setDraft(content);
+    setMode("code_and_conv");
     setEditing(false);
   }
 
   if (editing) {
     const lineCount = Math.max(1, draft.split("\n").length);
-    const canSubmit = draft.trim().length > 0;
+    const canSubmit = draft.trim().length > 0 && !editDisabled;
     return (
       <div className="user-bubble-row is-editing">
         <div className="user-edit-card" role="form" aria-label={t("action.editAndRetry")}>
@@ -969,6 +1006,26 @@ function UserBubble({
               }
             }}
           />
+          <div className="user-edit-card-modes" role="group" aria-label={t("editRetry.modeLabel")}>
+            <button
+              type="button"
+              className="user-edit-mode"
+              data-active={mode === "code_and_conv" ? "true" : undefined}
+              onClick={() => setMode("code_and_conv")}
+            >
+              <span className="user-edit-mode-title">{t("editRetry.modeCodeAndConv")}</span>
+              <span className="user-edit-mode-desc">{t("editRetry.modeCodeAndConvHint")}</span>
+            </button>
+            <button
+              type="button"
+              className="user-edit-mode"
+              data-active={mode === "conv_only" ? "true" : undefined}
+              onClick={() => setMode("conv_only")}
+            >
+              <span className="user-edit-mode-title">{t("editRetry.modeConvOnly")}</span>
+              <span className="user-edit-mode-desc">{t("editRetry.modeConvOnlyHint")}</span>
+            </button>
+          </div>
           <div className="user-edit-card-footer">
             <span className="user-edit-card-keys">{t("editRetry.keys")}</span>
             <div className="user-edit-card-actions">
@@ -1068,12 +1125,20 @@ function UserBubble({
       <div className="msg-actions">
         <CopyButton content={content} />
         {onEdit && (
-          <IconButton label={t("action.edit")} onClick={() => { setDraft(content); setEditing(true); }}>
+          <IconButton
+            label={editDisabled ? t("editRetry.disabledBusy") : t("action.edit")}
+            onClick={beginEdit}
+            disabled={editDisabled}
+          >
             <PencilIcon />
           </IconButton>
         )}
         {onBranch && (
-          <IconButton label={t("action.branch")} onClick={() => onBranch(messageId)}>
+          <IconButton
+            label={editDisabled ? t("editRetry.disabledBusy") : t("action.branch")}
+            onClick={() => onBranch(messageId)}
+            disabled={editDisabled}
+          >
             <ForkIcon />
           </IconButton>
         )}
@@ -1115,11 +1180,13 @@ function IconButton({
   onClick,
   children,
   className,
+  disabled,
 }: {
   label: string;
   onClick: () => void;
   children: ReactNode;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -1128,6 +1195,7 @@ function IconButton({
       aria-label={label}
       title={label}
       onClick={onClick}
+      disabled={disabled}
     >
       {children}
     </button>

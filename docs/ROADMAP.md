@@ -1,179 +1,62 @@
-# 路线图 — ROADMAP
+# 路线图
 
-> Aurevoy 唯一路线图。
-> 完成标准：**真实链路跑通、失败路径明确、状态可恢复、用户可理解、验证可复现**。
+> 完成标准：真实链路、失败可诊断、状态可恢复、验证可复现。  
+> 细节契约见 `packages/shared` 与源码；本文只维护**状态**与**未竟项**。
 
-## 阶段总览
+## 已完成（不再展开）
 
-| 阶段 | 主题 | 状态 |
-|------|------|------|
-| M0 | 产品底座与全链路通信 | ✅ |
-| M1 | 真实 LLM 与单 Agent 工具循环 | ✅ |
-| M2 | 工具能力、审批闭环与 MCP | ✅ |
-| M3 | 工程治理：状态机、轨迹、评测、沙箱 | ✅ |
-| M4 | 记忆、多轮对话与任务恢复 | ✅ |
-| M5 | 设置、分发与跨平台 | 🚧 |
-| M6 | 产物、追问、预算与 token | ✅ |
-| M7 | 工具扩展、安全加固、多步计划、UI 拆分 | ✅ |
-| Rewind | 编辑重跑 / 撤销 / 分支 / 压缩 | ✅ |
-| Project | 项目工作区与对话分组 | ✅ |
-| P1-P7 | Agent 架构重构（以 Claude Code 为蓝本） | ✅ |
-| Skill | 技能系统（斜杠命令、工具白名单、预装 skill） | ✅ |
-| WebSearch | 网页搜索工具与 web-search 预装 skill | ✅ |
-| CI/CD | GitHub Actions 跨平台自动构建 | ✅ |
-| Multimodal | 多模态图片/文件拖拽粘贴、视觉模型、图片查看器 | ✅ |
-| Skill Evolution | Git 安装 skill + load_skill 工具加载 | ✅ |
-| Python Runtime | 系统 Python + venv 运行时 | ✅ |
-| Line-oriented File Tools | 行级文件工具统一 | ✅ |
-| Timeline Format | planStepId 关联的 timeline 分组渲染 | ✅ |
-| ThinkingCard | 替 ReasoningBlock，干净的思考过程卡片 | ✅ |
-| Pi Approval Gate | Pi `beforeToolCall` 单点门禁 + auto mode 核心策略 | ✅ |
-| Multi-Provider LLM | Anthropic / OpenAI 兼容 / OpenAI Responses v2 | ✅ |
-| Auto Mode | auto/plan 两档 + 安全暂停 + 计划门禁 | ✅ |
-| Plan Mode | 自动复杂度检测 + Scout + LLM 规划 | ✅ |
-| Tool Framework | Effect-TS 新一代工具系统（P0-P4） | ✅ |
-| Memory Vectorization | sqlite-vec 向量检索 + Dreams 维护管道 | ✅ |
-| KB RAG | 索引目录管理 + 增量索引 + KNN 语义召回 | ✅ |
-| KB Settings Panel | 前端知识库设置面板 + Embedding 配置 | ✅ |
-| Context Menu | 自定义右键菜单组件 | ✅ |
-| M8 | 评测、浏览器与发布体验 | 🚧 |
+| 域 | 内容 |
+|---|---|
+| 底座 | Monorepo、HTTP+SSE、shared 契约、Tauri 壳、Pi AgentHarness |
+| 工具与安全 | 内置文件/网络工具、三级风险、审批门、MCP、Effect 工具框架、沙箱边界 |
+| 规划与模式 | Scout、LLM 计划、auto/plan、计划门禁、安全暂停 |
+| 会话控制 | 多轮、resume、内联编辑重试（revert+continue）、unrevert、branch、compact |
+| 子代理 | 多角色 `delegate`、并发闸门、进度 SSE、Timeline 工作组 |
+| 记忆与知识 | 长期记忆 CRUD、sqlite-vec 混合检索、Dreams、KB 索引/recall、设置面板 |
+| 交付面 | 追问、产物、双层预算、token usage、checkpoint、工作台、多模态、Skill |
+| 工程 | 轨迹日志、M3–M8 回归、跨平台 CI、i18n、模型多 Provider 槽位 |
 
-## 验证口径
+验证：
 
 ```bash
-npm run typecheck
-npm run build
-npm run regression:m3   # 基础 Agent、安全、审批、取消
-npm run regression:m4   # 多轮、记忆、恢复
-npm run regression:m5   # 设置、工具管理、数据管理、MCP
-npm run regression:m6   # 追问、产物、预算、token、命令执行
-npm run regression:m7   # 文件工具、网络安全、schema、计划、checkpoint
-npm run regression:m8   # 知识库/RAG、嵌入 provider、混合检索
+npm run typecheck && npm run build
+npm run regression:m3   # … m8 见 package.json
 ```
 
----
+## 进行中
 
-## 已完成阶段
+### M5 分发 🚧
 
-### M0 — 产品底座
-npm workspaces monorepo；HTTP + SSE 通信；`@aurevoy/shared` 类型契约；Fastify + 事件总线 + 工具注册表 + SQLite；Tauri + React。
+- [x] 设置 / 工具 / 数据 / MCP / 模型槽位 / i18n / 引擎托管 / CI  
+- [ ] macOS 签名、公证、自动更新（需 Apple Developer）  
+- [ ] Windows 适配（WebView2、原生模块、路径）
 
-### M1 — 真实 LLM 与单 Agent 工具循环
-历史阶段最初使用自研 ReAct/provider loop；当前主 Agent 执行链已迁移到 Pi AgentHarness，Aurevoy 保留 HTTP/SSE、工具、审批与持久化控制面。
+### M8 体验深化 🚧
 
-### M2 — 工具能力、审批闭环与 MCP
-内置基础工具 + 路径/symlink 校验 + 三级风险模型 + 审批门 + MCP stdio 发现与注册。
+**KB / RAG**
 
-### M3 — 工程治理
-显式 runtime phase + SQLite 轨迹日志 + M3-M7 回归套件 + 沙箱边界（execFile 非 shell）。
+- [x] 索引目录、增量索引、KNN `recall`、Embedding 配置、设置 UI  
+- [ ] 隐式自动召回（任务开始时注入 KB 上下文）
 
-### M4 — 记忆、多轮对话与任务恢复
-多轮对话 + 短期记忆(上下文压缩) + 长期记忆(SQLite memories, CRUD+启停) + 任务恢复(扫描遗留→显式 resume)。
+**评测**
 
-### M6 — 产物、追问、预算与 Token
-`ask_user`(追问) + `create_artifact`/`apply_artifact`(产物) + 执行预算(`maxIterations`/`maxWallTimeMs`) + Token 用量 + `execute_command`(spawn, shell:false, 默认禁用)。
+- [ ] `scripts/evals/` 真实任务集 + 规则评分（+ 可选 LLM Judge）  
+- [ ] `npm run eval:agent-usability` 发布门槛
 
-### M7 — 工具扩展、安全加固、多步计划、UI 拆分
-文件工具(`search_files`/`copy_file`/`move_file`/`delete_file` + 行级工具集 `open_file`/`scroll`/`search_grep`/`create_file`/`replace_lines`/`append_file`) +
-网络安全(`web_fetch` SSRF 防护 + HTML 正文提取) + 工具治理(schema validation + MCP 注入检测) +
-多步计划(LLM 驱动 + checkpoint) + 前端工作台(PlanCard/ClarificationCard/ArtifactCard/BudgetBar)。
+**浏览器**
 
-### Rewind / Edit & Regenerate
-revert 截断 + 多模式(code_and_conv/conv_only) + 会话分支(branch) + 上下文压缩(compact, LLM 摘要) + 文件快照回滚。
+- [x] 预装 browser skill + Playwright MCP 兼容说明  
+- [ ] 推荐 MCP 模板（默认关闭高风险动作）  
+- [ ] 截图/DOM 摘要更顺畅进入 workbench
 
-### Project — 项目工作区与对话分组
-导入文件夹作为项目 + 对话归属 + per-task workspace 隔离 + CRUD API + Tauri 文件夹选择器。
+**发布**
 
-### Agent 架构重构 P1-P7
-P1 侦查+LLM 规划 → P2 3 区并行执行 → P3 工具结果截断 → P4 Token 感知+语义压缩 → P5 Memory 评分+引用 → P6 Diff 编辑+文件快照 → P7 子代理委托。
+- [ ] 首次启动向导、健康页、数据导出/清理体验  
+- [ ] macOS / Windows 安装包与更新通道
 
-### Skill — 技能系统
-斜杠命令激活 → `load_skill` 工具加载 + `install_skill` 从 Git 安装。
+## 原则
 
-### WebSearch — 网页搜索
-`web_search` 工具（可配置 DuckDuckGo Lite / SearXNG / Tavily / Custom JSON）+ `web-search` 预装 skill。
-
-### CI/CD — 跨平台自动构建
-GitHub Actions 多平台(macOS/Windows/Linux) typecheck + tag 触发 DMG 构建。
-
-### Multimodal — 多模态
-图片/文件拖拽粘贴 + base64 注入视觉模型 + 可配置 vision sub-model + per-tool auto-approve。
-
----
-
-## M5 — 设置、分发与跨平台 🚧
-
-已完成：
-
-- 设置界面（Provider/Base URL/Model/API Key/工作区/工具开关/MCP servers/自动模式等级）
-- 设置变更实时影响运行配置
-- 模型列表管理（手动获取 + 勾选启用）
-- 工具管理（启停 + MCP 连接状态）
-- 数据管理（清理策略）
-- 引擎子进程托管（Tauri sidecar）
-- 跨平台 CI（macOS + Windows + Linux）
-- macOS 红绿灯与窗口一体化整合
-- i18n（英文默认 + 中文/日文/韩文）
-- KB 设置面板（索引目录管理 + Embedding 配置 + 状态统计）
-- Web 搜索后端可配置（Settings → Web Search → 选择后端）
-
-待完成：
-
-- [ ] macOS 打包、签名、公证、自动更新（需 Apple Developer 账号）
-- [ ] Windows 适配（WebView2、原生模块、路径权限）
-
----
-
-## M8 — 知识库、评测、浏览器与发布体验 🚧
-
-> 浏览器自动化已通过 browser 预装 skill + Playwright MCP 提供基础能力。
-> 网页搜索已通过 web_search 工具 + web-search 预装 skill 落地。
-> 知识库 RAG（M8.1）已完成索引、召回、向量检索和前端设置面板，仅隐式自动召回待实现。
-
-### M8.1 知识库与 RAG ✅（隐式召回 🚧）
-
-已引入 `sqlite-vec` 向量扩展 + 混合评分（关键词+向量），支持记忆语义检索和知识库文件索引。
-
-- [x] 评估并引入 `sqlite-vec`（已验证 better-sqlite3 兼容性、KNN 性能）
-- [x] Embedding Provider 工厂（Ollama 本地 / OpenAI 远程 / @xenova 进程内降级）
-- [x] 记忆向量化：`memory_vec` 表 + 混合评分（`α·keyword + (1-α)·vector`）
-- [x] 知识库设置入口（`/api/knowledge-base/dirs` CRUD）
-- [x] 索引状态表（`kb_dirs`/`kb_files`/`kb_chunks` + 变更检测）
-- [x] `index_files` + `recall` 工具（增量索引 + KNN 语义召回）
-- [x] 前端 KB 设置面板（索引目录管理 + Embedding 配置 + 状态统计）
-- [x] 禁用/删除知识库时索引自动清理（级联删除）
-- [x] Embedding 配置可继承 LLM Base URL / API Key（`GET /api/knowledge-base/embedding-config`）
-- [ ] 后端自动隐式 recall（Agent 自动对目标做 KB 检索注入上下文）
-
-### M8.2 Agent 评测
-
-- [ ] `scripts/evals/` 目录 + 20+ 真实任务样例
-- [ ] 规则评分器（工具正确性、参数正确性、越权、审批、产物生成）
-- [ ] 可选 LLM Judge（仅质量评分，不用于安全门禁）
-- [ ] `npm run eval:agent-usability`（30 分钟级，发布门槛）
-- [ ] 安全合规率 100%；任务完成率 ≥ 70%
-
-### M8.3 浏览器自动化
-
-- [ ] Playwright MCP Server 接入
-- [ ] 推荐 MCP 配置模板（不自动启用高风险浏览器动作）
-- [ ] 截图、DOM 摘要、控制台错误进入 artifact
-
-### M8.4 发布体验
-
-- [ ] macOS 打包、签名、公证、自动更新
-- [ ] Windows WebView2、原生模块重编、路径权限验证
-- [ ] 首次启动向导（Provider/Key/工作区/数据目录/工具权限/MCP）
-- [ ] 运行健康页（Provider 连通性、模型列表、MCP 状态、沙箱状态）
-- [ ] 数据导出和清理
-
----
-
-## 工程原则
-
-1. 一次只推进一个有边界的小目标，完成即按 `CONVENTIONS.md` 验证。
-2. 所有功能真实接入后端链路；禁止 Mock、占位 UI 或静态配置冒充完成。
-3. 动 LLM/工具/存储/审批/任务状态时，保持抽象接口清晰。
-4. 接口/类型变动 → 先改 `packages/shared` → 再联动 agent 与 desktop。
-5. 多 Agent、后训练、复杂推理框架不是近期目标；先把单 Agent 做扎实。
-6. 主 Agent 执行链统一走 Pi AgentHarness；统一工具注册表、SQLite、HTTP+SSE 继续作为 Aurevoy 控制面主线。
+1. 一次推进有边界的目标；不做假完成。  
+2. 类型变更：先 `packages/shared` → `build:shared` → agent / web-ui。  
+3. 主执行链只走 Pi；控制面保留审批、沙箱、轨迹、SSE。  
+4. 多 Agent 编排 / 后训练不是近期目标。

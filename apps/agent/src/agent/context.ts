@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { getEmbeddingProvider } from '../embedding/provider.js';
 import { searchMemoryVec, isVecLoaded, getMemorySummary, setMemorySummary } from '../store/db.js';
 import { skillRegistry } from '../skills/registry.js';
+import { formatSubagentRoleCatalogForTool } from './subagent-profiles.js';
 
 /**
  * 构建可用 skill 的 catalog 消息（Tier 1: name + description + location），
@@ -51,15 +52,21 @@ export function buildSkillCatalogMessage(): Message | null {
 
 /** 输出较大的工具（内容会被 Microcompact 结构化压缩） */
 export const TOOLS_WITH_LARGE_OUTPUT = new Set([
-  'open_file', 'scroll', 'search_grep', 'web_fetch', 'web_search',
-  'execute_command', 'edit_lines', 'replace_lines',
+  'read', 'grep', 'glob', 'list_directory', 'web_fetch', 'web_search',
+  'bash', 'execute_command',
+  // 历史别名（压缩旧轨迹时仍可能出现）
+  'open_file', 'scroll', 'search_grep', 'edit_lines', 'replace_lines',
 ]);
 
-/** 写入/确认类工具（输出简短，不压缩） */
+/** 写入/确认/交付类工具（输出简短，不压缩） */
 export const TOOLS_KEEP_VERBATIM = new Set([
-  'write_file', 'create_file', 'append_file', 'copy_file', 'move_file', 'rename_file',
-  'delete_file', 'session_open', 'session_write', 'session_close', 'session_abort',
-  'apply_artifact', 'create_artifact', 'remember', 'index_files', 'recall',
+  'write', 'edit', 'copy_file', 'move_file', 'rename_file', 'delete_file',
+  'apply_artifact', 'create_artifact', 'attach_content', 'present_ui',
+  'bundle_report', 'delegate', 'remember', 'recall', 'ask_user', 'load_skill',
+  // 历史别名
+  'write_file', 'create_file', 'append_file',
+  'session_open', 'session_write', 'session_close', 'session_abort',
+  'index_files',
 ]);
 
 // ---- 公共类型 ----
@@ -965,44 +972,88 @@ export function buildSystemContextMessage(
 }
 
 /**
- * 工具使用引导消息——指导 LLM 使用行级原语工具操作文件。
+ * 主 Agent 身份与产品契约（system prompt 前缀，尽量稳定以利 prompt cache）。
+ */
+export function buildAgentIdentityMessage(): Message {
+  const content = [
+    'You are Aurevoy, a personal AI agent desktop runtime.',
+    'You plan, call tools, and keep working until the user goal is done or blocked.',
+    '',
+    'Hard rules:',
+    '- Prefer real tool results over speculation. Never claim work is done without evidence from tools or prior verified context.',
+    '- Stay inside the workspace sandbox unless the user explicitly granted external paths.',
+    '- When something fails, report the concrete error and what you already verified; do not invent success.',
+    '- Keep final answers concise. Deliver large outputs via files + attach_content or present_ui, not wall-of-text dumps.',
+  ].join('\n');
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 主 Agent 操作协议：对齐真实工具面，覆盖读写、交付、多代理与 skill。
  *
  * 始终注入，放在环境上下文之后。
  */
 export function buildToolGuidanceMessage(): Message {
+  const roleCatalog = formatSubagentRoleCatalogForTool();
   const content = [
-    '<tool_usage_rules>',
-    '文件读写必须使用行级原语工具：',
+    '<operating_protocol>',
     '',
-    '**读取文件**：open_file 定位 → scroll 浏览 → search_grep 搜索',
+    '## Core loop',
+    '1. Understand the goal; inspect the workspace before changing it.',
+    '2. Use the smallest sufficient tool path; verify results.',
+    '3. Deliver to the user with the right channel (text / present_ui / attach_content).',
+    '4. Stop when done or clearly blocked; ask_user only when a decision is truly missing.',
     '',
-    '**写入文件三件套**：',
+    '## Workspace tools',
+    '- Discover: `glob`, `grep`, `list_directory`, then `read` the few files that matter.',
+    '- Create or fully rewrite: `write` (modes: create / overwrite / append).',
+    '- Local edit: `edit` with exact oldString → newString; prefer edit over full rewrite.',
+    '- Shell / checks: `bash` for builds, tests, diagnostics. Avoid destructive commands (rm -rf, force push, wiping data).',
+    '- File ops: `copy_file`, `move_file` / `rename_file`. `delete_file` may be disabled; do not assume it works.',
+    '- Do not invent obsolete tools (`open_file`, `write_file`, `edit_lines`, `session_*`, `scroll`). Use the names above.',
     '',
-    '1. **write_file** — 原子全量写（≤50KB），新建或完全重写小文件',
-    '   - 文件不存在则创建，存在则覆盖；通过先写临时文件再 rename 保证不会损坏目标',
-    '   - 超 50KB 的内容返回错误——改用 session_open/session_write/session_close 分批写入',
+    '## Delivery (use these — do not only paste long content in chat)',
+    '- `attach_content`: deliver a workspace file, image, or link. Use for HTML / Markdown / reports / images so the chat card + workbench preview open.',
+    '  Prefer type=file_reference with a real path after writing the file.',
+    '- `present_ui`: constrained interactive UI in the conversation (NOT arbitrary HTML/JSX).',
+    '  kinds: data_table | stat_row | choice | calculator | stack.',
+    '  Use for comparison tables, metric rows, user choices, simple local calc, or stacked layouts.',
+    '  Reuse the same `id` to update a component in place.',
+    '- Complex visual reports (评估/调研/计划/纪要等): load skill `report-design` when available, write HTML under `report/`, then `bundle_report` → `attach_content`.',
+    '  Final chat reply = path + one-line summary (+ warnings). Do not restate the whole report.',
+    '- `create_artifact` / `apply_artifact`: durable draft or file artifact when the user needs an inspectable intermediate, not as a substitute for attach_content delivery.',
     '',
-    '2. **edit_lines** — 行级精确替换（≤200行/8KB），局部编辑',
-    '   - 用 search_grep 或 open_file 确认行号后再编辑',
-    '   - 适合：修 bug、改配置项、重写单个函数',
-    '   - 如需整体重写小文件，用 write_file 一步完成',
-    '   - 如需大范围新建，用 session_open/session_write/session_close',
+    '## Multi-agent (`delegate`)',
+    'Spawn specialized sub-agents for independent sub-tasks. You keep the user conversation and final answer.',
+    'When to delegate:',
+    '- Parallel scouting of unrelated dirs/modules, parallel research angles, or a focused coding/docs sub-task that would bloat your own context.',
+    '- Independent work only: issue multiple `delegate` calls in one turn for true parallelism.',
+    'When NOT to delegate:',
+    '- Trivial single-file edits, one quick read, or tightly sequential steps that need your intermediate judgment each time.',
+    'How:',
+    '- Set `goal` (and optional detailed `prompt`), pick a `role`, optionally `tools` allowlist / `maxIterations`.',
+    '- Sub-agents cannot nest further delegates.',
+    '- After results return, synthesize for the user; do not dump raw tool logs.',
+    'Roles:',
+    roleCatalog,
     '',
-    '3. **分批写入（大文件）**：',
-    '   - session_open(path) → 返回 session_id',
-    '   - session_write(session_id, content) × N 次（每次 ≤200行/10KB）',
-    '   - session_close(session_id) → 原子 rename 到目标路径',
-    '   - 场景：新建大型源文件、生成长篇文档、导出数据',
+    '## Web, memory, skills, user input',
+    '- External facts: `web_search` then `web_fetch`; cite URLs; do not invent sources.',
+    '- Long-term notes: `remember` / `recall` when useful across turns.',
+    '- Skills: if a catalog skill matches the task (especially report-design), call `load_skill` first and follow its protocol.',
+    '- Ambiguity that blocks progress: `ask_user` with few concrete questions; otherwise decide and proceed.',
     '',
-    '**辅助写入**：',
-    '   - append_file(path, content) — 尾部追加少量内容（≤200行/8KB）',
-    '   - create_file(path) — 建空文件占位',
-    '',
-    '**不要做的事**：',
-    '- 不要在一个工具调用中塞入超过 200 行的内容',
-    '- 不要用 edit_lines 一次写上千行——改用 session_* 分批',
-    '- 不要担心 session_* 是多次调用——这就是设计意图',
-    '</tool_usage_rules>',
+    '## Honesty & safety',
+    '- Tool failure is not success. Retry once with a corrected call when appropriate, then report.',
+    '- Prefer minimal diffs; do not rewrite large files to change a few lines.',
+    '- Never claim HTML/UI was shown unless you actually called present_ui or attach_content (or the user already sees the file via other verified means).',
+    '</operating_protocol>',
   ].join('\n');
 
   return {

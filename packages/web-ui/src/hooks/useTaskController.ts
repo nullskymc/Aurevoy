@@ -23,7 +23,6 @@ export function useTaskController({
   closeStream,
   currentTask,
   draftProjectId,
-  editingMessageId,
   goal,
   handleEvent,
   openStream,
@@ -34,7 +33,6 @@ export function useTaskController({
   setBusy,
   setCurrentTask,
   setDraftProjectId,
-  setEditingMessageId,
   setGoal,
   setModelDrawerOpen,
   setNotice,
@@ -52,7 +50,6 @@ export function useTaskController({
   closeStream: () => void;
   currentTask: Task | null;
   draftProjectId: string | undefined;
-  editingMessageId: string | null;
   goal: string;
   handleEvent: (event: AgentEvent) => void;
   openStream: (taskId: string, onEvent: (event: AgentEvent) => void, onDone: () => void) => void;
@@ -63,7 +60,6 @@ export function useTaskController({
   setBusy: Dispatch<SetStateAction<boolean>>;
   setCurrentTask: Dispatch<SetStateAction<Task | null>>;
   setDraftProjectId: Dispatch<SetStateAction<string | undefined>>;
-  setEditingMessageId: Dispatch<SetStateAction<string | null>>;
   setGoal: Dispatch<SetStateAction<string>>;
   setModelDrawerOpen: Dispatch<SetStateAction<boolean>>;
   setNotice: (message: string | null) => void;
@@ -113,7 +109,6 @@ export function useTaskController({
   function handleSelectTask(task: Task): void {
     closeStream();
     setModelDrawerOpen(false);
-    setEditingMessageId(null);
     setActiveView("chat");
     setCurrentTask(task);
     setStatus(task.status);
@@ -182,12 +177,9 @@ export function useTaskController({
       return;
     }
     const currentAttachments = attachments.length > 0 ? [...attachments] : undefined;
-    if (editingMessageId) {
-      setEditingMessageId(null);
+    if (currentTask && !busy) {
       void continueGoal(goal, currentAttachments);
-    } else if (currentTask && !busy) {
-      void continueGoal(goal, currentAttachments);
-    } else {
+    } else if (!busy) {
       void startGoal(goal, currentAttachments);
     }
   }
@@ -196,7 +188,6 @@ export function useTaskController({
     closeStream();
     setBusy(false);
     setModelDrawerOpen(false);
-    setEditingMessageId(null);
     setActiveView("chat");
     setCurrentTask(null);
     setStatus(null);
@@ -208,24 +199,58 @@ export function useTaskController({
     setDraftProjectId(projectId);
   }
 
-  async function handleRevertAndEdit(messageId: string, content: string, mode: RevertMode): Promise<void> {
-    if (busy || !currentTask) return;
+  /**
+   * 轻量编辑重试：截断到目标用户消息，再用编辑后的文案立刻 continue。
+   * 不走 Composer 二次编辑；取消只发生在内联卡本地，未提交前不改历史。
+   */
+  async function handleRevertAndEdit(
+    messageId: string,
+    content: string,
+    mode: RevertMode,
+    messageAttachments?: MessageAttachment[],
+  ): Promise<void> {
+    const trimmed = content.trim();
+    if (busy || !currentTask || !trimmed) return;
+
+    const taskId = currentTask.id;
+    const attach =
+      messageAttachments && messageAttachments.length > 0 ? messageAttachments : undefined;
 
     closeStream();
-    setBusy(false);
     clearLiveState();
     setTraces([]);
+    setBusy(true);
+    setStatus("running");
+    setPhase("initializing");
+    resetComposer();
 
+    let truncatedTask: Task | null = null;
     try {
-      const response = await revertTask(currentTask.id, messageId, mode);
+      const response = await revertTask(taskId, messageId, mode);
+      truncatedTask = response.task;
       setCurrentTask(response.task);
       setStatus(response.task.status);
       setPhase(response.task.phase);
       setPlan(response.task.plan);
       updateTaskList(response.task);
-      setGoal(response.removedContent ?? content);
-      setEditingMessageId(messageId);
+
+      const { task } = await runAgentRequest(() => continueTask(taskId, trimmed, attach));
+      setCurrentTask(task);
+      setPhase(task.phase);
+      setStatus(task.status);
+      setPlan(task.plan);
+      updateTaskList(task);
+      openStream(task.id, handleEvent, () => setBusy(false));
     } catch (err) {
+      setBusy(false);
+      // revert 已成功时保留截断态，用户可用「撤销编辑」恢复
+      if (truncatedTask) {
+        setCurrentTask(truncatedTask);
+        setStatus(truncatedTask.status);
+        setPhase(truncatedTask.phase);
+        setPlan(truncatedTask.plan);
+        updateTaskList(truncatedTask);
+      }
       setNotice(`${t("notice.revertFailed")}${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -264,8 +289,7 @@ export function useTaskController({
       setPhase(response.task.phase);
       setPlan(response.task.plan);
       updateTaskList(response.task);
-      setEditingMessageId(null);
-      setGoal("");
+      resetComposer();
     } catch (err) {
       setNotice(`${t("notice.unrevertFailed")}${err instanceof Error ? err.message : String(err)}`);
     }

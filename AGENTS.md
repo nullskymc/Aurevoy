@@ -1,115 +1,73 @@
-# AGENTS.md — Aurevoy 协作指南（智能体优先）
+# AGENTS.md — Aurevoy 协作入口
 
-> 本文件是任何参与 Aurevoy 开发的智能体（或人类）的**第一入口**。
-> 开始任何任务前，先读完本文件，再按需深入 `docs/` 下的专题文档。
+> 参与本仓库的智能体/人类先读本文，再按需下钻 `docs/`。
 
-## 1. 这个项目是什么
+## 产品
 
-Aurevoy 是一款**面向个人用户的通用 AI Agent 桌面产品**。用户用自然语言表达目标，
-Aurevoy 负责理解目标、拆解任务、调用工具、执行操作并持续推进直至完成。
+Aurevoy 是**本地个人 AI Agent 桌面应用**：用户用自然语言给目标，引擎规划、调工具、持续执行直至完成。
 
-- 当前阶段：已完成 LLM 驱动规划、并行工具执行、Skill 系统、网页搜索、浏览器自动化（MCP）、
-  子代理委托、Diff 编辑、Token 感知压缩、长期记忆向量检索、知识库 RAG、多 Provider LLM
-  （OpenAI 兼容 / Anthropic / OpenAI Responses v2）、auto/plan 自动模式、自动规划模式、
-  Effect-TS 新一代工具框架（P0-P4）等全套 Agent 能力。
-  开发目标是**可交付、可恢复、可审计、可评测的个人 Agent 产品**。
-- 当前版本：v0.6.2（分支 `dev`），最新 tag v0.6.2。
+- 版本：v0.6.3（tag `v0.6.3`）
+- 形态：macOS 优先，Windows 扩展时主要重打包壳
+- 原则：真实链路、可恢复、可审计；禁止 Mock / 假能力
 
-## 2. 30 秒架构速览
-
-前后端分离，先 macOS 后 Windows（扩展时后端几乎不动，只重打包桌面壳）：
+## 架构（30 秒）
 
 ```
-apps/desktop  (Tauri 2.0 + React + TS)   ──HTTP + SSE──▶  apps/agent (Node + Fastify)
-   桌面壳 + UI（前端）                                        Agent 引擎（后端，独立进程）
-                                                                  │
-                                              ┌───────────────────┼───────────────────┐
-                                          LLM Provider        Tool Registry        SQLite
-                                          (OpenAI 兼容)        (内置 + MCP)         (本地存储)
-packages/shared (TS 类型)  ← 前后端共享契约，跨进程数据结构唯一来源
+apps/desktop (Tauri) + packages/web-ui (React)
+              │  HTTP + SSE (127.0.0.1:8787)
+              ▼
+         apps/agent (Node + Fastify + Pi AgentHarness)
+              ├── LLM (多协议)  ·  Tools (Effect + MCP)
+              └── SQLite (任务 / 轨迹 / 记忆 / KB)
+packages/shared  ← 跨进程类型唯一来源
 ```
 
-引擎默认监听 `http://127.0.0.1:8787`。主 Agent loop 使用 Pi Agent；
-LLM 配置以 Pi provider id 为准（如 openai、anthropic、deepseek、openrouter、google、openai-compatible 等）。
-详见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
+主循环固定走 Pi runtime；LLM 等产品配置走设置页 / SQLite，env 仅运维面。详见 [ARCHITECTURE](./docs/ARCHITECTURE.md)。
 
-## 3. 文档地图
+## 文档地图
 
-| 文档 | 内容 | 何时读 |
-|---|---|---|
-| `AGENTS.md`（本文） | 协作总则、速览、规则 | 永远先读 |
-| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 系统架构、模块职责、数据流 | 理解全局 / 改动跨模块 |
-| [`docs/TECH_STACK.md`](./docs/TECH_STACK.md) | 技术选型与取舍理由 | 引入新依赖 / 选型决策 |
-| [`docs/API.md`](./docs/API.md) | HTTP API + SSE 事件契约 | 改前后端接口 |
-| [`docs/UI_DESIGN.md`](./docs/UI_DESIGN.md) | 人机交互、信息架构、前端界面设计 | 改桌面 UI / 设计 Agent 工作台 |
-| [`docs/CONVENTIONS.md`](./docs/CONVENTIONS.md) | 代码规范、目录约定、工程治理、扩展指南 | 写任何代码前 |
-| [`docs/ROADMAP.md`](./docs/ROADMAP.md) | 分阶段规划与任务清单 | 决定"做什么" |
-| [`.github/workflows/build.yml`](./.github/workflows/build.yml) | CI/CD 自动构建与回归 | 了解构建流程 |
+| 文档 | 用途 |
+|---|---|
+| 本文 | 入口、规则、命令 |
+| [ARCHITECTURE](./docs/ARCHITECTURE.md) | 模块与数据流 |
+| [API](./docs/API.md) | HTTP + SSE 契约说明 |
+| [UI_DESIGN](./docs/UI_DESIGN.md) | 交互与界面边界 |
+| [CONVENTIONS](./docs/CONVENTIONS.md) | 代码与扩展约定 |
+| [TECH_STACK](./docs/TECH_STACK.md) | 选型理由 |
+| [ROADMAP](./docs/ROADMAP.md) | 已完成能力 + 未竟项 |
 
-## 4. 给协作智能体的硬性规则
+类型真相在 `packages/shared/src/`，API 细节以代码为准；文档只做索引与约定。
 
-1. **契约唯一来源**：任何跨进程（前端↔后端）的数据结构，必须定义在 `packages/shared/src/`。
-   不要在前端或后端各自重复定义，避免类型漂移。
-2. **改契约要联动**：改了 `@aurevoy/shared` 的类型后，必须 `npm run build:shared`，
-   否则前后端拿到的是旧的 `dist`。
-3. **新增工具**：新工具优先放到 `apps/agent/src/tool/tools/`（Effect-TS 新一代框架），
-   通过 `framework/registry.ts` 的 `register()` 注册；旧工具仍可放 `apps/agent/src/tools/`。
-   不要把工具逻辑写进 Agent 循环里。
-4. **新增 LLM Provider**：优先扩展 Pi model/provider 映射并保持 `AUREVOY_LLM_*` 配置入口。
-   Agent 循环固定通过 Pi runtime 执行，不再维护第二套 ReAct 后端。
-5. **跨平台意识**：后端不要依赖 macOS 专有路径/命令；前端不要假设 Tauri 之外的运行环境。
-   目标是 macOS → Windows 平滑扩展。
-6. **不做假能力**：禁止用 Mock、占位回复、演示数据或“看起来能用”的前端状态冒充真实能力。
-   外部能力不可用时必须明确失败、降级或提示配置缺失，并留下可诊断信息。
-7. **完成即验证**：任何改动后至少跑 `npm run typecheck`；动了后端跑冒烟测试；动了前端跑 `vite build`。
-   影响 Agent 行为、工具、安全或存储的改动还要补充可复现的轨迹/用例。
-8. **秘钥安全**：API Key 等只能走环境变量（`.env`，已 gitignore），禁止硬编码或提交。
-9. **工程治理优先**：新增工具、执行器、记忆、设置或任务控制时，必须同步考虑日志、审批、
-   权限边界、失败恢复、回归评测与用户可解释性。
+## 硬性规则
 
-## 5. 常用命令
+1. 跨进程数据结构只定义在 `packages/shared`；改完必 `npm run build:shared`。
+2. 新工具放 `apps/agent/src/tool/tools/`，经 `framework/registry` 注册；不写进 Agent loop。
+3. 新 Provider 扩展 Pi 映射，不恢复第二套 ReAct 后端。
+4. 后端不绑 macOS 路径/命令；前端不假设非 Tauri 环境。
+5. 外部能力缺失时明确失败/降级，不假成功。
+6. 改动后至少 `npm run typecheck`；行为/安全/存储改动补回归或可复现轨迹。
+7. 密钥只走环境变量 / 设置存储，禁止提交。
+8. 新能力同步考虑：日志、审批、权限、失败恢复、用户可解释性。
+
+## 命令
 
 ```bash
-npm install              # 安装全部 workspace 依赖
-npm run dev              # 同时启动 Agent 引擎 + 桌面应用
-npm run dev:agent        # 仅后端引擎（tsx watch 热重载）
-npm run typecheck        # 全 workspace 类型检查
-npm run build            # 构建 shared → agent → desktop
-npm run build:shared     # 仅构建共享类型（改完 shared 必做）
-npm run regression:m3    # M3 基础 Agent、安全、审批、取消
-npm run regression:m4    # M4 多轮、记忆、恢复
-npm run regression:m5    # M5 设置、工具管理、数据管理、MCP
-npm run regression:m6    # M6 追问、产物、预算、token、命令执行
-npm run regression:m7    # M7 文件工具、网络安全、schema、计划、checkpoint
-npm run regression:m8    # M8 知识库/RAG、嵌入 provider、混合检索
+npm install              # workspace 依赖（Node >= 22.19.0）
+npm run dev              # 引擎 + 桌面
+npm run dev:agent        # 仅引擎热重载
+npm run typecheck        # 全仓类型检查
+npm run build            # shared → agent → desktop
+npm run build:shared     # 改 shared 后必做
+npm run regression:m3    # … m8 见 package.json
 ```
 
-环境要求：Node >= 22.19.0、Rust (stable)、macOS Xcode CLT。详见 README。
+环境：Node ≥ 22.19.0、Rust stable、macOS Xcode CLT。
 
-## 6. 当前进度与交付方向
+## 能力现状（摘要）
 
-- ✅ M0-M2：Monorepo、前后端通信、SSE、LLM Provider、Pi-backed Agent runtime、内置工具、审批、MCP
-- ✅ M3：工程治理（runtime phase、轨迹日志、`m3` 回归集、沙箱边界）
-- ✅ M4：多轮对话、长期记忆、任务恢复
-- ✅ M5：设置界面、工具管理、数据管理、跨平台 CI
-- ✅ M6：追问、产物、预算、token usage、命令执行
-- ✅ M7：文件工具、网络安全、多步计划、checkpoint、前端工作台
-- ✅ Rewind：编辑重跑/撤销/分支/压缩
-- ✅ Project：项目工作区与对话分组
-- ✅ P1-P7：Agent 架构重构（LLM 规划→并行执行→截断→语义压缩→记忆评分→Diff 编辑→子代理）
-- ✅ Skill 系统：load_skill 工具激活、install_skill 从 Git 安装、预装 skill（web-search/browser/report-design）、工具白名单
-- ✅ 网页搜索：`web_search` 工具，DuckDuckGo 免费搜索，可配置搜索后端
-- ✅ CI/CD：GitHub Actions macOS ARM64 自动构建 + M3-M7 回归
-- ✅ Multimodal：图片/文件拖拽粘贴、视觉模型、图片查看器
-- ✅ LLM Provider：OpenAI 兼容 / Anthropic（Claude Messages API）/ OpenAI Responses API v2 三协议
-- ✅ 自动模式：auto/plan 两档、运行时切换、安全暂停、计划门禁
-- ✅ 规划模式：自动复杂度检测 → Scout 侦查 → LLM 计划生成 → 审批后自动执行
-- ✅ 工具框架：Effect-TS 新一代工具系统（P0-P4），Schema 驱动输入输出，作用域注册，审批引擎
-- ✅ 记忆向量化：`sqlite-vec` 向量检索 + 混合评分（关键词+向量）+ Dreams 维护管道
-- ✅ 知识库 RAG：索引目录管理、增量索引、KNN 语义召回、前端 KB 设置面板
-- ✅ 前端优化：行级文件工具统一、写入进度推送、右键菜单、Composer 模型 popover、SSE 一致性修复
-- ✅ 其他：Python 运行时（系统 venv）、agent 主动发送文件、planStepId 时间线分组
-- 🚧 M5 打包签名：macOS 签名公证、自动更新（需 Apple Developer 账号）
-- 🚧 M8：隐式自动 KB 召回、Agent usability eval、浏览器自动化（Playwright MCP）、发布体验
+**已交付：** Pi harness、多协议 LLM、Effect 工具 + MCP、auto/plan、规划/侦查、审批、多轮/恢复、  
+内联编辑重试/分支/压缩、子代理（并发与工作组 UI）、Skill、网页搜索、多模态、项目工作区、  
+双层预算、记忆向量 + KB RAG、设置/数据管理、CI。
 
-详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。
+**进行中：** macOS 签名公证与自动更新、隐式 KB 召回、评测与发布体验。  
+清单与验收见 [ROADMAP](./docs/ROADMAP.md)。

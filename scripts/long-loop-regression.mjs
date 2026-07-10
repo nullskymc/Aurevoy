@@ -13,6 +13,7 @@ await mkdir(workspaceDir, { recursive: true });
 const llmFixture = await startLlmFixture();
 
 process.env.AUREVOY_HOST = '127.0.0.1';
+process.env.AUREVOY_TEST_BOOTSTRAP = '1';
 process.env.AUREVOY_PORT = '0';
 process.env.AUREVOY_DB_PATH = join(tempRoot, 'aurevoy.sqlite');
 process.env.AUREVOY_WORKSPACE_DIR = workspaceDir;

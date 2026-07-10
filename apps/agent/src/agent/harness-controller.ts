@@ -27,6 +27,7 @@ import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval, waitForPlanA
 import { createInitialAutoModeState, syncAutoModeState } from './approval.js';
 import { taskStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
+import { resumeIncompletePlan } from './plan-progress.js';
 import {
   ensureLifetimeAllowsAnotherRun,
   initialBudgetUsage,
@@ -130,7 +131,7 @@ export function prepareTaskForBudgetContinue(
   return prepareTaskForResume(task);
 }
 
-/** 编辑重跑：截断目标消息及其之后的对话，等待用户继续输入后由 Pi 重新生成。 */
+/** 编辑重试截断：移除目标消息及其之后的对话；前端再立刻 continue 编辑稿。 */
 export function revertTask(
   task: Task,
   messageId: string,
@@ -175,7 +176,7 @@ export function revertTask(
   });
   writeTrace(task.id, 'phase', null, {
     ok: true,
-    summary: `编辑重跑(mode=${mode})：截断到消息 ${messageId} 之前，移除 ${removedMessages.length} 条消息`,
+    summary: `编辑重试截断(mode=${mode})：截断到消息 ${messageId} 之前，移除 ${removedMessages.length} 条消息`,
     data: { messageId, mode, removedCount: removedMessages.length },
   });
 
@@ -187,7 +188,7 @@ export function revertTask(
   };
 }
 
-/** 撤销上一次 revert：从 archivedMessages 恢复被截断的消息。 */
+/** 撤销上一次 revert：从 archivedMessages 恢复（仅 continue 尚未提交时）。 */
 export function unrevertTask(task: Task): { task: Task; restoredCount: number } {
   const archived = task.archivedMessages ?? [];
   if (archived.length === 0) return { task, restoredCount: 0 };
@@ -202,7 +203,7 @@ export function unrevertTask(task: Task): { task: Task; restoredCount: number } 
   taskEvents.publish({ type: 'unreverted', taskId: task.id, restoredCount: archived.length });
   writeTrace(task.id, 'phase', null, {
     ok: true,
-    summary: `撤销编辑重跑：恢复 ${archived.length} 条归档消息到活跃历史`,
+    summary: `撤销编辑重试截断：恢复 ${archived.length} 条归档消息到活跃历史`,
     data: { restoredCount: archived.length },
   });
   return { task, restoredCount: archived.length };
@@ -365,6 +366,8 @@ export function addUserTurn(
     attachments,
   };
   task.messages.push(userMsg);
+  // continue 一旦写入新用户消息，上一次 revert 的归档不再可撤销
+  task.archivedMessages = [];
   task.status = 'pending';
   task.phase = 'initializing';
   task.pendingApprovals = [];
@@ -530,9 +533,7 @@ export async function runHarnessTask(task: Task): Promise<void> {
   if (task.plan.length === 0) {
     task.plan = createInitialPlan(task);
   } else {
-    task.plan = task.plan.map((step, index) =>
-      step.status === 'completed' ? step : { ...step, status: index === 0 ? 'running' : 'pending' },
-    );
+    task.plan = resumeIncompletePlan(task.plan);
   }
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
@@ -565,6 +566,7 @@ function createInitialPlan(task: Task): PlanStep[] {
   if (!shouldUseMultiStepPlan(task.goal)) {
     return [{ id: 'exec', description: 'Agent 执行任务', status: 'running' }];
   }
+  // 三步模板由 plan-progress 在工具/终稿/收尾时推进，避免 discover 永久 running
   return [
     { id: 'discover', description: '搜集并确认本地材料', status: 'running' },
     { id: 'synthesize', description: '整理关键信息并形成结构', status: 'pending' },
@@ -631,10 +633,7 @@ async function requestManualPlanApproval(task: Task, signal: AbortSignal): Promi
   approvedState.planReady = false;
   task.status = 'running';
   task.phase = 'initializing';
-  task.plan = task.plan.map((step, index) => ({
-    ...step,
-    status: index === 0 ? 'running' : 'pending',
-  }));
+  task.plan = resumeIncompletePlan(task.plan);
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
   taskEvents.publish({ type: 'status', taskId: task.id, status: task.status });
@@ -684,16 +683,14 @@ function patchDanglingToolResults(messages: Message[]): Message[] {
 function resumePlanFromCheckpoint(plan: PlanStep[], checkpointStepId?: string): PlanStep[] {
   if (plan.length === 0) return plan;
   if (!checkpointStepId) {
-    return plan.map((step, index) => ({
-      ...step,
-      status: step.status === 'completed' ? 'completed' : index === 0 ? 'running' : 'pending',
-    }));
+    return resumeIncompletePlan(plan);
   }
   const checkpointIndex = plan.findIndex((step) => step.id === checkpointStepId);
-  return plan.map((step, index) => {
-    if (checkpointIndex >= 0 && index <= checkpointIndex) return { ...step, status: 'completed' };
-    return { ...step, status: index === Math.max(0, checkpointIndex + 1) ? 'running' : 'pending' };
+  const marked = plan.map((step, index) => {
+    if (checkpointIndex >= 0 && index <= checkpointIndex) return { ...step, status: 'completed' as const };
+    return { ...step, status: 'pending' as const };
   });
+  return resumeIncompletePlan(marked);
 }
 
 function summarizeMessages(messages: Message[]): string {

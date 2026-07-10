@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, afterEach } from "vitest"
 import { config } from "../config.js"
-import { createPiModel } from "./pi-provider.js"
+import { createPiModel, resolveModelBaseUrl } from "./pi-provider.js"
+import { settingsStore } from "../store/db.js"
 
 const originalLlm = { ...config.llm }
+const PROVIDERS_KEY = "llm.providers"
+let previousProviders: string | undefined
 
 function withLlmConfig(overrides: Partial<typeof config.llm>, fn: () => void): void {
   Object.assign(config.llm, originalLlm, overrides)
@@ -10,6 +13,33 @@ function withLlmConfig(overrides: Partial<typeof config.llm>, fn: () => void): v
     fn()
   } finally {
     Object.assign(config.llm, originalLlm)
+  }
+}
+
+function withProviderMap(map: Record<string, { baseUrl: string }>, fn: () => void): void {
+  previousProviders = settingsStore.get(PROVIDERS_KEY)
+  settingsStore.set(
+    PROVIDERS_KEY,
+    JSON.stringify(
+      Object.fromEntries(
+        Object.entries(map).map(([id, slot]) => [
+          id,
+          {
+            baseUrl: slot.baseUrl,
+            model: "",
+            visionModel: "",
+            availableModels: [],
+            enabledModels: [],
+          },
+        ]),
+      ),
+    ),
+  )
+  try {
+    fn()
+  } finally {
+    if (previousProviders === undefined) settingsStore.delete(PROVIDERS_KEY)
+    else settingsStore.set(PROVIDERS_KEY, previousProviders)
   }
 }
 
@@ -70,6 +100,92 @@ describe("createPiModel", () => {
       expect(model.baseUrl?.replace(/\/+$/, "")).toBe("https://gateway.example.test/v1")
       // 网关通常只有 chat/completions；不能继续用 catalog 的 responses API
       expect(model.api).toBe("openai-completions")
+    })
+  })
+
+  it("never downgrades openai-codex to chat/completions (Cloudflare 403 trap)", () => {
+    withLlmConfig({
+      provider: "openai-codex",
+      // 用户可能保存了 catalog 默认 baseUrl，或留空回落到 catalog
+      baseUrl: "https://chatgpt.com/backend-api",
+      model: "gpt-5.4",
+    }, () => {
+      const model = createPiModel()
+      expect(model.api).toBe("openai-codex-responses")
+      expect(model.provider).toBe("openai-codex")
+    })
+  })
+
+  it("keeps openai-codex api even when baseUrl is empty (catalog default)", () => {
+    withLlmConfig({
+      provider: "openai-codex",
+      baseUrl: "",
+      model: "gpt-5.4",
+    }, () => {
+      const model = createPiModel()
+      expect(model.api).toBe("openai-codex-responses")
+    })
+  })
+})
+
+describe("resolveModelBaseUrl provider isolation", () => {
+  afterEach(() => {
+    Object.assign(config.llm, originalLlm)
+  })
+
+  it("uses empty opencode-go slot baseUrl over polluted flat config", () => {
+    withLlmConfig({
+      provider: "opencode-go",
+      // 扁平字段被 openai-compatible 残留污染
+      baseUrl: "https://newapi.example.test/v1",
+      model: "mimo-v2.5",
+    }, () => {
+      withProviderMap({
+        "openai-compatible": { baseUrl: "https://newapi.example.test/v1" },
+        "opencode-go": { baseUrl: "" },
+      }, () => {
+        // 空槽 = 使用 catalog 默认，而不是扁平 newapi
+        expect(resolveModelBaseUrl("https://opencode.ai/zen/go/v1", "opencode-go")).toBe(
+          "https://opencode.ai/zen/go/v1",
+        )
+        expect(resolveModelBaseUrl(undefined, "openai-compatible")).toBe(
+          "https://newapi.example.test/v1",
+        )
+      })
+    })
+  })
+
+  it("createPiModel for opencode-go ignores flat gateway when slot baseUrl is empty", () => {
+    withLlmConfig({
+      provider: "opencode-go",
+      baseUrl: "https://newapi.example.test/v1",
+      model: "mimo-v2.5",
+    }, () => {
+      withProviderMap({
+        "opencode-go": { baseUrl: "" },
+      }, () => {
+        const model = createPiModel()
+        expect(model.provider).toBe("opencode-go")
+        expect(model.baseUrl?.replace(/\/+$/, "")).toBe("https://opencode.ai/zen/go/v1")
+      })
+    })
+  })
+
+  it("createPiModel with provider override uses that slot for vision routing", () => {
+    withLlmConfig({
+      provider: "openai-codex",
+      baseUrl: "",
+      model: "gpt-5.5",
+    }, () => {
+      withProviderMap({
+        "openai-codex": { baseUrl: "" },
+        "opencode-go": { baseUrl: "" },
+      }, () => {
+        const model = createPiModel("mimo-v2.5", "opencode-go")
+        expect(model.provider).toBe("opencode-go")
+        expect(model.id).toBe("mimo-v2.5")
+        expect(model.baseUrl?.replace(/\/+$/, "")).toBe("https://opencode.ai/zen/go/v1")
+      })
     })
   })
 })

@@ -4,159 +4,69 @@
 
 # Aurevoy
 
-> Tell it *what* you want, not *how* to do it.
-> Your first AI companion that actually **gets things done**.
+> Tell it *what* you want, not *how* to do it.  
+> A personal AI agent that **gets work done** on your machine.
 
-[中文文档](docs/README/README_zh-CN.md)
-[한국어 문서](docs/README/README_ko-KR.md)
-[日本語ドキュメント](docs/README/README_ja-JP.md)
+[中文](docs/README/README_zh-CN.md) · [한국어](docs/README/README_ko-KR.md) · [日本語](docs/README/README_ja-JP.md)
 
 ---
 
-Aurevoy is a personal AI agent that runs on your computer. It's more than a chat interface —
-you give it a goal, and it figures out the rest: researching, writing files, searching the web, and working through tasks step by step.
+Aurevoy is a **local desktop agent** (macOS first). You state a goal; it plans, uses tools, and works through the task—files, web research, code edits, and more—while you stay in control.
 
-**Like having someone sitting next to you who just says "I'll take care of it."**
-
----
-
-## What It Can Do
-
-### Everyday Tasks, Just Ask
+## What you can do
 
 ```
-"Convert all the PNGs in my downloads folder to WebP"
+"Convert PNGs in Downloads to WebP"
 "Research React 19 breaking changes and write a migration checklist"
-"Read through this folder and turn the code into a README"
-```
-
-Aurevoy breaks down the task and gets to work. You don't need to explain how.
-
-### Write, Edit, and Explore Code
-
-```
 "Add dark mode to this project"
-"Find the date-formatting utility in src/utils and check for bugs"
-"This code is too slow — help me find the bottleneck"
+"Summarize these notes into a weekly report"
 ```
 
-It understands your project structure, makes precise edits, and flags issues. If something goes wrong, you can always **undo** — edit any earlier message, branch the conversation, or compress context to start fresh.
+- **Code & files** — search, precise edits, workspace-aware tools  
+- **Research** — web search & fetch (SSRF-safe), optional browser skill  
+- **Multimodal** — drag images/files; vision models when needed  
+- **Memory & knowledge** — preferences you teach it; optional folder KB/RAG  
+- **Control** — stop anytime; approve tools; inline edit & retry; branch threads  
 
-### Research & Writing
+Everything runs **on your computer**. You bring your own API keys (OpenAI-compatible, Anthropic, and more). Open source.
 
-```
-"Survey the top React state management libraries — compare pros and cons"
-"Translate this article into English, keeping technical terms accurate"
-"Turn these meeting notes into a weekly report"
-```
+## Quick start
 
-It searches the web for up-to-date information, fetches pages for details, and synthesizes everything into the format you need.
+1. **Install** — latest DMG from [Releases](../../releases)  
+2. **Configure** — Settings → provider, base URL, model, API key  
+3. **Chat** — type a goal; `/` lists skills (e.g. web-search, browser)
 
-### See and Understand Images
-
-Drag and drop images or files into the conversation. Aurevoy switches to a vision model when images are present, so it can read screenshots, analyze diagrams, and answer questions about what it sees.
-
-### Learns Your Preferences
-
-Tell it how you work — "I always use pnpm," "I prefer functional style" — and it remembers. Next time it follows your conventions without being reminded.
-
----
-
-## How It Works
-
-You give it a goal → Aurevoy scouts your workspace to understand the context → builds a plan → executes step by step:
-
-- **Need to read a file?** It opens and inspects it.
-- **Need to look something up?** It searches the web for current information.
-- **Need to write code?** It makes precise edits without touching unrelated parts.
-- **Need your input?** It pauses, asks, and waits for your go-ahead before proceeding.
-
-You see every step. Dislike a direction? Interrupt anytime, revise, and it picks back up. You can also rewind — edit any earlier message and regenerate from that point, or branch into a new thread to explore a different direction.
-
----
-
-## Your Data, Your Rules
-
-- **Everything runs locally.** Your data never leaves your machine.
-- You bring your own API key and choose whichever model you want.
-- The code is open source — you can always see exactly what it's doing.
-
----
-
-## Get Started
-
-### 1. Download
-
-Grab the latest DMG from [Releases](../../releases) and drag it into Applications.
-
-### 2. Configure a Model
-
-Open Aurevoy and fill in your model details under Settings:
-
-```
-Provider: OpenAI (or any compatible API)
-Base URL: https://api.openai.com/v1
-Model: gpt-4o-mini
-API Key: sk-xxxx
-```
-
-Works with OpenAI, DeepSeek, Ollama, and any OpenAI-compatible endpoint. Use your own key — no extra fees.
-
-### 3. Start a Conversation
-
-Tell Aurevoy what you need in the input box. Talk to it like a person.
-
-```
-/  Browse available skills (web-search, browser, and more)
-```
-
----
-
-## Contributing
-
-Aurevoy is open source. Contributions are welcome.
+### Develop
 
 ```bash
-# Prerequisites: Node.js >= 20, Rust (stable), macOS
+# Node >= 22.19.0, Rust stable, macOS Xcode CLT
 git clone https://github.com/nullskymc/Aurevoy.git
-cd Aurevoy
-npm install
-npm run dev          # start dev mode
-npm run typecheck    # type check
-npm run build        # production build
+cd Aurevoy && npm install
+npm run dev
+npm run typecheck
 ```
 
-More details in [AGENTS.md](AGENTS.md) and [docs/](docs/).
+Contributor guide: [AGENTS.md](AGENTS.md) · docs: [docs/](docs/)
 
----
+## Stack
 
-## Tech Stack
-
-| Layer | Technology |
+| Layer | Tech |
 |---|---|
-| Desktop App | Tauri 2 + React + TypeScript |
-| Agent Engine | Node.js + Fastify + SQLite |
-| Transport | Local HTTP + SSE streaming |
-| Tool Extensions | Built-in tools + MCP protocol (connect external tool servers) |
-| Skill System | Slash-command-activated capabilities, custom skills supported |
+| Shell | Tauri 2 |
+| UI | React + TypeScript (`packages/web-ui`) |
+| Engine | Node + Fastify + Pi Agent + SQLite |
+| Transport | Local HTTP + SSE |
+| Extensions | Built-in tools + MCP + Skills |
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)
 
----
+## Capabilities (current)
 
-## What's Included
+Autonomous plan & tools · multi-provider LLM · auto/plan modes · multi-turn & resume ·  
+inline edit-retry / branch / compact · multi-role subagents · skills · web search ·  
+multimodal · projects · dual task budgets · long-term memory + KB RAG · settings & CI  
 
-- Autonomous planning & parallel tool execution
-- File read/write/search/copy/move/delete, precision diff edits
-- Web search & page fetching with SSRF protection
-- Long-term memory (learns your preferences over time)
-- Multi-turn conversations, edit & retry, branching threads, context compression
-- Multimodal: image/file drag-and-drop, vision model support
-- Project workspaces for organizing conversations
-- Skill system (slash commands, custom skills)
-- macOS native desktop app
-
-Coming next: knowledge base / RAG, agent evaluation framework, release polish. See [ROADMAP](docs/ROADMAP.md).
+**In progress:** code signing / auto-update, implicit KB recall, evals, release polish.
 
 ---
 

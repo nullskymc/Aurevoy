@@ -31,6 +31,10 @@ import type {
   MemoryEntry,
   MemoryListResponse,
   ModelListResponse,
+  OauthLoginRespondRequest,
+  OauthLoginStartRequest,
+  OauthLogoutRequest,
+  OauthSessionSnapshot,
   PlanApprovalRequest,
   PlanApprovalResponse,
   ProjectListResponse,
@@ -83,6 +87,13 @@ import { skillRegistry } from './skills/registry.js';
 import { installFromGit, uninstallSkill } from './skills/installer.js';
 import { reloadSkillsAndTools } from './skills/reload.js';
 import { getPiProviderName, listPiProviderModels } from './llm/pi-provider.js';
+import {
+  cancelOauthSession,
+  getOauthSession,
+  logoutOauthProvider,
+  respondOauthSession,
+  startOauthLogin,
+} from './llm/oauth-login.js';
 import { getMcpStatuses, reloadMcpTools } from './tool/mcp-integration.js';
 import {
   readCleanupPolicyDays,
@@ -117,7 +128,7 @@ export async function buildServer(externalLogger?: Logger) {
   app.get('/api/health', async (): Promise<HealthResponse> => {
     return {
       status: 'ok',
-      version: '0.6.2',
+      version: '0.6.3',
       uptimeMs: Date.now() - startedAt,
       provider: getPiProviderName(),
       contextCharBudget: config.agent.contextCharBudget,
@@ -367,6 +378,70 @@ export async function buildServer(externalLogger?: Logger) {
     }
   });
 
+  // ---- LLM OAuth（订阅登录）----
+
+  app.post<{ Body: OauthLoginStartRequest }>(
+    '/api/settings/llm/oauth/login',
+    async (req, reply): Promise<OauthSessionSnapshot | unknown> => {
+      try {
+        const provider = String(req.body?.provider ?? '').trim();
+        if (!provider) return reply.code(400).send({ error: 'provider is required' });
+        return startOauthLogin(provider);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ error: message });
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/settings/llm/oauth/session/:id',
+    async (req, reply): Promise<OauthSessionSnapshot | unknown> => {
+      const session = getOauthSession(req.params.id);
+      if (!session) return reply.code(404).send({ error: 'OAuth session not found' });
+      return session;
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: OauthLoginRespondRequest }>(
+    '/api/settings/llm/oauth/session/:id/respond',
+    async (req, reply): Promise<OauthSessionSnapshot | unknown> => {
+      try {
+        return respondOauthSession(req.params.id, String(req.body?.value ?? ''));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ error: message });
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/settings/llm/oauth/session/:id/cancel',
+    async (req, reply): Promise<OauthSessionSnapshot | unknown> => {
+      try {
+        return cancelOauthSession(req.params.id);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ error: message });
+      }
+    },
+  );
+
+  app.post<{ Body: OauthLogoutRequest }>(
+    '/api/settings/llm/oauth/logout',
+    async (req, reply) => {
+      try {
+        const provider = String(req.body?.provider ?? '').trim();
+        if (!provider) return reply.code(400).send({ error: 'provider is required' });
+        await logoutOauthProvider(provider);
+        return readRuntimeSettings();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ error: message });
+      }
+    },
+  );
+
   app.get('/api/data', async (): Promise<DataStatusResponse> => {
     return {
       dbPath: config.dbPath,
@@ -538,8 +613,7 @@ export async function buildServer(externalLogger?: Logger) {
     return reply.code(200).send({ ok: true });
   });
 
-  // 编辑重跑（Phase 1）：截断到目标消息之前，回到该点状态；前端随后用 continue 端点
-  // 把编辑后的文本作为该点的新输入，带上下文重新生成。
+  // 编辑重试截断：移除目标消息及其之后的历史；前端内联确认后立刻 continue 编辑稿。
   app.post<{ Params: { id: string }; Body: RevertTaskRequest }>(
     '/api/tasks/:id/revert',
     async (req, reply) => {
@@ -566,7 +640,7 @@ export async function buildServer(externalLogger?: Logger) {
     },
   );
 
-  // 撤销上一次 revert：从归档恢复消息。仅在 revert 后尚未 continue 时可用。
+  // 撤销上一次 revert：从归档恢复。仅当 archivedMessages 仍在（continue 尚未写入）时可用。
   app.post<{ Params: { id: string } }>('/api/tasks/:id/unrevert', async (req, reply) => {
     const task = taskStore.get(req.params.id);
     if (!task) return reply.code(404).send({ error: 'task not found' });

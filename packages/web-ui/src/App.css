@@ -1633,9 +1633,14 @@ button.user-bubble-attachment {
   transition: background 0.15s, color 0.15s;
 }
 
-.msg-action-btn:hover {
+.msg-action-btn:hover:not(:disabled) {
   background: var(--hover);
   color: var(--text);
+}
+
+.msg-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* 用户消息：气泡右对齐，操作行也右对齐，常态淡显 */
@@ -1718,6 +1723,52 @@ button.user-bubble-attachment {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   box-shadow: 0 0 0 3px var(--accent-soft-bg, color-mix(in srgb, var(--accent) 14%, transparent));
+}
+
+.user-edit-card-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.user-edit-mode {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.user-edit-mode:hover {
+  background: var(--hover, var(--surface-hover));
+  color: var(--text);
+}
+
+.user-edit-mode[data-active="true"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft-bg, color-mix(in srgb, var(--accent) 10%, transparent));
+  color: var(--text);
+}
+
+.user-edit-mode-title {
+  font-size: calc(var(--ui-font-size) - 1.5px);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.user-edit-mode-desc {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.user-edit-mode[data-active="true"] .user-edit-mode-desc {
+  color: var(--text-secondary);
 }
 
 .user-edit-card-footer {

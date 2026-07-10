@@ -7,10 +7,13 @@ import {
   createModels,
   createProvider,
   type Models as PiModels,
+  type Provider as PiProvider,
 } from '@earendil-works/pi-ai';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
-import { filterChatModelIds } from '@aurevoy/shared';
+import { filterChatModelIds, type PiProviderCatalogEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
+import { hasStoredCredential } from './credential-store.js';
+import { settingsStore } from '../store/db.js';
 
 // ---- Dynamic model discovery via Pi's createProvider + refreshModels ----
 
@@ -62,59 +65,148 @@ function createOpenAICompatProvider() {
 
 // ---- Public API ----
 
+/**
+ * 暴露 Pi 对各家 provider 的元数据（协议 apis、鉴权形态、默认 baseUrl）。
+ * 前端只做展示/接入，不在 Aurevoy 侧复刻各家协议差异。
+ */
+export function listPiProviderCatalog(): PiProviderCatalogEntry[] {
+  const entries = builtinProviders().map((provider) => toCatalogEntry(provider));
+  // 自定义 OpenAI 兼容端：Aurevoy 合成，不在 Pi 内置列表
+  entries.push({
+    id: 'openai-compatible',
+    name: 'OpenAI Compatible / Custom',
+    defaultBaseUrl: '',
+    apis: ['openai-completions'],
+    supportsApiKey: true,
+    apiKeyLabel: 'API key',
+    supportsOauth: false,
+    modelCount: 0,
+    requiresBaseUrl: true,
+    custom: true,
+  });
+  return entries.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function toCatalogEntry(provider: PiProvider): PiProviderCatalogEntry {
+  const models = provider.getModels();
+  const apis = [...new Set(models.map((model) => model.api).filter(Boolean))].sort();
+  return {
+    id: provider.id,
+    name: provider.name || provider.id,
+    defaultBaseUrl: (provider.baseUrl ?? '').replace(/\/+$/, ''),
+    apis: apis.length > 0 ? apis : [fallbackApiForProvider(provider.id)],
+    supportsApiKey: Boolean(provider.auth.apiKey),
+    apiKeyLabel: provider.auth.apiKey?.name,
+    supportsOauth: Boolean(provider.auth.oauth),
+    oauthLabel: provider.auth.oauth?.name,
+    modelCount: models.length,
+    requiresBaseUrl: false,
+    custom: false,
+  };
+}
+
 export function getPiProviderName(): string {
   return isPiLLMConfigured() ? `${config.llm.provider}:${config.llm.model}` : 'unconfigured';
 }
 
 export function isPiLLMConfigured(): boolean {
-  return !!config.llm.apiKey && isValidPiProviderId(config.llm.provider);
+  if (!isValidPiProviderId(config.llm.provider)) return false;
+  if (config.llm.apiKey?.trim()) return true;
+  // OAuth / 分槽凭证（CredentialStore）
+  return hasStoredCredential(config.llm.provider);
 }
 
 export function assertPiLLMConfigured(): void {
   if (!isValidPiProviderId(config.llm.provider)) {
     throw new Error(`未支持的 Provider id: "${config.llm.provider}"。仅允许小写字母、数字和连字符。`);
   }
-  if (!config.llm.apiKey) {
+  if (!isPiLLMConfigured()) {
     throw new Error(
-      '未配置 LLM API Key。请在项目根目录 .env 设置 AUREVOY_LLM_API_KEY ' +
-        '（以及 AUREVOY_LLM_BASE_URL / AUREVOY_LLM_MODEL）。参考 .env.example。',
+      '未配置 LLM 凭证。请在设置中为当前 Provider 配置 API Key，或使用订阅登录。',
     );
   }
 }
 
 /**
- * 运行时模型端点：设置/环境里的 baseUrl 优先于 Pi 内置 catalog。
- * 多 Provider 槽位会把用户网关写进 config.llm.baseUrl；若仍用 catalog 默认
- * api.openai.com 等地址，会导致请求打到错误端点，usage 也拿不到。
+ * 按 provider 槽位解析请求端点，避免扁平 `config.llm.baseUrl` 跨槽串用。
+ *
+ * 优先级：
+ * 1. `llm.providers[provider].baseUrl`（槽存在时：空串 = 明确使用 catalog 默认）
+ * 2. 仅当请求的是**当前激活** provider 且槽不存在时，回退扁平 `config.llm.baseUrl`
+ * 3. 模型 catalog / 调用方传入的默认 baseUrl
  */
-export function resolveModelBaseUrl(modelBaseUrl?: string): string {
-  const configured = config.llm.baseUrl?.trim().replace(/\/+$/, '');
-  if (configured) return configured;
+export function resolveModelBaseUrl(modelBaseUrl?: string, provider?: string): string {
+  const providerId = (provider ?? config.llm.provider).trim();
+  const slotBaseUrl = readProviderSlotBaseUrl(providerId);
+  if (slotBaseUrl !== undefined) {
+    const fromSlot = slotBaseUrl.trim().replace(/\/+$/, '');
+    if (fromSlot) return fromSlot;
+    return (modelBaseUrl ?? '').replace(/\/+$/, '');
+  }
+
+  // 槽位尚未建立时：激活 provider 可用扁平字段（兼容迁移中）
+  if (providerId === config.llm.provider) {
+    const configured = config.llm.baseUrl?.trim().replace(/\/+$/, '');
+    if (configured) return configured;
+  }
   return (modelBaseUrl ?? '').replace(/\/+$/, '');
 }
 
 /**
- * 非官方 OpenAI 主机时，把 catalog 里的 Responses API 降级为 chat/completions。
- * 多数第三方网关只实现 /v1/chat/completions；强行走 /v1/responses 会直接失败，
- * 任务虽能「看起来结束」但 token usage 永远为空。
+ * 读取多 provider map 中某槽的 baseUrl。
+ * - `undefined`：map 中无该 provider（未建槽）
+ * - `''`：已建槽且明确未配置自定义网关
+ */
+function readProviderSlotBaseUrl(provider: string): string | undefined {
+  if (!provider) return undefined;
+  const raw = settingsStore.get('llm.providers');
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const slot = (parsed as Record<string, unknown>)[provider];
+    if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return undefined;
+    const baseUrl = (slot as { baseUrl?: unknown }).baseUrl;
+    return typeof baseUrl === 'string' ? baseUrl : '';
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 第三方网关通常只有 chat/completions：把官方 OpenAI Responses 降级为 completions。
+ *
+ * 注意：
+ * - `openai-codex-responses` 必须走 chatgpt.com Codex 协议，**绝不能**降级，
+ *   否则会打到 /backend-api/chat/completions 并被 Cloudflare 403。
+ * - chatgpt.com 是 Codex 官方端点，不是「第三方网关」。
  */
 export function resolveModelApi(api: string | undefined, baseUrl: string, provider: string): string {
   const resolved = api || fallbackApiForProvider(provider);
-  if (!isOfficialOpenAIHost(baseUrl) && (resolved === 'openai-responses' || resolved === 'openai-codex-responses')) {
+  // Codex 订阅协议：始终保留
+  if (resolved === 'openai-codex-responses' || provider === 'openai-codex') {
+    return 'openai-codex-responses';
+  }
+  // 仅对「真·OpenAI Responses」在非官方主机上降级
+  if (resolved === 'openai-responses' && !isOfficialOpenAIHost(baseUrl) && !isCodexHost(baseUrl)) {
     return 'openai-completions';
   }
   return resolved;
 }
 
-export function createPiModel(modelOverride?: string): PiModel<any> {
-  const provider = normalizePiProvider(config.llm.provider);
+/**
+ * @param modelOverride 覆盖模型 id（如全局视觉模型）
+ * @param providerOverride 覆盖 provider（视觉 `provider:model` 跨槽时必须带上，避免用激活槽 baseUrl）
+ */
+export function createPiModel(modelOverride?: string, providerOverride?: string): PiModel<any> {
+  const provider = normalizePiProvider(providerOverride?.trim() || config.llm.provider);
   const modelId = modelOverride?.trim() || config.llm.model;
   const builtin = (getModel as (provider: string, model: string) => PiModel<any> | undefined)(
     provider,
     modelId,
   );
   if (builtin) {
-    const baseUrl = resolveModelBaseUrl(builtin.baseUrl);
+    const baseUrl = resolveModelBaseUrl(builtin.baseUrl, provider);
     const withBaseUrl = {
       ...builtin,
       baseUrl,
@@ -138,7 +230,7 @@ export function createPiModel(modelOverride?: string): PiModel<any> {
     }
     return withBaseUrl;
   }
-  const baseUrl = resolveModelBaseUrl();
+  const baseUrl = resolveModelBaseUrl(undefined, provider);
   const api = resolveModelApi(fallbackApiForProvider(provider), baseUrl, provider);
   const openAICompat = api === 'openai-completions'
     ? openAICompletionsFallbackCompat(provider, baseUrl, modelId)
@@ -271,6 +363,12 @@ function safeHost(url: string): string {
 function isOfficialOpenAIHost(baseUrl: string): boolean {
   const host = safeHost(baseUrl);
   return host === 'api.openai.com' || host.endsWith('.openai.azure.com');
+}
+
+/** ChatGPT / Codex 订阅官方主机（backend-api） */
+function isCodexHost(baseUrl: string): boolean {
+  const host = safeHost(baseUrl);
+  return host === 'chatgpt.com' || host.endsWith('.chatgpt.com');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

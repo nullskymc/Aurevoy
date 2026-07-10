@@ -350,6 +350,7 @@ function buildModelGroups(settings: RuntimeSettings | null): ModelGroup[] {
         availableModels: settings.llm.availableModels,
         enabledModels: settings.llm.enabledModels,
         apiKeyConfigured: settings.llm.apiKeyConfigured,
+        oauthConfigured: settings.llm.oauthConfigured,
       }];
 
   const groups: ModelGroup[] = [];
