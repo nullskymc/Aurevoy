@@ -15,6 +15,10 @@ import {
   type McpStatusResponse,
   type MessageAttachment,
   type ModelListResponse,
+  type OauthLoginRespondRequest,
+  type OauthLoginStartRequest,
+  type OauthLogoutRequest,
+  type OauthSessionSnapshot,
   type ResumeTaskResponse,
   type RevertMode,
   type RevertTaskResponse,
@@ -426,6 +430,54 @@ export async function listProviderModels(): Promise<string[]> {
   if (!res.ok) throw new Error(`list provider models failed: ${await readErrorMessage(res)}`);
   const body = (await res.json()) as ModelListResponse;
   return body.models;
+}
+
+export async function startOauthLogin(provider: string): Promise<OauthSessionSnapshot> {
+  const res = await fetch(`${BASE_URL}/api/settings/llm/oauth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider } satisfies OauthLoginStartRequest),
+  });
+  if (!res.ok) throw new Error(`oauth login failed: ${await readErrorMessage(res)}`);
+  return res.json() as Promise<OauthSessionSnapshot>;
+}
+
+export async function getOauthSession(sessionId: string): Promise<OauthSessionSnapshot> {
+  const res = await fetch(`${BASE_URL}/api/settings/llm/oauth/session/${encodeURIComponent(sessionId)}`);
+  if (!res.ok) throw new Error(`oauth session failed: ${await readErrorMessage(res)}`);
+  return res.json() as Promise<OauthSessionSnapshot>;
+}
+
+export async function respondOauthSession(sessionId: string, value: string): Promise<OauthSessionSnapshot> {
+  const res = await fetch(
+    `${BASE_URL}/api/settings/llm/oauth/session/${encodeURIComponent(sessionId)}/respond`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value } satisfies OauthLoginRespondRequest),
+    },
+  );
+  if (!res.ok) throw new Error(`oauth respond failed: ${await readErrorMessage(res)}`);
+  return res.json() as Promise<OauthSessionSnapshot>;
+}
+
+export async function cancelOauthSession(sessionId: string): Promise<OauthSessionSnapshot> {
+  const res = await fetch(
+    `${BASE_URL}/api/settings/llm/oauth/session/${encodeURIComponent(sessionId)}/cancel`,
+    { method: 'POST' },
+  );
+  if (!res.ok) throw new Error(`oauth cancel failed: ${await readErrorMessage(res)}`);
+  return res.json() as Promise<OauthSessionSnapshot>;
+}
+
+export async function logoutOauthProvider(provider: string): Promise<RuntimeSettings> {
+  const res = await fetch(`${BASE_URL}/api/settings/llm/oauth/logout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider } satisfies OauthLogoutRequest),
+  });
+  if (!res.ok) throw new Error(`oauth logout failed: ${await readErrorMessage(res)}`);
+  return res.json() as Promise<RuntimeSettings>;
 }
 
 async function readErrorMessage(res: Response): Promise<string> {

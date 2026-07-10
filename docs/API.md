@@ -151,15 +151,12 @@ revert → reverted → messages → status(running) → … → done
 - `subagentRuns`（`parentCallId` 关联 delegate）  
 - `projectId`、`parentTaskId`、`autoModeState`
 
-## 配置入口（环境 / 设置）
+## 配置入口
 
-| 类别 | 示例 |
+| 类别 | 入口 |
 |---|---|
-| LLM | `AUREVOY_LLM_PROVIDER` / `BASE_URL` / `MODEL` / `API_KEY` / timeout |
-| 运行 | 端口、CORS、工作区、子代理并发 `AUREVOY_SUBAGENT_MAX_CONCURRENCY` |
-| 网络 | `web_fetch` SSRF 相关 |
-| MCP | `AUREVOY_MCP_SERVERS_JSON` 或设置页 JSON |
-| 沙箱 | 允许终端命令等（默认关） |
+| 运维 / 进程 | env：`AUREVOY_HOST` / `PORT` / `DB_PATH` / `WORKSPACE_DIR` / `LOG_*` / `CORS`（见 `.env.example`） |
+| 产品 | 设置页 → SQLite：LLM 多槽位、OAuth、MCP、搜索、embedding、预算、沙箱开关等 |
 
 密钥禁止写入文档示例的真实值；设置 API 永不回显明文 key。
 

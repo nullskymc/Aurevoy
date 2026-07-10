@@ -1198,6 +1198,43 @@ export interface LlmProviderSlot {
   /** 用户勾选后允许出现在主界面模型菜单中的模型列表 */
   enabledModels: string[];
   apiKeyConfigured: boolean;
+  /** 是否已配置 OAuth 订阅凭证（密钥永不回显） */
+  oauthConfigured: boolean;
+}
+
+/**
+ * 来自 Pi `builtinProviders()` 的目录项（只读元数据）。
+ * 前端按此渲染连接形态；协议/鉴权由 Pi 各 provider 实现，不在 UI 复刻。
+ */
+export interface PiProviderCatalogEntry {
+  /** Pi provider id */
+  id: string;
+  /** 展示名 */
+  name: string;
+  /** 默认 baseUrl；空表示需用户填写或由 ambient 凭证推导 */
+  defaultBaseUrl: string;
+  /**
+   * 该 provider 模型使用的协议（Pi model.api）。
+   * 例：anthropic → ["anthropic-messages"]；openai → ["openai-responses"]
+   */
+  apis: string[];
+  /** 是否支持 API Key / 静态凭证 */
+  supportsApiKey: boolean;
+  /** API Key 字段标签（来自 Pi auth.apiKey.name） */
+  apiKeyLabel?: string;
+  /** 是否支持 OAuth 订阅登录（Pi auth.oauth） */
+  supportsOauth: boolean;
+  /** OAuth 展示名（来自 Pi auth.oauth.name） */
+  oauthLabel?: string;
+  /** 内置 catalog 模型数量（静态；动态 provider 可能为 0） */
+  modelCount: number;
+  /**
+   * 是否必须由用户提供 baseUrl。
+   * 仅 openai-compatible 为 true；内置 provider 可留空用默认。
+   */
+  requiresBaseUrl: boolean;
+  /** 是否为 Aurevoy 合成的自定义兼容端（非 Pi 内置） */
+  custom?: boolean;
 }
 
 export interface RuntimeSettings {
@@ -1219,11 +1256,18 @@ export interface RuntimeSettings {
     timeoutMs: number;
     maxTokens: number;
     apiKeyConfigured: boolean;
+    /** 当前激活 provider 是否已配置 OAuth 订阅凭证 */
+    oauthConfigured: boolean;
     /**
      * 全部已配置过的 Provider 槽位。
      * 主界面模型菜单据此跨 provider 展示/切换；设置页切换下拉时据此回填字段。
      */
     providers: LlmProviderSlot[];
+    /**
+     * 内置 provider 目录 + openai-compatible 自定义项。
+     * 设置页列表与连接表单据此渲染鉴权能力。
+     */
+    providerCatalog: PiProviderCatalogEntry[];
   };
   workspaceDir: string;
   commandExecutionEnabled: boolean;
@@ -1339,6 +1383,54 @@ export interface UpdateRuntimeSettingsRequest {
 
 export interface ModelListResponse {
   models: string[];
+}
+
+/** POST /api/settings/llm/oauth/login */
+export interface OauthLoginStartRequest {
+  provider: string;
+}
+
+/** OAuth 登录会话状态（轮询） */
+export type OauthSessionStatus = 'running' | 'awaiting_input' | 'done' | 'error' | 'cancelled';
+
+export type OauthAuthEvent =
+  | { type: 'auth_url'; url: string; instructions?: string }
+  | {
+      type: 'device_code';
+      userCode: string;
+      verificationUri: string;
+      intervalSeconds?: number;
+      expiresInSeconds?: number;
+    }
+  | { type: 'progress'; message: string };
+
+export type OauthAuthPrompt =
+  | { type: 'text'; message: string; placeholder?: string; signal?: never }
+  | { type: 'secret'; message: string; placeholder?: string }
+  | {
+      type: 'select';
+      message: string;
+      options: ReadonlyArray<{ id: string; label: string; description?: string }>;
+    }
+  | { type: 'manual_code'; message: string; placeholder?: string };
+
+export interface OauthSessionSnapshot {
+  sessionId: string;
+  provider: string;
+  status: OauthSessionStatus;
+  events: OauthAuthEvent[];
+  pendingPrompt?: OauthAuthPrompt;
+  error?: string;
+}
+
+/** POST /api/settings/llm/oauth/session/:id/respond */
+export interface OauthLoginRespondRequest {
+  value: string;
+}
+
+/** POST /api/settings/llm/oauth/logout */
+export interface OauthLogoutRequest {
+  provider: string;
 }
 
 export interface ToolListResponse {

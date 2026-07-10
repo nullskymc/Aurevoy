@@ -22,7 +22,7 @@ apps/desktop (Tauri) + packages/web-ui (React)
 packages/shared  ← 跨进程类型唯一来源
 ```
 
-主循环固定走 Pi runtime；配置入口 `AUREVOY_LLM_*` / 设置页。详见 [ARCHITECTURE](./docs/ARCHITECTURE.md)。
+主循环固定走 Pi runtime；LLM 等产品配置走设置页 / SQLite，env 仅运维面。详见 [ARCHITECTURE](./docs/ARCHITECTURE.md)。
 
 ## 文档地图
 

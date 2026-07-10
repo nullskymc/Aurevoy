@@ -1005,6 +1005,121 @@ button.settings-provider-line-main:focus-visible {
   line-height: 1.4;
 }
 
+.settings-oauth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 0.35rem;
+}
+
+.settings-oauth-status,
+.settings-oauth-error {
+  margin: 0.35rem 0 0;
+  font-size: var(--ui-font-xs);
+  line-height: 1.4;
+}
+
+.settings-oauth-status {
+  color: var(--text-secondary, #6b7280);
+}
+
+.settings-oauth-error {
+  color: var(--danger, #c0392b);
+}
+
+.settings-oauth-prompt {
+  display: grid;
+  gap: 8px;
+  margin-top: 0.5rem;
+}
+
+.settings-oauth-select-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-oauth-select-options .settings-secondary-btn:not(:disabled) {
+  opacity: 1;
+  cursor: pointer;
+  color: var(--text);
+  border: 1px solid var(--border-strong, rgba(0, 0, 0, 0.12));
+}
+
+.settings-oauth-device-code {
+  margin: 0.35rem 0 0;
+  font-size: var(--ui-font-sm);
+  color: var(--text);
+}
+
+.settings-oauth-device-code code {
+  font-size: 1.05em;
+  letter-spacing: 0.06em;
+  font-weight: 650;
+}
+
+.settings-oauth-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 0.5rem;
+}
+
+.settings-oauth-open-link {
+  color: var(--accent, #2563eb);
+  font-size: var(--ui-font-sm);
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.settings-oauth-blank-hint {
+  color: var(--text-tertiary, #9ca3af);
+}
+
+.settings-oauth-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 0.5rem;
+  padding: 10px 12px;
+  border-radius: var(--ui-radius-md, 8px);
+  background: color-mix(in srgb, #16a34a 12%, transparent);
+  border: 1px solid color-mix(in srgb, #16a34a 35%, transparent);
+  color: var(--text);
+}
+
+.settings-oauth-success-icon {
+  flex: 0 0 auto;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #fff;
+  background: #16a34a;
+  line-height: 1;
+}
+
+.settings-oauth-success-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-oauth-success-body strong {
+  font-size: var(--ui-font-sm);
+  font-weight: 650;
+}
+
+.settings-oauth-success-body small {
+  color: var(--text-secondary, #6b7280);
+  font-size: var(--ui-font-xs);
+  line-height: 1.4;
+}
+
 .settings-modal-input {
   width: 100%;
   height: var(--ui-control-md);

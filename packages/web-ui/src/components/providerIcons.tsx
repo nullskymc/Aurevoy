@@ -37,6 +37,23 @@ import opencode from "@lobehub/icons-static-svg/icons/opencode.svg?url";
 import claudeColor from "@lobehub/icons-static-svg/icons/claude-color.svg?url";
 import googleColor from "@lobehub/icons-static-svg/icons/google-color.svg?url";
 
+/**
+ * 热门 provider（仅排序/置顶用）。完整列表优先 settings.llm.providerCatalog。
+ * PI_PROVIDER_OPTIONS 作图标与本地回退。
+ */
+export const POPULAR_PROVIDER_IDS = [
+  "openai",
+  "anthropic",
+  "deepseek",
+  "google",
+  "openrouter",
+  "github-copilot",
+  "xai",
+  "moonshotai",
+  "openai-compatible",
+] as const;
+
+/** 本地 provider 表：图标 / 文案回退；列表以服务端 catalog 为准 */
 export const PI_PROVIDER_OPTIONS = [
   { value: "openai", label: "OpenAI", popular: true, descKey: "settings.providerDesc.openai" },
   { value: "anthropic", label: "Anthropic", popular: true, descKey: "settings.providerDesc.anthropic" },
@@ -82,7 +99,13 @@ export function providerMeta(id: string): ProviderOption | undefined {
   return PI_PROVIDER_OPTIONS.find((item) => item.value === id);
 }
 
-export function providerLabel(id: string): string {
+export function isPopularProvider(id: string): boolean {
+  return (POPULAR_PROVIDER_IDS as readonly string[]).includes(id);
+}
+
+/** 优先用 catalog 展示名；否则回退本地表 / id */
+export function providerLabel(id: string, catalogName?: string): string {
+  if (catalogName?.trim()) return catalogName.trim();
   return providerMeta(id)?.label ?? id;
 }
 
@@ -92,7 +115,7 @@ export function providerMonogram(id: string): string {
   return (cleaned.slice(0, 1) || id.slice(0, 1)).toUpperCase();
 }
 
-/** Pi provider id → Lobe 静态 SVG URL（优先 color） */
+/** provider id → Lobe 静态 SVG URL（优先 color） */
 const PROVIDER_ICON_URL: Record<string, string> = {
   openai: openai,
   "openai-compatible": openai,

@@ -7,10 +7,12 @@ import {
   createModels,
   createProvider,
   type Models as PiModels,
+  type Provider as PiProvider,
 } from '@earendil-works/pi-ai';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
-import { filterChatModelIds } from '@aurevoy/shared';
+import { filterChatModelIds, type PiProviderCatalogEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
+import { hasStoredCredential } from './credential-store.js';
 
 // ---- Dynamic model discovery via Pi's createProvider + refreshModels ----
 
@@ -62,22 +64,64 @@ function createOpenAICompatProvider() {
 
 // ---- Public API ----
 
+/**
+ * 暴露 Pi 对各家 provider 的元数据（协议 apis、鉴权形态、默认 baseUrl）。
+ * 前端只做展示/接入，不在 Aurevoy 侧复刻各家协议差异。
+ */
+export function listPiProviderCatalog(): PiProviderCatalogEntry[] {
+  const entries = builtinProviders().map((provider) => toCatalogEntry(provider));
+  // 自定义 OpenAI 兼容端：Aurevoy 合成，不在 Pi 内置列表
+  entries.push({
+    id: 'openai-compatible',
+    name: 'OpenAI Compatible / Custom',
+    defaultBaseUrl: '',
+    apis: ['openai-completions'],
+    supportsApiKey: true,
+    apiKeyLabel: 'API key',
+    supportsOauth: false,
+    modelCount: 0,
+    requiresBaseUrl: true,
+    custom: true,
+  });
+  return entries.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function toCatalogEntry(provider: PiProvider): PiProviderCatalogEntry {
+  const models = provider.getModels();
+  const apis = [...new Set(models.map((model) => model.api).filter(Boolean))].sort();
+  return {
+    id: provider.id,
+    name: provider.name || provider.id,
+    defaultBaseUrl: (provider.baseUrl ?? '').replace(/\/+$/, ''),
+    apis: apis.length > 0 ? apis : [fallbackApiForProvider(provider.id)],
+    supportsApiKey: Boolean(provider.auth.apiKey),
+    apiKeyLabel: provider.auth.apiKey?.name,
+    supportsOauth: Boolean(provider.auth.oauth),
+    oauthLabel: provider.auth.oauth?.name,
+    modelCount: models.length,
+    requiresBaseUrl: false,
+    custom: false,
+  };
+}
+
 export function getPiProviderName(): string {
   return isPiLLMConfigured() ? `${config.llm.provider}:${config.llm.model}` : 'unconfigured';
 }
 
 export function isPiLLMConfigured(): boolean {
-  return !!config.llm.apiKey && isValidPiProviderId(config.llm.provider);
+  if (!isValidPiProviderId(config.llm.provider)) return false;
+  if (config.llm.apiKey?.trim()) return true;
+  // OAuth / 分槽凭证（CredentialStore）
+  return hasStoredCredential(config.llm.provider);
 }
 
 export function assertPiLLMConfigured(): void {
   if (!isValidPiProviderId(config.llm.provider)) {
     throw new Error(`未支持的 Provider id: "${config.llm.provider}"。仅允许小写字母、数字和连字符。`);
   }
-  if (!config.llm.apiKey) {
+  if (!isPiLLMConfigured()) {
     throw new Error(
-      '未配置 LLM API Key。请在项目根目录 .env 设置 AUREVOY_LLM_API_KEY ' +
-        '（以及 AUREVOY_LLM_BASE_URL / AUREVOY_LLM_MODEL）。参考 .env.example。',
+      '未配置 LLM 凭证。请在设置中为当前 Provider 配置 API Key，或使用订阅登录。',
     );
   }
 }
@@ -94,13 +138,21 @@ export function resolveModelBaseUrl(modelBaseUrl?: string): string {
 }
 
 /**
- * 非官方 OpenAI 主机时，把 catalog 里的 Responses API 降级为 chat/completions。
- * 多数第三方网关只实现 /v1/chat/completions；强行走 /v1/responses 会直接失败，
- * 任务虽能「看起来结束」但 token usage 永远为空。
+ * 第三方网关通常只有 chat/completions：把官方 OpenAI Responses 降级为 completions。
+ *
+ * 注意：
+ * - `openai-codex-responses` 必须走 chatgpt.com Codex 协议，**绝不能**降级，
+ *   否则会打到 /backend-api/chat/completions 并被 Cloudflare 403。
+ * - chatgpt.com 是 Codex 官方端点，不是「第三方网关」。
  */
 export function resolveModelApi(api: string | undefined, baseUrl: string, provider: string): string {
   const resolved = api || fallbackApiForProvider(provider);
-  if (!isOfficialOpenAIHost(baseUrl) && (resolved === 'openai-responses' || resolved === 'openai-codex-responses')) {
+  // Codex 订阅协议：始终保留
+  if (resolved === 'openai-codex-responses' || provider === 'openai-codex') {
+    return 'openai-codex-responses';
+  }
+  // 仅对「真·OpenAI Responses」在非官方主机上降级
+  if (resolved === 'openai-responses' && !isOfficialOpenAIHost(baseUrl) && !isCodexHost(baseUrl)) {
     return 'openai-completions';
   }
   return resolved;
@@ -271,6 +323,12 @@ function safeHost(url: string): string {
 function isOfficialOpenAIHost(baseUrl: string): boolean {
   const host = safeHost(baseUrl);
   return host === 'api.openai.com' || host.endsWith('.openai.azure.com');
+}
+
+/** ChatGPT / Codex 订阅官方主机（backend-api） */
+function isCodexHost(baseUrl: string): boolean {
+  const host = safeHost(baseUrl);
+  return host === 'chatgpt.com' || host.endsWith('.chatgpt.com');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

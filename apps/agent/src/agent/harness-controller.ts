@@ -27,6 +27,7 @@ import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval, waitForPlanA
 import { createInitialAutoModeState, syncAutoModeState } from './approval.js';
 import { taskStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
+import { resumeIncompletePlan } from './plan-progress.js';
 import {
   ensureLifetimeAllowsAnotherRun,
   initialBudgetUsage,
@@ -532,9 +533,7 @@ export async function runHarnessTask(task: Task): Promise<void> {
   if (task.plan.length === 0) {
     task.plan = createInitialPlan(task);
   } else {
-    task.plan = task.plan.map((step, index) =>
-      step.status === 'completed' ? step : { ...step, status: index === 0 ? 'running' : 'pending' },
-    );
+    task.plan = resumeIncompletePlan(task.plan);
   }
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
@@ -567,6 +566,7 @@ function createInitialPlan(task: Task): PlanStep[] {
   if (!shouldUseMultiStepPlan(task.goal)) {
     return [{ id: 'exec', description: 'Agent 执行任务', status: 'running' }];
   }
+  // 三步模板由 plan-progress 在工具/终稿/收尾时推进，避免 discover 永久 running
   return [
     { id: 'discover', description: '搜集并确认本地材料', status: 'running' },
     { id: 'synthesize', description: '整理关键信息并形成结构', status: 'pending' },
@@ -633,10 +633,7 @@ async function requestManualPlanApproval(task: Task, signal: AbortSignal): Promi
   approvedState.planReady = false;
   task.status = 'running';
   task.phase = 'initializing';
-  task.plan = task.plan.map((step, index) => ({
-    ...step,
-    status: index === 0 ? 'running' : 'pending',
-  }));
+  task.plan = resumeIncompletePlan(task.plan);
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
   taskEvents.publish({ type: 'status', taskId: task.id, status: task.status });
@@ -686,16 +683,14 @@ function patchDanglingToolResults(messages: Message[]): Message[] {
 function resumePlanFromCheckpoint(plan: PlanStep[], checkpointStepId?: string): PlanStep[] {
   if (plan.length === 0) return plan;
   if (!checkpointStepId) {
-    return plan.map((step, index) => ({
-      ...step,
-      status: step.status === 'completed' ? 'completed' : index === 0 ? 'running' : 'pending',
-    }));
+    return resumeIncompletePlan(plan);
   }
   const checkpointIndex = plan.findIndex((step) => step.id === checkpointStepId);
-  return plan.map((step, index) => {
-    if (checkpointIndex >= 0 && index <= checkpointIndex) return { ...step, status: 'completed' };
-    return { ...step, status: index === Math.max(0, checkpointIndex + 1) ? 'running' : 'pending' };
+  const marked = plan.map((step, index) => {
+    if (checkpointIndex >= 0 && index <= checkpointIndex) return { ...step, status: 'completed' as const };
+    return { ...step, status: 'pending' as const };
   });
+  return resumeIncompletePlan(marked);
 }
 
 function summarizeMessages(messages: Message[]): string {

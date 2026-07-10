@@ -9,8 +9,15 @@ import type {
 } from '@aurevoy/shared';
 import { filterChatModelIds } from '@aurevoy/shared';
 import { config, parseMcpServers, parseNumber } from '../config.js';
-import { resetPiProviderCache } from '../llm/pi-provider.js';
+import { listPiProviderCatalog, resetPiProviderCache } from '../llm/pi-provider.js';
 import { resetEmbeddingCache } from '../embedding/provider.js';
+import type { PiProviderCatalogEntry } from '@aurevoy/shared';
+import {
+  clearProviderCredential,
+  hasOauthCredential,
+  hasStoredCredential,
+  writeApiKeyCredential,
+} from '../llm/credential-store.js';
 import { settingsStore } from '../store/db.js';
 import { resetPythonCache } from './python-runtime.js';
 
@@ -133,12 +140,11 @@ export function loadPersistedSettings(): void {
       : entries[SETTING_KEYS.commandExecutionEnabled] === 'true';
   if (mcpJson !== undefined) config.mcpServers = parseMcpServers(mcpJson);
 
-  // 解析 API Key：环境变量 > 分槽 key > 遗留全局 key
-  const envKey = process.env.AUREVOY_LLM_API_KEY?.trim();
-  if (envKey) {
-    config.llm.apiKey = envKey;
-  } else {
-    config.llm.apiKey = readProviderApiKey(config.llm.provider) || entries[SETTING_KEYS.llmApiKey] || '';
+  // API Key：仅分槽 / 遗留全局；不再读 AUREVOY_LLM_API_KEY（产品配置走设置页）
+  config.llm.apiKey = readProviderApiKey(config.llm.provider) || entries[SETTING_KEYS.llmApiKey] || '';
+  // 同步 api_key 进 store，绝不覆盖 oauth
+  if (config.llm.apiKey.trim()) {
+    void writeApiKeyCredential(config.llm.provider, config.llm.apiKey, { force: false });
   }
 
   // 迁移：把当前扁平配置写入多 provider map，并把遗留 key 归到当前 provider 槽
@@ -174,6 +180,14 @@ export function loadPersistedSettings(): void {
   applyBudgetSetting(entries[SETTING_KEYS.budgetLifetimeMaxOutputBytes], 'lifetime', 'maxOutputBytes');
 }
 
+function safeListPiProviderCatalog(): PiProviderCatalogEntry[] {
+  try {
+    return listPiProviderCatalog();
+  } catch {
+    return [];
+  }
+}
+
 export function readRuntimeSettings(): RuntimeSettings {
   const activeProvider = config.llm.provider;
   const availableModels = readActiveAvailableModels();
@@ -189,8 +203,11 @@ export function readRuntimeSettings(): RuntimeSettings {
       temperature: config.llm.temperature,
       timeoutMs: config.llm.timeoutMs,
       maxTokens: config.llm.maxTokens,
-      apiKeyConfigured: config.llm.apiKey.trim().length > 0,
+      apiKeyConfigured: config.llm.apiKey.trim().length > 0 || hasStoredCredential(activeProvider),
+      oauthConfigured: hasOauthCredential(activeProvider),
       providers: listProviderSlots(),
+      /** provider 元数据；失败时回空，由前端 fallback。 */
+      providerCatalog: safeListPiProviderCatalog(),
     },
     workspaceDir: config.workspaceDir,
     commandExecutionEnabled: config.sandbox.commandExecutionEnabled,
@@ -478,6 +495,9 @@ function writeProviderApiKey(provider: string, apiKey: string): void {
   } else {
     settingsStore.delete(key);
   }
+  // 同步到 Pi CredentialStore。用户显式保存 Key 时 force 覆盖 oauth；
+  // 清空 Key 只删 api_key，不碰 oauth。
+  void writeApiKeyCredential(provider, apiKey, { force: apiKey.trim().length > 0 });
 }
 
 function readProviderMap(): Record<string, StoredProviderSlot> {
@@ -571,20 +591,8 @@ function activateProviderSlot(provider: string): void {
     settingsStore.set(SETTING_KEYS.llmEnabledModels, stringifyModelList([]));
   }
 
-  // 切换密钥：分槽 key > 遗留全局 key（仅当目标就是迁移前的 provider）
-  const slottedKey = readProviderApiKey(provider);
-  if (slottedKey) {
-    config.llm.apiKey = slottedKey;
-  } else {
-    // 环境变量始终优先
-    const envKey = process.env.AUREVOY_LLM_API_KEY?.trim();
-    if (envKey) {
-      config.llm.apiKey = envKey;
-    } else {
-      // 无分槽 key 时清空，避免误用其他 provider 的 key
-      config.llm.apiKey = '';
-    }
-  }
+  // 切换密钥：只读分槽；无则清空，避免误用其它 provider / 全局 env
+  config.llm.apiKey = readProviderApiKey(provider);
 }
 
 /**
@@ -667,6 +675,7 @@ function removeProviderSlot(provider: string): void {
   delete map[provider];
   writeProviderMap(map);
   writeProviderApiKey(provider, '');
+  void clearProviderCredential(provider);
 
   if (provider === config.llm.provider) {
     const remaining = Object.keys(map).sort((a, b) => a.localeCompare(b));
@@ -709,9 +718,10 @@ function listProviderSlots(): LlmProviderSlot[] {
           ? readActiveEnabledModels()
           : filterChatModelIds(slot.enabledModels),
         apiKeyConfigured: isActive
-          ? config.llm.apiKey.trim().length > 0
+          ? config.llm.apiKey.trim().length > 0 || hasStoredCredential(provider)
           : readProviderApiKey(provider).trim().length > 0
-            || (process.env.AUREVOY_LLM_API_KEY?.trim().length ?? 0) > 0,
+            || hasStoredCredential(provider),
+        oauthConfigured: hasOauthCredential(provider),
       } satisfies LlmProviderSlot;
     })
     .sort((a, b) => a.provider.localeCompare(b.provider));

@@ -19,6 +19,7 @@ await mkdir(workspaceDir, { recursive: true });
 const llmFixture = await startLlmFixture();
 
 process.env.AUREVOY_HOST = '127.0.0.1';
+process.env.AUREVOY_TEST_BOOTSTRAP = '1';
 process.env.AUREVOY_PORT = '0';
 process.env.AUREVOY_DB_PATH = join(tempRoot, 'aurevoy.sqlite');
 process.env.AUREVOY_WORKSPACE_DIR = workspaceDir;
@@ -291,6 +292,7 @@ console.log('M8 知识库与向量检索回归\n');
 
 // 启动引擎
 process.env.AUREVOY_HOST = '127.0.0.1';
+process.env.AUREVOY_TEST_BOOTSTRAP = '1';
 process.env.AUREVOY_PORT = '0';
 process.env.AUREVOY_LLM_PROVIDER = 'openai';
 process.env.AUREVOY_LLM_API_KEY = 'test-key';

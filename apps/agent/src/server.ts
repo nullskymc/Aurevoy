@@ -31,6 +31,10 @@ import type {
   MemoryEntry,
   MemoryListResponse,
   ModelListResponse,
+  OauthLoginRespondRequest,
+  OauthLoginStartRequest,
+  OauthLogoutRequest,
+  OauthSessionSnapshot,
   PlanApprovalRequest,
   PlanApprovalResponse,
   ProjectListResponse,
@@ -83,6 +87,13 @@ import { skillRegistry } from './skills/registry.js';
 import { installFromGit, uninstallSkill } from './skills/installer.js';
 import { reloadSkillsAndTools } from './skills/reload.js';
 import { getPiProviderName, listPiProviderModels } from './llm/pi-provider.js';
+import {
+  cancelOauthSession,
+  getOauthSession,
+  logoutOauthProvider,
+  respondOauthSession,
+  startOauthLogin,
+} from './llm/oauth-login.js';
 import { getMcpStatuses, reloadMcpTools } from './tool/mcp-integration.js';
 import {
   readCleanupPolicyDays,
@@ -366,6 +377,70 @@ export async function buildServer(externalLogger?: Logger) {
       return reply.code(400).send({ error: message });
     }
   });
+
+  // ---- LLM OAuth（订阅登录）----
+
+  app.post<{ Body: OauthLoginStartRequest }>(
+    '/api/settings/llm/oauth/login',
+    async (req, reply): Promise<OauthSessionSnapshot | unknown> => {
+      try {
+        const provider = String(req.body?.provider ?? '').trim();
+        if (!provider) return reply.code(400).send({ error: 'provider is required' });
+        return startOauthLogin(provider);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ error: message });
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/settings/llm/oauth/session/:id',
+    async (req, reply): Promise<OauthSessionSnapshot | unknown> => {
+      const session = getOauthSession(req.params.id);
+      if (!session) return reply.code(404).send({ error: 'OAuth session not found' });
+      return session;
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: OauthLoginRespondRequest }>(
+    '/api/settings/llm/oauth/session/:id/respond',
+    async (req, reply): Promise<OauthSessionSnapshot | unknown> => {
+      try {
+        return respondOauthSession(req.params.id, String(req.body?.value ?? ''));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ error: message });
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/settings/llm/oauth/session/:id/cancel',
+    async (req, reply): Promise<OauthSessionSnapshot | unknown> => {
+      try {
+        return cancelOauthSession(req.params.id);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ error: message });
+      }
+    },
+  );
+
+  app.post<{ Body: OauthLogoutRequest }>(
+    '/api/settings/llm/oauth/logout',
+    async (req, reply) => {
+      try {
+        const provider = String(req.body?.provider ?? '').trim();
+        if (!provider) return reply.code(400).send({ error: 'provider is required' });
+        await logoutOauthProvider(provider);
+        return readRuntimeSettings();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ error: message });
+      }
+    },
+  );
 
   app.get('/api/data', async (): Promise<DataStatusResponse> => {
     return {

@@ -72,4 +72,28 @@ describe("createPiModel", () => {
       expect(model.api).toBe("openai-completions")
     })
   })
+
+  it("never downgrades openai-codex to chat/completions (Cloudflare 403 trap)", () => {
+    withLlmConfig({
+      provider: "openai-codex",
+      // 用户可能保存了 catalog 默认 baseUrl，或留空回落到 catalog
+      baseUrl: "https://chatgpt.com/backend-api",
+      model: "gpt-5.4",
+    }, () => {
+      const model = createPiModel()
+      expect(model.api).toBe("openai-codex-responses")
+      expect(model.provider).toBe("openai-codex")
+    })
+  })
+
+  it("keeps openai-codex api even when baseUrl is empty (catalog default)", () => {
+    withLlmConfig({
+      provider: "openai-codex",
+      baseUrl: "",
+      model: "gpt-5.4",
+    }, () => {
+      const model = createPiModel()
+      expect(model.api).toBe("openai-codex-responses")
+    })
+  })
 })

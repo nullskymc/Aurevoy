@@ -517,6 +517,7 @@ function App() {
             onEditMemory={handleEditMemory}
             onDeleteMemory={handleDeleteMemory}
             onConnectionChange={refreshRuntime}
+            onNotice={setNotice}
           />
         ) : showConversation ? (
           <>

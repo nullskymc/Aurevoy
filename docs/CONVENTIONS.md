@@ -24,7 +24,7 @@ scripts/               回归
 ## 后端
 
 - `server.ts` 只做路由/I/O；业务在 `agent/`、`tool/`、`store/`。  
-- 可变配置经 `config.ts` 或 runtime settings，不散落 `process.env`。  
+- 运维配置经 env（`HOST`/`PORT`/`DB_PATH`/日志等）；产品配置经 runtime settings / SQLite，不散落 `process.env`。  
 - 任务状态变更写 SQLite + 发 `AgentEvent`；轨迹写 `traceStore`。  
 - 命令/代码执行只经 `sandbox/`；默认关闭。  
 - 工具：Effect `tool/tools/*` + `register()`；不在 loop 内联工具逻辑。
@@ -57,7 +57,7 @@ scripts/               回归
 
 **新工具：** `tool/tools/<name>/` 定义 Schema → registry → 必要时 shared 事件/描述 → 回归。  
 
-**新 Provider：** 扩展 `llm/pi-provider` 映射，保持 `AUREVOY_LLM_*` / 设置槽位。  
+**新 Provider：** 扩展 `llm/pi-provider` 映射与设置槽位（不新增产品向 env）。  
 
 **改契约：** 改 shared → `npm run build:shared` → 修 agent/web-ui 编译。  
 

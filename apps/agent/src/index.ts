@@ -34,7 +34,7 @@ async function main() {
     {
       provider: config.llm.provider, model: config.llm.model, baseUrl: config.llm.baseUrl,
       apiKeyConfigured: config.llm.apiKey.trim().length > 0,
-      apiKeySource: process.env.AUREVOY_LLM_API_KEY?.trim() ? 'env' : 'sqlite',
+      apiKeySource: 'settings',
     },
     '运行时配置已加载',
   );
