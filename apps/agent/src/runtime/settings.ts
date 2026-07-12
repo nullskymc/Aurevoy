@@ -7,36 +7,37 @@ import type {
   TaskBudget,
   UpdateRuntimeSettingsRequest,
 } from '@aurevoy/shared';
-import { filterChatModelIds } from '@aurevoy/shared';
 import { config, parseMcpServers, parseNumber } from '../config.js';
 import { listPiProviderCatalog, resetPiProviderCache } from '../llm/pi-provider.js';
 import { resetEmbeddingCache } from '../embedding/provider.js';
 import type { PiProviderCatalogEntry } from '@aurevoy/shared';
 import {
   clearProviderCredential,
+  hasApiKeyCredential,
   hasOauthCredential,
-  hasStoredCredential,
   writeApiKeyCredential,
 } from '../llm/credential-store.js';
+import {
+  deleteLlmProvider,
+  ensureLlmSchemaMigrated,
+  ensureProviderRow,
+  getAvailableModelIds,
+  getDefaultModelId,
+  getEnabledModelIds,
+  getLlmProvider,
+  listLlmProviders,
+  readLlmCredential,
+  readLlmGlobal,
+  replaceAvailableModels,
+  setDefaultModel,
+  setEnabledModels,
+  upsertLlmProvider,
+  writeLlmGlobal,
+} from '../llm/llm-store.js';
 import { settingsStore } from '../store/db.js';
 import { resetPythonCache } from './python-runtime.js';
 
 const SETTING_KEYS = {
-  llmProvider: 'llm.provider',
-  /** 遗留全局 API Key；迁移后按 provider 分槽 `llm.apiKey.<id>` 存储，此项仅作回退。 */
-  llmApiKey: 'llm.apiKey',
-  llmBaseUrl: 'llm.baseUrl',
-  llmModel: 'llm.model',
-  llmVisionModel: 'llm.visionModel',
-  llmAvailableModels: 'llm.availableModels',
-  llmEnabledModels: 'llm.enabledModels',
-  /** 旧版本字段：曾同时表示”已获取列表”和”主界面可选列表”，现在只作为迁移来源。 */
-  llmModelOptions: 'llm.modelOptions',
-  /** 多 provider 槽位 map：providerId → StoredProviderSlot（不含密钥） */
-  llmProviders: 'llm.providers',
-  llmTemperature: 'llm.temperature',
-  llmTimeoutMs: 'llm.timeoutMs',
-  llmMaxTokens: 'llm.maxTokens',
   workspaceDir: 'workspaceDir',
   commandExecutionEnabled: 'sandbox.commandExecutionEnabled',
   mcpServersJson: 'mcpServersJson',
@@ -64,20 +65,6 @@ const SETTING_KEYS = {
 } as const;
 
 const DEFAULT_CLEANUP_POLICY_DAYS = 30;
-
-/**
- * 持久化中的 provider 槽位（无密钥）。
- * 注意：视觉模型是全局配置（llm.visionModel），不按槽位切换；
- * visionModel 字段仅兼容旧数据读取，写入时固定为空。
- */
-interface StoredProviderSlot {
-  baseUrl: string;
-  model: string;
-  /** @deprecated 视觉模型已改为全局，槽位不再维护 */
-  visionModel: string;
-  availableModels: string[];
-  enabledModels: string[];
-}
 
 export interface SettingsUpdateResult {
   settings: RuntimeSettings;
@@ -126,13 +113,6 @@ export function loadPersistedSettings(): void {
     config.search.apiKey = searchKey;
   }
 
-  config.llm.provider = normalizeProvider(entries[SETTING_KEYS.llmProvider] || config.llm.provider);
-  config.llm.baseUrl = entries[SETTING_KEYS.llmBaseUrl] || config.llm.baseUrl;
-  config.llm.model = entries[SETTING_KEYS.llmModel] || config.llm.model;
-  config.llm.visionModel = entries[SETTING_KEYS.llmVisionModel] ?? config.llm.visionModel;
-  config.llm.temperature = parseNumber(entries[SETTING_KEYS.llmTemperature], config.llm.temperature);
-  config.llm.timeoutMs = parseNumber(entries[SETTING_KEYS.llmTimeoutMs], config.llm.timeoutMs);
-  config.llm.maxTokens = parseNumber(entries[SETTING_KEYS.llmMaxTokens], config.llm.maxTokens);
   config.workspaceDir = entries[SETTING_KEYS.workspaceDir] || config.workspaceDir;
   config.sandbox.commandExecutionEnabled =
     entries[SETTING_KEYS.commandExecutionEnabled] === undefined
@@ -140,21 +120,15 @@ export function loadPersistedSettings(): void {
       : entries[SETTING_KEYS.commandExecutionEnabled] === 'true';
   if (mcpJson !== undefined) config.mcpServers = parseMcpServers(mcpJson);
 
-  // API Key：仅分槽 / 遗留全局；不再读 AUREVOY_LLM_API_KEY（产品配置走设置页）
-  config.llm.apiKey = readProviderApiKey(config.llm.provider) || entries[SETTING_KEYS.llmApiKey] || '';
-  // 同步 api_key 进 store，绝不覆盖 oauth
-  if (config.llm.apiKey.trim()) {
-    void writeApiKeyCredential(config.llm.provider, config.llm.apiKey, { force: false });
-  }
-
-  // 迁移：把当前扁平配置写入多 provider map，并把遗留 key 归到当前 provider 槽
-  migrateLegacyProviderSlots();
-
-  // 以多 provider 槽位 map 为真相源，回放当前激活槽到扁平字段。
-  // 否则重启会沿用全局 llm.baseUrl，把 openai-compatible 的网关串到 opencode-go 等槽。
-  if (isValidPiProviderId(config.llm.provider)) {
-    activateProviderSlot(config.llm.provider);
-    snapshotActiveProviderSlot();
+  // LLM：正式表为真相源（含从旧 app_settings 的一次性迁移）
+  ensureLlmSchemaMigrated();
+  const global = readLlmGlobal();
+  config.llm.temperature = global.temperature;
+  config.llm.timeoutMs = global.timeoutMs;
+  config.llm.maxTokens = global.maxTokens;
+  config.llm.visionModel = global.visionModel;
+  if (isValidPiProviderId(global.activeProvider)) {
+    activateProviderSlot(global.activeProvider);
   }
 
   const autoModeStored = entries[SETTING_KEYS.autoModeLevel];
@@ -210,7 +184,7 @@ export function readRuntimeSettings(): RuntimeSettings {
       temperature: config.llm.temperature,
       timeoutMs: config.llm.timeoutMs,
       maxTokens: config.llm.maxTokens,
-      apiKeyConfigured: config.llm.apiKey.trim().length > 0 || hasStoredCredential(activeProvider),
+      apiKeyConfigured: hasApiKeyCredential(activeProvider),
       oauthConfigured: hasOauthCredential(activeProvider),
       providers: listProviderSlots(),
       /** provider 元数据；失败时回空，由前端 fallback。 */
@@ -249,24 +223,25 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   let mcpChanged = false;
 
   if (body.llm) {
+    ensureLlmSchemaMigrated();
     // 切换 provider 时若前端 draft 误带上一槽 baseUrl，丢弃该字段，避免污染新槽。
     let ignoreIncomingBaseUrl = false;
+    const targetForConnection = body.llm.provider !== undefined
+      ? normalizeProvider(body.llm.provider)
+      : config.llm.provider;
 
-    // 1) 若请求切换 provider：先快照当前槽位，再激活目标槽位（恢复其 key/baseUrl/model 等）
+    // 1) 切换激活 provider（只改指针 + 加载目标槽到内存）
     if (body.llm.provider !== undefined) {
       const nextProvider = normalizeProvider(body.llm.provider);
       if (nextProvider !== config.llm.provider) {
         const previousBaseUrl = config.llm.baseUrl.trim();
-        snapshotActiveProviderSlot();
         activateProviderSlot(nextProvider);
         providerChanged = true;
 
         if (body.llm.baseUrl !== undefined) {
           const incoming = String(body.llm.baseUrl).trim().replace(/\/+$/, '');
           const prev = previousBaseUrl.replace(/\/+$/, '');
-          const slotBase = (readProviderMap()[nextProvider]?.baseUrl ?? '').trim().replace(/\/+$/, '');
-          // 与切换前扁平 baseUrl 相同、且与新槽已存值不同 → 视为 draft 残留串槽
-          // openai-compatible 必须允许提交 baseUrl（首次接入网关的常见路径）
+          const slotBase = (getLlmProvider(nextProvider)?.baseUrl ?? '').trim().replace(/\/+$/, '');
           if (
             nextProvider !== 'openai-compatible'
             && incoming.length > 0
@@ -276,73 +251,66 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
             ignoreIncomingBaseUrl = true;
           }
         }
-      } else {
-        config.llm.provider = nextProvider;
-        settingsStore.set(SETTING_KEYS.llmProvider, config.llm.provider);
       }
     }
 
+    // 连接字段：始终写「当前激活」槽（兼容旧 API）；slot* 字段可写任意槽
+    const active = config.llm.provider;
+
     if (body.llm.baseUrl !== undefined && !ignoreIncomingBaseUrl) {
-      config.llm.baseUrl = validateBaseUrl(body.llm.baseUrl, config.llm.provider === 'openai-compatible');
-      settingsStore.set(SETTING_KEYS.llmBaseUrl, config.llm.baseUrl);
+      const baseUrl = validateBaseUrl(body.llm.baseUrl, active === 'openai-compatible');
+      config.llm.baseUrl = baseUrl;
+      upsertLlmProvider(active, { baseUrl });
       providerChanged = true;
     }
     if (body.llm.model !== undefined) {
-      config.llm.model = requireNonEmpty(body.llm.model, 'model');
-      settingsStore.set(SETTING_KEYS.llmModel, config.llm.model);
-      providerChanged = true;
-      // 切换主模型时把该模型并入启用列表（可之后再取消勾选），避免「切换了但菜单/设置看起来没保存」
+      const model = requireNonEmpty(body.llm.model, 'model');
+      setDefaultModel(active, model);
+      config.llm.model = model;
+      // 切换主模型时并入启用列表
       if (body.llm.enabledModels === undefined && body.llm.slotEnabledModels === undefined) {
-        const enabled = readActiveEnabledModels();
-        if (config.llm.model && !enabled.includes(config.llm.model)) {
-          settingsStore.set(
-            SETTING_KEYS.llmEnabledModels,
-            stringifyModelList([config.llm.model, ...enabled]),
-          );
+        const enabled = getEnabledModelIds(active);
+        if (!enabled.includes(model)) {
+          setEnabledModels(active, [model, ...enabled]);
         }
       }
+      providerChanged = true;
     }
     if (body.llm.visionModel !== undefined) {
       config.llm.visionModel = body.llm.visionModel.trim();
-      if (config.llm.visionModel) {
-        settingsStore.set(SETTING_KEYS.llmVisionModel, config.llm.visionModel);
-      } else {
-        settingsStore.delete(SETTING_KEYS.llmVisionModel);
-      }
+      writeLlmGlobal({ visionModel: config.llm.visionModel });
     }
     if (body.llm.availableModels !== undefined) {
-      // 过滤 embedding / tts 等非对话模型，避免混入主模型目录
-      const chatOnly = filterChatModelIds(body.llm.availableModels);
-      settingsStore.set(SETTING_KEYS.llmAvailableModels, stringifyModelList(chatOnly));
+      replaceAvailableModels(active, body.llm.availableModels, { source: 'remote' });
+      providerChanged = true;
     }
     if (body.llm.enabledModels !== undefined) {
-      // 允许空列表：某 Provider 可以不勾选任何模型进主界面菜单
-      patchProviderEnabledModels(config.llm.provider, body.llm.enabledModels);
+      setEnabledModels(active, body.llm.enabledModels);
+      providerChanged = true;
     }
     if (body.llm.temperature !== undefined) {
       config.llm.temperature = clampNumber(body.llm.temperature, 0, 2, 'temperature');
-      settingsStore.set(SETTING_KEYS.llmTemperature, String(config.llm.temperature));
+      writeLlmGlobal({ temperature: config.llm.temperature });
       providerChanged = true;
     }
     if (body.llm.timeoutMs !== undefined) {
       config.llm.timeoutMs = clampNumber(body.llm.timeoutMs, 1000, 10 * 60 * 1000, 'timeoutMs');
-      settingsStore.set(SETTING_KEYS.llmTimeoutMs, String(config.llm.timeoutMs));
+      writeLlmGlobal({ timeoutMs: config.llm.timeoutMs });
       providerChanged = true;
     }
     if (body.llm.maxTokens !== undefined) {
       config.llm.maxTokens = clampNumber(body.llm.maxTokens, 256, 65536, 'maxTokens');
-      settingsStore.set(SETTING_KEYS.llmMaxTokens, String(config.llm.maxTokens));
+      writeLlmGlobal({ maxTokens: config.llm.maxTokens });
+      // 同时记到当前 provider 槽（可选覆盖）
+      upsertLlmProvider(active, { maxTokens: config.llm.maxTokens });
       providerChanged = true;
     }
     if (body.llm.apiKey !== undefined) {
+      // 只写当前激活 provider 的凭证表（与其它 provider 完全隔离）
       config.llm.apiKey = body.llm.apiKey;
-      writeProviderApiKey(config.llm.provider, body.llm.apiKey);
-      // 同步遗留全局 key，兼容旧读取路径
-      if (body.llm.apiKey.trim().length > 0) {
-        settingsStore.set(SETTING_KEYS.llmApiKey, body.llm.apiKey, true);
-      } else {
-        settingsStore.delete(SETTING_KEYS.llmApiKey);
-      }
+      void writeApiKeyCredential(active, body.llm.apiKey, {
+        force: body.llm.apiKey.trim().length > 0,
+      });
       providerChanged = true;
     }
 
@@ -352,38 +320,41 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     }
 
     if (body.llm.slotEnabledModels !== undefined) {
-      patchProviderEnabledModels(
-        normalizeProvider(body.llm.slotEnabledModels.provider),
-        body.llm.slotEnabledModels.enabledModels,
-      );
+      const pid = normalizeProvider(body.llm.slotEnabledModels.provider);
+      setEnabledModels(pid, body.llm.slotEnabledModels.enabledModels);
+      if (pid === config.llm.provider) {
+        // 内存无列表缓存，read 时直接查表
+      }
+      providerChanged = true;
+    }
+
+    if (body.llm.slotAvailableModels !== undefined) {
+      const pid = normalizeProvider(body.llm.slotAvailableModels.provider);
+      replaceAvailableModels(pid, body.llm.slotAvailableModels.availableModels, {
+        source: 'custom',
+      });
       providerChanged = true;
     }
 
     if (body.llm.slotModel !== undefined) {
-      patchProviderDefaultModel(
-        normalizeProvider(body.llm.slotModel.provider),
-        requireNonEmpty(body.llm.slotModel.model, 'slotModel.model'),
-      );
+      const pid = normalizeProvider(body.llm.slotModel.provider);
+      const model = requireNonEmpty(body.llm.slotModel.model, 'slotModel.model');
+      setDefaultModel(pid, model);
+      if (pid === config.llm.provider) {
+        config.llm.model = model;
+      }
       providerChanged = true;
     }
 
-    // 回写激活槽 map，保证与扁平字段一致。
-    // removeProvider 自行维护 map；其余 llm 变更（含 model / enabled）都 snapshot 一次。
-    // patchProviderEnabledModels 已写入最新 enabled，snapshot 会从扁平字段读回同一份。
-    if (body.llm.removeProvider === undefined) {
-      if (body.llm.slotEnabledModels !== undefined) {
-        // 非激活槽只改了 map；若改的是激活槽，flat 已更新，仍需 snapshot 对齐 map 其它字段
-        if (normalizeProvider(body.llm.slotEnabledModels.provider) === config.llm.provider) {
-          snapshotActiveProviderSlot();
-        }
-      } else if (body.llm.slotModel !== undefined) {
-        if (normalizeProvider(body.llm.slotModel.provider) === config.llm.provider) {
-          snapshotActiveProviderSlot();
-        }
-      } else {
-        snapshotActiveProviderSlot();
-      }
-    }
+    // 保证激活指针与内存一致
+    writeLlmGlobal({
+      activeProvider: config.llm.provider,
+      visionModel: config.llm.visionModel,
+      temperature: config.llm.temperature,
+      timeoutMs: config.llm.timeoutMs,
+      maxTokens: config.llm.maxTokens,
+    });
+    void targetForConnection;
   }
 
   if (body.workspaceDir !== undefined) {
@@ -505,313 +476,96 @@ export function readCleanupPolicyDays(): number {
   return parseNumber(settingsStore.get(SETTING_KEYS.cleanupPolicyDays), DEFAULT_CLEANUP_POLICY_DAYS);
 }
 
-// ---- Multi-provider slot helpers ----
-
-function providerApiKeyKey(provider: string): string {
-  return `llm.apiKey.${provider}`;
-}
-
-function readProviderApiKey(provider: string): string {
-  return settingsStore.get(providerApiKeyKey(provider)) ?? '';
-}
-
-function writeProviderApiKey(provider: string, apiKey: string): void {
-  const key = providerApiKeyKey(provider);
-  if (apiKey.trim().length > 0) {
-    settingsStore.set(key, apiKey, true);
-  } else {
-    settingsStore.delete(key);
-  }
-  // 同步到 Pi CredentialStore。用户显式保存 Key 时 force 覆盖 oauth；
-  // 清空 Key 只删 api_key，不碰 oauth。
-  void writeApiKeyCredential(provider, apiKey, { force: apiKey.trim().length > 0 });
-}
-
-function readProviderMap(): Record<string, StoredProviderSlot> {
-  const raw = settingsStore.get(SETTING_KEYS.llmProviders);
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const result: Record<string, StoredProviderSlot> = {};
-    for (const [provider, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (!isValidPiProviderId(provider)) continue;
-      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
-      const slot = value as Partial<StoredProviderSlot>;
-      result[provider] = {
-        baseUrl: typeof slot.baseUrl === 'string' ? slot.baseUrl : '',
-        model: typeof slot.model === 'string' ? slot.model : '',
-        // 遗留字段：读取兼容，新写入一律清空
-        visionModel: '',
-        availableModels: Array.isArray(slot.availableModels)
-          ? slot.availableModels.filter((m): m is string => typeof m === 'string')
-          : [],
-        enabledModels: Array.isArray(slot.enabledModels)
-          ? slot.enabledModels.filter((m): m is string => typeof m === 'string')
-          : [],
-      };
-    }
-    return result;
-  } catch {
-    return {};
-  }
-}
-
-function writeProviderMap(map: Record<string, StoredProviderSlot>): void {
-  settingsStore.set(SETTING_KEYS.llmProviders, JSON.stringify(map));
-}
-
-/** 把当前内存中的激活 provider 配置写入 map + 扁平字段。视觉模型为全局，不写入槽位。 */
-function snapshotActiveProviderSlot(): void {
-  const provider = config.llm.provider;
-  if (!isValidPiProviderId(provider)) return;
-  const map = readProviderMap();
-  const availableModels = readActiveAvailableModels();
-  const enabledModels = readActiveEnabledModels();
-  map[provider] = {
-    baseUrl: config.llm.baseUrl,
-    model: config.llm.model,
-    visionModel: '',
-    availableModels,
-    enabledModels,
-  };
-  writeProviderMap(map);
-  // 同步扁平字段（激活视图）
-  settingsStore.set(SETTING_KEYS.llmProvider, provider);
-  settingsStore.set(SETTING_KEYS.llmBaseUrl, config.llm.baseUrl);
-  settingsStore.set(SETTING_KEYS.llmModel, config.llm.model);
-  // 全局视觉模型单独持久化，与槽位切换无关
-  if (config.llm.visionModel) {
-    settingsStore.set(SETTING_KEYS.llmVisionModel, config.llm.visionModel);
-  } else {
-    settingsStore.delete(SETTING_KEYS.llmVisionModel);
-  }
-  settingsStore.set(SETTING_KEYS.llmAvailableModels, stringifyModelList(availableModels));
-  settingsStore.set(SETTING_KEYS.llmEnabledModels, stringifyModelList(enabledModels));
-}
+// ---- Multi-provider slot helpers (llm_* tables) ----
 
 /**
- * 激活指定 provider 槽位：加载其 baseUrl/model/lists/key 到 config 与扁平设置。
- * 目标槽位不存在时仍切换 provider id，字段保持合理默认。
- * 视觉模型是全局配置，切换槽位时不改动。
+ * 激活指定 provider：只改内存 config + llm_global.active_provider。
+ * 凭证/目录从正式表读取，绝不从其它槽回填。
  */
 function activateProviderSlot(provider: string): void {
-  const map = readProviderMap();
-  const slot = map[provider];
+  if (!isValidPiProviderId(provider)) {
+    throw new Error(`无效的 provider: ${provider}`);
+  }
+  ensureProviderRow(provider);
+  const slot = getLlmProvider(provider);
+  const global = readLlmGlobal();
+
   config.llm.provider = provider;
-  settingsStore.set(SETTING_KEYS.llmProvider, provider);
-
-  if (slot) {
-    config.llm.baseUrl = slot.baseUrl;
-    config.llm.model = slot.model || config.llm.model;
-    settingsStore.set(SETTING_KEYS.llmBaseUrl, config.llm.baseUrl);
-    settingsStore.set(SETTING_KEYS.llmModel, config.llm.model);
-    settingsStore.set(SETTING_KEYS.llmAvailableModels, stringifyModelList(slot.availableModels));
-    settingsStore.set(SETTING_KEYS.llmEnabledModels, stringifyModelList(filterChatModelIds(slot.enabledModels)));
+  config.llm.baseUrl = slot?.baseUrl ?? (provider === 'openai-compatible' ? config.llm.baseUrl : '');
+  config.llm.model = getDefaultModelId(provider) || slot?.defaultModel || '';
+  config.llm.visionModel = global.visionModel;
+  if (slot?.maxTokens != null) {
+    config.llm.maxTokens = slot.maxTokens;
   } else {
-    // 新 provider：保留 model 名可能不适用，清空列表，baseUrl 仅 openai-compatible 需要
-    if (provider !== 'openai-compatible') {
-      config.llm.baseUrl = '';
-      settingsStore.set(SETTING_KEYS.llmBaseUrl, '');
-    }
-    settingsStore.set(SETTING_KEYS.llmAvailableModels, stringifyModelList([]));
-    settingsStore.set(SETTING_KEYS.llmEnabledModels, stringifyModelList([]));
+    config.llm.maxTokens = global.maxTokens;
   }
+  config.llm.temperature = global.temperature;
+  config.llm.timeoutMs = global.timeoutMs;
 
-  // 切换密钥：只读分槽；无则清空，避免误用其它 provider / 全局 env
-  config.llm.apiKey = readProviderApiKey(provider);
-}
-
-/**
- * 更新指定槽位的 enabledModels。
- * - 始终写入 multi-provider map
- * - 若是激活槽，同时写扁平 llm.enabledModels
- * - 允许空数组（表示该 Provider 不在主界面暴露任何模型）
- */
-function patchProviderEnabledModels(provider: string, enabledModels: string[]): void {
-  if (!isValidPiProviderId(provider)) {
-    throw new Error(`无效的 provider: ${provider}`);
-  }
-  // 注意：不要对「用户显式提交的列表」再强制塞回默认模型
-  const nextEnabled = filterChatModelIds(enabledModels);
-  const map = readProviderMap();
-  const slot = map[provider] ?? emptyProviderSlot();
-  // 激活槽的 available/model 以内存为准，避免 map 过期
-  if (provider === config.llm.provider) {
-    map[provider] = {
-      baseUrl: config.llm.baseUrl,
-      model: config.llm.model,
-      visionModel: '',
-      availableModels: readActiveAvailableModels(),
-      enabledModels: nextEnabled,
-    };
-    settingsStore.set(SETTING_KEYS.llmEnabledModels, stringifyModelList(nextEnabled));
+  // 鉴权：只读本 provider 凭证
+  const cred = readLlmCredential(provider);
+  if (cred?.type === 'api_key') {
+    config.llm.apiKey = String((cred as { key?: string }).key ?? '');
   } else {
-    map[provider] = { ...slot, enabledModels: nextEnabled };
-  }
-  writeProviderMap(map);
-}
-
-/**
- * 更新指定槽位的默认 model，不切换激活 provider。
- * 仅改 model 字段，不强制并入 enabled（启用勾选与「默认」解耦）。
- */
-function patchProviderDefaultModel(provider: string, model: string): void {
-  if (!isValidPiProviderId(provider)) {
-    throw new Error(`无效的 provider: ${provider}`);
-  }
-  const nextModel = requireNonEmpty(model, 'model');
-
-  if (provider === config.llm.provider) {
-    config.llm.model = nextModel;
-    settingsStore.set(SETTING_KEYS.llmModel, nextModel);
-    return;
+    // oauth 不进 config.llm.apiKey（避免 sk 路径误用 JWT）
+    config.llm.apiKey = '';
   }
 
-  const map = readProviderMap();
-  const slot = map[provider] ?? emptyProviderSlot();
-  map[provider] = {
-    ...slot,
-    model: nextModel,
-  };
-  writeProviderMap(map);
+  writeLlmGlobal({ activeProvider: provider });
 }
 
-function emptyProviderSlot(): StoredProviderSlot {
-  return {
-    baseUrl: '',
-    model: '',
-    visionModel: '',
-    availableModels: [],
-    enabledModels: [],
-  };
-}
-
-/** 删除 provider 槽位与分槽密钥；必要时切换激活 provider。 */
+/** 删除 provider 行（级联凭证与模型）；必要时切换激活。 */
 function removeProviderSlot(provider: string): void {
   if (!isValidPiProviderId(provider)) {
     throw new Error(`无效的 provider: ${provider}`);
   }
-
-  const map = readProviderMap();
-  // 若删除的是当前激活槽，先快照其它字段到 map（随后删除）
-  if (provider === config.llm.provider) {
-    snapshotActiveProviderSlot();
-  }
-
-  delete map[provider];
-  writeProviderMap(map);
-  writeProviderApiKey(provider, '');
+  const wasActive = provider === config.llm.provider;
+  deleteLlmProvider(provider);
   void clearProviderCredential(provider);
 
-  if (provider === config.llm.provider) {
-    const remaining = Object.keys(map).sort((a, b) => a.localeCompare(b));
+  if (wasActive) {
+    const remaining = listLlmProviders()
+      .map((p) => p.providerId)
+      .sort((a, b) => a.localeCompare(b));
     const next = remaining[0] ?? 'openai';
-    // 确保回落目标在 map 中有条目；全新 openai 由 activate 创建空槽
     activateProviderSlot(next);
-    snapshotActiveProviderSlot();
   }
 }
 
 function listProviderSlots(): LlmProviderSlot[] {
-  const map = readProviderMap();
-  // 确保当前激活 provider 一定出现在列表中
+  ensureLlmSchemaMigrated();
   const active = config.llm.provider;
-  if (isValidPiProviderId(active) && !map[active]) {
-    map[active] = {
-      baseUrl: config.llm.baseUrl,
-      model: config.llm.model,
-      visionModel: '',
-      availableModels: readActiveAvailableModels(),
-      enabledModels: readActiveEnabledModels(),
-    };
+  const globalVision = config.llm.visionModel;
+  let providers = listLlmProviders();
+  if (isValidPiProviderId(active) && !providers.some((p) => p.providerId === active)) {
+    ensureProviderRow(active);
+    providers = listLlmProviders();
   }
 
-  // 视觉模型为全局：槽位 API 中 visionModel 统一回显全局值，便于旧前端读取
-  const globalVision = config.llm.visionModel;
-
-  return Object.entries(map)
-    .map(([provider, slot]) => {
+  return providers
+    .map((slot) => {
+      const provider = slot.providerId;
       const isActive = provider === active;
       return {
         provider,
         baseUrl: isActive ? config.llm.baseUrl : slot.baseUrl,
-        model: isActive ? config.llm.model : slot.model,
+        model: isActive ? config.llm.model : (getDefaultModelId(provider) || slot.defaultModel),
         visionModel: globalVision,
-        availableModels: isActive
-          ? readActiveAvailableModels()
-          : filterChatModelIds(slot.availableModels),
-        enabledModels: isActive
-          ? readActiveEnabledModels()
-          : filterChatModelIds(slot.enabledModels),
-        apiKeyConfigured: isActive
-          ? config.llm.apiKey.trim().length > 0 || hasStoredCredential(provider)
-          : readProviderApiKey(provider).trim().length > 0
-            || hasStoredCredential(provider),
+        availableModels: getAvailableModelIds(provider),
+        enabledModels: getEnabledModelIds(provider),
+        apiKeyConfigured: hasApiKeyCredential(provider),
         oauthConfigured: hasOauthCredential(provider),
       } satisfies LlmProviderSlot;
     })
     .sort((a, b) => a.provider.localeCompare(b.provider));
 }
 
-/** 首次启动或升级：把扁平配置灌进 multi-provider map。 */
-function migrateLegacyProviderSlots(): void {
-  const map = readProviderMap();
-  const provider = config.llm.provider;
-  if (!isValidPiProviderId(provider)) return;
-
-  if (!map[provider]) {
-    map[provider] = {
-      baseUrl: config.llm.baseUrl,
-      model: config.llm.model,
-      visionModel: '',
-      availableModels: readModelList(SETTING_KEYS.llmAvailableModels),
-      enabledModels: readEnabledModelsLegacy(),
-    };
-    writeProviderMap(map);
-  }
-
-  // 遗留全局 key → 分槽（仅当该槽尚无 key）
-  const legacyKey = settingsStore.get(SETTING_KEYS.llmApiKey);
-  if (legacyKey && !readProviderApiKey(provider)) {
-    writeProviderApiKey(provider, legacyKey);
-  }
-}
-
 function readActiveAvailableModels(): string[] {
-  // 读出时再滤一遍，清理历史脏数据（embedding 等）
-  return filterChatModelIds(readModelList(SETTING_KEYS.llmAvailableModels));
+  return getAvailableModelIds(config.llm.provider);
 }
 
 function readActiveEnabledModels(): string[] {
-  return filterChatModelIds(readEnabledModelsLegacy());
-}
-
-function readEnabledModelsLegacy(): string[] {
-  const explicit = settingsStore.get(SETTING_KEYS.llmEnabledModels);
-  if (explicit !== undefined) return parseModelList(explicit);
-  return readModelList(SETTING_KEYS.llmModelOptions);
-}
-
-function readModelList(key: string): string[] {
-  const raw = settingsStore.get(key);
-  if (!raw) return [];
-  return parseModelList(raw);
-}
-
-function parseModelList(raw: string): string[] {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return [...new Set(parsed.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))];
-  } catch {
-    return [];
-  }
-}
-
-function stringifyModelList(models: string[]): string {
-  const unique = [...new Set(models.map((model) => model.trim()).filter(Boolean))];
-  return JSON.stringify(unique);
+  return getEnabledModelIds(config.llm.provider);
 }
 
 function isValidPiProviderId(provider: string): boolean {

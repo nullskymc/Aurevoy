@@ -144,14 +144,32 @@
   align-items: center;
   gap: var(--ui-space-3);
   max-width: min(420px, calc(100vw - 36px));
-  border: var(--ui-border-width) solid #f0c9c9;
+  border: var(--ui-border-width) solid color-mix(in srgb, var(--text) 12%, transparent);
   border-radius: var(--ui-radius-lg);
-  background: #fbeaea;
-  color: #a3262b;
+  background: var(--card-bg, #fff);
+  color: var(--text);
   font-size: var(--ui-font-sm);
   line-height: 1.45;
   padding: var(--ui-space-2) var(--ui-space-3);
   box-shadow: 0 14px 34px rgba(31, 35, 40, 0.12);
+}
+
+.toast-bubble[data-tone="error"] {
+  border-color: #f0c9c9;
+  background: #fbeaea;
+  color: #a3262b;
+}
+
+.toast-bubble[data-tone="success"] {
+  border-color: color-mix(in srgb, #16a34a 40%, transparent);
+  background: color-mix(in srgb, #16a34a 12%, #fff);
+  color: #166534;
+}
+
+.toast-bubble[data-tone="info"] {
+  border-color: color-mix(in srgb, #2563eb 28%, transparent);
+  background: color-mix(in srgb, #2563eb 10%, #fff);
+  color: #1e3a8a;
 }
 
 .toast-bubble span {

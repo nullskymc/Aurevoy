@@ -1159,10 +1159,22 @@ button:disabled {
   background: transparent;
 }
 
-:root[data-theme="dark"] .toast-bubble {
+:root[data-theme="dark"] .toast-bubble[data-tone="error"] {
   background: #3a2526;
   border-color: #5a3336;
   color: #f0b4b4;
+}
+
+:root[data-theme="dark"] .toast-bubble[data-tone="success"] {
+  background: color-mix(in srgb, #16a34a 18%, #1a1f1a);
+  border-color: color-mix(in srgb, #16a34a 45%, transparent);
+  color: #86efac;
+}
+
+:root[data-theme="dark"] .toast-bubble[data-tone="info"] {
+  background: color-mix(in srgb, #2563eb 18%, #1a1d24);
+  border-color: color-mix(in srgb, #2563eb 40%, transparent);
+  color: #93c5fd;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -1175,10 +1187,22 @@ button:disabled {
     background: transparent;
   }
 
-  :root:not([data-theme="light"]) .toast-bubble {
+  :root:not([data-theme="light"]) .toast-bubble[data-tone="error"] {
     background: #3a2526;
     border-color: #5a3336;
     color: #f0b4b4;
+  }
+
+  :root:not([data-theme="light"]) .toast-bubble[data-tone="success"] {
+    background: color-mix(in srgb, #16a34a 18%, #1a1f1a);
+    border-color: color-mix(in srgb, #16a34a 45%, transparent);
+    color: #86efac;
+  }
+
+  :root:not([data-theme="light"]) .toast-bubble[data-tone="info"] {
+    background: color-mix(in srgb, #2563eb 18%, #1a1d24);
+    border-color: color-mix(in srgb, #2563eb 40%, transparent);
+    color: #93c5fd;
   }
 }
 

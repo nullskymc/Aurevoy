@@ -1341,6 +1341,15 @@ export interface UpdateRuntimeSettingsRequest {
       enabledModels: string[];
     };
     /**
+     * 更新指定槽位的 availableModels（完整目录，含用户自定义 id）。
+     * 会同步修剪 enabledModels 中已不存在的项。
+     * 若 provider 为当前激活槽，会同步扁平字段。
+     */
+    slotAvailableModels: {
+      provider: string;
+      availableModels: string[];
+    };
+    /**
      * 更新指定槽位的默认 model，不强制切换激活 provider。
      * 若 provider 为当前激活槽，会同步扁平 model 字段。
      */

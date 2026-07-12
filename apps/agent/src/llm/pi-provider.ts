@@ -12,8 +12,13 @@ import {
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { filterChatModelIds, type PiProviderCatalogEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
-import { hasStoredCredential } from './credential-store.js';
-import { settingsStore } from '../store/db.js';
+import { aurevoyCredentialStore, hasStoredCredential } from './credential-store.js';
+import {
+  ensureLlmSchemaMigrated,
+  getLlmProvider,
+  readLlmCredential,
+} from './llm-store.js';
+import { providerIdSupportsXaiOauth, XAI_OAUTH_LABEL } from './xai-oauth.js';
 
 // ---- Dynamic model discovery via Pi's createProvider + refreshModels ----
 
@@ -21,7 +26,8 @@ let _piModelsCache: PiModels | null = null;
 
 function getPiModels(): PiModels {
   if (_piModelsCache) return _piModelsCache;
-  const models = createModels();
+  // 复用运行时凭证库：模型发现也能让 Pi 自动刷新 OAuth access token。
+  const models = createModels({ credentials: aurevoyCredentialStore });
   for (const provider of builtinProviders()) {
     models.setProvider(provider);
   }
@@ -90,6 +96,9 @@ export function listPiProviderCatalog(): PiProviderCatalogEntry[] {
 function toCatalogEntry(provider: PiProvider): PiProviderCatalogEntry {
   const models = provider.getModels();
   const apis = [...new Set(models.map((model) => model.api).filter(Boolean))].sort();
+  // xAI：Pi 仅 API Key；Aurevoy 叠加 SuperGrok / X Premium+ device-code OAuth
+  const supportsOauth =
+    Boolean(provider.auth.oauth) || providerIdSupportsXaiOauth(provider.id);
   return {
     id: provider.id,
     name: provider.name || provider.id,
@@ -97,8 +106,10 @@ function toCatalogEntry(provider: PiProvider): PiProviderCatalogEntry {
     apis: apis.length > 0 ? apis : [fallbackApiForProvider(provider.id)],
     supportsApiKey: Boolean(provider.auth.apiKey),
     apiKeyLabel: provider.auth.apiKey?.name,
-    supportsOauth: Boolean(provider.auth.oauth),
-    oauthLabel: provider.auth.oauth?.name,
+    supportsOauth,
+    oauthLabel:
+      provider.auth.oauth?.name
+      ?? (providerIdSupportsXaiOauth(provider.id) ? XAI_OAUTH_LABEL : undefined),
     modelCount: models.length,
     requiresBaseUrl: false,
     custom: false,
@@ -131,46 +142,25 @@ export function assertPiLLMConfigured(): void {
  * 按 provider 槽位解析请求端点，避免扁平 `config.llm.baseUrl` 跨槽串用。
  *
  * 优先级：
- * 1. `llm.providers[provider].baseUrl`（槽存在时：空串 = 明确使用 catalog 默认）
- * 2. 仅当请求的是**当前激活** provider 且槽不存在时，回退扁平 `config.llm.baseUrl`
+ * 1. llm_providers.base_url（表内有行时：空串 = 明确使用 catalog 默认）
+ * 2. 仅当请求的是**当前激活** provider 且表无行时，回退扁平 `config.llm.baseUrl`
  * 3. 模型 catalog / 调用方传入的默认 baseUrl
  */
 export function resolveModelBaseUrl(modelBaseUrl?: string, provider?: string): string {
+  ensureLlmSchemaMigrated();
   const providerId = (provider ?? config.llm.provider).trim();
-  const slotBaseUrl = readProviderSlotBaseUrl(providerId);
-  if (slotBaseUrl !== undefined) {
-    const fromSlot = slotBaseUrl.trim().replace(/\/+$/, '');
+  const slot = getLlmProvider(providerId);
+  if (slot) {
+    const fromSlot = slot.baseUrl.trim().replace(/\/+$/, '');
     if (fromSlot) return fromSlot;
     return (modelBaseUrl ?? '').replace(/\/+$/, '');
   }
 
-  // 槽位尚未建立时：激活 provider 可用扁平字段（兼容迁移中）
   if (providerId === config.llm.provider) {
     const configured = config.llm.baseUrl?.trim().replace(/\/+$/, '');
     if (configured) return configured;
   }
   return (modelBaseUrl ?? '').replace(/\/+$/, '');
-}
-
-/**
- * 读取多 provider map 中某槽的 baseUrl。
- * - `undefined`：map 中无该 provider（未建槽）
- * - `''`：已建槽且明确未配置自定义网关
- */
-function readProviderSlotBaseUrl(provider: string): string | undefined {
-  if (!provider) return undefined;
-  const raw = settingsStore.get('llm.providers');
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-    const slot = (parsed as Record<string, unknown>)[provider];
-    if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return undefined;
-    const baseUrl = (slot as { baseUrl?: unknown }).baseUrl;
-    return typeof baseUrl === 'string' ? baseUrl : '';
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -251,23 +241,350 @@ export function createPiModel(modelOverride?: string, providerOverride?: string)
   };
 }
 
+/**
+ * 拉取当前激活 provider 的模型目录。
+ *
+ * 策略（优先 API，静态目录兜底）：
+ * 1. OpenAI 兼容族：`GET {base}/models`（或 `/v1/models`）
+ * 2. openai-codex：仅在有 OAuth access token 时请求 ChatGPT backend
+ * 3. 合并 Pi 静态 catalog（API 失败或不全时不丢已知 id）
+ * 4. 仍为空时回落当前主模型 id；远程明确失败且无任何列表则抛错
+ */
 export async function listPiProviderModels(): Promise<string[]> {
-  const normalized = normalizePiProvider(config.llm.provider);
-  const models = getPiModels();
+  // 目录请求必须使用用户实际选择的槽位：`openai-compatible` 经 host 推断后会变成
+  // qwen/deepseek 等 id，若拿推断 id 解析 Base URL 会绕过用户填写的网关地址。
+  const selectedProvider = config.llm.provider.trim();
+  const normalized = normalizePiProvider(selectedProvider);
+  const staticIds = listStaticProviderModelIds(normalized);
+  let remoteIds: string[] = [];
+  let remoteError: Error | undefined;
+  let remoteAttempted = false;
 
-  if (normalized === 'openai-compatible' && config.llm.baseUrl) {
-    try {
-      await models.refresh('openai-compatible');
-    } catch {
-      // refresh failed — fall through to static catalog / fallback
+  try {
+    if (selectedProvider === 'openai-codex') {
+      remoteAttempted = true;
+      remoteIds = await fetchCodexModelIds();
+    } else if (
+      selectedProvider === 'openai-compatible'
+      || supportsOpenAiStyleModelsApi(selectedProvider)
+    ) {
+      remoteAttempted = true;
+      remoteIds = await fetchOpenAiCompatibleModelIds(selectedProvider);
+    }
+  } catch (err) {
+    remoteError = err instanceof Error ? err : new Error(String(err));
+  }
+
+  // 远程有结果：以远程为主，并并入静态（避免官方新 id 覆盖旧静态时丢已知项）
+  if (remoteIds.length > 0) {
+    const merged = filterChatModelIds([...remoteIds, ...staticIds]);
+    return [...new Set(merged)].sort((a, b) => a.localeCompare(b));
+  }
+
+  // 远程失败：
+  // - openai-compatible 无静态目录 → 必须抛错
+  // - 其它有静态目录 → 回落静态，但错误信息在日志层；若静态也空则抛远程错误
+  if (remoteAttempted && remoteError) {
+    if (selectedProvider === 'openai-compatible' || staticIds.length === 0) {
+      throw remoteError;
     }
   }
 
-  const ids = filterChatModelIds(models.getModels(normalized).map((m) => m.id).filter(Boolean));
-  if (ids.length > 0) return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
-  // 回退：当前主模型即使像 embedding 也保留，避免空列表卡死配置
+  const staticOnly = filterChatModelIds(staticIds);
+  if (staticOnly.length > 0) {
+    return [...new Set(staticOnly)].sort((a, b) => a.localeCompare(b));
+  }
+
   const fallback = config.llm.model.trim();
   return fallback ? [fallback] : [];
+}
+
+function listStaticProviderModelIds(provider: string): string[] {
+  try {
+    return getPiModels()
+      .getModels(provider)
+      .map((m) => m.id)
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** 走 OpenAI 风格 `/models` 的 provider（含多数网关）。 */
+function supportsOpenAiStyleModelsApi(provider: string): boolean {
+  // 明确不走 OpenAI /models 的协议族
+  if (
+    provider === 'anthropic'
+    || provider === 'amazon-bedrock'
+    || provider === 'google'
+    || provider === 'google-vertex'
+    || provider === 'mistral'
+    || provider === 'azure-openai-responses'
+    || provider === 'openai-codex'
+  ) {
+    return false;
+  }
+  return true;
+}
+
+async function resolveProviderAuthToken(provider: string): Promise<string | undefined> {
+  ensureLlmSchemaMigrated();
+  // 先交由 Pi 解析，OAuth token 过期时会在 CredentialStore 内自动刷新。
+  const knownModel = getPiModels().getModels(provider)[0];
+  if (knownModel) {
+    const resolved = await getPiModels().getAuth(knownModel);
+    const token = resolved?.auth.apiKey?.trim();
+    if (token) return token;
+  }
+
+  // 自定义 provider 没有 Pi 静态模型，保留本地凭证与当前槽内存 key 的回退。
+  const stored = readLlmCredential(provider);
+  if (stored?.type === 'api_key') {
+    const key = String((stored as { key?: string }).key ?? '').trim();
+    if (key) return key;
+  }
+  if (stored?.type === 'oauth') {
+    const access = String((stored as { access?: string }).access ?? '').trim();
+    if (access) return access;
+  }
+  // 仅当本 provider 是激活槽且内存有 key 时回退（不跨槽）
+  if (provider === config.llm.provider && config.llm.apiKey?.trim()) {
+    return config.llm.apiKey.trim();
+  }
+  return undefined;
+}
+
+/**
+ * 解析 Codex 的 OAuth 访问令牌。
+ *
+ * 必须通过 Pi 的 `Models.getAuth()` 获取：它会在 access token 过期时使用
+ * CredentialStore 串行刷新并落盘，避免模型发现与真实调用使用不同的凭证状态。
+ */
+async function resolveCodexOauthAccessToken(): Promise<{ token: string; accountId?: string } | undefined> {
+  const codexModel = getPiModels().getModels('openai-codex')[0];
+  if (!codexModel) return undefined;
+
+  const resolved = await getPiModels().getAuth(codexModel);
+  const token = resolved?.auth.apiKey?.trim();
+  if (!token || token.split('.').length !== 3) return undefined;
+
+  const stored = readLlmCredential('openai-codex');
+  const storedAccountId = (stored as { accountId?: unknown } | undefined)?.accountId;
+  const accountId =
+    (stored?.type === 'oauth' && typeof storedAccountId === 'string' && storedAccountId.trim())
+    || extractCodexAccountId(token);
+  return { token, accountId: accountId || undefined };
+}
+
+function resolveProviderModelsBaseUrl(provider: string): string {
+  const builtin = findBuiltinProviderMeta(provider);
+  return resolveModelBaseUrl(builtin?.baseUrl, provider).replace(/\/+$/, '');
+}
+
+function findBuiltinProviderMeta(providerId: string) {
+  return builtinProviders().find((p) => p.id === providerId);
+}
+
+function candidateModelsUrls(baseUrl: string): string[] {
+  const base = baseUrl.replace(/\/+$/, '');
+  if (!base) return [];
+  const urls = new Set<string>();
+  if (base.endsWith('/v1')) {
+    urls.add(`${base}/models`);
+  } else {
+    urls.add(`${base}/models`);
+    urls.add(`${base}/v1/models`);
+  }
+  return [...urls];
+}
+
+async function fetchOpenAiCompatibleModelIds(provider: string): Promise<string[]> {
+  const baseUrl = resolveProviderModelsBaseUrl(provider);
+  if (!baseUrl) {
+    throw new Error(`Provider "${provider}" 未配置 Base URL，无法拉取模型列表`);
+  }
+  const token = await resolveProviderAuthToken(provider);
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let lastError: Error | undefined;
+  for (const url of candidateModelsUrls(baseUrl)) {
+    try {
+      const ids = await fetchOpenAiModelsJson(url, headers);
+      if (ids.length > 0) return ids;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  if (lastError) throw lastError;
+  return [];
+}
+
+async function fetchOpenAiModelsJson(
+  url: string,
+  headers: Record<string, string>,
+): Promise<string[]> {
+  const resp = await fetch(url, {
+    headers,
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(
+      `拉取模型列表失败 ${url} (HTTP ${resp.status})${text ? `: ${text.slice(0, 200)}` : ''}`,
+    );
+  }
+  const json = (await resp.json()) as
+    | { data?: Array<{ id?: string } | string> }
+    | Array<{ id?: string } | string>
+    | { models?: Array<{ id?: string; slug?: string } | string> };
+  return parseModelListPayload(json);
+}
+
+function parseModelListPayload(json: unknown): string[] {
+  const out: string[] = [];
+  const push = (raw: unknown) => {
+    if (typeof raw === 'string' && raw.trim()) {
+      out.push(raw.trim());
+      return;
+    }
+    if (raw && typeof raw === 'object') {
+      const rec = raw as {
+        id?: unknown;
+        slug?: unknown;
+        name?: unknown;
+        model?: unknown;
+        models?: unknown;
+      };
+      const id =
+        (typeof rec.id === 'string' && rec.id.trim())
+        || (typeof rec.slug === 'string' && rec.slug.trim())
+        || (typeof rec.model === 'string' && rec.model.trim())
+        || (typeof rec.name === 'string' && rec.name.trim())
+        || '';
+      if (id) out.push(id);
+      // ChatGPT backend 常见嵌套：category.models[]
+      if (Array.isArray(rec.models)) {
+        for (const nested of rec.models) push(nested);
+      }
+    }
+  };
+
+  if (Array.isArray(json)) {
+    for (const item of json) push(item);
+    return out;
+  }
+  if (!json || typeof json !== 'object') return out;
+  const obj = json as {
+    data?: unknown;
+    models?: unknown;
+    categories?: unknown;
+  };
+  if (Array.isArray(obj.data)) {
+    for (const item of obj.data) push(item);
+  }
+  if (Array.isArray(obj.models)) {
+    for (const item of obj.models) push(item);
+  }
+  if (Array.isArray(obj.categories)) {
+    for (const cat of obj.categories) push(cat);
+  }
+  return out;
+}
+
+/**
+ * Codex 的模型目录不是通用 `/models`：它位于 ChatGPT backend 的
+ * `/codex/models`，并要求 `client_version`、账户标识和 Codex 请求头。
+ * 这是模型发现协议；实际生成仍由 Pi 的 `openai-codex-responses` 处理。
+ */
+async function fetchCodexModelIds(): Promise<string[]> {
+  const auth = await resolveCodexOauthAccessToken();
+  if (!auth) {
+    throw new Error(
+      'OpenAI Codex 未完成订阅登录（需要有效的 OAuth access token），无法从 API 拉取模型列表。'
+      + '请先在提供商页对 Codex 执行订阅登录。',
+    );
+  }
+
+  const baseUrl = resolveProviderModelsBaseUrl('openai-codex');
+  if (!baseUrl) {
+    throw new Error('OpenAI Codex 未配置模型目录 Base URL');
+  }
+
+  const url = buildCodexModelsUrl(baseUrl);
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${auth.token}`,
+    // 与 Pi 的 Codex transport 对齐，避免 ChatGPT backend 将目录请求当成网页请求。
+    Originator: 'pi',
+    'User-Agent': 'pi',
+  };
+  if (auth.accountId) {
+    headers['ChatGPT-Account-Id'] = auth.accountId;
+  }
+
+  const models = await fetchCodexModelsJson(url, headers);
+  return filterChatModelIds(models);
+}
+
+/**
+ * Codex backend 根据客户端版本筛选目录。使用协议版本 1.0.0 获取当前可用模型，
+ * 避免把 Aurevoy 或 Pi 的发布版本误当成 Codex CLI 版本而过滤掉新模型。
+ */
+function buildCodexModelsUrl(baseUrl: string): string {
+  const base = baseUrl.replace(/\/+$/, '');
+  const codexBase = base.endsWith('/codex') ? base : `${base}/codex`;
+  const url = new URL(`${codexBase}/models`);
+  url.searchParams.set('client_version', '1.0.0');
+  return url.toString();
+}
+
+/** 只保留 Codex API 明确标记为可调用的模型，防止目录中隐藏项被写入设置。 */
+async function fetchCodexModelsJson(
+  url: string,
+  headers: Record<string, string>,
+): Promise<string[]> {
+  const resp = await fetch(url, {
+    headers,
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(
+      `拉取 Codex 模型列表失败 ${url} (HTTP ${resp.status})${text ? `: ${text.slice(0, 200)}` : ''}`,
+    );
+  }
+
+  const json = (await resp.json()) as { models?: unknown };
+  if (!Array.isArray(json.models)) return [];
+  return json.models.flatMap((raw) => {
+    if (!raw || typeof raw !== 'object') return [];
+    const model = raw as { slug?: unknown; id?: unknown; supported_in_api?: unknown; visibility?: unknown };
+    if (model.supported_in_api !== true || model.visibility === 'hidden') return [];
+    const id =
+      (typeof model.slug === 'string' && model.slug.trim())
+      || (typeof model.id === 'string' && model.id.trim())
+      || '';
+    return id ? [id] : [];
+  });
+}
+
+function extractCodexAccountId(accessToken: string): string | undefined {
+  try {
+    const parts = accessToken.split('.');
+    if (parts.length < 2) return undefined;
+    const payload = parts[1] ?? '';
+    const json = Buffer.from(payload, 'base64url').toString('utf8');
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    const auth = parsed['https://api.openai.com/auth'];
+    if (auth && typeof auth === 'object') {
+      const accountId = (auth as { chatgpt_account_id?: unknown }).chatgpt_account_id;
+      if (typeof accountId === 'string' && accountId.trim()) return accountId.trim();
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
 }
 
 export function resetPiProviderCache(): void {

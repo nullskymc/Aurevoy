@@ -32,8 +32,11 @@ import {
   type Usage as PiUsage,
 } from '@earendil-works/pi-ai/compat';
 import { createModels, createProvider } from '@earendil-works/pi-ai';
+import type { ProviderAuth } from '@earendil-works/pi-ai';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { aurevoyCredentialStore } from '../llm/credential-store.js';
+import { readLlmCredential } from '../llm/llm-store.js';
+import { xaiGrokOauth } from '../llm/xai-oauth.js';
 import type {
   AgentEvent,
   AggregatedTokenUsage,
@@ -366,7 +369,11 @@ export function createAurevoyPiModels(selectedModel: PiModel<any>): PiModels {
       name: builtin.name || builtin.id,
       baseUrl: modelForRequest.baseUrl || builtin.baseUrl,
       headers: builtin.headers,
-      auth: wrapBuiltinAuth(builtin.auth, modelForRequest.baseUrl),
+      auth: wrapBuiltinAuth(
+        augmentProviderAuth(builtin.id, builtin.auth),
+        modelForRequest.baseUrl,
+        builtin.id,
+      ),
       models: [modelForRequest],
       api: getApiForApiName(modelForRequest.api),
     });
@@ -405,20 +412,41 @@ function findBuiltinProvider(providerId: string) {
   return builtinProviders().find((p) => p.id === providerId);
 }
 
+/** Pi 未声明 oauth 时，Aurevoy 可叠加扩展（如 xAI SuperGrok）。 */
+function augmentProviderAuth(providerId: string, auth: ProviderAuth): ProviderAuth {
+  if (auth.oauth) return auth;
+  if (providerId === 'xai') {
+    return { ...auth, oauth: xaiGrokOauth };
+  }
+  return auth;
+}
+
 /**
- * 保留 Pi 原生 apiKey/oauth；在 resolve 结果上叠加用户设置的 baseUrl，
- * 并在无 CredentialStore 凭证时回退到 Aurevoy 槽位/环境里的 apiKey。
+ * 保留 Pi 原生 apiKey/oauth；叠加 baseUrl，并按 **model.provider** 取本槽凭证。
+ * 禁止回退到「当前激活槽」的 config.llm.apiKey（跨 provider 串钥根因）。
  *
- * openai-codex 等「仅 OAuth」provider：不要注入 sk- API Key 回退，
- * 否则 extractAccountId 会把非 JWT 当成 access token 并报
- * Failed to extract accountId from token。
+ * openai-codex 等「仅 OAuth」provider：不要注入 sk- API Key 回退。
  */
 function wrapBuiltinAuth(
-  auth: import('@earendil-works/pi-ai').ProviderAuth,
+  auth: ProviderAuth,
   requestBaseUrl: string,
-): import('@earendil-works/pi-ai').ProviderAuth {
+  providerId: string,
+): ProviderAuth {
   const base = requestBaseUrl.replace(/\/+$/, '');
   const oauthOnly = Boolean(auth.oauth) && !auth.apiKey;
+
+  const resolveSlotApiKey = (): string | undefined => {
+    const cred = readLlmCredential(providerId);
+    if (cred?.type === 'api_key') {
+      const key = String((cred as { key?: string }).key ?? '').trim();
+      if (key) return key;
+    }
+    // 仅当本 provider 恰好是激活槽时，才用内存 key
+    if (providerId === config.llm.provider && config.llm.apiKey?.trim()) {
+      return config.llm.apiKey.trim();
+    }
+    return undefined;
+  };
 
   return {
     apiKey: auth.apiKey
@@ -435,11 +463,11 @@ function wrapBuiltinAuth(
                 },
               };
             }
-            // CredentialStore / env 未命中 → Aurevoy 扁平配置
-            if (config.llm.apiKey?.trim()) {
+            const slotKey = resolveSlotApiKey();
+            if (slotKey) {
               return {
                 auth: {
-                  apiKey: config.llm.apiKey,
+                  apiKey: slotKey,
                   baseUrl: base || undefined,
                 },
                 source: 'settings',
@@ -450,15 +478,17 @@ function wrapBuiltinAuth(
         }
       : oauthOnly
         ? undefined
-        : config.llm.apiKey?.trim()
-          ? {
-              name: 'Aurevoy API Key',
-              resolve: async () => ({
-                auth: { apiKey: config.llm.apiKey, baseUrl: base || undefined },
+        : {
+            name: 'Aurevoy API Key',
+            resolve: async () => {
+              const slotKey = resolveSlotApiKey();
+              if (!slotKey) return undefined;
+              return {
+                auth: { apiKey: slotKey, baseUrl: base || undefined },
                 source: 'settings',
-              }),
-            }
-          : undefined,
+              };
+            },
+          },
     oauth: auth.oauth,
   };
 }

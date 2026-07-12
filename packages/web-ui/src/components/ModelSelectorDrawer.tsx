@@ -52,7 +52,7 @@ interface SelectableModel {
 
 interface ModelGroup {
   provider: string;
-  apiKeyConfigured: boolean;
+  credentialConfigured: boolean;
   models: SelectableModel[];
 }
 
@@ -97,7 +97,7 @@ export function ModelSelectorDrawer({
   const flatItems = useMemo(
     () => filteredGroups.flatMap((group) => group.models.map((item) => ({
       ...item,
-      apiKeyConfigured: group.apiKeyConfigured,
+      credentialConfigured: group.credentialConfigured,
     }))),
     [filteredGroups],
   );
@@ -211,7 +211,7 @@ export function ModelSelectorDrawer({
       if (event.key === "Enter") {
         const item = flatItems.find((entry) => entry.key === highlightKey) ?? flatItems[0];
         if (!item || saving) return;
-        if (!item.apiKeyConfigured) return;
+        if (!item.credentialConfigured) return;
         if (item.key === currentKey) {
           onClose();
           return;
@@ -245,9 +245,9 @@ export function ModelSelectorDrawer({
 
   if (!open) return null;
 
-  function selectItem(item: SelectableModel, apiKeyConfigured: boolean): void {
+  function selectItem(item: SelectableModel, credentialConfigured: boolean): void {
     if (saving) return;
-    if (!apiKeyConfigured) return;
+    if (!credentialConfigured) return;
     if (item.key === currentKey) {
       onClose();
       return;
@@ -301,7 +301,7 @@ export function ModelSelectorDrawer({
               {group.models.map((item) => {
                 const active = item.key === currentKey;
                 const highlighted = item.key === (highlightKey ?? currentKey);
-                const disabled = saving || !group.apiKeyConfigured;
+                const disabled = saving || !group.credentialConfigured;
                 return (
                   <button
                     key={item.key}
@@ -313,9 +313,9 @@ export function ModelSelectorDrawer({
                     data-highlight={highlighted}
                     className="model-menu-item"
                     disabled={disabled && !active}
-                    title={!group.apiKeyConfigured ? t("model.providerNoKeyHint") : item.model}
+                    title={!group.credentialConfigured ? t("model.providerNoKeyHint") : item.model}
                     onMouseEnter={() => setHighlightKey(item.key)}
-                    onClick={() => selectItem(item, group.apiKeyConfigured)}
+                    onClick={() => selectItem(item, group.credentialConfigured)}
                   >
                     {item.model}
                   </button>
@@ -369,7 +369,8 @@ function buildModelGroups(settings: RuntimeSettings | null): ModelGroup[] {
     if (enabled.length === 0) continue;
     groups.push({
       provider: slot.provider,
-      apiKeyConfigured: slot.apiKeyConfigured,
+      // OAuth 订阅没有 API Key，但同样具备切换模型所需的有效凭证。
+      credentialConfigured: Boolean(slot.apiKeyConfigured || slot.oauthConfigured),
       models: enabled.map((model) => ({
         provider: slot.provider,
         model,

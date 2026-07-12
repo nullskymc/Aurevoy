@@ -33,7 +33,7 @@ import { ModelSelectorDrawer } from "./components/ModelSelectorDrawer";
 import { WorkbenchPanel } from "./components/WorkbenchPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
-import { ToastNotice } from "./components/ToastNotice";
+import { ToastNotice, type ToastTone } from "./components/ToastNotice";
 import { SearchPage } from "./pages/SearchPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { SETTINGS_SECTION_IDS, type AutoModeLevel, type MainView, type SettingsSectionId } from "./app/types";
@@ -90,7 +90,17 @@ function App() {
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
   const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
   const [online, setOnline] = useState<boolean | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNoticeState] = useState<{ message: string; tone: ToastTone } | null>(null);
+  const setNotice = (message: string | null, tone?: ToastTone) => {
+    if (!message) {
+      setNoticeState(null);
+      return;
+    }
+    const inferred: ToastTone =
+      tone
+      ?? (/失败|失敗|failed|error|错误|錯誤|無法|无法|못|에러/i.test(message) ? "error" : "info");
+    setNoticeState({ message, tone: inferred });
+  };
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const {
@@ -153,6 +163,7 @@ function App() {
     handleRemoveProvider,
     handleSaveEnabledModels,
     handleSaveSlotEnabledModels,
+    handleSaveSlotAvailableModels,
     handleSaveModelSelection,
     handleSaveProviderConnection,
     handleSaveSettings,
@@ -503,6 +514,7 @@ function App() {
             onFetchModelsForProvider={handleFetchModelsForProvider}
             onSaveEnabledModels={handleSaveEnabledModels}
             onSaveSlotEnabledModels={handleSaveSlotEnabledModels}
+            onSaveSlotAvailableModels={handleSaveSlotAvailableModels}
             onSelectModel={handleActivateProviderModel}
             onSaveVisionModel={handleSaveVisionModel}
             onRemoveProvider={handleRemoveProvider}
@@ -678,7 +690,13 @@ function App() {
         }}
       />
 
-      {notice && <ToastNotice message={notice} onClose={() => setNotice(null)} />}
+      {notice && (
+        <ToastNotice
+          message={notice.message}
+          tone={notice.tone}
+          onClose={() => setNotice(null)}
+        />
+      )}
     </div>
   );
 }

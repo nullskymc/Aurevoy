@@ -15,10 +15,8 @@ export function ProviderSettings({
   draft,
   settings,
   saving,
-  fetchingModels,
   onDraftChange,
   onSaveConnection,
-  onFetchModelsForProvider,
   onRemoveProvider,
   onRefreshSettings,
   onNotice,
@@ -26,15 +24,14 @@ export function ProviderSettings({
   draft: SettingsDraft;
   settings: RuntimeSettings | null;
   saving: boolean;
-  fetchingModels: boolean;
   onDraftChange: (draft: SettingsDraft) => void;
-  onSaveConnection: (draft: SettingsDraft) => void;
-  onFetchModelsForProvider: (provider: string) => void;
+  onSaveConnection: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
   onRemoveProvider: (provider: string) => void;
   onRefreshSettings?: () => void;
-  onNotice?: (message: string) => void;
+  onNotice?: (message: string, tone?: "info" | "success" | "error") => void;
 }) {
   const [connectionOpen, setConnectionOpen] = useState(false);
+  const [showApiKeyAlt, setShowApiKeyAlt] = useState(false);
 
   useEffect(() => {
     if (!connectionOpen) return;
@@ -54,9 +51,6 @@ export function ProviderSettings({
   const oauthConfigured = isEditingActive
     ? Boolean(settings?.llm.oauthConfigured)
     : Boolean(editingSlot?.oauthConfigured);
-  const availableCount = isEditingActive
-    ? (settings?.llm.availableModels.length ?? 0)
-    : (editingSlot?.availableModels.length ?? 0);
   const configuredProviders = settings?.llm.providers ?? [];
   const connectedIds = new Set(configuredProviders.map((slot) => slot.provider));
   /** 服务端 catalog 优先，缺失时本地回退，保证可连接列表始终可见。 */
@@ -65,18 +59,50 @@ export function ProviderSettings({
   const popularToConnect = availableToConnect.filter((entry) => isPopularProvider(entry.id));
   const moreToConnect = availableToConnect.filter((entry) => !isPopularProvider(entry.id));
   const editingCatalog = catalogFor(settings, draft.provider);
-  // 已保存槽位即可拉取模型目录（内置列表本地可读，不必先填 key）
-  const canFetchModels = connectedIds.has(draft.provider);
-  const showApiKeyField = !editingCatalog || editingCatalog.supportsApiKey || editingCatalog.custom;
+  const supportsOauth = Boolean(editingCatalog?.supportsOauth);
+  const supportsApiKey = Boolean(
+    !editingCatalog || editingCatalog.supportsApiKey || editingCatalog.custom,
+  );
+  const oauthOnly = supportsOauth && !supportsApiKey;
+  const hybridAuth = supportsOauth && supportsApiKey;
+  // 混合鉴权：OAuth / API Key 互斥，不同时展示
+  const apiKeyMode = hybridAuth
+    ? showApiKeyAlt || (apiKeyConfigured && !oauthConfigured)
+    : supportsApiKey && !supportsOauth;
+  const showOauthPanel = supportsOauth && !apiKeyMode;
+  const showApiKeyField = supportsApiKey && (!supportsOauth || apiKeyMode);
   const requiresBaseUrl = Boolean(editingCatalog?.requiresBaseUrl);
+  const showBaseUrlField = !oauthOnly || requiresBaseUrl || Boolean(draft.baseUrl);
+  const showMaxTokensField = !oauthOnly;
   const baseUrlPlaceholder = editingCatalog?.defaultBaseUrl
     || (requiresBaseUrl ? "https://api.example.com/v1" : "");
+  const needsManualSave = showApiKeyField || showBaseUrlField || showMaxTokensField;
 
   function selectProvider(nextProvider: string): void {
     const slot = settings?.llm.providers?.find((item) => item.provider === nextProvider);
     const isActive = settings?.llm.provider === nextProvider;
     const savedBase = slot?.baseUrl
       ?? (isActive ? (settings?.llm.baseUrl ?? "") : "");
+    const nextCatalog = catalogFor(settings, nextProvider);
+    const nextSupportsOauth = Boolean(nextCatalog?.supportsOauth);
+    const nextSupportsApiKey = Boolean(
+      !nextCatalog || nextCatalog.supportsApiKey || nextCatalog.custom,
+    );
+    const nextApiKeyConfigured = isActive
+      ? Boolean(settings?.llm.apiKeyConfigured)
+      : Boolean(slot?.apiKeyConfigured);
+    const nextOauthConfigured = isActive
+      ? Boolean(settings?.llm.oauthConfigured)
+      : Boolean(slot?.oauthConfigured);
+    // 混合鉴权：仅「有 Key 且无 OAuth」时默认进密钥模式，否则 OAuth
+    setShowApiKeyAlt(
+      Boolean(
+        nextSupportsOauth
+        && nextSupportsApiKey
+        && nextApiKeyConfigured
+        && !nextOauthConfigured,
+      ),
+    );
     onDraftChange({
       ...draft,
       provider: nextProvider,
@@ -111,8 +137,24 @@ export function ProviderSettings({
   }
 
   function handleSaveConnection(): void {
-    // 保存后保持弹窗打开，便于继续「获取模型列表」
     onSaveConnection(draft);
+  }
+
+  function handleOauthAuthChanged(event: "login" | "logout"): void {
+    if (event === "login") {
+      // 登录成功：激活槽位；silent 避免覆盖 OAuth 成功 toast
+      void Promise.resolve(onSaveConnection({ ...draft, apiKey: "" }, { silent: true }))
+        .then(() => onRefreshSettings?.());
+      return;
+    }
+    // 退出：禁止 silent-save（会把空槽重新标成「已连接」）
+    if (oauthOnly) {
+      // 纯订阅：退出即断开槽位，离开「已连接」列表
+      setConnectionOpen(false);
+      onRemoveProvider(draft.provider);
+      return;
+    }
+    onRefreshSettings?.();
   }
 
   function providerKindLabel(slot: { provider: string; baseUrl: string; apiKeyConfigured: boolean }): string {
@@ -255,6 +297,7 @@ export function ProviderSettings({
           role="dialog"
           aria-modal="true"
           aria-labelledby="settings-connection-dialog-title"
+          data-auth={oauthOnly ? "oauth" : hybridAuth ? "hybrid" : "apikey"}
           onClick={(event) => event.stopPropagation()}
         >
           <header className="settings-modal-head">
@@ -262,9 +305,15 @@ export function ProviderSettings({
               <ProviderIcon provider={draft.provider} />
               <div>
                 <h2 id="settings-connection-dialog-title">
-                  {t("settings.connectionConfig")}
+                  {providerLabel(draft.provider, editingCatalog?.name)}
                 </h2>
-                <p>{providerLabel(draft.provider, editingCatalog?.name)}</p>
+                <p>
+                  {oauthOnly
+                    ? t("settings.providerKindOauth")
+                    : hybridAuth
+                      ? t("settings.providerKindApiKeyOauth")
+                      : t("settings.connectionConfig")}
+                </p>
               </div>
             </div>
             <button
@@ -278,19 +327,26 @@ export function ProviderSettings({
           </header>
 
           <div className="settings-modal-body">
-            {editingCatalog?.supportsOauth && (
-              <OauthLoginPanel
-                provider={draft.provider}
-                oauthLabel={editingCatalog.oauthLabel}
-                oauthConfigured={oauthConfigured}
-                disabled={saving}
-                onNotice={onNotice}
-                onAuthChanged={() => {
-                  // 激活槽位 + 刷新 settings，让「已登录」状态回填列表
-                  onSaveConnection({ ...draft, apiKey: "" });
-                  onRefreshSettings?.();
-                }}
-              />
+            {showOauthPanel && (
+              <>
+                <OauthLoginPanel
+                  provider={draft.provider}
+                  oauthLabel={editingCatalog?.oauthLabel}
+                  oauthConfigured={oauthConfigured}
+                  disabled={saving}
+                  onNotice={onNotice}
+                  onAuthChanged={handleOauthAuthChanged}
+                />
+                {hybridAuth && (
+                  <button
+                    type="button"
+                    className="settings-link-btn settings-oauth-alt-link"
+                    onClick={() => setShowApiKeyAlt(true)}
+                  >
+                    {t("settings.useApiKeyInstead")}
+                  </button>
+                )}
+              </>
             )}
 
             {showApiKeyField && (
@@ -299,15 +355,15 @@ export function ProviderSettings({
                 <small>
                   {apiKeyConfigured
                     ? t("settings.apiKeyConfigured")
-                    : editingCatalog?.supportsOauth && !editingCatalog.supportsApiKey
-                      ? t("settings.oauthNotConnectedShort")
+                    : hybridAuth
+                      ? t("settings.apiKeyAltHint")
                       : t("settings.apiKeyMissing")}
                 </small>
                 <input
                   className="settings-modal-input"
                   type="password"
                   value={draft.apiKey}
-                  autoFocus={!editingCatalog?.supportsOauth}
+                  autoFocus={!supportsOauth || apiKeyMode}
                   placeholder={
                     apiKeyConfigured
                       ? t("settings.apiKeyKeepPlaceholder")
@@ -315,73 +371,80 @@ export function ProviderSettings({
                   }
                   onChange={(event) => onDraftChange({ ...draft, apiKey: event.currentTarget.value })}
                 />
+                {hybridAuth && (
+                  <button
+                    type="button"
+                    className="settings-link-btn"
+                    onClick={() => {
+                      setShowApiKeyAlt(false);
+                      onDraftChange({ ...draft, apiKey: "" });
+                    }}
+                  >
+                    {t("settings.backToOauth")}
+                  </button>
+                )}
               </label>
             )}
 
-            <label className="settings-modal-field">
-              <span>Base URL</span>
-              <small>
-                {requiresBaseUrl
-                  ? t("settings.baseUrlRequiredDesc")
-                  : t("settings.baseUrlOptionalDesc")}
-              </small>
-              <input
-                className="settings-modal-input"
-                value={draft.baseUrl}
-                placeholder={baseUrlPlaceholder}
-                onChange={(event) => onDraftChange({ ...draft, baseUrl: event.currentTarget.value })}
-              />
-            </label>
+            {showBaseUrlField && (
+              <label className="settings-modal-field">
+                <span>Base URL</span>
+                <small>
+                  {requiresBaseUrl
+                    ? t("settings.baseUrlRequiredDesc")
+                    : t("settings.baseUrlOptionalDesc")}
+                </small>
+                <input
+                  className="settings-modal-input"
+                  value={draft.baseUrl}
+                  placeholder={baseUrlPlaceholder}
+                  onChange={(event) => onDraftChange({ ...draft, baseUrl: event.currentTarget.value })}
+                />
+              </label>
+            )}
 
-            <label className="settings-modal-field">
-              <span>{t("settings.maxTokensTitle")}</span>
-              <small>{t("settings.maxTokensDesc")}</small>
-              <input
-                className="settings-modal-input settings-modal-input-narrow"
-                type="number"
-                min={256}
-                step={256}
-                value={draft.maxTokens}
-                onChange={(event) =>
-                  onDraftChange({ ...draft, maxTokens: Number(event.currentTarget.value) })
-                }
-              />
-            </label>
-
-            <div className="settings-modal-field">
-              <span>{t("settings.fetchModelsTitle")}</span>
-              <small>
-                {canFetchModels
-                  ? availableCount > 0
-                    ? `${t("settings.modelDescFetchedPrefix")}${availableCount}${t("settings.modelListCountSuffix")} · ${t("settings.fetchModelsNoSetHint")}`
-                    : editingCatalog && editingCatalog.modelCount > 0
-                      ? `${t("settings.fetchModelsCatalogHint")}${editingCatalog.modelCount}${t("settings.modelListCountSuffix")}`
-                      : t("settings.fetchModelsDesc")
-                  : t("settings.fetchModelsNeedSave")}
-              </small>
-              <button
-                type="button"
-                className="settings-secondary-btn settings-modal-fetch-btn"
-                disabled={saving || fetchingModels || !canFetchModels}
-                onClick={() => onFetchModelsForProvider(draft.provider)}
-              >
-                {fetchingModels ? t("settings.fetching") : t("settings.fetchModels")}
-              </button>
-            </div>
+            {showMaxTokensField && (
+              <label className="settings-modal-field">
+                <span>{t("settings.maxTokensTitle")}</span>
+                <small>{t("settings.maxTokensDesc")}</small>
+                <input
+                  className="settings-modal-input settings-modal-input-narrow"
+                  type="number"
+                  min={256}
+                  step={256}
+                  value={draft.maxTokens}
+                  onChange={(event) =>
+                    onDraftChange({ ...draft, maxTokens: Number(event.currentTarget.value) })
+                  }
+                />
+              </label>
+            )}
           </div>
 
           <footer className="settings-modal-foot">
-            <button type="button" className="settings-secondary-btn" onClick={closeConnection}>
-              {t("action.cancel")}
-            </button>
-            <button
-              type="button"
-              className="settings-primary-btn"
-              disabled={saving}
-              onClick={handleSaveConnection}
-            >
-              {saving ? t("settings.saving") : t("settings.saveConnectionTitle")}
-            </button>
+            {needsManualSave ? (
+              <>
+                <button type="button" className="settings-secondary-btn" onClick={closeConnection}>
+                  {t("action.cancel")}
+                </button>
+                <button
+                  type="button"
+                  className="settings-primary-btn"
+                  disabled={saving}
+                  onClick={handleSaveConnection}
+                >
+                  {saving ? t("settings.saving") : t("settings.saveConnectionTitle")}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="settings-primary-btn"
+                onClick={closeConnection}
+              >
+                {t("settings.oauthDone")}
+              </button>
+            )}
           </footer>
         </div>
       </div>

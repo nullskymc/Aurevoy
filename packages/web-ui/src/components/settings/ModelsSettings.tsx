@@ -12,20 +12,26 @@ export function ModelsSettings({
   fetchingModels,
   onFetchModelsForProvider,
   onSaveSlotEnabledModels,
+  onSaveSlotAvailableModels,
   onSelectModel,
   onSaveVisionModel,
 }: {
   settings: RuntimeSettings | null;
   saving: boolean;
   fetchingModels: boolean;
-  onFetchModelsForProvider: (provider: string) => void;
+  onFetchModelsForProvider: (provider: string, options?: { silent?: boolean }) => void;
   onSaveSlotEnabledModels: (provider: string, models: string[]) => void;
+  onSaveSlotAvailableModels: (provider: string, models: string[]) => void;
   onSelectModel: (provider: string, model: string) => void;
   onSaveVisionModel: (visionModel: string) => void;
 }) {
   const [query, setQuery] = useState("");
   /** 本地乐观启用列表：取消勾选立即生效，不被 saving/回写时序弹回 */
   const [enabledLocal, setEnabledLocal] = useState<Record<string, string[]>>({});
+  /** 各 provider 自定义模型输入框草稿 */
+  const [customDraft, setCustomDraft] = useState<Record<string, string>>({});
+  /** 展开的 provider 抽屉；默认只开当前激活槽 */
+  const [openProviders, setOpenProviders] = useState<Record<string, boolean>>({});
 
   const providers = settings?.llm.providers ?? [];
   const activeProvider = settings?.llm.provider;
@@ -33,6 +39,14 @@ export function ModelsSettings({
   /** 全局视觉：namespace `provider:model` 或裸 id */
   const globalVision = settings?.llm.visionModel ?? "";
   const normalizedQuery = query.trim().toLowerCase();
+
+  useEffect(() => {
+    if (!activeProvider) return;
+    setOpenProviders((prev) => {
+      if (prev[activeProvider]) return prev;
+      return { ...prev, [activeProvider]: true };
+    });
+  }, [activeProvider]);
 
   // 服务端 settings 变化时同步本地勾选（仅当与本地无冲突的 pending 时）
   useEffect(() => {
@@ -110,6 +124,31 @@ export function ModelsSettings({
   /** 清空该 Provider 在主界面菜单中的勾选（可全不选）。 */
   function enableNone(provider: string): void {
     commitEnabled(provider, []);
+  }
+
+  function addCustomModel(provider: string): void {
+    const raw = (customDraft[provider] ?? "").trim();
+    if (!raw) return;
+    if (!isChatModelId(raw)) return;
+    const available = slotAvailable(provider);
+    if (available.includes(raw)) {
+      setCustomDraft((prev) => ({ ...prev, [provider]: "" }));
+      return;
+    }
+    const nextAvailable = [...available, raw];
+    onSaveSlotAvailableModels(provider, nextAvailable);
+    // 新模型默认勾选进主界面菜单
+    commitEnabled(provider, [...slotEnabled(provider), raw]);
+    setCustomDraft((prev) => ({ ...prev, [provider]: "" }));
+  }
+
+  function removeModel(provider: string, model: string): void {
+    const available = slotAvailable(provider).filter((m) => m !== model);
+    onSaveSlotAvailableModels(provider, available);
+    commitEnabled(
+      provider,
+      slotEnabled(provider).filter((m) => m !== model),
+    );
   }
 
   /** 跨 provider 的视觉候选：namespace 保证同名模型不冲突 */
@@ -236,102 +275,181 @@ export function ModelsSettings({
           const visionParsed = parseModelNamespace(globalVision);
           const allEnabled = available.length > 0 && available.every((m) => enabledSet.has(m));
           const slotCatalog = catalogFor(settings, slot.provider);
+          // 搜索时强制展开匹配组；否则看抽屉状态（默认仅激活槽展开）
+          const open =
+            Boolean(normalizedQuery)
+            || openProviders[slot.provider]
+            || (openProviders[slot.provider] === undefined && isActiveSlot);
           return (
-            <section key={slot.provider} className="settings-models-group">
+            <section
+              key={slot.provider}
+              className="settings-models-group"
+              data-open={open}
+            >
               <header className="settings-models-group-head">
-                <ProviderIcon provider={slot.provider} />
-                <div className="settings-models-group-title">
-                  <strong>
-                    {providerLabel(slot.provider, slotCatalog?.name)}
-                  </strong>
-                  <small>
-                    <span className="settings-models-ns">{slot.provider}</span>
-                    {" · "}
-                    {enabledSet.size}/{available.length || models.length}
-                    {isActiveSlot ? ` · ${t("settings.providerActive")}` : ""}
-                  </small>
-                </div>
-                <div className="settings-models-group-actions">
-                  <button
-                    type="button"
-                    className="settings-secondary-btn"
-                    disabled={fetchingModels || saving}
-                    onClick={() => onFetchModelsForProvider(slot.provider)}
-                  >
-                    {fetchingModels ? t("settings.fetching") : t("settings.fetchModels")}
-                  </button>
-                  {available.length > 0 && (
-                    <>
-                      <button
-                        type="button"
-                        className="settings-secondary-btn"
-                        disabled={saving || allEnabled}
-                        onClick={() => enableAll(slot.provider)}
-                      >
-                        {t("settings.enableAllModels")}
-                      </button>
-                      <button
-                        type="button"
-                        className="settings-secondary-btn"
-                        disabled={saving || enabledSet.size === 0}
-                        onClick={() => enableNone(slot.provider)}
-                      >
-                        {t("settings.enableNoneModels")}
-                      </button>
-                    </>
-                  )}
-                </div>
-              </header>
-
-              {available.length === 0 ? (
-                <div className="settings-provider-empty settings-models-empty-inline">
-                  <p>{t("settings.modelEmptyFetchHere")}</p>
-                </div>
-              ) : (
-                <div className="settings-provider-sheet settings-models-sheet" role="list">
-                  {models.map((model) => {
-                    const isCurrent = isActiveSlot && model === current;
-                    // 勾选 = 出现在输入框模型菜单；点名称 = 切换并保存为当前主模型
-                    const checked = enabledSet.has(model);
-                    const ns = modelNamespace(slot.provider, model);
-                    const isVision =
-                      globalVision === ns
-                      || (visionParsed.provider === slot.provider && visionParsed.model === model)
-                      || (!visionParsed.provider && globalVision === model);
-                    return (
-                      <div
-                        key={ns}
-                        className="settings-models-row"
-                        data-current={isCurrent}
-                        role="listitem"
-                      >
+                <button
+                  type="button"
+                  className="settings-models-group-toggle"
+                  aria-expanded={open}
+                  onClick={() =>
+                    setOpenProviders((prev) => ({
+                      ...prev,
+                      [slot.provider]: !open,
+                    }))
+                  }
+                >
+                  <span className="settings-models-group-caret" data-open={open} aria-hidden="true">
+                    ›
+                  </span>
+                  <ProviderIcon provider={slot.provider} />
+                  <span className="settings-models-group-title">
+                    <strong>
+                      {providerLabel(slot.provider, slotCatalog?.name)}
+                    </strong>
+                    <small>
+                      <span className="settings-models-ns">{slot.provider}</span>
+                      {" · "}
+                      {enabledSet.size}/{available.length || models.length}
+                      {isActiveSlot ? ` · ${t("settings.providerActive")}` : ""}
+                    </small>
+                  </span>
+                </button>
+                {open && (
+                  <div className="settings-models-group-actions">
+                    <button
+                      type="button"
+                      className="settings-secondary-btn"
+                      disabled={fetchingModels || saving}
+                      onClick={() => onFetchModelsForProvider(slot.provider)}
+                    >
+                      {fetchingModels ? t("settings.fetching") : t("settings.fetchModels")}
+                    </button>
+                    {available.length > 0 && (
+                      <>
                         <button
                           type="button"
-                          className="settings-models-row-main"
-                          disabled={saving || isCurrent}
-                          title={isCurrent ? ns : t("settings.clickToUseModel")}
-                          onClick={() => {
-                            if (!isCurrent) onSelectModel(slot.provider, model);
-                          }}
+                          className="settings-secondary-btn"
+                          disabled={saving || allEnabled}
+                          onClick={() => enableAll(slot.provider)}
                         >
-                          <span className="settings-models-row-id" title={ns}>{model}</span>
-                          {isCurrent && <em>{t("settings.modelCurrent")}</em>}
-                          {isVision && !isCurrent && <em>{t("settings.modelVisionTag")}</em>}
+                          {t("settings.enableAllModels")}
                         </button>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={(event) => {
-                            event.stopPropagation();
-                            toggleModel(slot.provider, model, event.currentTarget.checked);
-                          }}
-                          aria-label={`${ns} ${t("settings.enableModelListLabel")}`}
-                          title={t("settings.enabledModelsDesc")}
-                        />
-                      </div>
-                    );
-                  })}
+                        <button
+                          type="button"
+                          className="settings-secondary-btn"
+                          disabled={saving || enabledSet.size === 0}
+                          onClick={() => enableNone(slot.provider)}
+                        >
+                          {t("settings.enableNoneModels")}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </header>
+
+              {open && (
+                <div className="settings-models-group-body">
+                  {available.length === 0 ? (
+                    <div className="settings-provider-empty settings-models-empty-inline">
+                      <p>{t("settings.modelEmptyFetchHere")}</p>
+                    </div>
+                  ) : (
+                    <div className="settings-provider-sheet settings-models-sheet" role="list">
+                      {models.map((model) => {
+                        const isCurrent = isActiveSlot && model === current;
+                        // 勾选 = 出现在输入框模型菜单；点名称 = 切换并保存为当前主模型
+                        const checked = enabledSet.has(model);
+                        const ns = modelNamespace(slot.provider, model);
+                        const isVision =
+                          globalVision === ns
+                          || (visionParsed.provider === slot.provider && visionParsed.model === model)
+                          || (!visionParsed.provider && globalVision === model);
+                        return (
+                          <div
+                            key={ns}
+                            className="settings-models-row"
+                            data-current={isCurrent}
+                            role="listitem"
+                          >
+                            <button
+                              type="button"
+                              className="settings-models-row-main"
+                              disabled={saving || isCurrent}
+                              title={isCurrent ? ns : t("settings.clickToUseModel")}
+                              onClick={() => {
+                                if (!isCurrent) onSelectModel(slot.provider, model);
+                              }}
+                            >
+                              <span className="settings-models-row-id" title={ns}>{model}</span>
+                              {isCurrent && <em>{t("settings.modelCurrent")}</em>}
+                              {isVision && !isCurrent && <em>{t("settings.modelVisionTag")}</em>}
+                            </button>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={(event) => {
+                                event.stopPropagation();
+                                toggleModel(slot.provider, model, event.currentTarget.checked);
+                              }}
+                              aria-label={`${ns} ${t("settings.enableModelListLabel")}`}
+                              title={t("settings.enabledModelsDesc")}
+                            />
+                            <button
+                              type="button"
+                              className="settings-models-row-remove"
+                              disabled={saving}
+                              title={t("settings.removeModel")}
+                              aria-label={`${t("settings.removeModel")}: ${model}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                removeModel(slot.provider, model);
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className="settings-models-add">
+                    <input
+                      className="settings-models-add-input"
+                      type="text"
+                      value={customDraft[slot.provider] ?? ""}
+                      placeholder={t("settings.addModelPlaceholder")}
+                      disabled={saving}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        setCustomDraft((prev) => ({
+                          ...prev,
+                          [slot.provider]: value,
+                        }));
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          addCustomModel(slot.provider);
+                        }
+                      }}
+                      aria-label={t("settings.addModel")}
+                    />
+                    <button
+                      type="button"
+                      className="settings-secondary-btn"
+                      disabled={
+                        saving
+                        || !(customDraft[slot.provider] ?? "").trim()
+                        || !isChatModelId((customDraft[slot.provider] ?? "").trim())
+                      }
+                      onClick={() => addCustomModel(slot.provider)}
+                    >
+                      {t("settings.addModel")}
+                    </button>
+                  </div>
                 </div>
               )}
             </section>

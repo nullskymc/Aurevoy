@@ -42,6 +42,7 @@ export function SettingsPanel({
   onFetchModelsForProvider,
   onSaveEnabledModels: _onSaveEnabledModels,
   onSaveSlotEnabledModels,
+  onSaveSlotAvailableModels,
   onSelectModel,
   onSaveVisionModel,
   onRemoveProvider,
@@ -153,10 +154,8 @@ export function SettingsPanel({
               draft={draft}
               settings={settings}
               saving={saving}
-              fetchingModels={fetchingModels}
               onDraftChange={setDraft}
               onSaveConnection={onSaveConnection}
-              onFetchModelsForProvider={onFetchModelsForProvider}
               onRemoveProvider={onRemoveProvider}
               onRefreshSettings={onRefresh}
               onNotice={onNotice}
@@ -170,6 +169,7 @@ export function SettingsPanel({
               fetchingModels={fetchingModels}
               onFetchModelsForProvider={onFetchModelsForProvider}
               onSaveSlotEnabledModels={onSaveSlotEnabledModels}
+              onSaveSlotAvailableModels={onSaveSlotAvailableModels}
               onSelectModel={onSelectModel}
               onSaveVisionModel={onSaveVisionModel}
             />
