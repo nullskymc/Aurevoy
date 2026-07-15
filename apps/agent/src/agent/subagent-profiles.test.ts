@@ -16,9 +16,12 @@ describe('subagent profiles', () => {
     );
     for (const profile of profiles) {
       expect(profile.tools.length).toBeGreaterThan(0);
-      expect(profile.timeoutMs).toBeGreaterThan(0);
-      expect(profile.maxIterations).toBeGreaterThan(0);
+      expect(profile.tools).not.toContain('present_ui');
+      expect(profile.maxOutputChars).toBeGreaterThan(0);
       expect(profile.systemPromptAddon.length).toBeGreaterThan(0);
+      // 子代理不再配置独立轮次/总时长上限
+      expect(profile).not.toHaveProperty('timeoutMs');
+      expect(profile).not.toHaveProperty('maxIterations');
     }
   });
 

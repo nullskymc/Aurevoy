@@ -1,31 +1,18 @@
 import type { Credential, CredentialStore } from '@earendil-works/pi-ai';
-import { settingsStore } from '../store/db.js';
-
-const CREDENTIAL_KEY_PREFIX = 'llm.credential.';
-
-function credentialKey(providerId: string): string {
-  return `${CREDENTIAL_KEY_PREFIX}${providerId}`;
-}
-
-function parseCredential(raw: string | undefined): Credential | undefined {
-  if (!raw?.trim()) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as Credential;
-    if (!parsed || typeof parsed !== 'object' || !('type' in parsed)) return undefined;
-    if (parsed.type === 'api_key') return parsed;
-    if (parsed.type === 'oauth' && typeof parsed.access === 'string' && typeof parsed.refresh === 'string') {
-      return parsed;
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
-}
+import {
+  deleteLlmCredential,
+  ensureLlmSchemaMigrated,
+  ensureProviderRow,
+  hasLlmApiKeyCredential,
+  hasLlmCredential,
+  hasLlmOauthCredential,
+  readLlmCredential,
+  writeLlmCredential,
+} from './llm-store.js';
 
 /**
- * SQLite 持久化的 Pi CredentialStore。
- * 每 provider 一条凭证（api_key | oauth）；modify 按 provider 串行，供 OAuth refresh 使用。
- * Pi 约定：modify 的 fn 返回 undefined 表示不改写；清除请用 delete()。
+ * Pi CredentialStore 适配：底层为 llm_credentials 表（每 provider 唯一鉴权）。
+ * modify 按 provider 串行，供 OAuth refresh 使用。
  */
 class AurevoyCredentialStore implements CredentialStore {
   private chains = new Map<string, Promise<unknown>>();
@@ -44,7 +31,8 @@ class AurevoyCredentialStore implements CredentialStore {
   }
 
   async read(providerId: string): Promise<Credential | undefined> {
-    return parseCredential(settingsStore.get(credentialKey(providerId)));
+    ensureLlmSchemaMigrated();
+    return readLlmCredential(providerId);
   }
 
   async modify(
@@ -52,17 +40,18 @@ class AurevoyCredentialStore implements CredentialStore {
     fn: (current: Credential | undefined) => Promise<Credential | undefined>,
   ): Promise<Credential | undefined> {
     return this.enqueue(providerId, async () => {
-      const current = parseCredential(settingsStore.get(credentialKey(providerId)));
+      ensureProviderRow(providerId);
+      const current = readLlmCredential(providerId);
       const next = await fn(current);
       if (next === undefined) return current;
-      settingsStore.set(credentialKey(providerId), JSON.stringify(next), true);
+      writeLlmCredential(providerId, next);
       return next;
     });
   }
 
   async delete(providerId: string): Promise<void> {
     await this.enqueue(providerId, async () => {
-      settingsStore.delete(credentialKey(providerId));
+      deleteLlmCredential(providerId);
     });
   }
 }
@@ -71,23 +60,25 @@ export const aurevoyCredentialStore: CredentialStore = new AurevoyCredentialStor
 
 /** 同步探测：是否已有可用凭证（api_key 或 oauth） */
 export function hasStoredCredential(providerId: string): boolean {
-  const cred = parseCredential(settingsStore.get(credentialKey(providerId)));
-  if (!cred) return false;
-  if (cred.type === 'api_key') return Boolean(cred.key?.trim());
-  if (cred.type === 'oauth') return Boolean(cred.access?.trim() && cred.refresh?.trim());
-  return false;
+  ensureLlmSchemaMigrated();
+  return hasLlmCredential(providerId);
 }
 
 export function hasOauthCredential(providerId: string): boolean {
-  const cred = parseCredential(settingsStore.get(credentialKey(providerId)));
-  return cred?.type === 'oauth' && Boolean(cred.access?.trim());
+  ensureLlmSchemaMigrated();
+  return hasLlmOauthCredential(providerId);
+}
+
+export function hasApiKeyCredential(providerId: string): boolean {
+  ensureLlmSchemaMigrated();
+  return hasLlmApiKeyCredential(providerId);
 }
 
 /**
- * 写入 API Key 凭证。
+ * 写入 API Key 凭证（互斥：覆盖 oauth）。
  * - 空 key：仅删除已有 api_key，不动 oauth
- * - 非空：默认不覆盖已有 oauth（Codex/Claude 订阅登录会被 sk- 密钥毁掉）
- * - force=true：用户在设置里显式保存 Key 时允许覆盖 oauth
+ * - 非空 + force=false：不覆盖已有 oauth
+ * - force=true：用户显式保存 Key 时允许覆盖 oauth
  */
 export async function writeApiKeyCredential(
   providerId: string,
@@ -96,20 +87,17 @@ export async function writeApiKeyCredential(
 ): Promise<void> {
   const trimmed = apiKey.trim();
   if (!trimmed) {
-    const current = await aurevoyCredentialStore.read(providerId);
+    const current = readLlmCredential(providerId);
     if (current?.type === 'api_key') {
-      await aurevoyCredentialStore.delete(providerId);
+      deleteLlmCredential(providerId);
     }
     return;
   }
   await aurevoyCredentialStore.modify(providerId, async (current) => {
     if (current?.type === 'oauth' && !options?.force) {
-      return undefined; // 保留订阅登录
+      return undefined;
     }
-    return {
-      type: 'api_key',
-      key: trimmed,
-    };
+    return { type: 'api_key', key: trimmed };
   });
 }
 

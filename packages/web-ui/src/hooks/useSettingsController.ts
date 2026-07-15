@@ -78,8 +78,11 @@ export function useSettingsController({
     }
   }
 
-  /** Provider 连接：只写密钥 / Base URL / maxTokens，不改默认模型、启用列表、视觉模型。 */
-  function handleSaveProviderConnection(draft: SettingsDraft): void {
+  /** Provider 连接：只写密钥 / Base URL / maxTokens，不改默认模型或启用列表。 */
+  function handleSaveProviderConnection(
+    draft: SettingsDraft,
+    options?: { silent?: boolean },
+  ): Promise<void> {
     // 跨槽保存时：若 baseUrl 仍等于当前激活槽网关、且与目标槽已存值不同，视为 draft 残留，回落目标槽
     const activeBase = (runtimeSettings?.llm.baseUrl ?? "").replace(/\/+$/, "");
     const slotBase = (
@@ -103,16 +106,20 @@ export function useSettingsController({
       },
     };
     setSettingsSaving(true);
-    void updateSettings(body)
+    return updateSettings(body)
       .then((next) => {
         setRuntimeSettings(next);
         setHealth((previous) =>
           previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
         );
-        setNotice(t("notice.settingsSaved"));
+        if (!options?.silent) {
+          setNotice(t("notice.settingsSaved"));
+        }
         return refreshSettings();
       })
-      .catch((err) => setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`))
+      .catch((err) => {
+        setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`);
+      })
       .finally(() => setSettingsSaving(false));
   }
 
@@ -163,22 +170,6 @@ export function useSettingsController({
         setHealth((previous) =>
           previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
         );
-        setNotice(t("notice.settingsSaved"));
-        return refreshSettings();
-      })
-      .catch((err) => setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => setSettingsSaving(false));
-  }
-
-  /**
-   * 全局视觉模型：只写 visionModel，不切换激活 provider。
-   * 值推荐 namespace：`provider:model`；空字符串表示清除（回退主模型）。
-   */
-  function handleSaveVisionModel(visionModel: string): void {
-    setSettingsSaving(true);
-    void updateSettings({ llm: { visionModel } })
-      .then((next) => {
-        setRuntimeSettings(next);
         setNotice(t("notice.settingsSaved"));
         return refreshSettings();
       })
@@ -253,11 +244,37 @@ export function useSettingsController({
       .catch((err) => setNotice(`${t("notice.saveModelListFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
 
+  /** 自定义模型添加时声明图片输入能力（只升不降）；目录模型由 Pi 注册表推断。 */
+  function handleSaveSlotImageInputModels(provider: string, models: string[]): void {
+    const imageInputModels = [...models];
+    void updateSettings({ llm: { slotImageInputModels: { provider, imageInputModels } } })
+      .then((next) => {
+        setRuntimeSettings(next);
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`${t("notice.saveModelListFailed")}${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  /** 写入任意槽位的 availableModels（自定义模型 / 删除模型）。 */
+  function handleSaveSlotAvailableModels(provider: string, models: string[]): void {
+    const availableModels = [...models];
+    void updateSettings({ llm: { slotAvailableModels: { provider, availableModels } } })
+      .then((next) => {
+        setRuntimeSettings(next);
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`${t("notice.saveModelListFailed")}${err instanceof Error ? err.message : String(err)}`));
+  }
+
   /**
    * 为指定 provider 拉取模型列表（只写 availableModels；保留仍有效的启用勾选，不强制勾选）。
    * 非当前激活槽时会先切换激活再拉取（listProviderModels 依赖当前激活 provider）。
+   * silent：OAuth 登录后自动拉取时不覆盖成功 toast。
    */
-  function handleFetchModelsForProvider(provider: string): void {
+  function handleFetchModelsForProvider(
+    provider: string,
+    options?: { silent?: boolean },
+  ): void {
     setFetchingModels(true);
     const priorSlot = runtimeSettings?.llm.providers?.find((s) => s.provider === provider);
     const priorEnabled =
@@ -276,17 +293,27 @@ export function useSettingsController({
             return next;
           });
 
+    const priorAvailable =
+      runtimeSettings?.llm.provider === provider
+        ? (runtimeSettings.llm.availableModels ?? [])
+        : (priorSlot?.availableModels ?? []);
+
     void ensureActive
       .then(() => listProviderModels())
       .then((models) => {
-        const enabledModels = priorEnabled.filter((model) => models.includes(model));
-        return updateSettings({ llm: { availableModels: models, enabledModels } });
+        // 拉取目录时保留用户手填的自定义模型 id（不在 catalog 里的）
+        const customKept = priorAvailable.filter((m) => !models.includes(m));
+        const availableModels = [...models, ...customKept];
+        const enabledModels = priorEnabled.filter((model) => availableModels.includes(model));
+        return updateSettings({ llm: { availableModels, enabledModels } });
       })
       .then((next) => {
         setRuntimeSettings(next);
-        setNotice(
-          `${t("notice.fetchedModelsPrefix")}${next.llm.availableModels.length}${t("notice.fetchedModelsSuffix")}`,
-        );
+        if (!options?.silent) {
+          setNotice(
+            `${t("notice.fetchedModelsPrefix")}${next.llm.availableModels.length}${t("notice.fetchedModelsSuffix")}`,
+          );
+        }
         return refreshSettings();
       })
       .catch((err) => setNotice(`${t("notice.fetchModelsFailed")}${err instanceof Error ? err.message : String(err)}`))
@@ -380,11 +407,12 @@ export function useSettingsController({
     handleSaveEnabledModels,
     handleSaveSlotDefaultModel,
     handleSaveSlotEnabledModels,
+    handleSaveSlotImageInputModels,
+    handleSaveSlotAvailableModels,
     handleRemoveProvider,
     handleSaveModelSelection,
     handleSaveProviderConnection,
     handleSaveSettings,
-    handleSaveVisionModel,
     handleToggleMemory,
     refreshMemories,
     refreshSettings,

@@ -15,6 +15,8 @@ import { KbSettings } from "./KbSettings";
 import { SearchSettings } from "./SearchSettings";
 import { UsageSettings } from "./UsageSettings";
 import "../SettingsPanel.css";
+// MemorySettings / KbSettings 复用 memory-* class；设置入口不挂载 MemoryPanel，需显式引入样式
+import "../MemoryPanel.css";
 
 export type { SettingsDraft } from "./types";
 export type { SettingsPanelProps } from "./types";
@@ -42,8 +44,9 @@ export function SettingsPanel({
   onFetchModelsForProvider,
   onSaveEnabledModels: _onSaveEnabledModels,
   onSaveSlotEnabledModels,
+  onSaveSlotImageInputModels,
+  onSaveSlotAvailableModels,
   onSelectModel,
-  onSaveVisionModel,
   onRemoveProvider,
   onChatFontSizeChange,
   onUiFontSizeChange,
@@ -153,10 +156,8 @@ export function SettingsPanel({
               draft={draft}
               settings={settings}
               saving={saving}
-              fetchingModels={fetchingModels}
               onDraftChange={setDraft}
               onSaveConnection={onSaveConnection}
-              onFetchModelsForProvider={onFetchModelsForProvider}
               onRemoveProvider={onRemoveProvider}
               onRefreshSettings={onRefresh}
               onNotice={onNotice}
@@ -170,8 +171,9 @@ export function SettingsPanel({
               fetchingModels={fetchingModels}
               onFetchModelsForProvider={onFetchModelsForProvider}
               onSaveSlotEnabledModels={onSaveSlotEnabledModels}
+              onSaveSlotImageInputModels={onSaveSlotImageInputModels}
+              onSaveSlotAvailableModels={onSaveSlotAvailableModels}
               onSelectModel={onSelectModel}
-              onSaveVisionModel={onSaveVisionModel}
             />
           )}
 

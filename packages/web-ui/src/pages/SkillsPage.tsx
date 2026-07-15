@@ -1,11 +1,28 @@
-import { useMemo, useState } from "react";
-import type { SkillDescriptor, SkillInstallResponse } from "@aurevoy/shared";
+import { useEffect, useMemo, useState } from "react";
+import type { SkillDescriptor, SkillDetail, SkillInstallResponse } from "@aurevoy/shared";
+import { fetchSkillDetail } from "../api";
+import { MarkdownRenderer } from "../components/MarkdownRenderer";
 import { t } from "../i18n";
 import "./SkillsPage.css";
 
-function formatAllowedTools(allowedTools?: string[]): string {
-  if (!allowedTools || allowedTools.length === 0) return t("skillsPage.allTools");
-  return allowedTools.join(" · ");
+type SourceTab = "personal" | "system";
+
+function isPersonal(skill: SkillDescriptor): boolean {
+  return skill.sourceDir === "user" || skill.sourceDir === "workspace";
+}
+
+function isSystem(skill: SkillDescriptor): boolean {
+  return skill.sourceDir === "system" || skill.sourceDir === "builtin";
+}
+
+function canUninstall(skill: SkillDescriptor): boolean {
+  return skill.sourceDir === "user" || skill.sourceDir === "system";
+}
+
+function matchesQuery(skill: SkillDescriptor, query: string): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return skill.name.toLowerCase().includes(q) || skill.description.toLowerCase().includes(q);
 }
 
 export function SkillsPage({
@@ -16,6 +33,8 @@ export function SkillsPage({
   onInstall,
   onReload,
   onToggle,
+  onUninstall,
+  onTrySkill,
 }: {
   skills: SkillDescriptor[];
   installing: boolean;
@@ -24,19 +43,27 @@ export function SkillsPage({
   onInstall: (url: string) => Promise<SkillInstallResponse>;
   onReload: () => Promise<void>;
   onToggle: (name: string, enabled: boolean) => Promise<void>;
+  onUninstall: (name: string) => Promise<void>;
+  /** 跳转对话并预填试用文案 */
+  onTrySkill?: (name: string) => void;
 }) {
-  const [url, setUrl] = useState("");
   const [query, setQuery] = useState("");
-  const [lastResult, setLastResult] = useState<SkillInstallResponse | null>(null);
+  const [sourceTab, setSourceTab] = useState<SourceTab>("personal");
   const [installOpen, setInstallOpen] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set(["workspace", "user", "system"]));
+  const [url, setUrl] = useState("");
+  const [lastResult, setLastResult] = useState<SkillInstallResponse | null>(null);
+  const [selectedName, setSelectedName] = useState<string | null>(null);
 
-  const filtered = query.trim()
-    ? skills.filter((s) => {
-        const q = query.toLowerCase();
-        return s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q);
-      })
-    : skills;
+  const filtered = useMemo(
+    () => skills.filter((s) => matchesQuery(s, query.trim())),
+    [skills, query],
+  );
+
+  const installed = filtered;
+  const tabSkills = useMemo(
+    () => filtered.filter((s) => (sourceTab === "personal" ? isPersonal(s) : isSystem(s))),
+    [filtered, sourceTab],
+  );
 
   async function handleInstall() {
     const trimmed = url.trim();
@@ -47,78 +74,48 @@ export function SkillsPage({
       setUrl("");
       setInstallOpen(false);
     } catch {
-      /* error shown via installError prop */
+      /* error via installError prop */
     }
   }
-
-  function toggleGroup(id: string) {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  const groups = useMemo(() => {
-    const map = new Map<string, SkillDescriptor[]>();
-    for (const skill of filtered) {
-      const key = skill.sourceDir;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(skill);
-    }
-
-    const order = ["workspace", "user", "system", "builtin"];
-    const result: Array<{ key: string; labelKey: string; skills: SkillDescriptor[] }> = [];
-    for (const key of order) {
-      const items = map.get(key);
-      if (items) {
-        result.push({ key, labelKey: `skillsPage.group.${key}`, skills: items });
-        map.delete(key);
-      }
-    }
-    for (const [key, items] of map) {
-      result.push({ key, labelKey: "skillsPage.group.other", skills: items });
-    }
-    return result;
-  }, [filtered]);
 
   return (
-    <section className="page-panel">
-      <header className="skills-page-header">
-        <div>
+    <section className="page-panel skills-page" aria-label={t("nav.skills")}>
+      <header className="skills-hero">
+        <div className="skills-hero-text">
           <h1>{t("nav.skills")}</h1>
-          <p className="skills-page-summary">{skills.length} skills</p>
+          <p>{t("skillsPage.desc")}</p>
         </div>
-        <div className="skills-page-actions">
+        <div className="skills-hero-actions">
           <button
             type="button"
-            className="ghost-btn"
-            onClick={onReload}
+            className="skills-icon-btn"
+            onClick={() => void onReload()}
             disabled={reloading}
             title={t("skillsPage.reload")}
+            aria-label={t("skillsPage.reload")}
           >
-            {reloading ? t("skillsPage.reloading") : t("skillsPage.reload")}
+            <ReloadIcon spinning={reloading} />
           </button>
-          {lastResult && !installError && (
-            <span className="skill-install-success">
-              {t("skillsPage.reloadSuccess")} ({lastResult.installedSkills?.length ?? skills.length})
-            </span>
-          )}
+          <button
+            type="button"
+            className="skills-create-btn"
+            onClick={() => setInstallOpen((v) => !v)}
+          >
+            {installOpen ? t("skillsPage.installHide") : t("skillsPage.installShow")}
+          </button>
         </div>
       </header>
 
-      <div className="skills-search-bar">
+      <div className="skills-search-shell">
+        <SearchIcon />
         <input
-          type="text"
+          type="search"
           className="skills-search-input"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t("skillsPage.search")}
+          aria-label={t("skillsPage.search")}
         />
-        <button type="button" className="ghost-btn" onClick={() => setInstallOpen(!installOpen)}>
-          {installOpen ? t("skillsPage.installHide") : t("skillsPage.installShow")}
-        </button>
       </div>
 
       {installOpen && (
@@ -137,58 +134,331 @@ export function SkillsPage({
               }}
               disabled={installing}
             />
-            <button type="button" className="btn-primary" onClick={handleInstall} disabled={installing || !url.trim()}>
+            <button
+              type="button"
+              className="skills-install-submit"
+              onClick={() => void handleInstall()}
+              disabled={installing || !url.trim()}
+            >
               {installing ? t("skillsPage.installing") : t("skillsPage.install")}
             </button>
           </div>
-          {installError && <p className="skill-install-error">{t("skillsPage.installFailed")}{installError}</p>}
+          {installError && (
+            <p className="skill-install-error">
+              {t("skillsPage.installFailed")}
+              {installError}
+            </p>
+          )}
+          {lastResult && !installError && (
+            <p className="skill-install-success">
+              {t("skillsPage.reloadSuccess")} ({lastResult.installedSkills?.length ?? 0})
+            </p>
+          )}
         </div>
       )}
 
-      {filtered.length === 0 ? (
-        <p className="page-empty">{query ? t("search.placeholder") : t("skillsPage.empty")}</p>
+      {installed.length === 0 ? (
+        <p className="skills-empty">{query ? t("skillsPage.emptySearch") : t("skillsPage.empty")}</p>
       ) : (
-        groups.map((group) => (
-          <section key={group.key} className="skills-group-section">
-            <button
-              type="button"
-              className="skills-group-header"
-              onClick={() => toggleGroup(group.key)}
-              aria-expanded={expandedGroups.has(group.key)}
-            >
-              <span className="skills-group-arrow">{expandedGroups.has(group.key) ? "\u25be" : "\u25b8"}</span>
-              <span>{t(group.labelKey as "skillsPage.group.workspace").replace("{n}", String(group.skills.length))}</span>
-              <span className="skills-group-count">{group.skills.length}</span>
-            </button>
-            {expandedGroups.has(group.key) && (
-              <div className="skills-group-body">
-                {group.skills.map((skill) => (
-                  <article key={skill.name} className="skills-card">
-                    <header className="skills-card-head">
-                      <label className="skills-card-toggle" title={skill.enabled ? t("memory.disable") : t("memory.enable")}>
-                        <input type="checkbox" checked={skill.enabled} onChange={() => onToggle(skill.name, !skill.enabled)} />
-                      </label>
-                      <strong>{skill.name}</strong>
-                      <span className={`skills-card-badge source-${skill.sourceDir}`}>{skill.sourcePath}</span>
-                    </header>
-                    <p className="skills-card-desc">{skill.description}</p>
-                    <div className="skills-card-meta">
-                      {skill.metadata?.version && <span className="skills-card-meta-item">{skill.metadata.version}</span>}
-                      {skill.license && <span className="skills-card-meta-item">{skill.license}</span>}
-                      <span className="skills-card-meta-item">{formatAllowedTools(skill.allowedTools)}</span>
-                    </div>
-                    {skill.installUrl && (
-                      <p className="skills-card-source" title={skill.installUrl}>
-                        {t("skillsPage.installedFrom")}: {skill.installUrl}
-                      </p>
-                    )}
-                  </article>
+        <>
+          <section className="skills-section">
+            <h2 className="skills-section-title">{t("skillsPage.installed")}</h2>
+            <div className="skills-grid">
+              {installed.map((skill) => (
+                <SkillListCard key={skill.name} skill={skill} onOpen={() => setSelectedName(skill.name)} />
+              ))}
+            </div>
+          </section>
+
+          <section className="skills-section">
+            <div className="skills-source-tabs" role="tablist" aria-label={t("skillsPage.sourceTabs")}>
+              <button
+                type="button"
+                role="tab"
+                className="skills-source-tab"
+                aria-selected={sourceTab === "personal"}
+                data-active={sourceTab === "personal"}
+                onClick={() => setSourceTab("personal")}
+              >
+                {t("skillsPage.tabPersonal")}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className="skills-source-tab"
+                aria-selected={sourceTab === "system"}
+                data-active={sourceTab === "system"}
+                onClick={() => setSourceTab("system")}
+              >
+                {t("skillsPage.tabSystem")}
+              </button>
+            </div>
+            {tabSkills.length === 0 ? (
+              <p className="skills-empty is-inline">{t("skillsPage.emptyTab")}</p>
+            ) : (
+              <div className="skills-grid">
+                {tabSkills.map((skill) => (
+                  <SkillListCard key={skill.name} skill={skill} onOpen={() => setSelectedName(skill.name)} />
                 ))}
               </div>
             )}
           </section>
-        ))
+        </>
+      )}
+
+      {selectedName && (
+        <SkillDetailModal
+          name={selectedName}
+          skill={skills.find((s) => s.name === selectedName) ?? null}
+          onClose={() => setSelectedName(null)}
+          onToggle={onToggle}
+          onUninstall={onUninstall}
+          onTrySkill={onTrySkill}
+        />
       )}
     </section>
+  );
+}
+
+function SkillListCard({ skill, onOpen }: { skill: SkillDescriptor; onOpen: () => void }) {
+  return (
+    <button type="button" className="skills-list-card" onClick={onOpen}>
+      <div className="skills-list-card-copy">
+        <span className="skills-list-card-name">{skill.name}</span>
+        <span className="skills-list-card-desc">{skill.description}</span>
+      </div>
+      {skill.enabled ? (
+        <span className="skills-list-card-check" aria-label={t("skillsPage.enabled")}>
+          <CheckIcon />
+        </span>
+      ) : (
+        <span className="skills-list-card-check is-off" aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
+function SkillDetailModal({
+  name,
+  skill,
+  onClose,
+  onToggle,
+  onUninstall,
+  onTrySkill,
+}: {
+  name: string;
+  skill: SkillDescriptor | null;
+  onClose: () => void;
+  onToggle: (name: string, enabled: boolean) => Promise<void>;
+  onUninstall: (name: string) => Promise<void>;
+  onTrySkill?: (name: string) => void;
+}) {
+  const [detail, setDetail] = useState<SkillDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [enabled, setEnabled] = useState(skill?.enabled ?? true);
+
+  useEffect(() => {
+    setEnabled(skill?.enabled ?? true);
+  }, [skill?.enabled, name]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    void fetchSkillDetail(name)
+      .then((data) => {
+        if (!cancelled) {
+          setDetail(data);
+          setEnabled(data.enabled);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [name]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const display = detail ?? skill;
+  const uninstallable = skill ? canUninstall(skill) : false;
+
+  async function handleToggle() {
+    const next = !enabled;
+    setEnabled(next);
+    setBusy(true);
+    try {
+      await onToggle(name, next);
+    } catch {
+      setEnabled(!next);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUninstall() {
+    if (!window.confirm(t("skillsPage.deleteConfirm"))) return;
+    setBusy(true);
+    try {
+      await onUninstall(name);
+      onClose();
+    } catch {
+      /* parent surfaces error */
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="skills-modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="skills-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={display?.name ?? name}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="skills-modal-toolbar">
+          <label className="skills-switch" title={enabled ? t("memory.disable") : t("memory.enable")}>
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={busy || !skill}
+              onChange={() => void handleToggle()}
+            />
+            <span className="skills-switch-track" aria-hidden="true" />
+          </label>
+          <button type="button" className="skills-modal-close" onClick={onClose} aria-label={t("action.cancel")}>
+            <CloseIcon />
+          </button>
+        </div>
+
+        <header className="skills-modal-head">
+          <h2>
+            {display?.name ?? name}
+            <span className="skills-modal-head-suffix"> Skill</span>
+          </h2>
+          {display?.description && <p className="skills-modal-desc">{display.description}</p>}
+          {display && (
+            <div className="skills-modal-meta">
+              <span className="skills-modal-pill">{display.sourcePath}</span>
+              {display.metadata?.version && (
+                <span className="skills-modal-pill">{display.metadata.version}</span>
+              )}
+              {display.installUrl && (
+                <span className="skills-modal-pill" title={display.installUrl}>
+                  {t("skillsPage.installedFrom")}
+                </span>
+              )}
+            </div>
+          )}
+        </header>
+
+        <div className="skills-modal-body">
+          {loading && <p className="skills-modal-status">{t("skillsPage.loadingDetail")}</p>}
+          {error && <p className="skills-modal-status is-error">{error}</p>}
+          {!loading && !error && detail && (
+            detail.body.trim() ? (
+              <div className="skills-modal-markdown">
+                <MarkdownRenderer content={detail.body} />
+              </div>
+            ) : (
+              <p className="skills-modal-status">{t("skillsPage.noBody")}</p>
+            )
+          )}
+        </div>
+
+        <footer className="skills-modal-footer">
+          {uninstallable ? (
+            <button
+              type="button"
+              className="skills-modal-uninstall"
+              onClick={() => void handleUninstall()}
+              disabled={busy}
+            >
+              {t("skillsPage.uninstall")}
+            </button>
+          ) : (
+            <span />
+          )}
+          {onTrySkill && (
+            <button
+              type="button"
+              className="skills-modal-try"
+              onClick={() => onTrySkill(name)}
+              disabled={busy || !enabled}
+            >
+              {t("skillsPage.tryNow")}
+            </button>
+          )}
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg className="skills-search-icon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <circle cx="8.5" cy="8.5" r="5.25" stroke="currentColor" strokeWidth="1.5" fill="none" />
+      <path d="M12.5 12.5L16 16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <path
+        d="M4.5 10.5l3.5 3.5 7.5-8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ReloadIcon({ spinning }: { spinning?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      width="16"
+      height="16"
+      aria-hidden="true"
+      className={spinning ? "skills-spin" : undefined}
+    >
+      <path
+        d="M4.5 8.5a5.5 5.5 0 019.2-3.1M15.5 4.5v3h-3M15.5 11.5a5.5 5.5 0 01-9.2 3.1M4.5 15.5v-3h3"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }

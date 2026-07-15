@@ -1,4 +1,6 @@
-/* ============ 长期记忆面板 ============ */
+/* ============ 长期记忆 / 知识库共用控件 ============ */
+/* 设置页 MemorySettings、KbSettings 与独立 MemoryPanel 共用这些 class */
+
 .memory-drawer {
   width: 440px;
 }
@@ -62,26 +64,47 @@
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   align-items: center;
+  min-width: 0;
 }
 
 .memory-cat-select {
   flex-shrink: 0;
   height: 32px;
+  max-width: 140px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
+  border-radius: var(--ui-radius-md, 8px);
+  background: var(--surface, var(--bg));
+  color: var(--text);
+  font: inherit;
   font-size: 12px;
-  padding: 0 6px;
+  padding: 0 8px;
+  outline: none;
+  cursor: pointer;
 }
 
 .memory-add-input {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   height: 32px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius-md, 8px);
   padding: 0 10px;
+  font: inherit;
   font-size: 13px;
-  background: var(--bg);
+  color: var(--text);
+  background: var(--surface, var(--bg));
+  outline: none;
+}
+
+.memory-add-input::placeholder {
+  color: var(--text-tertiary, var(--text-muted, #6b7280));
+}
+
+.memory-add-input:focus,
+.memory-cat-select:focus,
+.memory-edit-input:focus {
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 45%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft-bg, rgba(37, 99, 235, 0.12));
 }
 
 .memory-add-btn {
@@ -89,16 +112,31 @@
   height: 32px;
   padding: 0 14px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--ui-radius-md, 8px);
   background: var(--accent, #2563eb);
-  color: #fff;
+  color: var(--accent-contrast, #fff);
+  font: inherit;
   font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
+}
+
+.memory-add-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
 }
 
 .memory-add-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  filter: none;
+}
+
+.memory-empty {
+  margin: 0;
+  padding: 16px 18px;
+  color: var(--text-secondary, var(--text-muted, #6b7280));
+  font-size: var(--ui-font-sm, 13px);
+  line-height: 1.55;
 }
 
 .memory-list {
@@ -114,7 +152,8 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 10px 12px;
-  background: var(--bg);
+  background: var(--card-bg, var(--bg));
+  color: var(--text);
 }
 
 .memory-item[data-disabled="true"] {
@@ -125,13 +164,14 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .memory-cat {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--hover, rgba(37, 99, 235, 0.1));
+  background: var(--accent-soft-bg, rgba(37, 99, 235, 0.1));
   color: var(--accent, #2563eb);
   font-weight: 600;
 }
@@ -148,21 +188,30 @@
 }
 
 .memory-toggle {
-
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   font-size: 12px;
   cursor: pointer;
   color: var(--text-muted, #6b7280);
+  user-select: none;
+}
+
+.memory-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent, #2563eb);
+  cursor: pointer;
 }
 
 .memory-content {
   margin: 8px 0 6px;
-  font-size: var(--ui-font-sm);
+  font-size: var(--ui-font-sm, 13px);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+  color: var(--text);
 }
 
 .memory-item-foot {
@@ -176,28 +225,35 @@
 
 .memory-source {
   font-style: italic;
+  min-width: 0;
 }
 
 .memory-time {
-
+  font-variant-numeric: tabular-nums;
 }
 
 .memory-item-actions {
   display: flex;
   gap: 6px;
+  margin-left: auto;
 }
 
 .memory-link {
   border: none;
   background: transparent;
   cursor: pointer;
+  font: inherit;
   font-size: 12px;
   color: var(--accent, #2563eb);
   padding: 0;
 }
 
+.memory-link:hover {
+  text-decoration: underline;
+}
+
 .memory-link.danger {
-  color: #dc2626;
+  color: var(--danger, #dc2626);
 }
 
 .memory-edit {
@@ -205,17 +261,21 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .memory-edit-input {
   width: 100%;
+  box-sizing: border-box;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius-md, 8px);
   padding: 8px 10px;
   font-size: 13px;
   font-family: inherit;
+  color: var(--text);
   resize: vertical;
-  background: var(--bg);
+  background: var(--surface, var(--bg));
+  outline: none;
 }
 
 .memory-edit-actions {

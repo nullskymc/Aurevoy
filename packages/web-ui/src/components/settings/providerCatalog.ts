@@ -4,7 +4,12 @@ import { PI_PROVIDER_OPTIONS } from "../providerIcons";
 
 /** 本地回退目录：服务端未下发 catalog 时保证可连接列表可见 */
 const OAUTH_ONLY = new Set(["openai-codex"]);
-const OAUTH_CAPABLE = new Set(["anthropic", "openai-codex", "github-copilot"]);
+const OAUTH_CAPABLE = new Set(["anthropic", "openai-codex", "github-copilot", "xai"]);
+
+/** Aurevoy 侧扩展的 OAuth（Pi 内置未声明时仍要在 UI 露出） */
+const AUREVOY_OAUTH_OVERLAY: Record<string, { oauthLabel: string }> = {
+  xai: { oauthLabel: "xAI (SuperGrok / X Premium+)" },
+};
 
 const FALLBACK_PROVIDER_CATALOG: PiProviderCatalogEntry[] = PI_PROVIDER_OPTIONS.map((item) => ({
   id: item.value,
@@ -21,19 +26,36 @@ const FALLBACK_PROVIDER_CATALOG: PiProviderCatalogEntry[] = PI_PROVIDER_OPTIONS.
         ? "OpenAI (ChatGPT Plus/Pro)"
         : item.value === "github-copilot"
           ? "GitHub Copilot"
-          : undefined,
+          : AUREVOY_OAUTH_OVERLAY[item.value]?.oauthLabel,
   modelCount: 0,
   requiresBaseUrl: item.value === "openai-compatible",
   custom: item.value === "openai-compatible",
 }));
 
-/** 服务端 catalog 优先；缺失或空数组时用本地回退 */
+/** 把 Aurevoy 扩展 OAuth 叠到服务端 catalog 上（旧 agent / Pi 未声明时仍可登录） */
+function applyOauthOverlay(entries: PiProviderCatalogEntry[]): PiProviderCatalogEntry[] {
+  return entries.map((entry) => {
+    const overlay = AUREVOY_OAUTH_OVERLAY[entry.id];
+    if (!overlay) return entry;
+    if (entry.supportsOauth && entry.oauthLabel) return entry;
+    return {
+      ...entry,
+      supportsOauth: true,
+      oauthLabel: entry.oauthLabel || overlay.oauthLabel,
+    };
+  });
+}
+
+/** 服务端 catalog 优先；缺失或空数组时用本地回退；再叠 Aurevoy OAuth 扩展 */
 export function resolveProviderCatalog(
   settings: RuntimeSettings | null | undefined,
 ): PiProviderCatalogEntry[] {
   const remote = settings?.llm.providerCatalog;
-  if (Array.isArray(remote) && remote.length > 0) return remote;
-  return FALLBACK_PROVIDER_CATALOG;
+  const base =
+    Array.isArray(remote) && remote.length > 0
+      ? remote
+      : FALLBACK_PROVIDER_CATALOG;
+  return applyOauthOverlay(base);
 }
 
 export function catalogFor(
@@ -47,8 +69,10 @@ export function catalogFor(
 export function providerCatalogSummary(entry: PiProviderCatalogEntry | undefined): string {
   if (!entry) return t("settings.providerDesc.generic");
   const parts: string[] = [];
-  if (entry.supportsOauth && entry.oauthLabel) {
-    parts.push(entry.oauthLabel);
+  if (entry.supportsOauth && !entry.supportsApiKey) {
+    parts.push(entry.oauthLabel || t("settings.providerKindOauth"));
+  } else if (entry.supportsOauth && entry.supportsApiKey) {
+    parts.push(entry.oauthLabel || t("settings.providerKindApiKeyOauth"));
   } else if (entry.supportsApiKey) {
     parts.push(t("settings.providerKindApiKey"));
   }

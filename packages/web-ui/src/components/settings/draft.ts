@@ -6,7 +6,6 @@ export function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
     provider: settings?.llm.provider ?? "openai",
     baseUrl: settings?.llm.baseUrl ?? "",
     model: settings?.llm.model ?? "",
-    visionModel: settings?.llm.visionModel ?? "",
     apiKey: "",
     workspaceDir: settings?.workspaceDir ?? "",
     maxTokens: settings?.llm.maxTokens ?? 8192,

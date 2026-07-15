@@ -169,7 +169,10 @@ export function useAgentEventHandler({
         if (event.message.role === "system") break;
         const isAssistant = event.message.role === "assistant";
         const hasToolCalls = (event.message.toolCalls?.length ?? 0) > 0;
-        if (isAssistant && !hasToolCalls) setOutput("");
+        // 终稿无工具：清 live 缓存避免与历史交付重复
+        // 过程旁白（有工具）：也清掉，避免旁白残留到下一轮流式/交付区
+        if (isAssistant) setOutput("");
+        if (isAssistant && hasToolCalls) nextOutputFreshRef.current = true;
         setCurrentTask((previous) => {
           const previousMessages = previous?.messages ?? [];
           if (!previous) return previous;
@@ -184,7 +187,12 @@ export function useAgentEventHandler({
         if (event.message.contentBlocks?.length) {
           setLiveContentBlocks((prev) => {
             const existingIds = new Set(prev.map((b) => b.id));
-            const newBlocks = event.message.contentBlocks!.filter((b) => !existingIds.has(b.id));
+            const batchIds = new Set<string>();
+            const newBlocks = event.message.contentBlocks!.filter((b) => {
+              if (existingIds.has(b.id) || batchIds.has(b.id)) return false;
+              batchIds.add(b.id);
+              return true;
+            });
             return newBlocks.length > 0 ? [...prev, ...newBlocks] : prev;
           });
         }
@@ -519,15 +527,15 @@ function mergeContentBlocks(
   incoming: ContentBlock[],
   upsert: boolean,
 ): ContentBlock[] {
-  if (!upsert) {
-    const prev = existing ?? [];
-    const ids = new Set(prev.map((b) => b.id));
-    const extras = incoming.filter((b) => !ids.has(b.id));
-    return extras.length > 0 ? [...prev, ...extras] : prev;
-  }
-  const map = new Map((existing ?? []).map((b) => [b.id, b]));
-  for (const block of incoming) {
+  // 用 Map 同时处理历史重复和单个 SSE 批次内的重复，避免重复 block 继续流入 React。
+  const map = new Map<string, ContentBlock>();
+  for (const block of existing ?? []) {
     map.set(block.id, block);
+  }
+  for (const block of incoming) {
+    if (upsert || !map.has(block.id)) {
+      map.set(block.id, block);
+    }
   }
   return [...map.values()];
 }

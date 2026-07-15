@@ -5,7 +5,7 @@
 
 ## 约定
 
-- JSON 请求/响应；SSE：`text/event-stream`，事件体为 `AgentEvent` JSON。  
+- JSON 请求/响应；SSE：`text/event-stream`，事件体为 `AgentEvent` JSON。图片附件以 data URL 随任务请求上传，单张上限 20MB；引擎落盘后任务历史只保存内部路径。
 - 鉴权：本机进程，无公网鉴权层。  
 - 改接口：先 shared → `build:shared` → agent / web-ui。
 
@@ -19,9 +19,11 @@
 | GET | `/api/tools` | 已注册工具（含 MCP）；禁用仍列出但不可调 |
 | PATCH | `/api/tools/:name` | `{ enabled }` |
 | GET | `/api/skills` | Skill catalog（无 body） |
+| GET | `/api/skills/:name` | Skill 详情（含 SKILL.md body） |
 | POST | `/api/skills/reload` | 重扫 skill |
 | POST | `/api/skills/install` | 从 Git 安装 |
-| DELETE | `/api/skills/:name` | 卸载用户 skill |
+| PATCH | `/api/skills/:name` | `{ enabled }` 启停 |
+| DELETE | `/api/skills/:name` | 卸载用户/系统 skill |
 | GET | `/api/mcp/status` | MCP 连接与工具数 |
 
 MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel` 优先）。

@@ -1,9 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
-import type { TokenUsageReport, TokenUsageReportBreakdown } from "@aurevoy/shared";
+import type {
+  TokenUsageDailyPoint,
+  TokenUsageReport,
+  TokenUsageReportBreakdown,
+} from "@aurevoy/shared";
 import { t } from "../../i18n";
 import { getTokenUsageReport } from "../../api";
 import { ProviderIcon, providerLabel } from "../providerIcons";
 import { SettingsChoiceGroup } from "./layout";
+import {
+  avgTokensPerTask,
+  buildCompositionRows,
+  composeInputShare,
+  composeOutputShare,
+  dailyBarHeight,
+  formatCost,
+  formatDayLabel,
+  formatExactTokens,
+  formatPct,
+  formatTokenCount,
+  pct,
+  shareBarWidth,
+  shouldShowDayLabel,
+  summarizeDailyActivity,
+  type UsageCompositionRow,
+} from "./usageFormat";
+
+export { formatTokenCount, formatCost, pct } from "./usageFormat";
 
 export function UsageSettings() {
   const [report, setReport] = useState<TokenUsageReport | null>(null);
@@ -27,8 +50,10 @@ export function UsageSettings() {
     return (
       <SettingsChoiceGroup title={t("settings.usageOverview")}>
         <div className="usage-shell usage-shell-loading" aria-busy="true">
-          <div className="usage-skeleton usage-skeleton-hero" />
+          <div className="usage-skeleton usage-skeleton-glance" />
           <div className="usage-skeleton-row">
+            <div className="usage-skeleton usage-skeleton-block" />
+            <div className="usage-skeleton usage-skeleton-block" />
             <div className="usage-skeleton usage-skeleton-block" />
             <div className="usage-skeleton usage-skeleton-block" />
           </div>
@@ -82,62 +107,120 @@ function UsageReportView({
   report: TokenUsageReport;
   onReload: () => void;
 }) {
-  const metrics = useMemo(() => buildMetrics(report), [report]);
+  const composition = useMemo(() => buildCompositionRows(report), [report]);
+  const daily = report.daily ?? [];
+  const dailySummary = useMemo(() => summarizeDailyActivity(daily), [daily]);
+  const inputShare = composeInputShare(report.promptTokens, report.completionTokens);
+  const outputShare = composeOutputShare(report.promptTokens, report.completionTokens);
   const composeBase = report.promptTokens + report.completionTokens;
-  const inputShare = pct(report.promptTokens, composeBase);
-  const outputShare = pct(report.completionTokens, composeBase);
-  const inputOfTotal = pct(report.promptTokens, report.totalTokens);
-  const outputOfTotal = pct(report.completionTokens, report.totalTokens);
   const coveragePct = pct(report.measuredTasks, report.tasks);
+  const cacheHitPct =
+    report.promptTokens > 0 ? pct(report.cacheReadTokens, report.promptTokens) : null;
   const topShare = report.breakdown[0]
     ? pct(report.breakdown[0].totalTokens, report.totalTokens)
     : 0;
+  const avgPerTask = avgTokensPerTask(report.totalTokens, report.measuredTasks);
+  const peakTokens = report.peakDay?.totalTokens ?? dailySummary.peakTokens;
+  const peakDate = report.peakDay?.date ?? dailySummary.peakDate;
 
   return (
     <div className="usage-page">
       <SettingsChoiceGroup title={t("settings.usageOverview")}>
-        <div className="usage-hero">
-          <div className="usage-hero-top">
-            <div className="usage-hero-main">
-              <span className="usage-hero-label">{t("settings.tokenUsageTotal")}</span>
-              <div className="usage-hero-value" title={formatExact(report.totalTokens)}>
-                {formatTokenCount(report.totalTokens)}
-              </div>
-              <p className="usage-hero-caption">{t("settings.usageHeroCaption")}</p>
+        <div className="usage-dashboard">
+          <header className="usage-dash-head">
+            <div className="usage-dash-head-copy">
+              <p className="usage-dash-caption">{t("settings.usageHeroCaption")}</p>
             </div>
+            <button
+              type="button"
+              className="settings-secondary-btn usage-refresh-btn"
+              onClick={onReload}
+            >
+              {t("settings.refresh")}
+            </button>
+          </header>
 
-            <div className="usage-hero-side">
-              <div className="usage-hero-cost">
-                <span className="usage-hero-label">{t("settings.tokenUsageEstimatedCost")}</span>
-                <div
-                  className="usage-hero-cost-value"
-                  title={
-                    report.estimatedCostUsd > 0
-                      ? `$${report.estimatedCostUsd.toFixed(6)}`
-                      : undefined
-                  }
-                >
-                  {formatCost(report.estimatedCostUsd)}
-                </div>
-                <span className="usage-hero-cost-unit">USD</span>
-              </div>
-              <button type="button" className="settings-secondary-btn usage-refresh-btn" onClick={onReload}>
-                {t("settings.refresh")}
-              </button>
-            </div>
+          {/* Codex-style glance cards: primary numbers at a glance */}
+          <div className="usage-glance" role="group" aria-label={t("settings.usageOverview")}>
+            <GlanceCard
+              label={t("settings.tokenUsageTotal")}
+              value={formatTokenCount(report.totalTokens)}
+              title={formatExactTokens(report.totalTokens)}
+              hint={
+                avgPerTask > 0
+                  ? `${formatTokenCount(avgPerTask)} ${t("settings.usageAvgPerTask")}`
+                  : t("settings.usageHeroCaption")
+              }
+              emphasize
+            />
+            <GlanceCard
+              label={t("settings.tokenUsageEstimatedCost")}
+              value={formatCost(report.estimatedCostUsd)}
+              title={
+                report.estimatedCostUsd > 0
+                  ? `$${report.estimatedCostUsd.toFixed(6)}`
+                  : t("settings.usageCostUnavailable")
+              }
+              hint={
+                report.estimatedCostUsd > 0
+                  ? "USD"
+                  : t("settings.usageCostUnavailable")
+              }
+              tone="cost"
+            />
+            <GlanceCard
+              label={t("settings.usageCoverage")}
+              value={`${report.measuredTasks}/${report.tasks}`}
+              hint={`${coveragePct.toFixed(0)}% ${t("settings.usageCoverageHint")}`}
+            />
+            <GlanceCard
+              label={t("settings.usagePeakDay")}
+              value={peakTokens > 0 ? formatTokenCount(peakTokens) : "—"}
+              title={
+                peakTokens > 0
+                  ? `${peakDate ?? ""} · ${formatExactTokens(peakTokens)}`
+                  : undefined
+              }
+              hint={
+                peakTokens > 0 && peakDate
+                  ? `${formatDayLabel(peakDate)} · ${dailySummary.activeDays}${t("settings.usageActiveDaysSuffix")}`
+                  : t("settings.usageNoDailyActivity")
+              }
+            />
           </div>
 
-          <div className="usage-compose" aria-hidden={composeBase <= 0}>
-            <div className="usage-compose-bar" role="img" aria-label={t("settings.usageComposition")}>
+          {/* Daily activity chart (task usage attributed by last report day) */}
+          {daily.length > 0 && (
+            <DailyActivityChart
+              daily={daily}
+              peakTokens={peakTokens}
+              windowTokens={dailySummary.windowTokens}
+              activeDays={dailySummary.activeDays}
+              todayTokens={dailySummary.todayTokens}
+            />
+          )}
+
+          {/* Claude-style input / output composition */}
+          <section className="usage-compose-panel" aria-label={t("settings.usageComposition")}>
+            <div className="usage-section-label">{t("settings.usageComposition")}</div>
+            <div
+              className="usage-compose-bar"
+              role="img"
+              aria-label={t("settings.usageComposition")}
+            >
               {composeBase > 0 ? (
                 <>
                   <span
                     className="usage-compose-seg is-input"
-                    style={{ width: `${Math.max(inputShare, inputShare > 0 ? 2 : 0)}%` }}
+                    style={{
+                      width: `${shareBarWidth(report.promptTokens, composeBase, 2)}%`,
+                    }}
                   />
                   <span
                     className="usage-compose-seg is-output"
-                    style={{ width: `${Math.max(outputShare, outputShare > 0 ? 2 : 0)}%` }}
+                    style={{
+                      width: `${shareBarWidth(report.completionTokens, composeBase, 2)}%`,
+                    }}
                   />
                 </>
               ) : (
@@ -148,82 +231,50 @@ function UsageReportView({
               <span className="usage-legend-item">
                 <i className="usage-dot is-input" />
                 {t("settings.usageInputTokens")}
-                <em title={formatExact(report.promptTokens)}>
-                  {formatTokenCount(report.promptTokens)} · {inputOfTotal.toFixed(1)}%
+                <em title={formatExactTokens(report.promptTokens)}>
+                  {formatTokenCount(report.promptTokens)} ·{" "}
+                  {formatPct(report.promptTokens, report.totalTokens)}
                 </em>
               </span>
               <span className="usage-legend-item">
                 <i className="usage-dot is-output" />
                 {t("settings.usageOutputTokens")}
-                <em title={formatExact(report.completionTokens)}>
-                  {formatTokenCount(report.completionTokens)} · {outputOfTotal.toFixed(1)}%
+                <em title={formatExactTokens(report.completionTokens)}>
+                  {formatTokenCount(report.completionTokens)} ·{" "}
+                  {formatPct(report.completionTokens, report.totalTokens)}
                 </em>
               </span>
+              {inputShare > 0 && outputShare > 0 && (
+                <span className="usage-legend-ratio" aria-hidden="true">
+                  {inputShare.toFixed(0)}/{outputShare.toFixed(0)}
+                </span>
+              )}
+              {cacheHitPct != null && report.cacheReadTokens > 0 && (
+                <span className="usage-legend-item">
+                  <i className="usage-dot is-cache" />
+                  {t("settings.usageCacheHitRate")}
+                  <em>{cacheHitPct.toFixed(1)}%</em>
+                </span>
+              )}
+              {report.breakdown.length > 0 && (
+                <span className="usage-legend-item">
+                  <i className="usage-dot is-output" />
+                  {t("settings.usageModelsUsed")}
+                  <em>
+                    {report.breakdown.length}
+                    {topShare > 0 ? ` · ${t("settings.usageTopModel")} ${topShare.toFixed(0)}%` : ""}
+                  </em>
+                </span>
+              )}
             </div>
-          </div>
-
-          <div className="usage-insight-row">
-            <div className="usage-insight">
-              <span className="usage-insight-label">{t("settings.usageCoverage")}</span>
-              <strong>
-                {report.measuredTasks}
-                <span className="usage-insight-sep">/</span>
-                {report.tasks}
-              </strong>
-              <small>
-                {coveragePct.toFixed(0)}% {t("settings.usageCoverageHint")}
-              </small>
-            </div>
-            <div className="usage-insight">
-              <span className="usage-insight-label">{t("settings.usageCacheHitRate")}</span>
-              <strong title={formatExact(report.cacheReadTokens)}>
-                {report.promptTokens > 0
-                  ? `${pct(report.cacheReadTokens, report.promptTokens).toFixed(1)}%`
-                  : "—"}
-              </strong>
-              <small>
-                {report.cacheReadTokens > 0
-                  ? `${formatTokenCount(report.cacheReadTokens)} ${t("settings.usageInputCache")}`
-                  : t("settings.usageNoCache")}
-              </small>
-            </div>
-            <div className="usage-insight">
-              <span className="usage-insight-label">{t("settings.usageModelsUsed")}</span>
-              <strong>{report.breakdown.length}</strong>
-              <small>
-                {report.breakdown[0]
-                  ? `${t("settings.usageTopModel")} ${topShare.toFixed(0)}%`
-                  : t("settings.usageNoModels")}
-              </small>
-            </div>
-          </div>
+          </section>
         </div>
       </SettingsChoiceGroup>
 
       <SettingsChoiceGroup title={t("settings.usageBreakdown")}>
         <div className="usage-metric-list">
-          {metrics.map((metric) => (
-            <div className="usage-metric-row" key={metric.id}>
-              <div className="usage-metric-head">
-                <span className="usage-metric-name">
-                  <i className={`usage-dot ${metric.tone}`} />
-                  {metric.label}
-                </span>
-                <span className="usage-metric-value" title={formatExact(metric.value)}>
-                  {formatTokenCount(metric.value)}
-                </span>
-              </div>
-              <div className="usage-metric-bar" aria-hidden="true">
-                <span
-                  className={`usage-metric-fill ${metric.tone}`}
-                  style={{ width: `${Math.max(metric.share, metric.value > 0 ? 1.5 : 0)}%` }}
-                />
-              </div>
-              <div className="usage-metric-meta">
-                <span>{metric.detail}</span>
-                <span>{metric.shareLabel}</span>
-              </div>
-            </div>
+          {composition.map((row) => (
+            <CompositionRow key={row.id} row={row} report={report} />
           ))}
         </div>
       </SettingsChoiceGroup>
@@ -231,10 +282,11 @@ function UsageReportView({
       {report.breakdown.length > 0 && (
         <SettingsChoiceGroup title={t("settings.usageByModel")}>
           <div className="usage-model-list">
-            {report.breakdown.map((item) => (
+            {report.breakdown.map((item, index) => (
               <ModelUsageCard
                 key={`${item.provider}:${item.model}`}
                 item={item}
+                rank={index + 1}
                 totalTokens={report.totalTokens}
               />
             ))}
@@ -245,11 +297,192 @@ function UsageReportView({
   );
 }
 
+function DailyActivityChart({
+  daily,
+  peakTokens,
+  windowTokens,
+  activeDays,
+  todayTokens,
+}: {
+  daily: TokenUsageDailyPoint[];
+  peakTokens: number;
+  windowTokens: number;
+  activeDays: number;
+  todayTokens: number;
+}) {
+  const hasActivity = windowTokens > 0;
+
+  return (
+    <section className="usage-daily" aria-label={t("settings.usageDailyActivity")}>
+      <div className="usage-daily-head">
+        <div>
+          <div className="usage-section-label">{t("settings.usageDailyActivity")}</div>
+          <p className="usage-daily-caption">{t("settings.usageDailyCaption")}</p>
+        </div>
+        <div className="usage-daily-stats">
+          <span>
+            <em>{t("settings.usageWindowTokens")}</em>
+            <b title={formatExactTokens(windowTokens)}>{formatTokenCount(windowTokens)}</b>
+          </span>
+          <span>
+            <em>{t("settings.usageActiveDays")}</em>
+            <b>
+              {activeDays}/{daily.length}
+            </b>
+          </span>
+          <span>
+            <em>{t("settings.usageToday")}</em>
+            <b title={formatExactTokens(todayTokens)}>{formatTokenCount(todayTokens)}</b>
+          </span>
+        </div>
+      </div>
+
+      {hasActivity ? (
+        <div
+          className="usage-daily-chart"
+          role="img"
+          aria-label={t("settings.usageDailyActivity")}
+          style={{ gridTemplateColumns: `repeat(${daily.length}, minmax(0, 1fr))` }}
+        >
+          {daily.map((point, index) => {
+            const height = dailyBarHeight(point.totalTokens, peakTokens);
+            const showLabel = shouldShowDayLabel(index, daily.length);
+            const isPeak = peakTokens > 0 && point.totalTokens === peakTokens && point.totalTokens > 0;
+            const isToday = index === daily.length - 1;
+            return (
+              <div
+                key={point.date}
+                className={`usage-daily-col${isToday ? " is-today" : ""}${isPeak ? " is-peak" : ""}`}
+                title={`${point.date}: ${formatExactTokens(point.totalTokens)} · ${point.tasks} ${t("settings.tokenUsageTasks")}`}
+              >
+                <div className="usage-daily-bar-track">
+                  <span
+                    className={`usage-daily-bar${point.totalTokens > 0 ? " is-active" : ""}`}
+                    style={{ height: `${height}%` }}
+                  />
+                </div>
+                <span className={`usage-daily-tick${showLabel ? " is-visible" : ""}`}>
+                  {showLabel ? formatDayLabel(point.date) : ""}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="usage-daily-empty">{t("settings.usageNoDailyActivity")}</p>
+      )}
+    </section>
+  );
+}
+
+function GlanceCard({
+  label,
+  value,
+  hint,
+  title,
+  emphasize,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  title?: string;
+  emphasize?: boolean;
+  tone?: "cost";
+}) {
+  return (
+    <div className={`usage-glance-card${emphasize ? " is-emphasize" : ""}${tone === "cost" ? " is-cost" : ""}`}>
+      <span className="usage-glance-label">{label}</span>
+      <strong className="usage-glance-value" title={title}>
+        {value}
+      </strong>
+      <small className="usage-glance-hint">{hint}</small>
+    </div>
+  );
+}
+
+function CompositionRow({
+  row,
+  report,
+}: {
+  row: UsageCompositionRow;
+  report: TokenUsageReport;
+}) {
+  const label = compositionLabel(row.id);
+  const detail = compositionDetail(row.id);
+  const shareLabel =
+    row.relativeOf === "input" && row.relativeShare != null
+      ? `${row.relativeShare.toFixed(1)}% ${t("settings.usageOfInput")}`
+      : row.relativeOf === "output" && row.relativeShare != null
+        ? `${row.relativeShare.toFixed(1)}% ${t("settings.usageOfOutput")}`
+        : `${row.shareOfTotal.toFixed(1)}%`;
+
+  return (
+    <div className="usage-metric-row">
+      <div className="usage-metric-head">
+        <span className="usage-metric-name">
+          <i className={`usage-dot ${row.tone}`} />
+          {label}
+        </span>
+        <span className="usage-metric-value" title={formatExactTokens(row.value)}>
+          {formatTokenCount(row.value)}
+        </span>
+      </div>
+      <div className="usage-metric-bar" aria-hidden="true">
+        <span
+          className={`usage-metric-fill ${row.tone}`}
+          style={{ width: `${shareBarWidth(row.value, report.totalTokens)}%` }}
+        />
+      </div>
+      <div className="usage-metric-meta">
+        <span>{detail}</span>
+        <span>{shareLabel}</span>
+      </div>
+    </div>
+  );
+}
+
+function compositionLabel(id: string): string {
+  switch (id) {
+    case "prompt":
+      return t("settings.usageInputTokens");
+    case "completion":
+      return t("settings.usageOutputTokens");
+    case "reasoning":
+      return t("settings.tokenUsageReasoning");
+    case "cache-read":
+      return t("settings.usageInputCache");
+    case "cache-write":
+      return t("settings.usageOutputCache");
+    default:
+      return id;
+  }
+}
+
+function compositionDetail(id: string): string {
+  switch (id) {
+    case "prompt":
+      return t("settings.usageInputDetail");
+    case "completion":
+      return t("settings.usageOutputDetail");
+    case "reasoning":
+      return t("settings.usageReasoningDetail");
+    case "cache-read":
+      return t("settings.usageCacheReadDetail");
+    case "cache-write":
+      return t("settings.usageCacheWriteDetail");
+    default:
+      return "";
+  }
+}
+
 function ModelUsageCard({
   item,
+  rank,
   totalTokens,
 }: {
   item: TokenUsageReportBreakdown;
+  rank: number;
   totalTokens: number;
 }) {
   const share = pct(item.totalTokens, totalTokens);
@@ -260,45 +493,69 @@ function ModelUsageCard({
     <article className="usage-model-card">
       <header className="usage-model-card-head">
         <div className="usage-model-identity">
-          <ProviderIcon provider={item.provider} size={22} className="settings-provider-glyph usage-model-icon" />
+          <span className="usage-model-rank" aria-label={`#${rank}`}>
+            {rank}
+          </span>
+          <ProviderIcon
+            provider={item.provider}
+            size={22}
+            className="settings-provider-glyph usage-model-icon"
+          />
           <div className="usage-model-name">
             <strong title={item.model}>{item.model}</strong>
             <small title={item.provider}>{providerLabel(item.provider)}</small>
           </div>
         </div>
         <div className="usage-model-totals">
-          <strong title={formatExact(item.totalTokens)}>{formatTokenCount(item.totalTokens)}</strong>
-          <small>{share.toFixed(1)}%</small>
+          <strong title={formatExactTokens(item.totalTokens)}>
+            {formatTokenCount(item.totalTokens)}
+          </strong>
+          <small>
+            {share.toFixed(1)}%
+            {item.estimatedCostUsd > 0 ? ` · ${formatCost(item.estimatedCostUsd)}` : ""}
+          </small>
         </div>
       </header>
 
       <div className="usage-model-share" aria-hidden="true">
-        <span style={{ width: `${Math.max(share, item.totalTokens > 0 ? 1.5 : 0)}%` }} />
+        <span style={{ width: `${shareBarWidth(item.totalTokens, totalTokens)}%` }} />
       </div>
 
       <div className="usage-model-stats">
         <span>
           <em>{t("settings.tokenUsagePrompt")}</em>
-          <b title={formatExact(item.promptTokens)}>{formatTokenCount(item.promptTokens)}</b>
+          <b title={formatExactTokens(item.promptTokens)}>
+            {formatTokenCount(item.promptTokens)}
+          </b>
         </span>
         <span>
           <em>{t("settings.tokenUsageCompletion")}</em>
-          <b title={formatExact(item.completionTokens)}>{formatTokenCount(item.completionTokens)}</b>
+          <b title={formatExactTokens(item.completionTokens)}>
+            {formatTokenCount(item.completionTokens)}
+          </b>
         </span>
         <span>
           <em>{t("settings.tokenUsageTasks")}</em>
           <b>{item.tasks}</b>
         </span>
-        {item.estimatedCostUsd > 0 && (
-          <span>
-            <em>{t("settings.tokenUsageEstimatedCost")}</em>
-            <b title={`$${item.estimatedCostUsd.toFixed(6)}`}>{formatCost(item.estimatedCostUsd)}</b>
-          </span>
-        )}
+        <span>
+          <em>{t("settings.tokenUsageEstimatedCost")}</em>
+          <b
+            title={
+              item.estimatedCostUsd > 0
+                ? `$${item.estimatedCostUsd.toFixed(6)}`
+                : undefined
+            }
+          >
+            {formatCost(item.estimatedCostUsd)}
+          </b>
+        </span>
         {item.reasoningTokens > 0 && (
           <span>
             <em>{t("settings.tokenUsageReasoning")}</em>
-            <b title={formatExact(item.reasoningTokens)}>{formatTokenCount(item.reasoningTokens)}</b>
+            <b title={formatExactTokens(item.reasoningTokens)}>
+              {formatTokenCount(item.reasoningTokens)}
+            </b>
           </span>
         )}
         {item.cacheReadTokens > 0 && (
@@ -312,108 +569,19 @@ function ModelUsageCard({
   );
 }
 
-type MetricTone = "is-input" | "is-output" | "is-reasoning" | "is-cache" | "is-cache-write";
-
-function buildMetrics(report: TokenUsageReport) {
-  const rows: Array<{
-    id: string;
-    label: string;
-    value: number;
-    share: number;
-    shareLabel: string;
-    detail: string;
-    tone: MetricTone;
-  }> = [
-    {
-      id: "prompt",
-      label: t("settings.usageInputTokens"),
-      value: report.promptTokens,
-      share: pct(report.promptTokens, report.totalTokens),
-      shareLabel: `${pct(report.promptTokens, report.totalTokens).toFixed(1)}%`,
-      detail: t("settings.usageInputDetail"),
-      tone: "is-input",
-    },
-    {
-      id: "completion",
-      label: t("settings.usageOutputTokens"),
-      value: report.completionTokens,
-      share: pct(report.completionTokens, report.totalTokens),
-      shareLabel: `${pct(report.completionTokens, report.totalTokens).toFixed(1)}%`,
-      detail: t("settings.usageOutputDetail"),
-      tone: "is-output",
-    },
-  ];
-
-  if (report.reasoningTokens > 0) {
-    rows.push({
-      id: "reasoning",
-      label: t("settings.tokenUsageReasoning"),
-      value: report.reasoningTokens,
-      share: pct(report.reasoningTokens, report.totalTokens),
-      shareLabel: `${pct(report.reasoningTokens, report.completionTokens).toFixed(1)}% ${t("settings.usageOfOutput")}`,
-      detail: t("settings.usageReasoningDetail"),
-      tone: "is-reasoning",
-    });
-  }
-
-  if (report.cacheReadTokens > 0) {
-    rows.push({
-      id: "cache-read",
-      label: t("settings.usageInputCache"),
-      value: report.cacheReadTokens,
-      share: pct(report.cacheReadTokens, report.totalTokens),
-      shareLabel: `${pct(report.cacheReadTokens, report.promptTokens).toFixed(1)}% ${t("settings.usageOfInput")}`,
-      detail: t("settings.usageCacheReadDetail"),
-      tone: "is-cache",
-    });
-  }
-
-  if (report.cacheWriteTokens > 0) {
-    rows.push({
-      id: "cache-write",
-      label: t("settings.usageOutputCache"),
-      value: report.cacheWriteTokens,
-      share: pct(report.cacheWriteTokens, report.totalTokens),
-      shareLabel: `${pct(report.cacheWriteTokens, report.totalTokens).toFixed(1)}%`,
-      detail: t("settings.usageCacheWriteDetail"),
-      tone: "is-cache-write",
-    });
-  }
-
-  return rows;
-}
-
-function pct(part: number, whole: number): number {
-  if (!whole || whole <= 0 || !Number.isFinite(part)) return 0;
-  return (part / whole) * 100;
-}
-
-export function formatTokenCount(n: number): string {
-  if (!Number.isFinite(n) || n < 0) return "0";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 1 : 2)}M`;
-  if (n >= 10_000) return `${(n / 1_000).toFixed(1)}k`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(2)}k`;
-  return String(Math.round(n));
-}
-
-function formatExact(n: number): string {
-  return `${Math.round(n).toLocaleString()} tokens`;
-}
-
-function formatCost(usd: number): string {
-  if (!Number.isFinite(usd) || usd <= 0) return "—";
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  if (usd < 1) return `$${usd.toFixed(3)}`;
-  return `$${usd.toFixed(2)}`;
-}
-
 function UsageChartIcon() {
   return (
     <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true">
       <rect x="3.5" y="12" width="3.5" height="7.5" rx="1" fill="currentColor" opacity="0.35" />
       <rect x="9" y="8" width="3.5" height="11.5" rx="1" fill="currentColor" opacity="0.55" />
       <rect x="14.5" y="5" width="3.5" height="14.5" rx="1" fill="currentColor" opacity="0.75" />
-      <path d="M4 4.5h16" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity="0.35" />
+      <path
+        d="M4 4.5h16"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        opacity="0.35"
+      />
     </svg>
   );
 }

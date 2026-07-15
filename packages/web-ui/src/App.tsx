@@ -27,19 +27,76 @@ import { useSkills } from "./hooks/useSkills";
 import { useWorkbenchTabs } from "./hooks/useWorkbenchTabs";
 import { useTaskController } from "./hooks/useTaskController";
 import { Composer, nextThinkingLevel, type ThinkingUILevel } from "./components/Composer";
-import { Conversation } from "./components/Conversation";
+import { ApprovalsDock, Conversation } from "./components/Conversation";
 import { AppTopBar } from "./components/AppTopBar";
 import { ModelSelectorDrawer } from "./components/ModelSelectorDrawer";
 import { WorkbenchPanel } from "./components/WorkbenchPanel";
+import { OutputFloatPanel } from "./components/OutputFloatPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
-import { ToastNotice } from "./components/ToastNotice";
+import { ToastNotice, type ToastTone } from "./components/ToastNotice";
 import { SearchPage } from "./pages/SearchPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { SETTINGS_SECTION_IDS, type AutoModeLevel, type MainView, type SettingsSectionId } from "./app/types";
 import { formatContextK } from "./app/taskUtils";
 import { t } from "./i18n";
 import "./App.css";
+
+function HeroSuggestionIcon({ kind }: { kind: "explore" | "build" | "review" | "fix" }) {
+  if (kind === "explore") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M6 14.5c0-2.5 2.2-4.5 5-4.5s5 2 5 4.5M8 10V7.5a4 4 0 018 0V10"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+        <path
+          d="M7.5 14.5h9l.8 4.2a1.2 1.2 0 01-1.2 1.4H7.9a1.2 1.2 0 01-1.2-1.4L7.5 14.5z"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+        <path d="M10 6.2l1.2-2.4h1.6L14 6.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (kind === "build") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M14.5 5.5l4 4M8 18l-2.2.6c-.5.1-.9-.3-.8-.8L5.6 15.6 13.2 8a2.2 2.2 0 013.1 0l.1.1a2.2 2.2 0 010 3.1L8 18z"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+  if (kind === "review") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M7.5 9.5A4.5 4.5 0 0116 8.2M16.5 14.5A4.5 4.5 0 018 15.8"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+        <path d="M16 5.5v3h3M8 18.5v-3H5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="13" r="4.2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12 8.8V6.2M10.2 6.8h3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M9.2 16.8c-1.4.9-2.7 1.5-3.4 1.3-.4-.1-.6-.6-.4-1 1.1-2.2 2.6-3.4 3.8-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M14.8 16.8c1.4.9 2.7 1.5 3.4 1.3.4-.1.6-.6.4-1-1.1-2.2-2.6-3.4-3.8-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 function App() {
   const platform = usePlatform();
@@ -90,7 +147,17 @@ function App() {
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
   const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
   const [online, setOnline] = useState<boolean | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNoticeState] = useState<{ message: string; tone: ToastTone } | null>(null);
+  const setNotice = (message: string | null, tone?: ToastTone) => {
+    if (!message) {
+      setNoticeState(null);
+      return;
+    }
+    const inferred: ToastTone =
+      tone
+      ?? (/失败|失敗|failed|error|错误|錯誤|無法|无法|못|에러/i.test(message) ? "error" : "info");
+    setNoticeState({ message, tone: inferred });
+  };
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const {
@@ -127,7 +194,17 @@ function App() {
   } = useSettings();
   const { projects, setProjects } = useProjects();
   const { memories, setMemories } = useMemories();
-  const { skills, refresh: refreshSkills, installing, installError, install, reloading, reload, toggle } = useSkills();
+  const {
+    skills,
+    refresh: refreshSkills,
+    installing,
+    installError,
+    install,
+    uninstall,
+    reloading,
+    reload,
+    toggle,
+  } = useSkills();
   const { mergeArtifact } = useArtifacts(setCurrentTask, updateTaskList);
   const { attachments, handlePickAttachments, handlePasteFiles, setAttachments } = useAttachments({
     platform,
@@ -153,10 +230,11 @@ function App() {
     handleRemoveProvider,
     handleSaveEnabledModels,
     handleSaveSlotEnabledModels,
+    handleSaveSlotImageInputModels,
+    handleSaveSlotAvailableModels,
     handleSaveModelSelection,
     handleSaveProviderConnection,
     handleSaveSettings,
-    handleSaveVisionModel,
     handleToggleMemory,
     refreshMemories,
     refreshSettings,
@@ -220,6 +298,12 @@ function App() {
     setThinkingLevel(next);
     localStorage.setItem("aurevoy.thinkingLevel", next);
     void updateSettings({ agentThinkingLevel: next }).catch(() => {});
+  }
+
+  function setThinkingLevelAndPersist(level: ThinkingUILevel): void {
+    setThinkingLevel(level);
+    localStorage.setItem("aurevoy.thinkingLevel", level);
+    void updateSettings({ agentThinkingLevel: level }).catch(() => {});
   }
 
   // 后端 settings 为推理深度真相源（刷新后与多端一致）
@@ -417,12 +501,19 @@ function App() {
     phase === "waiting_approval" ||
     output.trim().length > 0;
 
+  const [outputRailOpen, setOutputRailOpen] = useState(true);
+
+  /** 输出栏与文件工作台互斥：对话中、工作台关、用户未手动关闭时占右侧列 */
+  const showOutputRail =
+    activeView === "chat" && showConversation && !workbenchOpen && outputRailOpen;
+
   return (
     <div
       className="app-shell"
       data-active-view={activeView}
       data-left-collapsed={leftCollapsed}
       data-workbench-open={workbenchOpen}
+      data-output-rail={showOutputRail ? "true" : "false"}
       data-theme={themeMode}
       style={shellStyle}
     >
@@ -455,115 +546,196 @@ function App() {
           activeView={activeView}
           currentTask={currentTask}
           workbenchOpen={workbenchOpen}
+          outputRailOpen={outputRailOpen}
           leftCollapsed={leftCollapsed}
           phase={phase}
           status={status}
           onToggleWorkbench={() => setWorkbenchOpen((open) => !open)}
+          onToggleOutputRail={() => setOutputRailOpen((open) => !open)}
           onToggleSidebar={() => setLeftCollapsed((collapsed) => !collapsed)}
         />
 
-        {activeView === "search" ? (
-          <SearchPage
-            query={searchQuery}
-            tasks={tasks}
-            onQueryChange={setSearchQuery}
-            onSelectTask={handleSelectTask}
-          />
-        ) : activeView === "skills" ? (
-          <SkillsPage
-            skills={skills}
-            installing={installing}
-            installError={installError}
-            reloading={reloading}
-            onInstall={install}
-            onReload={reload}
-            onToggle={toggle}
-          />
-        ) : activeView === "settings" ? (
-          <SettingsPanel
-            settings={runtimeSettings}
-            mcpServers={mcpServers}
-            dataStatus={dataStatus}
-            memories={memories}
-            saving={settingsSaving}
-            fetchingModels={fetchingModels}
-            chatFontSize={chatFontSize}
-            uiFontSize={uiFontSize}
-            codeFontSize={codeFontSize}
-            workMode={workMode}
-            themeMode={themeMode}
-            locale={locale}
-            initialSection={settingsInitialSection}
-            onClose={handleCloseSettings}
-            onSave={handleSaveSettings}
-            onSaveConnection={handleSaveProviderConnection}
-            onCleanup={handleCleanupData}
-            onRefresh={refreshSettings}
-            onFetchModels={handleFetchModels}
-            onFetchModelsForProvider={handleFetchModelsForProvider}
-            onSaveEnabledModels={handleSaveEnabledModels}
-            onSaveSlotEnabledModels={handleSaveSlotEnabledModels}
-            onSelectModel={handleActivateProviderModel}
-            onSaveVisionModel={handleSaveVisionModel}
-            onRemoveProvider={handleRemoveProvider}
-            onChatFontSizeChange={handleChatFontSizeChange}
-            onUiFontSizeChange={handleUiFontSizeChange}
-            onCodeFontSizeChange={handleCodeFontSizeChange}
-            onWorkModeChange={handleWorkModeChange}
-            onThemeModeChange={setThemeMode}
-            onLocaleChange={setLocaleState}
-            onCreateMemory={handleCreateMemory}
-            onToggleMemory={handleToggleMemory}
-            onEditMemory={handleEditMemory}
-            onDeleteMemory={handleDeleteMemory}
-            onConnectionChange={refreshRuntime}
-            onNotice={setNotice}
-          />
-        ) : showConversation ? (
-          <>
-            <div className="main-scroll" ref={mainScrollRef}>
-              <Conversation
-                task={currentTask}
-                status={status}
-                phase={phase}
-                phaseDetail={phaseDetail}
-                plan={plan}
-                output={output}
-                busy={busy}
-                liveToolActivity={derivedLive}
-                liveContentBlocks={liveContentBlocks}
-                hasLiveTail={hasLiveTail}
-                defaultToolDetailsOpen={defaultToolDetailsOpen}
-                online={online}
-                onToolDecision={handleToolDecision}
-                onPlanDecision={handlePlanDecision}
-                onClarificationAnswer={handleClarificationAnswer}
-                canResume={canResume}
-                hasArchivedMessages={(currentTask?.archivedMessages?.length ?? 0) > 0}
-                onUserMessageEdit={(messageId, content, mode, messageAttachments) =>
-                  void handleRevertAndEdit(messageId, content, mode, messageAttachments)
-                }
-                onUnrevert={() => void handleUnrevert()}
-                onBranch={(messageId) => void handleBranch(messageId)}
-                onResume={() => void handleResumeTask()}
-                onUiChoice={handleUiChoice}
-                onOpenWorkspacePath={(path) => {
-                  workbenchTabs.openWorkspaceFile(path);
-                  setWorkbenchOpen(true);
-                }}
-              />
+        <div className="main-stage">
+          {activeView === "search" ? (
+            <SearchPage
+              query={searchQuery}
+              tasks={tasks}
+              onQueryChange={setSearchQuery}
+              onSelectTask={handleSelectTask}
+            />
+          ) : activeView === "skills" ? (
+            <SkillsPage
+              skills={skills}
+              installing={installing}
+              installError={installError}
+              reloading={reloading}
+              onInstall={install}
+              onReload={reload}
+              onToggle={toggle}
+              onUninstall={uninstall}
+              onTrySkill={(name) => {
+                handleNewTask();
+                setGoal(t("skillsPage.tryPrompt").replace("{name}", name));
+              }}
+            />
+          ) : activeView === "settings" ? (
+            <SettingsPanel
+              settings={runtimeSettings}
+              mcpServers={mcpServers}
+              dataStatus={dataStatus}
+              memories={memories}
+              saving={settingsSaving}
+              fetchingModels={fetchingModels}
+              chatFontSize={chatFontSize}
+              uiFontSize={uiFontSize}
+              codeFontSize={codeFontSize}
+              workMode={workMode}
+              themeMode={themeMode}
+              locale={locale}
+              initialSection={settingsInitialSection}
+              onClose={handleCloseSettings}
+              onSave={handleSaveSettings}
+              onSaveConnection={handleSaveProviderConnection}
+              onCleanup={handleCleanupData}
+              onRefresh={refreshSettings}
+              onFetchModels={handleFetchModels}
+              onFetchModelsForProvider={handleFetchModelsForProvider}
+              onSaveEnabledModels={handleSaveEnabledModels}
+              onSaveSlotEnabledModels={handleSaveSlotEnabledModels}
+              onSaveSlotImageInputModels={handleSaveSlotImageInputModels}
+              onSaveSlotAvailableModels={handleSaveSlotAvailableModels}
+              onSelectModel={handleActivateProviderModel}
+              onRemoveProvider={handleRemoveProvider}
+              onChatFontSizeChange={handleChatFontSizeChange}
+              onUiFontSizeChange={handleUiFontSizeChange}
+              onCodeFontSizeChange={handleCodeFontSizeChange}
+              onWorkModeChange={handleWorkModeChange}
+              onThemeModeChange={setThemeMode}
+              onLocaleChange={setLocaleState}
+              onCreateMemory={handleCreateMemory}
+              onToggleMemory={handleToggleMemory}
+              onEditMemory={handleEditMemory}
+              onDeleteMemory={handleDeleteMemory}
+              onConnectionChange={refreshRuntime}
+              onNotice={setNotice}
+            />
+          ) : showConversation ? (
+            <div className="main-chat">
+              <div className="main-scroll" ref={mainScrollRef}>
+                <Conversation
+                  task={currentTask}
+                  status={status}
+                  phase={phase}
+                  phaseDetail={phaseDetail}
+                  plan={plan}
+                  output={output}
+                  busy={busy}
+                  liveToolActivity={derivedLive}
+                  liveContentBlocks={liveContentBlocks}
+                  hasLiveTail={hasLiveTail}
+                  defaultToolDetailsOpen={defaultToolDetailsOpen}
+                  online={online}
+                  onToolDecision={handleToolDecision}
+                  onClarificationAnswer={handleClarificationAnswer}
+                  canResume={canResume}
+                  hasArchivedMessages={(currentTask?.archivedMessages?.length ?? 0) > 0}
+                  onUserMessageEdit={(messageId, content, mode, messageAttachments) =>
+                    void handleRevertAndEdit(messageId, content, mode, messageAttachments)
+                  }
+                  onUnrevert={() => void handleUnrevert()}
+                  onBranch={(messageId) => void handleBranch(messageId)}
+                  onResume={() => void handleResumeTask()}
+                  onUiChoice={handleUiChoice}
+                  onOpenWorkspacePath={(path) => {
+                    workbenchTabs.openWorkspaceFile(path);
+                    setWorkbenchOpen(true);
+                  }}
+                />
+              </div>
+              <div className="composer-dock">
+                <ApprovalsDock
+                  liveToolActivity={derivedLive}
+                  pendingApprovals={currentTask.pendingApprovals}
+                  phase={phase}
+                  plan={plan}
+                  onToolDecision={handleToolDecision}
+                  onPlanDecision={handlePlanDecision}
+                />
+                {health?.contextTokenBudget != null && currentTask && currentTask.messages.length > 0 && (
+                  <div className="context-hint">
+                    {t("context.label")} ~{formatContextK(currentTask.contextTokens ?? 0)} / {formatContextK(health.contextTokenBudget)} {t("context.unit")}
+                  </div>
+                )}
+                <Composer
+                  value={goal}
+                  busy={busy}
+                  online={online}
+                  variant="docked"
+                  projectName={draftProjectName}
+                  skills={skills}
+                  attachments={attachments}
+                  onAttachmentsChange={setAttachments}
+                  onPasteFiles={(files) => void handlePasteFiles(files)}
+                  onPickAttachments={() => void handlePickAttachments()}
+                  provider={health?.provider}
+                  onChange={setGoal}
+                  onSubmit={handleComposerSubmit}
+                  onOpenModelSelector={handleOpenModelSelector}
+                  modelButtonRef={modelButtonRef}
+                  onStop={handleStopStream}
+                  autoModeLevel={autoModeLevel}
+                  autoModePaused={!!autoModeState?.paused}
+                  onCycleAutoMode={cycleAutoModeLevel}
+                  onResumeAutoMode={handleResumeAutoMode}
+                  thinkingLevel={thinkingLevel}
+                  onCycleThinkingLevel={cycleThinkingLevel}
+                />
+                <ModelSelectorDrawer
+                  open={modelDrawerOpen}
+                  provider={health?.provider}
+                  settings={runtimeSettings}
+                  saving={settingsSaving}
+                  anchorRef={modelButtonRef}
+                  thinkingLevel={thinkingLevel}
+                  onThinkingLevelChange={setThinkingLevelAndPersist}
+                  onClose={() => setModelDrawerOpen(false)}
+                  onOpenFullSettings={handleOpenFullSettingsFromModelDrawer}
+                  onSave={handleSaveModelSelection}
+                />
+              </div>
             </div>
-            <div className="composer-dock">
-              {health?.contextTokenBudget != null && currentTask && currentTask.messages.length > 0 && (
-                <div className="context-hint">
-                  {t("context.label")} ~{formatContextK(currentTask.contextTokens ?? 0)} / {formatContextK(health.contextTokenBudget)} {t("context.unit")}
-                </div>
-              )}
+          ) : (
+            <div className="hero">
+              <h1 className="hero-title">{t("hero.title")}</h1>
+              <div className="hero-suggestions" role="list">
+                {(
+                  [
+                    ["hero.suggestion.explore", "hero.suggestion.explorePrompt", "explore"],
+                    ["hero.suggestion.build", "hero.suggestion.buildPrompt", "build"],
+                    ["hero.suggestion.review", "hero.suggestion.reviewPrompt", "review"],
+                    ["hero.suggestion.fix", "hero.suggestion.fixPrompt", "fix"],
+                  ] as const
+                ).map(([labelKey, promptKey, kind]) => (
+                  <button
+                    key={labelKey}
+                    type="button"
+                    role="listitem"
+                    className="hero-suggestion-card"
+                    data-kind={kind}
+                    onClick={() => setGoal(t(promptKey))}
+                  >
+                    <span className="hero-suggestion-icon" aria-hidden="true">
+                      <HeroSuggestionIcon kind={kind} />
+                    </span>
+                    <span className="hero-suggestion-label">{t(labelKey)}</span>
+                  </button>
+                ))}
+              </div>
               <Composer
                 value={goal}
                 busy={busy}
                 online={online}
-                variant="docked"
+                variant="hero"
                 projectName={draftProjectName}
                 skills={skills}
                 attachments={attachments}
@@ -589,51 +761,15 @@ function App() {
                 settings={runtimeSettings}
                 saving={settingsSaving}
                 anchorRef={modelButtonRef}
+                thinkingLevel={thinkingLevel}
+                onThinkingLevelChange={setThinkingLevelAndPersist}
                 onClose={() => setModelDrawerOpen(false)}
                 onOpenFullSettings={handleOpenFullSettingsFromModelDrawer}
                 onSave={handleSaveModelSelection}
               />
             </div>
-          </>
-        ) : (
-          <div className="hero">
-            <h1 className="hero-title">{t("hero.title")}</h1>
-            <Composer
-              value={goal}
-              busy={busy}
-              online={online}
-              variant="hero"
-              projectName={draftProjectName}
-              skills={skills}
-              attachments={attachments}
-              onAttachmentsChange={setAttachments}
-              onPasteFiles={(files) => void handlePasteFiles(files)}
-              onPickAttachments={() => void handlePickAttachments()}
-              provider={health?.provider}
-              onChange={setGoal}
-              onSubmit={handleComposerSubmit}
-              onOpenModelSelector={handleOpenModelSelector}
-              modelButtonRef={modelButtonRef}
-              onStop={handleStopStream}
-              autoModeLevel={autoModeLevel}
-              autoModePaused={!!autoModeState?.paused}
-              onCycleAutoMode={cycleAutoModeLevel}
-              onResumeAutoMode={handleResumeAutoMode}
-              thinkingLevel={thinkingLevel}
-              onCycleThinkingLevel={cycleThinkingLevel}
-            />
-            <ModelSelectorDrawer
-              open={modelDrawerOpen}
-              provider={health?.provider}
-              settings={runtimeSettings}
-              saving={settingsSaving}
-              anchorRef={modelButtonRef}
-              onClose={() => setModelDrawerOpen(false)}
-              onOpenFullSettings={handleOpenFullSettingsFromModelDrawer}
-              onSave={handleSaveModelSelection}
-            />
-          </div>
-        )}
+          )}
+        </div>
       </main>
 
       <div
@@ -642,6 +778,28 @@ function App() {
         aria-label={t("a11y.resizeRight")}
         onPointerDown={(event) => startResize("right", event)}
       />
+
+      {/* 右侧列：输出栏（视觉浮卡）与文件工作台互斥，同一 grid 列 */}
+      {showOutputRail ? (
+        <aside className="output-rail" aria-label={t("output.panelLabel")}>
+          <OutputFloatPanel
+            task={currentTask}
+            liveContentBlocks={liveContentBlocks}
+            visible
+            onOpenArtifact={(artifact) => {
+              if (!currentTask?.id) return;
+              workbenchTabs.openArtifact(artifact, currentTask.id);
+              setWorkbenchOpen(true);
+            }}
+            onOpenPath={(path) => {
+              workbenchTabs.openWorkspaceFile(path);
+              setWorkbenchOpen(true);
+            }}
+            onOpenWorkbench={() => setWorkbenchOpen(true)}
+            onClose={() => setOutputRailOpen(false)}
+          />
+        </aside>
+      ) : null}
 
       <WorkbenchPanel
         open={workbenchOpen}
@@ -678,7 +836,13 @@ function App() {
         }}
       />
 
-      {notice && <ToastNotice message={notice} onClose={() => setNotice(null)} />}
+      {notice && (
+        <ToastNotice
+          message={notice.message}
+          tone={notice.tone}
+          onClose={() => setNotice(null)}
+        />
+      )}
     </div>
   );
 }

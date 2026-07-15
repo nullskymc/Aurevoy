@@ -12,7 +12,7 @@ export function KbSettings({ settings: _settings }: { settings: RuntimeSettings 
   const [error, setError] = useState("");
 
   useEffect(() => {
-    loadData();
+    void loadData();
   }, []);
 
   async function loadData() {
@@ -20,7 +20,10 @@ export function KbSettings({ settings: _settings }: { settings: RuntimeSettings 
       const { listKbDirs, getKbStatus } = await import("../../api");
       setDirs(await listKbDirs());
       setStatus(await getKbStatus());
-    } catch { setError(t("kb.statusFailed")); }
+      setError("");
+    } catch {
+      setError(t("kb.statusFailed"));
+    }
   }
 
   async function addDir() {
@@ -33,7 +36,9 @@ export function KbSettings({ settings: _settings }: { settings: RuntimeSettings 
       setDirs((prev) => [...prev, dir]);
       setDirInput("");
       setError("");
-    } catch { setError(t("kb.addFailed")); }
+    } catch {
+      setError(t("kb.addFailed"));
+    }
     setAdding(false);
   }
 
@@ -42,38 +47,56 @@ export function KbSettings({ settings: _settings }: { settings: RuntimeSettings 
       const { deleteKbDir } = await import("../../api");
       await deleteKbDir(id);
       setDirs((prev) => prev.filter((d) => d.id !== id));
-    } catch { setError(t("kb.deleteFailed")); }
+    } catch {
+      setError(t("kb.deleteFailed"));
+    }
   }
 
-return (
+  return (
     <>
-<SettingsGroup title={t("kb.dirsTitle")}>
+      <SettingsGroup title={t("kb.dirsTitle")}>
         <div className="memory-add">
           <input
             className="memory-add-input"
             value={dirInput}
             placeholder={t("kb.addDirPlaceholder")}
             onChange={(e) => setDirInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") addDir(); }}
+            onKeyDown={(e) => { if (e.key === "Enter") void addDir(); }}
           />
-          <button type="button" className="memory-add-btn" onClick={addDir} disabled={adding || !dirInput.trim()}>
+          <button
+            type="button"
+            className="memory-add-btn"
+            onClick={() => void addDir()}
+            disabled={adding || !dirInput.trim()}
+          >
             {t("kb.addDir")}
           </button>
         </div>
-        {error && <p className="memory-source" style={{ color: "var(--danger)", margin: "4px 0 0 14px" }}>{error}</p>}
+
+        {error && (
+          <p className="memory-empty" style={{ color: "var(--danger)" }}>{error}</p>
+        )}
 
         {dirs.length === 0 ? (
-          <p className="memory-empty" style={{ padding: "12px 14px" }}>{t("kb.noDirs")}</p>
+          <p className="memory-empty">{t("kb.noDirs")}</p>
         ) : (
           <ul className="memory-list">
             {dirs.map((dir) => (
               <li key={dir.id} className="memory-item">
                 <code className="memory-content">{dir.dirPath}</code>
                 <div className="memory-item-foot">
-                  <span className="memory-source">{dir.recursive ? "recursive" : "non-recursive"}</span>
-                  <button type="button" className="memory-link danger" onClick={() => removeDir(dir.id)}>
-                    {t("kb.removeDir")}
-                  </button>
+                  <span className="memory-source">
+                    {dir.recursive ? "recursive" : "non-recursive"}
+                  </span>
+                  <span className="memory-item-actions">
+                    <button
+                      type="button"
+                      className="memory-link danger"
+                      onClick={() => void removeDir(dir.id)}
+                    >
+                      {t("kb.removeDir")}
+                    </button>
+                  </span>
                 </div>
               </li>
             ))}
@@ -84,19 +107,26 @@ return (
       {status && (
         <SettingsGroup title={t("kb.statusTitle")}>
           <div className="settings-row">
-            <div className="settings-info">
-              <span className="settings-label">{t("kb.totalFiles")}: {status.totalFiles}</span>
-            </div>
+            <span>
+              <strong>{t("kb.totalFiles")}</strong>
+            </span>
+            <em>{status.totalFiles}</em>
           </div>
           <div className="settings-row">
-            <div className="settings-info">
-              <span className="settings-label">{t("kb.totalChunks")}: {status.totalChunks}</span>
-            </div>
+            <span>
+              <strong>{t("kb.totalChunks")}</strong>
+            </span>
+            <em>{status.totalChunks}</em>
           </div>
           <div className="settings-row">
-            <div className="settings-info">
-              <span className="settings-label">{t("kb.lastIndexed")}: {status.lastIndexed ? new Date(status.lastIndexed).toLocaleString() : t("kb.emptyStatus")}</span>
-            </div>
+            <span>
+              <strong>{t("kb.lastIndexed")}</strong>
+            </span>
+            <em>
+              {status.lastIndexed
+                ? new Date(status.lastIndexed).toLocaleString()
+                : t("kb.emptyStatus")}
+            </em>
           </div>
         </SettingsGroup>
       )}

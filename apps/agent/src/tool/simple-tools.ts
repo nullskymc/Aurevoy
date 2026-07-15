@@ -4,6 +4,9 @@ import { homedir } from 'node:os';
 import { config } from '../config.js';
 import { unifiedToolRegistry } from './unified-registry.js';
 
+// 对话内 UI 暂停开放：保留 canvas 实现以便后续恢复与渲染历史内容，但不向 Agent 注册该工具。
+const ENABLE_PRESENT_UI_TOOL = false;
+
 // ---- 路径安全工具 ----
 
 function resolveInWorkspace(input: unknown, workspaceRoot: string, externalPaths?: string[]): string {
@@ -256,31 +259,29 @@ export function registerSimpleTools(): void {
     },
   });
 
-  // present_ui — 对话内限定交互组件（白名单 kind，禁止可执行代码）
-  unifiedToolRegistry.register({
+  // present_ui — 对话内 Agent 自由设计 UI（canvas 基础原语或 sandbox JS）
+  // 暂停注册，避免模型与子代理进入尚在评估的 canvas 链路。
+  if (ENABLE_PRESENT_UI_TOOL) unifiedToolRegistry.register({
     name: 'present_ui',
     description:
-      '在对话中展示可交互的限定 UI 组件（非任意 HTML/JSX）。' +
-      '用于数据表、指标卡、选项选择、简单计算器或 stack 组合布局。' +
+      '在对话中展示由 Agent 自由设计的交互 UI；canvas 支持安全基础原语或 sandbox 隔离的 HTML/CSS/JS。' +
       '传入相同 id 可更新已有组件（原地替换 props）。' +
-      '复杂视觉报告请写 HTML 文件并用 attach_content，不要用本工具执行脚本。',
+      '需要对话内交互时直接使用本工具；只有用户明确要求可下载的长篇报告时才写 HTML 文件并用 attach_content。',
     inputSchema: {
       type: 'object',
       properties: {
         kind: {
           type: 'string',
-          enum: ['data_table', 'stat_row', 'choice', 'calculator', 'stack'],
+          enum: ['canvas'],
           description:
-            'data_table: 可排序/筛选表格；stat_row: 指标卡；choice: 用户选项；' +
-            'calculator: 本地轻量计算；stack: 组合多个子组件',
+            'canvas: Agent 自由设计交互界面，可使用基础原语或 sandbox 隔离的 HTML/CSS/JS。',
         },
         props: {
           type: 'object',
           description:
-            '组件属性。data_table: {title?, columns:string[], rows:(string|number|null)[][], features?:("sort"|"filter"|"copy"|"sum")[]}；' +
-            'stat_row: {items:{label,value,hint?}[]}；choice: {prompt, options:{id,label}[], multi?}；' +
-            'calculator: {title?, fields:{id,label,value:number}[], formula:string}；' +
-            'stack: {children:{kind,props}[]}',
+            '组件属性。canvas 声明式模式为 {title?, description?, state?, body:UiNode[]}，JS 模式为 {title?, description?, state?, html, css?, script}；UiNode 支持 section/row/column/grid/' +
+            'heading/text/badge/divider/spacer/progress/button/input/textarea/select/checkbox；' +
+            '节点可用 stateKey、visibleWhen、style token 和 submit/set/toggle action；JS 模式用 aurevoy.emit(actionId,payload) 回传事件，不要直接调用 window.postMessage/parent.postMessage。',
         },
         id: { type: 'string', description: '可选。已有组件 id，传入则更新该组件' },
         fallbackText: { type: 'string', description: '纯文本降级摘要（可选）' },
@@ -421,14 +422,11 @@ export function registerSimpleTools(): void {
 
 // ---- present_ui 校验（白名单 props，防撑爆 UI）----
 
-const UI_KINDS = new Set(['data_table', 'stat_row', 'choice', 'calculator', 'stack']);
-const MAX_TABLE_ROWS = 200;
-const MAX_TABLE_COLS = 20;
-const MAX_CELL_CHARS = 500;
-const MAX_STACK_CHILDREN = 12;
-const MAX_STACK_DEPTH = 3;
+const UI_KINDS = new Set(['canvas']);
+const MAX_CANVAS_DEPTH = 6;
+const MAX_CANVAS_NODES = 80;
 
-function validatePresentUiProps(kind: string, raw: unknown, depth = 0): Record<string, unknown> {
+function validatePresentUiProps(kind: string, raw: unknown): Record<string, unknown> {
   if (!UI_KINDS.has(kind)) {
     throw new Error(`不支持的 UI kind: ${kind}。允许: ${[...UI_KINDS].join(', ')}`);
   }
@@ -437,197 +435,131 @@ function validatePresentUiProps(kind: string, raw: unknown, depth = 0): Record<s
   }
   const props = raw as Record<string, unknown>;
 
-  switch (kind) {
-    case 'data_table':
-      return validateDataTableProps(props);
-    case 'stat_row':
-      return validateStatRowProps(props);
-    case 'choice':
-      return validateChoiceProps(props);
-    case 'calculator':
-      return validateCalculatorProps(props);
-    case 'stack':
-      return validateStackProps(props, depth);
-    default:
-      throw new Error(`不支持的 UI kind: ${kind}`);
+  if (kind !== 'canvas') {
+    throw new Error(`不支持的 UI kind: ${kind}`);
   }
+  return validateCanvasProps(props);
+
 }
 
-function validateDataTableProps(props: Record<string, unknown>): Record<string, unknown> {
-  const columns = props.columns;
-  if (!Array.isArray(columns) || columns.length === 0) {
-    throw new Error('data_table.props.columns 必须是非空字符串数组');
+function validateCanvasProps(props: Record<string, unknown>): Record<string, unknown> {
+  const hasCode = typeof props.html === 'string' || typeof props.script === 'string' || typeof props.css === 'string';
+  if (hasCode) {
+    if (typeof props.html !== 'string' || !props.html.trim()) throw new Error('canvas JS 模式需要 html');
+    if (typeof props.script !== 'string' || !props.script.trim()) throw new Error('canvas JS 模式需要 script');
+    if (props.html.length > 80_000 || (typeof props.css === 'string' && props.css.length > 40_000) || props.script.length > 80_000) {
+      throw new Error('canvas html/css/script 超出长度限制');
+    }
+  } else if (!Array.isArray(props.body) || props.body.length === 0) {
+    throw new Error('canvas 需要非空 body，或提供 html + script');
   }
-  if (columns.length > MAX_TABLE_COLS) {
-    throw new Error(`data_table 列数不能超过 ${MAX_TABLE_COLS}`);
+  const body = Array.isArray(props.body) ? props.body : [];
+  const counter = { value: 0 };
+  const stateRaw = props.state && typeof props.state === 'object' && !Array.isArray(props.state)
+    ? props.state as Record<string, unknown>
+    : {};
+  const state: Record<string, string | number | boolean | null> = {};
+  for (const [key, value] of Object.entries(stateRaw).slice(0, 40)) {
+    if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(key)) continue;
+    state[key] = normalizeCanvasPrimitive(value);
   }
-  const colStrs = columns.map((c, i) => {
-    if (typeof c !== 'string' || !c.trim()) throw new Error(`columns[${i}] 必须是非空字符串`);
-    return c.trim().slice(0, 80);
-  });
-
-  const rows = props.rows;
-  if (!Array.isArray(rows)) throw new Error('data_table.props.rows 必须是数组');
-  if (rows.length > MAX_TABLE_ROWS) {
-    throw new Error(`data_table 行数不能超过 ${MAX_TABLE_ROWS}`);
-  }
-  const normalizedRows = rows.map((row, ri) => {
-    if (!Array.isArray(row)) throw new Error(`rows[${ri}] 必须是数组`);
-    return colStrs.map((_, ci) => normalizeCell(row[ci]));
-  });
-
-  const featuresRaw = props.features;
-  let features: string[] | undefined;
-  if (featuresRaw !== undefined) {
-    if (!Array.isArray(featuresRaw)) throw new Error('features 必须是数组');
-    const allowed = new Set(['sort', 'filter', 'copy', 'sum']);
-    features = [...new Set(featuresRaw.map(String).filter((f) => allowed.has(f)))];
-  }
-
   return {
-    title: typeof props.title === 'string' ? props.title.trim().slice(0, 120) : undefined,
-    columns: colStrs,
-    rows: normalizedRows,
-    features: features && features.length > 0 ? features : ['sort', 'copy'],
+    title: typeof props.title === 'string' ? props.title.trim().slice(0, 160) : undefined,
+    description: typeof props.description === 'string' ? props.description.trim().slice(0, 500) : undefined,
+    state,
+    body: body.map((node, index) => validateCanvasNode(node, `body[${index}]`, 0, counter)),
+    html: typeof props.html === 'string' ? props.html : undefined,
+    css: typeof props.css === 'string' ? props.css : undefined,
+    script: typeof props.script === 'string' ? props.script : undefined,
   };
 }
 
-function normalizeCell(value: unknown): string | number | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  const s = String(value);
-  return s.length > MAX_CELL_CHARS ? `${s.slice(0, MAX_CELL_CHARS)}…` : s;
-}
+const CANVAS_NODE_TYPES = new Set([
+  'section', 'row', 'column', 'grid', 'heading', 'text', 'badge', 'divider', 'spacer', 'progress',
+  'button', 'input', 'textarea', 'select', 'checkbox',
+]);
+const CANVAS_TONES = new Set(['neutral', 'accent', 'success', 'warning', 'danger']);
+const CANVAS_VARIANTS = new Set(['plain', 'soft', 'outline', 'solid']);
+const CANVAS_ALIGNS = new Set(['start', 'center', 'end', 'stretch']);
 
-function validateStatRowProps(props: Record<string, unknown>): Record<string, unknown> {
-  const items = props.items;
-  if (!Array.isArray(items) || items.length === 0) {
-    throw new Error('stat_row.props.items 必须是非空数组');
+function validateCanvasNode(
+  raw: unknown,
+  path: string,
+  depth: number,
+  counter: { value: number },
+): Record<string, unknown> {
+  if (depth > MAX_CANVAS_DEPTH) throw new Error(`canvas 节点嵌套不能超过 ${MAX_CANVAS_DEPTH} 层`);
+  counter.value += 1;
+  if (counter.value > MAX_CANVAS_NODES) throw new Error(`canvas 节点不能超过 ${MAX_CANVAS_NODES} 个`);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`${path} 必须是对象`);
+  const node = raw as Record<string, unknown>;
+  const type = typeof node.type === 'string' ? node.type : '';
+  if (!CANVAS_NODE_TYPES.has(type)) throw new Error(`${path}.type 不支持: ${type}`);
+
+  const normalized: Record<string, unknown> = { type };
+  if (typeof node.id === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(node.id)) normalized.id = node.id;
+  if (typeof node.text === 'string') normalized.text = node.text.slice(0, 1000);
+  if (typeof node.label === 'string') normalized.label = node.label.slice(0, 240);
+  if (typeof node.placeholder === 'string') normalized.placeholder = node.placeholder.slice(0, 160);
+  if (typeof node.stateKey === 'string' && /^[a-zA-Z0-9_.-]{1,64}$/.test(node.stateKey)) normalized.stateKey = node.stateKey;
+  if (node.value !== undefined) normalized.value = normalizeCanvasPrimitive(node.value);
+
+  if (Array.isArray(node.options)) {
+    normalized.options = node.options.slice(0, 30).map((option, index) => {
+      if (!option || typeof option !== 'object' || Array.isArray(option)) throw new Error(`${path}.options[${index}] 必须是对象`);
+      const record = option as Record<string, unknown>;
+      return { label: String(record.label ?? '').slice(0, 120), value: String(record.value ?? '').slice(0, 120) };
+    });
   }
-  if (items.length > 12) throw new Error('stat_row items 不能超过 12 个');
-  return {
-    items: items.map((item, i) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) {
-        throw new Error(`items[${i}] 必须是对象`);
-      }
-      const rec = item as Record<string, unknown>;
-      if (typeof rec.label !== 'string' || typeof rec.value !== 'string' && typeof rec.value !== 'number') {
-        throw new Error(`items[${i}] 需要 label 与 value`);
-      }
-      return {
-        label: String(rec.label).slice(0, 80),
-        value: typeof rec.value === 'number' ? rec.value : String(rec.value).slice(0, 120),
-        hint: typeof rec.hint === 'string' ? rec.hint.slice(0, 120) : undefined,
+  if (node.style && typeof node.style === 'object' && !Array.isArray(node.style)) {
+    const style = node.style as Record<string, unknown>;
+    normalized.style = {
+      tone: typeof style.tone === 'string' && CANVAS_TONES.has(style.tone) ? style.tone : undefined,
+      variant: typeof style.variant === 'string' && CANVAS_VARIANTS.has(style.variant) ? style.variant : undefined,
+      width: style.width === 'full' || style.width === 'auto' ? style.width : undefined,
+      columns: typeof style.columns === 'number' && style.columns >= 1 && style.columns <= 4 ? Math.floor(style.columns) : undefined,
+      gap: typeof style.gap === 'number' && style.gap >= 0 && style.gap <= 4 ? Math.floor(style.gap) : undefined,
+      padding: typeof style.padding === 'number' && style.padding >= 0 && style.padding <= 4 ? Math.floor(style.padding) : undefined,
+      align: typeof style.align === 'string' && CANVAS_ALIGNS.has(style.align) ? style.align : undefined,
+    };
+  }
+  if (node.visibleWhen && typeof node.visibleWhen === 'object' && !Array.isArray(node.visibleWhen)) {
+    const condition = node.visibleWhen as Record<string, unknown>;
+    if (typeof condition.stateKey === 'string' && /^[a-zA-Z0-9_.-]{1,64}$/.test(condition.stateKey)) {
+      normalized.visibleWhen = { stateKey: condition.stateKey, equals: normalizeCanvasPrimitive(condition.equals) };
+    }
+  }
+  if (node.action && typeof node.action === 'object' && !Array.isArray(node.action)) {
+    const action = node.action as Record<string, unknown>;
+    if (action.type === 'submit' || action.type === 'set' || action.type === 'toggle') {
+      normalized.action = {
+        type: action.type,
+        id: typeof action.id === 'string' ? action.id.slice(0, 64) : undefined,
+        stateKey: typeof action.stateKey === 'string' && /^[a-zA-Z0-9_.-]{1,64}$/.test(action.stateKey) ? action.stateKey : undefined,
+        value: action.value === undefined ? undefined : normalizeCanvasPrimitive(action.value),
+        includeState: action.includeState !== false,
       };
-    }),
-  };
+    }
+  }
+  if (Array.isArray(node.children)) {
+    normalized.children = node.children.map((child, index) => validateCanvasNode(child, `${path}.children[${index}]`, depth + 1, counter));
+  }
+  return normalized;
 }
 
-function validateChoiceProps(props: Record<string, unknown>): Record<string, unknown> {
-  if (typeof props.prompt !== 'string' || !props.prompt.trim()) {
-    throw new Error('choice.props.prompt 必填');
-  }
-  const options = props.options;
-  if (!Array.isArray(options) || options.length === 0) {
-    throw new Error('choice.props.options 必须是非空数组');
-  }
-  if (options.length > 20) throw new Error('choice options 不能超过 20 个');
-  return {
-    prompt: props.prompt.trim().slice(0, 500),
-    multi: props.multi === true,
-    options: options.map((opt, i) => {
-      if (!opt || typeof opt !== 'object' || Array.isArray(opt)) {
-        throw new Error(`options[${i}] 必须是对象`);
-      }
-      const rec = opt as Record<string, unknown>;
-      const id = typeof rec.id === 'string' ? rec.id.trim() : '';
-      const label = typeof rec.label === 'string' ? rec.label.trim() : '';
-      if (!id || !label) throw new Error(`options[${i}] 需要 id 与 label`);
-      return { id: id.slice(0, 64), label: label.slice(0, 120) };
-    }),
-  };
-}
-
-function validateCalculatorProps(props: Record<string, unknown>): Record<string, unknown> {
-  const fields = props.fields;
-  if (!Array.isArray(fields) || fields.length === 0) {
-    throw new Error('calculator.props.fields 必须是非空数组');
-  }
-  if (fields.length > 12) throw new Error('calculator fields 不能超过 12 个');
-  if (typeof props.formula !== 'string' || !props.formula.trim()) {
-    throw new Error('calculator.props.formula 必填');
-  }
-  const formula = props.formula.trim().slice(0, 200);
-  if (!/^[a-zA-Z0-9_+\-*/().\s]+$/.test(formula)) {
-    throw new Error('formula 仅允许字段 id 与 + - * / ( ) 数字空白');
-  }
-  return {
-    title: typeof props.title === 'string' ? props.title.trim().slice(0, 120) : undefined,
-    formula,
-    fields: fields.map((f, i) => {
-      if (!f || typeof f !== 'object' || Array.isArray(f)) throw new Error(`fields[${i}] 必须是对象`);
-      const rec = f as Record<string, unknown>;
-      const id = typeof rec.id === 'string' ? rec.id.trim() : '';
-      const label = typeof rec.label === 'string' ? rec.label.trim() : id;
-      if (!id || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(id)) {
-        throw new Error(`fields[${i}].id 必须是合法标识符`);
-      }
-      const value = typeof rec.value === 'number' && Number.isFinite(rec.value) ? rec.value : 0;
-      return { id: id.slice(0, 32), label: label.slice(0, 80), value };
-    }),
-  };
-}
-
-function validateStackProps(props: Record<string, unknown>, depth: number): Record<string, unknown> {
-  if (depth >= MAX_STACK_DEPTH) {
-    throw new Error(`stack 嵌套不能超过 ${MAX_STACK_DEPTH} 层`);
-  }
-  const children = props.children;
-  if (!Array.isArray(children) || children.length === 0) {
-    throw new Error('stack.props.children 必须是非空数组');
-  }
-  if (children.length > MAX_STACK_CHILDREN) {
-    throw new Error(`stack children 不能超过 ${MAX_STACK_CHILDREN}`);
-  }
-  return {
-    children: children.map((child, i) => {
-      if (!child || typeof child !== 'object' || Array.isArray(child)) {
-        throw new Error(`children[${i}] 必须是对象`);
-      }
-      const rec = child as Record<string, unknown>;
-      const kind = typeof rec.kind === 'string' ? rec.kind : '';
-      if (kind === 'stack') {
-        // 允许嵌套 stack，但计入 depth
-      }
-      return {
-        kind,
-        props: validatePresentUiProps(kind, rec.props, depth + 1),
-      };
-    }),
-  };
+function normalizeCanvasPrimitive(value: unknown): string | number | boolean | null {
+  if (value === null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (typeof value === 'boolean') return value;
+  return String(value ?? '').slice(0, 1000);
 }
 
 function defaultFallbackText(kind: string, props: Record<string, unknown>): string {
-  switch (kind) {
-    case 'data_table': {
-      const cols = props.columns as string[];
-      const rows = props.rows as unknown[];
-      return `表格「${typeof props.title === 'string' ? props.title : '数据'}」：${cols.length} 列 × ${rows.length} 行`;
-    }
-    case 'stat_row': {
-      const items = props.items as Array<{ label: string; value: string | number }>;
-      return items.map((it) => `${it.label}: ${it.value}`).join(' · ');
-    }
-    case 'choice':
-      return `请选择：${String(props.prompt)}`;
-    case 'calculator':
-      return `计算器：${String(props.formula)}`;
-    case 'stack': {
-      const n = (props.children as unknown[]).length;
-      return `组合 UI（${n} 块）`;
-    }
-    default:
-      return `UI: ${kind}`;
+  if (kind === 'canvas') {
+    const body = Array.isArray(props.body) ? props.body as unknown[] : [];
+    return props.html
+      ? `自定义 JS 交互界面${typeof props.title === 'string' ? `「${props.title}」` : ''}`
+      : `交互界面${typeof props.title === 'string' ? `「${props.title}」` : ''}（${body.length} 个根节点）`;
   }
+  return `UI: ${kind}`;
 }

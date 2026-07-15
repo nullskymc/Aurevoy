@@ -22,9 +22,10 @@ export function OauthLoginPanel({
   oauthLabel?: string;
   oauthConfigured: boolean;
   disabled?: boolean;
-  onAuthChanged: () => void;
+  /** login = 登录成功；logout = 退出订阅（父级勿再 silent-save 槽位） */
+  onAuthChanged: (event: "login" | "logout") => void;
   /** 全局 Toast / 顶部提示 */
-  onNotice?: (message: string) => void;
+  onNotice?: (message: string, tone?: "info" | "success" | "error") => void;
 }) {
   const platform = usePlatform();
   const [busy, setBusy] = useState(false);
@@ -44,8 +45,8 @@ export function OauthLoginPanel({
   const effectivelyConfigured = oauthConfigured || loginSucceeded;
 
   useEffect(() => {
-    // 外部 settings 刷新后 oauthConfigured 变为 true 时，同步本地成功态
-    if (oauthConfigured) setLoginSucceeded(true);
+    // 与服务端状态双向同步：退出后 oauthConfigured=false 必须清掉本地成功态
+    setLoginSucceeded(oauthConfigured);
   }, [oauthConfigured]);
 
   useEffect(() => {
@@ -108,20 +109,26 @@ export function OauthLoginPanel({
     setError(null);
     setStatusText(t("settings.oauthLoginSuccessDetail"));
     setPromptValue("");
+    setSession(null);
     if (!successNotified.current) {
       successNotified.current = true;
-      onNotice?.(t("settings.oauthLoginSuccess"));
+      onNotice?.(t("settings.oauthLoginSuccess"), "success");
     }
-    onAuthChanged();
+    onAuthChanged("login");
   }
 
   function applySnapshot(next: OauthSessionSnapshot): void {
     setSession(next);
     handleNewEvents(next.events);
 
+    // Codex 浏览器回调会与 manual_code 竞态：回调在 agent 侧完成后 status→done，
+    // 若在 awaiting_input 时停轮询，前端永远看不到成功。
+    // 因此 running / awaiting_input 都持续 poll，直到终态。
     if (next.status === "awaiting_input") {
-      stopPolling();
       setBusy(false);
+      if (!pollRef.current) {
+        startPolling(next.sessionId);
+      }
       return;
     }
 
@@ -144,7 +151,7 @@ export function OauthLoginPanel({
       setBusy(false);
       setLoginSucceeded(false);
       setError(next.error || t("settings.oauthLoginFailed"));
-      onNotice?.(next.error || t("settings.oauthLoginFailed"));
+      onNotice?.(next.error || t("settings.oauthLoginFailed"), "error");
       return;
     }
 
@@ -167,7 +174,7 @@ export function OauthLoginPanel({
           setBusy(false);
           const msg = err instanceof Error ? err.message : String(err);
           setError(msg);
-          onNotice?.(msg);
+          onNotice?.(msg, "error");
         });
     }, 800);
   }
@@ -190,7 +197,7 @@ export function OauthLoginPanel({
       setBusy(false);
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
-      onNotice?.(msg);
+      onNotice?.(msg, "error");
     }
   }
 
@@ -214,7 +221,7 @@ export function OauthLoginPanel({
       setBusy(false);
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
-      onNotice?.(msg);
+      onNotice?.(msg, "error");
     }
   }
 
@@ -229,7 +236,7 @@ export function OauthLoginPanel({
       setBusy(false);
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
-      onNotice?.(msg);
+      onNotice?.(msg, "error");
     }
   }
 
@@ -256,12 +263,13 @@ export function OauthLoginPanel({
       setLoginSucceeded(false);
       successNotified.current = false;
       setStatusText(t("settings.oauthLoggedOut"));
-      onNotice?.(t("settings.oauthLoggedOut"));
-      onAuthChanged();
+      onNotice?.(t("settings.oauthLoggedOut"), "info");
+      // 只刷新 settings，不要 silent-save（否则会重新激活空槽并看起来仍「已连接」）
+      onAuthChanged("logout");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
-      onNotice?.(msg);
+      onNotice?.(msg, "error");
     } finally {
       setBusy(false);
     }
@@ -272,28 +280,48 @@ export function OauthLoginPanel({
   const inputLocked = busy && session?.status !== "awaiting_input";
   const canSubmitEmpty = allowsEmptySubmit(pending);
   const canSubmit = canSubmitEmpty || promptValue.trim().length > 0;
-  const showSuccessBanner = loginSucceeded && !inFlight && !error;
+  // 已连接且空闲：紧凑态，不堆叠横幅/外框
+  const idleConnected = effectivelyConfigured && !inFlight && !error;
 
-  return (
-    <div className="settings-modal-field settings-oauth-panel">
-      <span>{oauthLabel || t("settings.oauthLoginTitle")}</span>
-      <small>
-        {effectivelyConfigured
-          ? t("settings.oauthConfigured")
-          : t("settings.oauthLoginDesc")}
-      </small>
-
-      {showSuccessBanner && (
-        <div className="settings-oauth-success" role="status" aria-live="polite">
-          <span className="settings-oauth-success-icon" aria-hidden="true">
+  if (idleConnected) {
+    return (
+      <div className="settings-oauth-idle" role="status" aria-live="polite">
+        <div className="settings-oauth-idle-main">
+          <span className="settings-oauth-idle-check" aria-hidden="true">
             ✓
           </span>
-          <div className="settings-oauth-success-body">
-            <strong>{t("settings.oauthLoginSuccess")}</strong>
-            <small>{t("settings.oauthLoginSuccessDetail")}</small>
+          <div className="settings-oauth-idle-text">
+            <strong>{oauthLabel || t("settings.oauthLoginTitle")}</strong>
+            <small>{t("settings.oauthConfiguredShort")}</small>
           </div>
         </div>
-      )}
+        <div className="settings-oauth-idle-actions">
+          <button
+            type="button"
+            className="settings-link-btn"
+            disabled={disabled || busy}
+            onClick={() => void handleLogin()}
+          >
+            {t("settings.oauthReLogin")}
+          </button>
+          <button
+            type="button"
+            className="settings-link-btn"
+            data-danger="true"
+            disabled={disabled || busy}
+            onClick={() => void handleLogout()}
+          >
+            {t("settings.oauthLogout")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-modal-field settings-oauth-panel" data-busy={inFlight || busy}>
+      <span>{oauthLabel || t("settings.oauthLoginTitle")}</span>
+      <small>{t("settings.oauthLoginDesc")}</small>
 
       <div className="settings-oauth-actions">
         {!inFlight && (
@@ -303,11 +331,7 @@ export function OauthLoginPanel({
             disabled={disabled || busy}
             onClick={() => void handleLogin()}
           >
-            {busy
-              ? t("settings.oauthLoggingIn")
-              : effectivelyConfigured
-                ? t("settings.oauthReLogin")
-                : t("settings.oauthLoginButton")}
+            {busy ? t("settings.oauthLoggingIn") : t("settings.oauthLoginButton")}
           </button>
         )}
         {inFlight && (
@@ -320,19 +344,9 @@ export function OauthLoginPanel({
             {t("settings.oauthCancel")}
           </button>
         )}
-        {effectivelyConfigured && !inFlight && (
-          <button
-            type="button"
-            className="settings-secondary-btn"
-            disabled={disabled || busy}
-            onClick={() => void handleLogout()}
-          >
-            {t("settings.oauthLogout")}
-          </button>
-        )}
       </div>
 
-      {inFlight && statusText && !showSuccessBanner && (
+      {inFlight && statusText && (
         <p className="settings-oauth-status">{statusText}</p>
       )}
       {deviceCode && inFlight && (

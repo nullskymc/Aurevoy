@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Message, SubagentRun } from "@aurevoy/shared";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData } from "./Timeline";
+import {
+  AgentRound,
+  buildAgentRoundFromMessage,
+  buildLiveAgentRoundData,
+  flattenProcessActivityRows,
+  formatProcessedSummaryLabel,
+  mergeAgentRoundData,
+  resolveLiveStatusText,
+} from "./Timeline";
 
 vi.mock("dompurify", () => ({
   default: {
@@ -212,8 +220,139 @@ describe("buildAgentRoundFromMessage", () => {
   });
 });
 
+describe("process presentation helpers", () => {
+  it("resolveLiveStatusText prefers phaseDetail and strips Agent prefix", () => {
+    expect(
+      resolveLiveStatusText({
+        phaseDetail: "Agent 正在思考",
+        data: {
+          id: "r",
+          planStepGroups: [],
+          summary: "执行了 1 个搜索",
+          status: "running",
+        },
+      }),
+    ).toBe("正在思考");
+  });
+
+  it("resolveLiveStatusText falls back to behavioral activity summary", () => {
+    expect(
+      resolveLiveStatusText({
+        data: {
+          id: "r",
+          planStepGroups: [{
+            planStepId: "_live",
+            description: "执行",
+            status: "running",
+            steps: [{
+              id: "s1",
+              kind: "command",
+              title: "pwd",
+              status: "running",
+              toolName: "execute_command",
+            }],
+          }],
+          summary: "",
+          status: "running",
+        },
+      }),
+    ).toBe("正在运行 pwd");
+  });
+
+  it("resolveLiveStatusText summarizes search as 正在搜索网页", () => {
+    expect(
+      resolveLiveStatusText({
+        data: {
+          id: "r",
+          planStepGroups: [{
+            planStepId: "_live",
+            description: "执行",
+            status: "running",
+            steps: [{
+              id: "s1",
+              kind: "search",
+              title: "ChatLuna",
+              status: "running",
+              toolName: "web_search",
+            }],
+          }],
+          summary: "",
+          status: "running",
+        },
+      }),
+    ).toBe("正在搜索网页 · ChatLuna");
+  });
+
+  it("flattenProcessActivityRows builds flat tool and subagent rows", () => {
+    const rows = flattenProcessActivityRows({
+      id: "round-1",
+      planStepGroups: [{
+        planStepId: "_default",
+        description: "执行",
+        status: "completed",
+        steps: [
+          { id: "c1", kind: "command", title: "pwd", status: "success", toolName: "bash" },
+          { id: "c2", kind: "command", title: "ls", status: "success", toolName: "bash" },
+          { id: "r1", kind: "file_read", title: "a.md", status: "success", toolName: "read" },
+        ],
+      }],
+      subagentRuns: [makeSubagentRun({ id: "sa1", status: "completed", role: "explore" })],
+      summary: "执行了 3 个工具",
+      status: "completed",
+    });
+
+    expect(rows.some((r) => r.kind === "group" && r.label.includes("多个命令"))).toBe(true);
+    expect(rows.some((r) => r.label.includes("pwd"))).toBe(true);
+    expect(rows.some((r) => r.label.includes("a.md"))).toBe(true);
+    expect(rows.some((r) => r.kind === "subagent")).toBe(true);
+  });
+
+  it("formatProcessedSummaryLabel does not invent duration seconds", () => {
+    expect(formatProcessedSummaryLabel({ stepCount: 3 })).toBe("已处理");
+    expect(formatProcessedSummaryLabel({ stepCount: 3, durationMs: 13_000 })).toBe("已处理 13s");
+  });
+
+  it("mergeAgentRoundData collapses multiple rounds into one process block", () => {
+    const a = buildAgentRoundFromMessage(
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-07-10T00:00:00.000Z",
+        toolCalls: [{
+          id: "c1",
+          type: "function",
+          function: { name: "bash", arguments: JSON.stringify({ command: "pwd" }) },
+        }],
+      },
+      new Map([["c1", { ok: true, output: "/" }]]),
+      [],
+    );
+    const b = buildAgentRoundFromMessage(
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-07-10T00:00:01.000Z",
+        toolCalls: [{
+          id: "c2",
+          type: "function",
+          function: { name: "web_search", arguments: JSON.stringify({ query: "x" }) },
+        }],
+      },
+      new Map([["c2", { ok: true, output: [] }]]),
+      [],
+    );
+    const merged = mergeAgentRoundData([a, b], "turn");
+    expect(merged).not.toBeNull();
+    expect(merged!.planStepGroups.flatMap((g) => g.steps).map((s) => s.id).sort()).toEqual(["c1", "c2"]);
+    expect(merged!.markdownOutput).toBeUndefined();
+    expect(flattenProcessActivityRows(merged!).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe("AgentRound", () => {
-  it("renders user-facing subagent identity, progress, metrics and tool activity", () => {
+  it("live mode renders 已处理 + gray status stream without plan-step tree", () => {
     const run = makeSubagentRun({
       id: "visible-run",
       parentCallId: "visible-call",
@@ -230,9 +369,21 @@ describe("AgentRound", () => {
     const html = renderToStaticMarkup(
       <AgentRound
         busy
+        processStartedAtMs={Date.now() - 5000}
         data={{
           id: "subagent-round",
-          planStepGroups: [],
+          planStepGroups: [{
+            planStepId: "_live",
+            description: "执行",
+            status: "running",
+            steps: [{
+              id: "tool-1",
+              kind: "command",
+              title: "pwd",
+              status: "running",
+              toolName: "bash",
+            }],
+          }],
           summary: "",
           subagentRuns: [run],
           status: "running",
@@ -240,40 +391,95 @@ describe("AgentRound", () => {
       />,
     );
 
-    expect(html).toContain("协作工作组");
-    expect(html).toContain("编码");
-    expect(html).toContain("检查实现");
+    expect(html).toContain("process-live-block");
+    expect(html).toContain("process-live-status");
+    expect(html).toContain("已处理");
     expect(html).toContain("正在调用 edit");
-    expect(html).toContain("edit");
-    expect(html).toContain("执行中");
+    expect(html).not.toContain("协作工作组");
+    expect(html).not.toContain("timeline-step");
     expect(html).not.toContain("timeline-empty");
+    expect(html).toContain('data-process="live"');
   });
 
-  it("renders the live empty-state phase label once before streaming output", () => {
+  it("streams typewriter delivery while thinking without stacking 正在思考", () => {
     const html = renderToStaticMarkup(
       <AgentRound
         busy
         phaseDetail="Agent 正在思考"
+        processStartedAtMs={Date.now()}
         data={{
           id: "live-tail",
           planStepGroups: [],
           summary: "",
-          markdownOutput: "streaming answer",
+          markdownOutput: "streaming answer appears as typewriter",
           status: "running",
         }}
       />,
     );
 
-    expect(html.match(/Agent 正在思考/g)).toHaveLength(1);
-    expect(html).toContain("timeline-empty");
-    expect(html).not.toContain("timeline-phase-bar");
-    expect(html.indexOf("timeline-empty")).toBeLessThan(html.indexOf("timeline-output"));
-    expect(html).not.toContain("思考中…");
+    expect(html).toContain("已处理");
+    expect(html).toContain("streaming answer appears as typewriter");
+    expect(html).toContain("stream-caret");
+    expect(html).toContain("is-streaming");
+    // 正文已出时不叠灰字「正在思考」
+    expect(html).not.toContain("正在思考");
+    expect(html).not.toContain("process-live-status");
   });
 
-  it("renders failed and successful tool steps with independent data-status", () => {
+  it("shows 正在思考 only when there is no streaming body yet", () => {
     const html = renderToStaticMarkup(
       <AgentRound
+        busy
+        phaseDetail="Agent 正在思考"
+        processStartedAtMs={Date.now()}
+        data={{
+          id: "live-wait",
+          planStepGroups: [],
+          summary: "",
+          status: "running",
+        }}
+      />,
+    );
+
+    expect(html).toContain("已处理");
+    expect(html).toContain("正在思考");
+    expect(html).toContain("process-live-status");
+  });
+
+  it("hides typewriter delivery while a tool is running", () => {
+    const html = renderToStaticMarkup(
+      <AgentRound
+        busy
+        processStartedAtMs={Date.now()}
+        data={{
+          id: "live-tool",
+          planStepGroups: [{
+            planStepId: "_live",
+            description: "执行",
+            status: "running",
+            steps: [{
+              id: "s1",
+              kind: "search",
+              title: "dingyi",
+              status: "running",
+              toolName: "web_search",
+            }],
+          }],
+          summary: "",
+          markdownOutput: "intermediate narration should stay out of body",
+          status: "running",
+        }}
+      />,
+    );
+
+    expect(html).toContain("正在搜索网页");
+    expect(html).not.toContain("intermediate narration should stay out of body");
+  });
+
+  it("completed mode exposes collapsible summary and flat activity rows with per-step status", () => {
+    const html = renderToStaticMarkup(
+      <AgentRound
+        defaultToolDetailsOpen
         data={{
           id: "mixed-status-round",
           planStepGroups: [{
@@ -304,10 +510,35 @@ describe("AgentRound", () => {
       />,
     );
 
-    // Round-level failed is expected for summary/badge, but each step keeps its own status.
+    expect(html).toContain("process-completed");
+    expect(html).toContain("已处理");
+    expect(html).toContain("process-activity-row");
+    expect(html).toContain('data-status="success"');
     expect(html).toContain('data-status="failed"');
-    expect(html).toContain('class="timeline-step" data-status="success"');
-    expect(html).toContain('class="timeline-step" data-status="failed"');
+    expect(html).toContain("ok.md");
+    expect(html).toContain("missing.md");
+    expect(html).not.toContain("timeline-step");
+    expect(html).not.toContain("doc-meta");
+  });
+
+  it("completed subagent rounds render as activity rows not workgroup cards", () => {
+    const html = renderToStaticMarkup(
+      <AgentRound
+        defaultToolDetailsOpen
+        data={{
+          id: "sa-round",
+          planStepGroups: [],
+          summary: "",
+          subagentRuns: [makeSubagentRun({ id: "sa-done", status: "completed", role: "coder" })],
+          status: "completed",
+        }}
+      />,
+    );
+
+    expect(html).toContain("process-activity-row");
+    expect(html).toContain('data-kind="subagent"');
+    expect(html).not.toContain("协作工作组");
+    expect(html).not.toContain("subagent-workgroup");
   });
 });
 

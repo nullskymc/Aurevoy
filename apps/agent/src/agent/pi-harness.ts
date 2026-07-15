@@ -32,8 +32,11 @@ import {
   type Usage as PiUsage,
 } from '@earendil-works/pi-ai/compat';
 import { createModels, createProvider } from '@earendil-works/pi-ai';
+import type { ProviderAuth } from '@earendil-works/pi-ai';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { aurevoyCredentialStore } from '../llm/credential-store.js';
+import { readLlmCredential } from '../llm/llm-store.js';
+import { xaiGrokOauth } from '../llm/xai-oauth.js';
 import type {
   AgentEvent,
   AggregatedTokenUsage,
@@ -236,9 +239,9 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
 
   try {
     assertPiLLMConfigured();
-    const selectedModel = selectPiModelForTask(task);
+    const selectedModel = selectPiModelForTask();
     assertPiModelSupportsAttachments(task, selectedModel);
-    const controller = new ActivePiTaskController(() => selectPiModelForTask(task));
+    const controller = new ActivePiTaskController(() => selectPiModelForTask());
     const harness = await createPiHarness(task, options, selectedModel, controller);
 
     publish({ type: 'phase', taskId: task.id, phase: 'thinking', detail: 'Agent 正在思考' });
@@ -366,7 +369,11 @@ export function createAurevoyPiModels(selectedModel: PiModel<any>): PiModels {
       name: builtin.name || builtin.id,
       baseUrl: modelForRequest.baseUrl || builtin.baseUrl,
       headers: builtin.headers,
-      auth: wrapBuiltinAuth(builtin.auth, modelForRequest.baseUrl),
+      auth: wrapBuiltinAuth(
+        augmentProviderAuth(builtin.id, builtin.auth),
+        modelForRequest.baseUrl,
+        builtin.id,
+      ),
       models: [modelForRequest],
       api: getApiForApiName(modelForRequest.api),
     });
@@ -405,20 +412,41 @@ function findBuiltinProvider(providerId: string) {
   return builtinProviders().find((p) => p.id === providerId);
 }
 
+/** Pi 未声明 oauth 时，Aurevoy 可叠加扩展（如 xAI SuperGrok）。 */
+function augmentProviderAuth(providerId: string, auth: ProviderAuth): ProviderAuth {
+  if (auth.oauth) return auth;
+  if (providerId === 'xai') {
+    return { ...auth, oauth: xaiGrokOauth };
+  }
+  return auth;
+}
+
 /**
- * 保留 Pi 原生 apiKey/oauth；在 resolve 结果上叠加用户设置的 baseUrl，
- * 并在无 CredentialStore 凭证时回退到 Aurevoy 槽位/环境里的 apiKey。
+ * 保留 Pi 原生 apiKey/oauth；叠加 baseUrl，并按 **model.provider** 取本槽凭证。
+ * 禁止回退到「当前激活槽」的 config.llm.apiKey（跨 provider 串钥根因）。
  *
- * openai-codex 等「仅 OAuth」provider：不要注入 sk- API Key 回退，
- * 否则 extractAccountId 会把非 JWT 当成 access token 并报
- * Failed to extract accountId from token。
+ * openai-codex 等「仅 OAuth」provider：不要注入 sk- API Key 回退。
  */
 function wrapBuiltinAuth(
-  auth: import('@earendil-works/pi-ai').ProviderAuth,
+  auth: ProviderAuth,
   requestBaseUrl: string,
-): import('@earendil-works/pi-ai').ProviderAuth {
+  providerId: string,
+): ProviderAuth {
   const base = requestBaseUrl.replace(/\/+$/, '');
   const oauthOnly = Boolean(auth.oauth) && !auth.apiKey;
+
+  const resolveSlotApiKey = (): string | undefined => {
+    const cred = readLlmCredential(providerId);
+    if (cred?.type === 'api_key') {
+      const key = String((cred as { key?: string }).key ?? '').trim();
+      if (key) return key;
+    }
+    // 仅当本 provider 恰好是激活槽时，才用内存 key
+    if (providerId === config.llm.provider && config.llm.apiKey?.trim()) {
+      return config.llm.apiKey.trim();
+    }
+    return undefined;
+  };
 
   return {
     apiKey: auth.apiKey
@@ -435,11 +463,11 @@ function wrapBuiltinAuth(
                 },
               };
             }
-            // CredentialStore / env 未命中 → Aurevoy 扁平配置
-            if (config.llm.apiKey?.trim()) {
+            const slotKey = resolveSlotApiKey();
+            if (slotKey) {
               return {
                 auth: {
-                  apiKey: config.llm.apiKey,
+                  apiKey: slotKey,
                   baseUrl: base || undefined,
                 },
                 source: 'settings',
@@ -450,15 +478,17 @@ function wrapBuiltinAuth(
         }
       : oauthOnly
         ? undefined
-        : config.llm.apiKey?.trim()
-          ? {
-              name: 'Aurevoy API Key',
-              resolve: async () => ({
-                auth: { apiKey: config.llm.apiKey, baseUrl: base || undefined },
+        : {
+            name: 'Aurevoy API Key',
+            resolve: async () => {
+              const slotKey = resolveSlotApiKey();
+              if (!slotKey) return undefined;
+              return {
+                auth: { apiKey: slotKey, baseUrl: base || undefined },
                 source: 'settings',
-              }),
-            }
-          : undefined,
+              };
+            },
+          },
     oauth: auth.oauth,
   };
 }
@@ -523,7 +553,13 @@ async function toHarnessPromptInput(message: Message, model: PiModel<any>): Prom
     }
     images.push(await imageAttachmentToPiContent(attachment));
   }
-  return { text: message.content, images };
+  // 明确告诉模型图片已内联注入，避免再对 memory:// 或上传路径发 read
+  let text = message.content;
+  if (images.length > 0) {
+    const names = imageAttachments.map((a) => a.name).join(', ');
+    text = `${message.content}\n\n[System: ${images.length} image(s) attached inline: ${names}. Vision input is already provided — do not call read on memory:// or attachment paths.]`;
+  }
+  return { text, images };
 }
 
 function createHarnessSkills(): PiHarnessSkill[] {
@@ -661,32 +697,9 @@ async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<st
   return messages.map((message) => message.content).join('\n\n');
 }
 
-function selectPiModelForTask(task: Task): PiModel<any> {
-  const hasImageAttachment = task.messages.some((message) =>
-    message.attachments?.some((attachment) => attachment.type === 'image'),
-  );
-  if (!hasImageAttachment || !config.llm.visionModel.trim()) {
-    return createPiModel();
-  }
-  // 全局视觉：支持 namespace `provider:model`，也兼容裸 model id；
-  // 跨槽时必须带 provider，否则会误用当前激活槽的 baseUrl/key 路由。
-  const visionRef = parseModelNamespace(config.llm.visionModel);
-  return createPiModel(visionRef.model, visionRef.provider);
-}
-
-/** 解析 `provider:model`；provider 段需为合法 id，否则整串当作 model id。 */
-function parseModelNamespace(value: string): { provider?: string; model: string } {
-  const raw = value.trim();
-  if (!raw) return { model: '' };
-  const [maybeProvider, rest] = raw.split(/:(.*)/s);
-  if (
-    rest !== undefined &&
-    rest.length > 0 &&
-    /^[a-z0-9][a-z0-9-]*$/.test(maybeProvider)
-  ) {
-    return { provider: maybeProvider, model: rest };
-  }
-  return { model: raw };
+function selectPiModelForTask(): PiModel<any> {
+  // 一个任务只使用用户当前选择的主模型；图片只是该模型的输入能力，不触发隐式换模型。
+  return createPiModel();
 }
 
 function assertPiModelSupportsAttachments(task: Task, model: PiModel<any>): void {
@@ -705,14 +718,17 @@ async function userMessageContentToPi(message: Message, model: PiModel<any>): Pr
   const imageAttachments = (message.attachments ?? []).filter((attachment) => attachment.type === 'image');
   if (imageAttachments.length === 0) return message.content;
 
-  const content: Array<PiTextContent | PiImageContent> = [{ type: 'text', text: message.content }];
+  const content: Array<PiTextContent | PiImageContent> = [{
+    type: 'text',
+    text: `${message.content}\n\n[System: image(s) attached inline — do not call read on memory:// or attachment paths.]`,
+  }];
   for (const attachment of imageAttachments) {
     if (!model.input?.includes('image')) {
       throw new Error(`模型 ${model.provider}:${model.id} 不支持图片附件：${attachment.name}`);
     }
     content.push({
       type: 'text',
-      text: `[Attached image: ${attachment.name}, mime: ${attachment.mimeType}, path: ${attachment.path}]`,
+      text: `[Attached image: ${attachment.name}, mime: ${attachment.mimeType}]`,
     });
     content.push(await imageAttachmentToPiContent(attachment));
   }
@@ -1664,7 +1680,10 @@ function isTextFile(attachment: MessageAttachment): boolean {
 }
 
 function collectExternalPaths(task: Task): string[] {
-  return task.messages.flatMap((message) => message.attachments?.map((attachment) => attachment.path) ?? []);
+  const paths = task.messages.flatMap((message) => message.attachments?.map((attachment) => attachment.path) ?? []);
+  // 引擎上传目录：落盘后的图片附件可读（read 工具 externalPaths）
+  const uploadDir = join(config.workspaceDir, '.aurevoy-uploads');
+  return [...new Set([...paths, uploadDir].filter((p) => p && !p.startsWith('memory://')))];
 }
 
 function parseToolArguments(raw: string): Record<string, unknown> {

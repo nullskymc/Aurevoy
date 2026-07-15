@@ -29,7 +29,6 @@ export interface SettingsDraft {
   provider: string;
   baseUrl: string;
   model: string;
-  visionModel: string;
   apiKey: string;
   workspaceDir: string;
   /** 最大输出 token；temperature/timeout 已不再驱动主循环，故不暴露 UI */
@@ -71,17 +70,20 @@ export interface SettingsPanelProps {
   initialSection?: SettingsSectionId;
   onClose: () => void;
   onSave: (draft: SettingsDraft) => void;
-  /** Provider 连接专用：只保存 key / baseUrl / maxTokens */
-  onSaveConnection: (draft: SettingsDraft) => void;
+  /** Provider 连接专用：只保存 key / baseUrl / maxTokens；silent 时不弹「已保存」toast（OAuth 成功路径用） */
+  onSaveConnection: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
   onCleanup: (olderThanDays: number) => void;
   onRefresh: () => void;
   onFetchModels: () => void;
-  onFetchModelsForProvider: (provider: string) => void;
+  onFetchModelsForProvider: (provider: string, options?: { silent?: boolean }) => void;
   onSaveEnabledModels: (models: string[]) => void;
   onSaveSlotEnabledModels: (provider: string, models: string[]) => void;
+  /** 更新模型注册表中的图片输入能力。 */
+  onSaveSlotImageInputModels: (provider: string, models: string[]) => void;
+  /** 更新槽位 availableModels（自定义添加 / 删除） */
+  onSaveSlotAvailableModels: (provider: string, models: string[]) => void;
   /** 点击模型名：切换并保存当前主模型 */
   onSelectModel: (provider: string, model: string) => void;
-  onSaveVisionModel: (visionModel: string) => void;
   onRemoveProvider: (provider: string) => void;
   onChatFontSizeChange: (size: number) => void;
   onUiFontSizeChange: (size: number) => void;
@@ -94,8 +96,8 @@ export interface SettingsPanelProps {
   onEditMemory: (id: string, content: string, category: MemoryCategory) => void;
   onDeleteMemory: (id: string) => void;
   onConnectionChange?: () => void;
-  /** 全局 Toast 提示（OAuth 成功/失败等） */
-  onNotice?: (message: string) => void;
+  /** 全局 Toast 提示（OAuth 成功/失败等）；tone 可选，默认按文案推断 */
+  onNotice?: (message: string, tone?: "info" | "success" | "error") => void;
 }
 
 export type SettingsIconName =

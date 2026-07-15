@@ -42,6 +42,9 @@ export interface PlatformAdapter {
   /** 将 data URL 保存为临时文件，返回文件路径 */
   saveTempFile?(name: string, dataUrl: string): Promise<string>;
 
+  /** 读取本地图片并转为 data URL，用于将真实图片内容上传到 Agent 引擎。 */
+  readImageDataUrl?(path: string): Promise<string>;
+
   /** 确保 Agent 引擎在运行（桌面壳进程管理） */
   ensureAgentRunning?(): Promise<{
     baseUrl?: string;

@@ -126,6 +126,10 @@ export const tauriPlatformAdapter: PlatformAdapter = {
     return invoke<string>('save_temp_file', { name, data: dataUrl });
   },
 
+  async readImageDataUrl(path: string): Promise<string> {
+    return invoke<string>('read_image_data_url', { path });
+  },
+
   async ensureAgentRunning() {
     if (
       typeof window !== 'undefined' &&

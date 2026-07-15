@@ -1,7 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
-import type { AuthEvent, AuthLoginCallbacks, AuthPrompt, OAuthCredential } from '@earendil-works/pi-ai';
+import type {
+  AuthEvent,
+  AuthLoginCallbacks,
+  AuthPrompt,
+  OAuthAuth,
+  OAuthCredential,
+} from '@earendil-works/pi-ai';
 import { aurevoyCredentialStore } from './credential-store.js';
+import { ensureProviderRow } from './llm-store.js';
+import { xaiGrokOauth } from './xai-oauth.js';
 
 export type OauthSessionStatus = 'running' | 'awaiting_input' | 'done' | 'error' | 'cancelled';
 
@@ -33,8 +41,16 @@ function findBuiltinProvider(providerId: string) {
   return builtinProviders().find((p) => p.id === providerId);
 }
 
+/** Pi 内置 oauth，或 Aurevoy 扩展（xAI SuperGrok device-code）。 */
+function resolveOauthAuth(providerId: string): OAuthAuth | undefined {
+  const builtin = findBuiltinProvider(providerId)?.auth.oauth;
+  if (builtin) return builtin;
+  if (providerId === 'xai') return xaiGrokOauth;
+  return undefined;
+}
+
 export function providerSupportsOauth(providerId: string): boolean {
-  return Boolean(findBuiltinProvider(providerId)?.auth.oauth);
+  return Boolean(resolveOauthAuth(providerId));
 }
 
 function toSnapshot(session: LiveSession): OauthSessionSnapshot {
@@ -53,8 +69,7 @@ function toSnapshot(session: LiveSession): OauthSessionSnapshot {
  * 前端通过 poll + respond 驱动 prompt（粘贴 code / 选择登录方式）。
  */
 export function startOauthLogin(providerId: string): OauthSessionSnapshot {
-  const provider = findBuiltinProvider(providerId);
-  const oauth = provider?.auth.oauth;
+  const oauth = resolveOauthAuth(providerId);
   if (!oauth) {
     throw new Error(`Provider "${providerId}" 不支持 OAuth 订阅登录`);
   }
@@ -123,8 +138,9 @@ export function startOauthLogin(providerId: string): OauthSessionSnapshot {
         session.status = 'cancelled';
         return;
       }
+      // 正式表：先确保 provider 行存在，再独占写入 oauth 凭证
+      ensureProviderRow(providerId);
       await aurevoyCredentialStore.modify(providerId, async () => credential);
-      // 确保 Models 路径能 resolve：写入 store 即可
       session.status = 'done';
       session.events.push({ type: 'progress', message: 'Login complete' });
     } catch (err) {

@@ -1,21 +1,55 @@
 import { Schema } from "effect"
-import { readFile, readdir, stat } from "node:fs/promises"
+import { readFile, readdir, stat, realpath } from "node:fs/promises"
 import { isAbsolute, relative, resolve, extname } from "node:path"
 import { make, type ContentPart } from "../../framework/definition.js"
 
-const resolveInWorkspace = async (input: string, workspaceRoot: string): Promise<string> => {
+function isInsideAllowedRoot(target: string, root: string): boolean {
+  const rel = relative(root, target)
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))
+}
+
+/**
+ * 解析可读路径：工作区内，或 externalPaths 白名单（用户附件 / 引擎上传目录）。
+ * 拒绝 memory:// 等客户端占位协议——那些必须先由上传接口落盘。
+ */
+const resolveReadablePath = async (
+  input: string,
+  workspaceRoot: string,
+  externalPaths: readonly string[] = [],
+): Promise<string> => {
+  if (!input || input.startsWith("memory://") || input.startsWith("blob:") || input.startsWith("data:")) {
+    throw new Error(
+      `Unable to access ${input || "(empty)"}：客户端占位路径不可读。图片应通过消息附件上传，由引擎多模态注入，无需再 read。`,
+    )
+  }
+
   const target = isAbsolute(input) ? resolve(input) : resolve(workspaceRoot, input)
-  const rel = relative(workspaceRoot, target)
-  if (rel !== "" && (rel.startsWith("..") || isAbsolute(rel))) throw new Error("路径越界：只允许访问工作区目录内")
+
+  const candidates = [workspaceRoot, ...externalPaths].filter(Boolean)
   try {
-    const { realpath } = await import("node:fs/promises")
-    const realRoot = await realpath(workspaceRoot)
-    const realTarget = await realpath(target)
-    if (!realTarget.startsWith(realRoot + "/") && realTarget !== realRoot)
-      throw new Error("符号链接指向工作区外")
-    return realTarget
-  } catch (err: any) {
-    if (err?.message?.includes("路径越界") || err?.message?.includes("符号链接")) throw err
+    let realTarget: string
+    try {
+      realTarget = await realpath(target)
+    } catch {
+      realTarget = target
+    }
+    for (const root of candidates) {
+      try {
+        const realRoot = await realpath(root)
+        if (isInsideAllowedRoot(realTarget, realRoot) || realTarget === realRoot) return realTarget
+      } catch {
+        const normalizedRoot = resolve(root)
+        if (isInsideAllowedRoot(target, normalizedRoot) || target === normalizedRoot) return target
+      }
+    }
+    for (const root of candidates) {
+      const normalizedRoot = resolve(root)
+      if (isInsideAllowedRoot(target, normalizedRoot) || target === normalizedRoot) return target
+    }
+    throw new Error("路径越界：只允许访问工作区或用户附件路径")
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (message.includes("路径越界") || message.includes("占位路径")) throw err
     throw new Error(`Unable to access ${input}`)
   }
 }
@@ -73,7 +107,7 @@ export const readTool = make({
   input: Input,
   output: Output,
   execute: async (input, ctx) => {
-    const path = await resolveInWorkspace(input.path, ctx.workspaceDir)
+    const path = await resolveReadablePath(input.path, ctx.workspaceDir, ctx.externalPaths ?? [])
 
     let info
     try { info = await stat(path) } catch { throw new Error(`Unable to access ${input.path}`) }

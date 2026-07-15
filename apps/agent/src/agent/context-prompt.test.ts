@@ -11,7 +11,7 @@ describe('main agent system prompt builders', () => {
     expect(msg.role).toBe('system');
     expect(msg.content).toContain('Aurevoy');
     expect(msg.content).toContain('attach_content');
-    expect(msg.content).toContain('present_ui');
+    expect(msg.content).not.toContain('present_ui');
     expect(msg.content).not.toContain('open_file');
     expect(msg.content).not.toContain('write_file');
     expect(msg.content).not.toContain('session_open');
@@ -30,10 +30,13 @@ describe('main agent system prompt builders', () => {
     }
 
     // Delivery surface
-    for (const name of ['attach_content', 'present_ui', 'bundle_report', 'report-design']) {
+    for (const name of ['attach_content', 'bundle_report', 'report-design']) {
       expect(text).toContain(name);
     }
-    expect(text).toContain('data_table');
+    expect(text).not.toContain('present_ui');
+    expect(text).toContain('Inline conversation UI is temporarily unavailable');
+    expect(text).not.toContain('data_table');
+    expect(text).toContain('report-design` is for long-form file reports');
 
     // Multi-agent
     expect(text).toContain('delegate');

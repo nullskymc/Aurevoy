@@ -219,6 +219,63 @@ try {
   console.warn('[db] M8 向量/KB 表创建失败，相关功能将不可用');
 }
 
+// Multi-provider LLM：正式表（不再用 app_settings 扁平键 + JSON 双写）
+db.exec(`
+  CREATE TABLE IF NOT EXISTS llm_global (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    active_provider TEXT NOT NULL DEFAULT 'openai',
+    vision_model    TEXT NOT NULL DEFAULT '',
+    temperature     REAL NOT NULL DEFAULT 0.7,
+    timeout_ms      INTEGER NOT NULL DEFAULT 120000,
+    max_tokens      INTEGER NOT NULL DEFAULT 8192,
+    updated_at      TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS llm_providers (
+    provider_id   TEXT PRIMARY KEY,
+    base_url      TEXT NOT NULL DEFAULT '',
+    default_model TEXT NOT NULL DEFAULT '',
+    max_tokens    INTEGER,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS llm_credentials (
+    provider_id      TEXT PRIMARY KEY
+                     REFERENCES llm_providers(provider_id) ON DELETE CASCADE,
+    auth_type        TEXT NOT NULL CHECK (auth_type IN ('api_key', 'oauth')),
+    api_key          TEXT,
+    oauth_access     TEXT,
+    oauth_refresh    TEXT,
+    oauth_expires_at TEXT,
+    oauth_extra_json TEXT,
+    updated_at       TEXT NOT NULL,
+    CHECK (
+      (auth_type = 'api_key' AND api_key IS NOT NULL AND oauth_access IS NULL)
+      OR
+      (auth_type = 'oauth' AND oauth_access IS NOT NULL AND api_key IS NULL)
+    )
+  );
+
+  CREATE TABLE IF NOT EXISTS llm_models (
+    provider_id TEXT NOT NULL
+                REFERENCES llm_providers(provider_id) ON DELETE CASCADE,
+    model_id    TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'remote'
+                CHECK (source IN ('remote', 'static', 'custom')),
+    enabled     INTEGER NOT NULL DEFAULT 0,
+    is_default  INTEGER NOT NULL DEFAULT 0,
+    supports_image INTEGER NOT NULL DEFAULT 0,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (provider_id, model_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_llm_models_enabled
+    ON llm_models(provider_id, enabled);
+`);
+
 interface TaskRow {
   id: string;
   goal: string;

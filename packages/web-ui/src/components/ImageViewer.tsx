@@ -25,7 +25,7 @@ export function ImageViewer({ src, alt, onClose }: ImageViewerProps) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  const imgSrc = (() => {
+  const imgSrc = src.startsWith('data:image/') ? src : (() => {
     try {
       return platform.filePathToUrl(src);
     } catch {

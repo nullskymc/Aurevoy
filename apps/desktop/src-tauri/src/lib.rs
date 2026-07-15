@@ -58,6 +58,30 @@ fn save_temp_file(name: String, data: String) -> Result<String, String> {
     Ok(file_path.to_string_lossy().to_string())
 }
 
+/// 读取用户选中的图片，编码为 data URL 交给前端上传到本地 Agent 引擎。
+#[tauri::command]
+fn read_image_data_url(path: String) -> Result<String, String> {
+    let metadata = std::fs::metadata(&path).map_err(|e| format!("读取图片信息失败: {e}"))?;
+    if metadata.is_dir() {
+        return Err("不能上传目录作为图片".to_string());
+    }
+    const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+    if metadata.len() > MAX_IMAGE_BYTES {
+        return Err("图片不能超过 20MB".to_string());
+    }
+    let mime = mime_guess::from_path(&path)
+        .first_or_octet_stream()
+        .to_string();
+    if !matches!(mime.as_str(), "image/png" | "image/jpeg" | "image/gif" | "image/webp") {
+        return Err("仅支持 PNG、JPEG、GIF 或 WebP 图片".to_string());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取图片失败: {e}"))?;
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -68,7 +92,8 @@ pub fn run() {
             ensure_agent_process,
             agent_process_status,
             file_metadata,
-            save_temp_file
+            save_temp_file,
+            read_image_data_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

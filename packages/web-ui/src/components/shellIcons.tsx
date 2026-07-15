@@ -81,6 +81,16 @@ export function IconTrash(props: IconProps = {}) {
   );
 }
 
+/** 视觉 / 图片输入能力标记（小眼睛） */
+export function IconEye(props: IconProps = {}) {
+  return (
+    <svg {...iconProps({ ...props, size: props.size ?? 14 })}>
+      <path d="M1.8 8s2.2-3.8 6.2-3.8S14.2 8 14.2 8s-2.2 3.8-6.2 3.8S1.8 8 1.8 8z" />
+      <circle cx="8" cy="8" r="1.8" />
+    </svg>
+  );
+}
+
 export function IconChevron(props: IconProps & { open?: boolean } = {}) {
   const { open, ...rest } = props;
   return (

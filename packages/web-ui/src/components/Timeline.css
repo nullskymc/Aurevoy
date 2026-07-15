@@ -1,16 +1,173 @@
-/* ============ Timeline 组件 ============ */
+/* ============ Timeline / Process stream 组件 ============ */
 
-.timeline-agent-round {
+.timeline-agent-round,
+.process-agent-round {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
   padding: 0;
 }
 
 .timeline-agent-round.is-live {
-  /* live 模式下增加底部间距便于阅读 */
   padding-bottom: 4px;
+}
+
+/* ---- Codex 过程语法：已处理 + 灰字行为摘要 ---- */
+.process-live-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.process-summary-static {
+  color: var(--process-fg, var(--text-tertiary));
+  font-size: var(--ui-font-base);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.process-live-status {
+  margin-top: 10px;
+  color: var(--process-fg, var(--text-tertiary));
+  font-size: var(--ui-font-base);
+  line-height: 1.5;
+  min-height: 1.5em;
+}
+
+/* ---- 完成后摘要 + 扁平列表 ---- */
+.process-completed {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.process-summary-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--process-fg, var(--text-tertiary));
+  font: inherit;
+  font-size: var(--ui-font-base);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.process-summary-toggle:hover {
+  color: var(--text-secondary);
+}
+
+.process-summary-caret {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+  transform: rotate(-90deg);
+}
+
+.process-summary-caret[data-open="true"] {
+  transform: rotate(0deg);
+}
+
+/* live / 完成后「已处理」下始终有分割线 */
+.process-summary-rule {
+  margin-top: 8px;
+  height: 1px;
+  background: var(--border);
+  width: 100%;
+}
+
+.process-summary-rule.is-always {
+  display: block;
+}
+
+.process-activity-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.process-activity-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--process-fg, var(--text-tertiary));
+  font-size: var(--ui-font-base);
+  line-height: 1.45;
+}
+
+.process-activity-row[data-status="failed"] {
+  color: var(--danger-soft-fg);
+}
+
+.process-activity-row[data-status="running"] {
+  color: var(--text-secondary);
+}
+
+.process-activity-row[data-kind="group"] {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.process-activity-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: inherit;
+  opacity: 0.8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.process-activity-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-delivery {
+  min-width: 0;
+}
+
+.process-delivery-body {
+  padding-left: 0 !important;
+}
+
+.process-delivery.is-streaming .process-delivery-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.process-delivery.is-streaming .markdown-body {
+  display: inline;
+  min-width: 0;
+}
+
+.process-delivery.is-streaming .stream-caret {
+  flex: 0 0 auto;
+  margin-bottom: 0.15em;
+}
+
+.process-delivery .doc-meta {
+  display: none;
 }
 
 /* 子代理协作工作组：作为执行过程的一部分内联出现，不抢占最终回复视觉层级。 */

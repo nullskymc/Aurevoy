@@ -3,7 +3,7 @@ import { t, type TranslationKey } from "../i18n";
 import { usePlatform } from "../platform/context";
 import { ImageViewer } from "./ImageViewer";
 import type { MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
-import { ProviderIcon, providerLabel } from "./providerIcons";
+import { formatModelEffortChipLabel } from "./ModelSelectorDrawer";
 import "./Composer.css";
 
 interface SlashCommand {
@@ -54,7 +54,7 @@ interface ComposerProps {
   onResumeAutoMode?: () => void;
   /** 推理深度（与模型能力相关，仅支持推理的模型会生效） */
   thinkingLevel?: ThinkingUILevel;
-  /** 点击循环切换推理深度 */
+  /** @deprecated 已合并进模型菜单；保留 prop 以免破坏外部调用 */
   onCycleThinkingLevel?: () => void;
 }
 
@@ -81,8 +81,7 @@ export function Composer({
   autoModePaused,
   onCycleAutoMode,
   onResumeAutoMode,
-  thinkingLevel = 'medium',
-  onCycleThinkingLevel,
+  thinkingLevel = "medium",
 }: ComposerProps) {
   const platform = usePlatform();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -102,9 +101,7 @@ export function Composer({
     : null;
   const providerChipLabel = !providerId
     ? (provider === "unconfigured" ? t("composer.providerUnconfigured") : t("composer.providerDisconnected"))
-    : modelId
-      ? modelId
-      : providerLabel(providerId);
+    : formatModelEffortChipLabel(modelId ?? undefined, thinkingLevel);
 
   const slashCommands = useMemo<SlashCommand[]>(() => {
     const commands: SlashCommand[] = [
@@ -199,7 +196,8 @@ export function Composer({
 
   function handleDragOver(e: React.DragEvent): void {
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'link';
+    // 网页 DataTransfer 文件用 copy；桌面原生路径拖入仍由 Tauri 事件处理
+    e.dataTransfer.dropEffect = e.dataTransfer.types.includes('Files') ? 'copy' : 'link';
     setIsDragOver(true);
   }
 
@@ -213,36 +211,36 @@ export function Composer({
   function handleDrop(e: React.DragEvent): void {
     e.preventDefault();
     setIsDragOver(false);
-    // HTML5 drop 不处理文件路径——路径由 Tauri onDragDropEvent 提供
+    // 桌面壳：原生路径由 Tauri onFileDrop 处理。网页：从 DataTransfer.files 读 dataUrl。
+    if (!onPasteFiles) return;
+    const fileList = e.dataTransfer?.files;
+    if (!fileList || fileList.length === 0) return;
+    void readImageFiles(Array.from(fileList)).then((files) => {
+      if (files.length > 0) onPasteFiles(files);
+    });
   }
 
   function handlePaste(e: React.ClipboardEvent): void {
     const items = e.clipboardData?.items;
     if (!items || !onPasteFiles) return;
 
-    const reads: Promise<{ name: string; dataUrl: string; mimeType: string } | null>[] = [];
+    const imageItems: DataTransferItem[] = [];
     for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (!item.type.startsWith('image/')) continue;
+      if (items[i].type.startsWith('image/')) imageItems.push(items[i]);
+    }
+    if (imageItems.length === 0) return;
+
+    // 阻止把图片当二进制糊进输入框
+    e.preventDefault();
+
+    const reads: Promise<{ name: string; dataUrl: string; mimeType: string } | null>[] = [];
+    imageItems.forEach((item, i) => {
       const blob = item.getAsFile();
-      if (!blob) continue;
+      if (!blob) return;
       const ext = item.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
       const name = `clipboard-${Date.now()}-${i}.${ext}`;
-      reads.push(
-        new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            if (typeof reader.result === 'string') {
-              resolve({ name, dataUrl: reader.result, mimeType: item.type });
-            } else {
-              resolve(null);
-            }
-          };
-          reader.onerror = () => resolve(null);
-          reader.readAsDataURL(blob);
-        }),
-      );
-    }
+      reads.push(readBlobAsAttachment(blob, name, item.type));
+    });
 
     if (reads.length === 0) return;
     void Promise.all(reads).then((results) => {
@@ -252,225 +250,235 @@ export function Composer({
   }
 
   const hasAttachments = attachments && attachments.length > 0;
+  const modeLabel = autoModePaused
+    ? t("composer.mode.paused")
+    : autoModeLevel === "plan"
+      ? t("composer.mode.plan")
+      : t("composer.mode.auto");
+  const modeTitle = autoModePaused
+    ? t("composer.mode.pausedHint")
+    : autoModeLevel === "plan"
+      ? t("composer.mode.planHint")
+      : t("composer.mode.autoHint");
 
   return (
     <div
       className="composer"
       data-variant={variant}
+      data-has-project={projectName ? "true" : "false"}
       data-dragover={isDragOver ? "true" : undefined}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onPaste={handlePaste}
     >
-      <div className="composer-box">
-        {showCmdPopup && (
-          <div className="cmd-popup" role="listbox">
-            {filteredCommands.map((cmd, i) => (
-              <button
-                type="button"
-                key={cmd.name}
-                role="option"
-                aria-selected={i === displayCmdIndex}
-                className="cmd-popup-item"
-                data-selected={i === displayCmdIndex ? "true" : undefined}
-                onPointerDown={(event) => {
-                  event.preventDefault();
-                  onChange(cmd.name);
-                  setCmdIndex(0);
-                }}
-              >
-                <span className="cmd-popup-name">{cmd.name}</span>
-                <span className="cmd-popup-desc">{cmd.descriptionKey ? t(cmd.descriptionKey) : (cmd.description ?? '')}</span>
-              </button>
-            ))}
+      <div className="composer-stack">
+        {projectName ? (
+          <div className="composer-project-bar" title={projectName}>
+            <FolderIcon />
+            <span className="composer-project-bar-name">{projectName}</span>
           </div>
-        )}
+        ) : null}
 
-        {/* 附件 chip 列表 */}
-        {hasAttachments && (
-          <div className="composer-attachments">
-            {attachments!.map((att) => {
-              const isImage = att.type === 'image';
-              const imgSrc = isImage ? (() => {
-                try {
-                  return platform.filePathToUrl(att.path);
-                } catch {
-                  return null;
-                }
-              })() : null;
-
-              return (
-                <span
-                  key={att.id}
-                  className={`composer-attachment-chip${isImage ? ' is-image' : ''}`}
-                  data-type={isImage ? 'image' : 'file'}
-                  title={att.path}
+        <div className="composer-box">
+          {showCmdPopup && (
+            <div className="cmd-popup" role="listbox">
+              {filteredCommands.map((cmd, i) => (
+                <button
+                  type="button"
+                  key={cmd.name}
+                  role="option"
+                  aria-selected={i === displayCmdIndex}
+                  className="cmd-popup-item"
+                  data-selected={i === displayCmdIndex ? "true" : undefined}
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    onChange(cmd.name);
+                    setCmdIndex(0);
+                  }}
                 >
-                  <span className="composer-attachment-chip-icon">
-                    {isImage && imgSrc ? (
-                      <img
-                        className="composer-attachment-thumb"
-                        src={imgSrc}
-                        alt={att.name}
-                        onClick={() => setViewingImage(att.path)}
-                      />
-                    ) : isImage ? (
-                      <ImageFileIcon />
-                    ) : (
-                      <DocFileIcon />
-                    )}
-                  </span>
-                  <span className="composer-attachment-chip-name">{att.name}</span>
-                  <button
-                    type="button"
-                    className="composer-attachment-chip-remove"
-                    aria-label="Remove attachment"
-                    onClick={() => handleRemoveAttachment(att.id)}
+                  <span className="cmd-popup-name">{cmd.name}</span>
+                  <span className="cmd-popup-desc">{cmd.descriptionKey ? t(cmd.descriptionKey) : (cmd.description ?? "")}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {hasAttachments && (
+            <div className="composer-attachments">
+              {attachments!.map((att) => {
+                const isImage = att.type === "image";
+                const imgSrc = isImage
+                  ? (() => {
+                      try {
+                        return att.dataUrl ?? platform.filePathToUrl(att.path);
+                      } catch {
+                        return null;
+                      }
+                    })()
+                  : null;
+
+                return (
+                  <span
+                    key={att.id}
+                    className={`composer-attachment-chip${isImage ? " is-image" : ""}`}
+                    data-type={isImage ? "image" : "file"}
+                    title={att.path}
                   >
-                    <XIcon />
-                  </button>
-                </span>
-              );
-            })}
-          </div>
-        )}
+                    <span className="composer-attachment-chip-icon">
+                      {isImage && imgSrc ? (
+                        <img
+                          className="composer-attachment-thumb"
+                          src={imgSrc}
+                          alt={att.name}
+                          onClick={() => setViewingImage(att.dataUrl ?? att.path)}
+                        />
+                      ) : isImage ? (
+                        <ImageFileIcon />
+                      ) : (
+                        <DocFileIcon />
+                      )}
+                    </span>
+                    <span className="composer-attachment-chip-name">{att.name}</span>
+                    <button
+                      type="button"
+                      className="composer-attachment-chip-remove"
+                      aria-label="Remove attachment"
+                      onClick={() => handleRemoveAttachment(att.id)}
+                    >
+                      <XIcon />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
 
-        <textarea
-          ref={textareaRef}
-          className="composer-input"
-          value={value}
-          placeholder={t("composer.placeholder")}
-          rows={1}
-          onChange={(event) => onChange(event.currentTarget.value)}
-          onKeyDown={handleKeyDown}
-          onCompositionStart={() => { composingRef.current = true; }}
-          onCompositionEnd={() => {
-            composingRef.current = false;
-            lastCompositionEndAtRef.current = Date.now();
-          }}
-        />
+          <textarea
+            ref={textareaRef}
+            className="composer-input"
+            value={value}
+            placeholder={t("composer.placeholder")}
+            rows={1}
+            onChange={(event) => onChange(event.currentTarget.value)}
+            onKeyDown={handleKeyDown}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+              lastCompositionEndAtRef.current = Date.now();
+            }}
+          />
 
-        <div className="composer-toolbar">
-          <div className="composer-tools-left">
-            <button
-              type="button"
-              className="composer-icon-btn"
-              title={t("composer.attachment")}
-              aria-label={t("composer.attachment")}
-              onClick={onPickAttachments}
-            >
-              <PlusIcon />
-            </button>
-            <button
-              ref={modelButtonRef}
-              type="button"
-              className="composer-chip composer-model-chip"
-              title={provider && provider !== "unconfigured" ? provider : providerChipLabel}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={onOpenModelSelector}
-            >
-              {providerId ? (
-                <ProviderIcon provider={providerId} className="composer-provider-icon" />
-              ) : (
-                <GearIcon />
-              )}
-              <span>{providerChipLabel}</span>
-            </button>
-          </div>
-
-          <div className="composer-tools-right">
-            {onCycleThinkingLevel && (
+          <div className="composer-toolbar">
+            <div className="composer-tools-left">
               <button
                 type="button"
-                className={"composer-chip thinking-level-chip" + (thinkingLevel !== "off" ? " is-active" : "")}
-                onClick={onCycleThinkingLevel}
-                title={t("composer.thinkingLevelHint")}
+                className="composer-icon-btn"
+                title={t("composer.attachment")}
+                aria-label={t("composer.attachment")}
+                onClick={onPickAttachments}
               >
-                <span className={"thinking-level-dot level-" + thinkingLevel} />
-                <span>{thinkingLevelShortLabel(thinkingLevel)}</span>
+                <PlusIcon />
               </button>
-            )}
-            <button
-              type="button"
-              className="composer-send"
-              disabled={busy ? !onStop : !canSend}
-              onClick={busy ? onStop : onSubmit}
-              aria-label={busy ? t("action.stop") : t("composer.send")}
-              title={
-                busy
-                  ? t("composer.stopHint")
-                  : !value.trim()
-                    ? t("composer.sendHintEmpty")
-                    : online === false
-                      ? t("composer.sendHintOffline")
-                      : !providerConfigured
-                        ? t("composer.sendHintUnconfigured")
-                        : t("composer.sendHintReady")
-              }
-            >
-              {busy ? <StopDot /> : <ArrowUpIcon />}
-            </button>
+              {(onCycleAutoMode || onResumeAutoMode) && (
+                <button
+                  type="button"
+                  className={
+                    "composer-mode-chip" +
+                    (autoModePaused ? " is-paused" : "") +
+                    (autoModeLevel === "plan" && !autoModePaused ? " is-plan" : "")
+                  }
+                  onClick={autoModePaused ? onResumeAutoMode : onCycleAutoMode}
+                  title={modeTitle}
+                >
+                  {autoModePaused ? (
+                    <span className="auto-mode-dot paused" />
+                  ) : autoModeLevel === "plan" ? (
+                    <HandIcon />
+                  ) : (
+                    <span className="auto-mode-dot" />
+                  )}
+                  <span>{modeLabel}</span>
+                </button>
+              )}
+            </div>
+
+            <div className="composer-tools-right">
+              <button
+                ref={modelButtonRef}
+                type="button"
+                className="composer-chip composer-model-chip composer-model-effort-chip"
+                title={provider && provider !== "unconfigured" ? `${provider} · ${thinkingLevel}` : providerChipLabel}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={onOpenModelSelector}
+              >
+                <span>{providerChipLabel}</span>
+              </button>
+              <button
+                type="button"
+                className="composer-send"
+                data-busy={busy ? "true" : undefined}
+                disabled={busy ? !onStop : !canSend}
+                onClick={busy ? onStop : onSubmit}
+                aria-label={busy ? t("action.stop") : t("composer.send")}
+                title={
+                  busy
+                    ? t("composer.stopHint")
+                    : !value.trim()
+                      ? t("composer.sendHintEmpty")
+                      : online === false
+                        ? t("composer.sendHintOffline")
+                        : !providerConfigured
+                          ? t("composer.sendHintUnconfigured")
+                          : t("composer.sendHintReady")
+                }
+              >
+                {busy ? <StopDot /> : <ArrowUpIcon />}
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="composer-footer-external">
-        <div className="composer-footer-left">
-          {projectName ? (
-            <span className="composer-project-badge" title={projectName}>
-              <FolderIcon />
-              <span>{projectName}</span>
-            </span>
-          ) : (
-            <span className="composer-project-badge is-standalone" title={t("projects.standalone")}>
-              <span>{t("projects.standalone")}</span>
-            </span>
-          )}
-        </div>
-        <div className="composer-footer-right">
-          {autoModePaused ? (
-            <button
-              type="button"
-              className="auto-mode-btn-composer auto-mode-paused"
-              onClick={onResumeAutoMode}
-              title="Plan approval paused — resume"
-            >
-              <span className="auto-mode-dot paused" />
-              <span>Paused — resume</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              className={"auto-mode-btn-composer is-active"}
-              onClick={onCycleAutoMode}
-              title={
-                autoModeLevel === 'auto'
-                  ? 'Auto — agent runs freely, all tools auto-approved'
-                  : 'Plan — agent plans first, user approves, then auto-executes'
-              }
-            >
-              <span className={"auto-mode-dot" + (autoModeLevel === 'plan' ? ' plan' : '')} />
-              <span>
-                {autoModeLevel === 'plan' ? 'Plan' : 'Auto'}
-              </span>
-            </button>
-          )}
-        </div>
-      </div>
       {viewingImage && (
-        <ImageViewer
-          src={viewingImage}
-          onClose={() => setViewingImage(null)}
-        />
+        <ImageViewer src={viewingImage} onClose={() => setViewingImage(null)} />
       )}
     </div>
   );
 }
 
-/** 固定英文档位名，与 API 枚举一致，不走 i18n */
-function thinkingLevelShortLabel(level: ThinkingUILevel): string {
-  return level;
+async function readImageFiles(
+  files: File[],
+): Promise<Array<{ name: string; dataUrl: string; mimeType: string }>> {
+  const results: Array<{ name: string; dataUrl: string; mimeType: string } | null> = [];
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+    const mimeType = file.type || 'image/png';
+    const name = file.name || `drop-${Date.now()}.png`;
+    results.push(await readBlobAsAttachment(file, name, mimeType));
+  }
+  return results.filter((r): r is NonNullable<typeof r> => r !== null);
+}
+
+function readBlobAsAttachment(
+  blob: Blob,
+  name: string,
+  mimeType: string,
+): Promise<{ name: string; dataUrl: string; mimeType: string } | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve({ name, dataUrl: reader.result, mimeType });
+      } else {
+        resolve(null);
+      }
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(blob);
+  });
 }
 
 export function nextThinkingLevel(current: ThinkingUILevel): ThinkingUILevel {
@@ -518,26 +526,6 @@ function PlusIcon() {
   );
 }
 
-function GearIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
-      <path
-        d="M10 12.6a2.6 2.6 0 100-5.2 2.6 2.6 0 000 5.2z"
-        stroke="currentColor"
-        strokeWidth="1.4"
-      />
-      <path
-        d="M10 2.5l1 1.9 2.1-.3.4 2.1 1.9 1-1 1.9 1 1.9-1.9 1-.4 2.1-2.1-.3-1 1.9-1-1.9-2.1.3-.4-2.1-1.9-1 1-1.9-1-1.9 1.9-1 .4-2.1 2.1.3 1-1.9z"
-        stroke="currentColor"
-        strokeWidth="1.1"
-        fill="none"
-        strokeLinejoin="round"
-        opacity="0"
-      />
-    </svg>
-  );
-}
-
 function ArrowUpIcon() {
   return (
     <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none">
@@ -556,6 +544,20 @@ function StopDot() {
   return (
     <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
       <rect x="6" y="6" width="8" height="8" rx="1.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+function HandIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none">
+      <path
+        d="M5.2 7.2V4.4a1 1 0 012 0v2.2M7.2 6.6V3.6a1 1 0 012 0v3.2M9.2 6.8V4.8a1 1 0 012 0v4.2c0 2.1-1.5 3.6-3.6 3.6H8c-2 0-3.6-1.2-3.6-3.2V7.8a1 1 0 012 0v.6"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

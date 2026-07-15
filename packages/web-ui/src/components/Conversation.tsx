@@ -15,7 +15,14 @@ import type {
 } from "@aurevoy/shared";
 import { ImageViewer } from "./ImageViewer";
 import { t } from "../i18n";
-import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData, type AgentRoundData } from "./Timeline";
+import {
+  AgentRound,
+  buildAgentRoundFromMessage,
+  buildLiveAgentRoundData,
+  dedupeContentBlocks,
+  mergeAgentRoundData,
+  type AgentRoundData,
+} from "./Timeline";
 import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -69,9 +76,8 @@ interface ConversationProps {
   /** 是否默认展开工具参数/结果详情。等待审批的工具始终展开。 */
   defaultToolDetailsOpen?: boolean;
   online?: boolean | null;
-  /** 工具审批决策回调（批准/拒绝），只作用于当前这一次工具调用。 */
+  /** 工具审批决策回调（对话内工具卡若仍展示待批时可复用；主审批在 ApprovalsDock）。 */
   onToolDecision: ToolDecisionHandler;
-  onPlanDecision: (approved: boolean) => void;
   onClarificationAnswer: (clarificationId: string, answer: string) => void;
   /** 当前任务是否可恢复（中断/失败等可续跑状态） */
   canResume?: boolean;
@@ -210,7 +216,6 @@ export function Conversation({
   hasLiveTail,
   defaultToolDetailsOpen = false,
   onToolDecision,
-  onPlanDecision,
   onClarificationAnswer,
   canResume = false,
   hasArchivedMessages = false,
@@ -287,9 +292,9 @@ export function Conversation({
   });
   // 已落到历史消息上的 contentBlocks 不再塞进 live tail，避免「每条消息底部都挂同一文件卡」
   const historicalContentBlockIds = new Set(
-    messages.flatMap((message) => (message.contentBlocks ?? []).map((block) => block.id)),
+    messages.flatMap((message) => dedupeContentBlocks(message.contentBlocks).map((block) => block.id)),
   );
-  const liveOnlyContentBlocks = liveContentBlocks.filter(
+  const liveOnlyContentBlocks = dedupeContentBlocks(liveContentBlocks).filter(
     (block) => !historicalContentBlockIds.has(block.id),
   );
   const liveRoundData = hasLiveTail
@@ -302,9 +307,6 @@ export function Conversation({
         subagentRuns: task.subagentRuns ?? [],
       })
     : null;
-  const approvalItems = collectApprovalItems(viewModel.liveToolActivity, task.pendingApprovals ?? []);
-  const showPlanApproval = phase === "waiting_approval" && approvalItems.length === 0 && plan.length > 0;
-
   return (
     <div className="conversation">
       <div ref={topRef} />
@@ -331,39 +333,22 @@ export function Conversation({
           />
         ))}
 
-        {hasLiveTail && (
-          <div className="aurevoy-agent-runner-container">
-            {approvalItems.length > 0 && (
-              <section className="tool-run-summary" data-status="awaiting">
-                <div className="tool-run-head">
-                  <span className="tool-run-dot" aria-hidden="true" />
-                  <span className="tool-run-title">执行工具</span>
-                  <span className="tool-run-names">{approvalItems.map((item) => item.name).join("、")}</span>
-                  <span className="tool-run-status">等待确认 {approvalItems.length}</span>
-                </div>
-                {approvalItems.map(item => (
-                  <ApprovalInline key={item.id} item={item} onDecision={onToolDecision} />
-                ))}
-              </section>
-            )}
-
-            {showPlanApproval && (
-              <PlanApprovalInline
-                plan={plan}
-                onDecision={onPlanDecision}
-              />
-            )}
-
-            {(task.clarifications ?? []).filter((item) => item.status === "pending").map((clarification) => (
-              <ClarificationCard
-                key={clarification.id}
-                clarification={clarification}
-                onAnswer={onClarificationAnswer}
-              />
-            ))}
-
-          </div>
-        )}
+        {/* ask-user 追问：留在对话流内 */}
+        {(() => {
+          const pending = (task.clarifications ?? []).filter((item) => item.status === "pending");
+          if (pending.length === 0) return null;
+          return (
+            <div className="process-gates process-gates--inline" aria-label={t("clarification.label")}>
+              {pending.map((clarification) => (
+                <ClarificationCard
+                  key={clarification.id}
+                  clarification={clarification}
+                  onAnswer={onClarificationAnswer}
+                />
+              ))}
+            </div>
+          );
+        })()}
         {!hasLiveTail && (
           <div className="turn-actions" aria-label={t("conv.turnActions")}>
             {hasArchivedMessages && onUnrevert && (
@@ -394,7 +379,7 @@ export function Conversation({
 
 function ConversationTurnView({
   turn,
-  isLiveTurn,
+  isLiveTurn: _isLiveTurn,
   resultMap,
   plan,
   subagentRuns,
@@ -432,20 +417,27 @@ function ConversationTurnView({
 }) {
   const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
   const attachContentToolCallIds = collectAttachContentToolCallIds(turn.agentMessages);
-  const finalMessage = isLiveTurn ? null : findFinalAssistantMessage(turn.agentMessages);
+  // 直播中也解析 final，用于把过程旁白从交付区剔除；直播正文主要靠 liveRoundData
+  const finalMessage = findFinalAssistantMessage(turn.agentMessages);
   /**
    * 用户可见交付面：按消息时间序渲染正文 + 文件卡。
-   * 旧逻辑把所有 presentation 统一甩到 final 之后，导致 attach_content 文件卡永远贴在
-   * 本轮最底部，看起来「跟哪条消息都无关」。
+   * 含非 presentation 工具的过程旁白（如「我先去看工作区…」）只进过程层，不进交付。
    */
-  const deliveryMessages = buildDeliveryMessages(assistantMessages, finalMessage);
+  const deliveryMessages = buildDeliveryMessages(assistantMessages, finalMessage, {
+    // 直播且终稿尚未落库：交付区不抢 live 流式区（避免中间条旁白当正文）
+    excludeProcessNarration: true,
+  });
   const deliveryMessageIds = new Set(deliveryMessages.map((message) => message.id));
-  const finalProcessMessages = finalMessage && isPresentationOnlyAssistantMessage(finalMessage) && hasProcessNarration(finalMessage)
-    ? [finalMessage]
-    : [];
-  const workflowMessages = assistantMessages.filter(
-    (message) => message.id !== finalMessage?.id && (!isPresentationOnlyAssistantMessage(message) || hasProcessNarration(message)),
-  ).concat(finalProcessMessages);
+  const workflowMessages = assistantMessages.filter((message) => {
+    // 含 list_dir/read 等过程工具的旁白：只进过程层
+    if (isProcessToolNarration(message)) return true;
+    if (finalMessage && message.id === finalMessage.id) {
+      // 终稿：仅当是 presentation+旁白时才进过程层，正文终稿不进
+      return isPresentationOnlyAssistantMessage(message) && hasProcessNarration(message);
+    }
+    // 非终稿：原逻辑（非纯 presentation，或 presentation 带旁白）
+    return !isPresentationOnlyAssistantMessage(message) || hasProcessNarration(message);
+  });
   const standaloneToolMessages = turn.agentMessages.filter(
     (message) => message.role === "tool" && (!message.toolCallId || !attachContentToolCallIds.has(message.toolCallId)),
   );
@@ -467,7 +459,7 @@ function ConversationTurnView({
       {(deliveryMessages.length > 0 || workflowMessages.length > 0 || standaloneToolMessages.length > 0 || liveRoundData) && (
         <div className="agent-turn">
           {(workflowMessages.length > 0 || standaloneToolMessages.length > 0 || liveRoundData) && (
-            <AgentWorkflowDrawer
+            <AgentProcessStream
               assistantMessages={workflowMessages}
               presentationMessageIds={deliveryMessageIds}
               standaloneToolMessages={standaloneToolMessages}
@@ -478,9 +470,9 @@ function ConversationTurnView({
               subagentRuns={subagentRuns}
               defaultToolDetailsOpen={defaultToolDetailsOpen}
               onToolDecision={onToolDecision}
-              defaultOpen={isLiveTurn}
               onUiChoice={onUiChoice}
               onOpenWorkspacePath={onOpenWorkspacePath}
+              turnStartedAt={turn.user?.createdAt}
             />
           )}
 
@@ -495,7 +487,8 @@ function ConversationTurnView({
               ) : (
                 <AgentRound
                   data={buildAgentRoundFromMessage(
-                    stripProcessNarrationForPresentation(message),
+                    // 交付面只渲染正文/块；过程工具由 AgentProcessStream 负责，避免剥掉同条消息的用户可见交付
+                    { ...message, toolCalls: undefined },
                     resultMap,
                     plan,
                     subagentRuns,
@@ -519,12 +512,17 @@ function ConversationTurnView({
  * 组装本 turn 对用户可见的交付消息（正文 / 文件 / UI），保持与消息历史一致的时序。
  * - file_reference / image / link：跟发起 attach 的那条 assistant 消息走
  * - 纯 present_ui（只有 ui 块、无正文）：仍放到「有正文的最终回复」之后，避免 choice 压住提问
+ * - 过程旁白（含 list_dir/read 等非 presentation 工具的中间 assistant）**不进交付**
  */
 function buildDeliveryMessages(
   assistantMessages: Message[],
   finalMessage: Message | null,
+  options?: { excludeProcessNarration?: boolean },
 ): Message[] {
+  const excludeProcess = options?.excludeProcessNarration !== false;
+
   const candidates = assistantMessages.filter((message) => {
+    if (excludeProcess && isProcessToolNarration(message)) return false;
     if (getFailureInfo(message)) return true;
     if (message.content.trim().length > 0) return true;
     if ((message.contentBlocks?.length ?? 0) > 0) return true;
@@ -549,13 +547,13 @@ function buildDeliveryMessages(
   }
 
   // 若还没有 final 正文（直播中），ui 块仍按时间序跟在当前已有交付后面
-  if (!finalMessage) {
+  if (!finalMessage || (excludeProcess && isProcessToolNarration(finalMessage))) {
     return [...primary, ...deferredUiOnly];
   }
 
   // 有 final 时：先按时间序输出正文/文件，再把纯 UI 放到末尾（通常 final 已在 primary 内）
   const primaryIds = new Set(primary.map((message) => message.id));
-  if (finalMessage && !primaryIds.has(finalMessage.id) && isRenderableAssistantMessage(finalMessage)) {
+  if (!primaryIds.has(finalMessage.id) && isRenderableAssistantMessage(finalMessage)) {
     primary.push(finalMessage);
   }
   return [...primary, ...deferredUiOnly];
@@ -667,12 +665,15 @@ function isPresentationOnlyAssistantMessage(message: Message): boolean {
   return toolCalls.length > 0 && toolCalls.every((toolCall) => isPresentationToolName(toolCall.function.name));
 }
 
-function hasProcessNarration(message: Message): boolean {
-  return (message.toolCalls?.length ?? 0) > 0 && message.content.trim().length > 0;
+/** 含非 presentation 工具的 assistant：过程旁白/工具轮，正文不进交付区 */
+function isProcessToolNarration(message: Message): boolean {
+  const toolCalls = message.toolCalls ?? [];
+  if (toolCalls.length === 0) return false;
+  return toolCalls.some((toolCall) => !isPresentationToolName(toolCall.function.name));
 }
 
-function stripProcessNarrationForPresentation(message: Message): Message {
-  return hasProcessNarration(message) ? { ...message, content: "" } : message;
+function hasProcessNarration(message: Message): boolean {
+  return isProcessToolNarration(message) && message.content.trim().length > 0;
 }
 
 function isRenderableAssistantMessage(message: Message): boolean {
@@ -697,7 +698,11 @@ function collectAttachContentToolCallIds(messages: Message[]): Set<string> {
   return collectPresentationToolCallIds(messages);
 }
 
-function AgentWorkflowDrawer({
+/**
+ * 主对话过程层：同一 turn 合并为 **一个** 过程块（live 状态流 或 单个「已处理」）。
+ * 不再按 assistant 消息各画一条「已处理」。
+ */
+function AgentProcessStream({
   assistantMessages,
   presentationMessageIds,
   standaloneToolMessages,
@@ -708,9 +713,9 @@ function AgentWorkflowDrawer({
   subagentRuns,
   defaultToolDetailsOpen,
   onToolDecision,
-  defaultOpen = false,
   onUiChoice,
   onOpenWorkspacePath,
+  turnStartedAt,
 }: {
   assistantMessages: Message[];
   presentationMessageIds: Set<string>;
@@ -722,12 +727,12 @@ function AgentWorkflowDrawer({
   subagentRuns: SubagentRun[];
   defaultToolDetailsOpen: boolean;
   onToolDecision: ToolDecisionHandler;
-  defaultOpen?: boolean;
   onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
   onOpenWorkspacePath?: (path: string) => void;
+  /** 本轮用户消息时间，用于「已处理 Xs」计时 */
+  turnStartedAt?: string;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const rounds = assistantMessages.map((message) =>
+  const historicalRounds = assistantMessages.map((message) =>
     buildAgentRoundFromMessage(
       stripPresentationBlocksForWorkflow(message, presentationMessageIds),
       resultMap,
@@ -735,70 +740,64 @@ function AgentWorkflowDrawer({
       subagentRuns,
     ),
   );
-  const failed = rounds.some((round) => round.status === "failed") ||
-    standaloneToolMessages.some((message) => !parseToolResultContent(message.content).ok) ||
-    liveRoundData?.status === "failed";
-  const summary = "Thought process";
+  const mergedHistorical = mergeAgentRoundData(historicalRounds, "turn-process");
+  // live 时只展示实时状态流；完成后只展示合并后的一个「已处理」
+  const showLive = Boolean(liveRoundData);
+  const showCompleted = !showLive && mergedHistorical != null;
 
-  useEffect(() => {
-    setOpen(defaultOpen);
-  }, [defaultOpen]);
+  const processStartedAtMs = resolveProcessStartMs(turnStartedAt);
+  const processDurationMs = (() => {
+    const start = turnStartedAt ? Date.parse(turnStartedAt) : NaN;
+    if (!Number.isFinite(start)) return null;
+    const endIso =
+      assistantMessages[assistantMessages.length - 1]?.createdAt ??
+      standaloneToolMessages[standaloneToolMessages.length - 1]?.createdAt;
+    if (!endIso) return null;
+    const end = Date.parse(endIso);
+    if (!Number.isFinite(end) || end < start) return null;
+    // 仅接受合理区间（避免坏时钟）
+    const ms = end - start;
+    return ms > 0 && ms < 24 * 60 * 60 * 1000 ? ms : null;
+  })();
 
   return (
-    <section className="workflow-drawer" data-open={open} data-status={failed ? "failed" : "completed"}>
-      <button
-        type="button"
-        className="workflow-drawer-toggle"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-label={`${open ? "收起" : "展开"}执行步骤${failed ? "，包含失败步骤" : ""}`}
-      >
-        <span className="workflow-drawer-icon" aria-hidden="true">
-          <WorkflowIcon />
-        </span>
-        <span className="workflow-drawer-count">{summary}</span>
-        <span className="workflow-drawer-caret" data-open={open} aria-hidden="true">
-          <ChevronRightIcon />
-        </span>
-      </button>
-
-      {open && (
-        <div className="workflow-drawer-body">
-          {rounds.map((round) => (
-            <AgentRound
-              key={round.id}
-              data={round}
-              busy={false}
-              defaultToolDetailsOpen={defaultToolDetailsOpen}
-              showWorkflow
-              showOutput
-              onUiChoice={onUiChoice}
-              onOpenWorkspacePath={onOpenWorkspacePath}
-            />
-          ))}
-          {liveRoundData && (
-            <AgentRound
-              key="live-workflow-round"
-              data={liveRoundData}
-              busy={true}
-              defaultToolDetailsOpen={defaultToolDetailsOpen}
-              showWorkflow
-              showOutput
-              onUiChoice={onUiChoice}
-              onOpenWorkspacePath={onOpenWorkspacePath}
-              phaseDetail={phaseDetail}
-            />
-          )}
-          {standaloneToolMessages.length > 0 && (
-            <ToolActivityList
-              items={standaloneToolMessages.map(standaloneToolActivityFromMessage)}
-              defaultDetailsOpen={defaultToolDetailsOpen}
-              onDecision={onToolDecision}
-            />
-          )}
-        </div>
+    <div className="agent-process-stream" data-process-stream="true">
+      {showCompleted && mergedHistorical && (
+        <AgentRound
+          key={mergedHistorical.id}
+          data={mergedHistorical}
+          busy={false}
+          defaultToolDetailsOpen={defaultToolDetailsOpen}
+          showWorkflow
+          showOutput={false}
+          processDurationMs={processDurationMs}
+          onUiChoice={onUiChoice}
+          onOpenWorkspacePath={onOpenWorkspacePath}
+        />
       )}
-    </section>
+      {showLive && liveRoundData && (
+        <AgentRound
+          key="live-process-round"
+          data={liveRoundData}
+          busy
+          defaultToolDetailsOpen={defaultToolDetailsOpen}
+          showWorkflow
+          // 流式正文：无运行中工具时打字机输出；有工具时仅灰字过程摘要
+          showOutput
+          processStartedAtMs={processStartedAtMs}
+          onUiChoice={onUiChoice}
+          onOpenWorkspacePath={onOpenWorkspacePath}
+          phaseDetail={phaseDetail}
+        />
+      )}
+      {standaloneToolMessages.length > 0 && (
+        <ToolActivityList
+          items={standaloneToolMessages.map(standaloneToolActivityFromMessage)}
+          defaultDetailsOpen={defaultToolDetailsOpen}
+          onDecision={onToolDecision}
+        />
+      )}
+    </div>
   );
 }
 
@@ -808,6 +807,16 @@ function stripPresentationBlocksForWorkflow(message: Message, presentationMessag
     return { ...message, contentBlocks: undefined };
   }
   return message;
+}
+
+/** live 计时：过旧的 createdAt（恢复会话）退回 Date.now()，避免「已处理 8000m」 */
+function resolveProcessStartMs(iso?: string): number {
+  const now = Date.now();
+  if (!iso) return now;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return now;
+  if (now - t > 6 * 60 * 60 * 1000 || t > now + 60_000) return now;
+  return t;
 }
 
 function ClarificationCard({
@@ -828,23 +837,31 @@ function ClarificationCard({
   }
 
   return (
-    <section className="clarification-card" aria-label={t("clarification.label")}>
-      <div className="clarification-head">
-        <strong>{t("clarification.title")}</strong>
-        <span>{t("clarification.waiting")}</span>
-      </div>
-      <p>{clarification.question}</p>
-      {clarification.context && <small>{clarification.context}</small>}
+    <section className="approval-card gate-card" aria-label={t("clarification.label")}>
+      <header className="approval-card-head">
+        <span className="approval-card-title">{t("clarification.title")}</span>
+        <span className="approval-card-meta">{t("clarification.waiting")}</span>
+      </header>
+      <p className="approval-card-body">{clarification.question}</p>
+      {clarification.context ? (
+        <p className="approval-card-context">{clarification.context}</p>
+      ) : null}
       {clarification.options?.length ? (
-        <div className="clarification-options">
+        <div className="gate-card-options">
           {clarification.options.map((option) => (
-            <button type="button" key={option} disabled={submitted} onClick={() => submit(option)}>
+            <button
+              type="button"
+              key={option}
+              className="gate-card-chip"
+              disabled={submitted}
+              onClick={() => submit(option)}
+            >
               {option}
             </button>
           ))}
         </div>
       ) : (
-        <div className="clarification-input-row">
+        <div className="gate-card-input-row">
           <input
             value={answer}
             disabled={submitted}
@@ -854,7 +871,12 @@ function ClarificationCard({
               if (event.key === "Enter") submit();
             }}
           />
-          <button type="button" disabled={submitted || !answer.trim()} onClick={() => submit()}>
+          <button
+            type="button"
+            className="approval-card-btn approval-card-btn--allow"
+            disabled={submitted || !answer.trim()}
+            onClick={() => submit()}
+          >
             {t("action.reply")}
           </button>
         </div>
@@ -898,7 +920,6 @@ function UserBubble({
   const platform = usePlatform();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(content);
-  const [mode, setMode] = useState<RevertMode>("code_and_conv");
   const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   // User bubble context menu
@@ -907,7 +928,6 @@ function UserBubble({
   function beginEdit(): void {
     if (editDisabled || !onEdit) return;
     setDraft(content);
-    setMode("code_and_conv");
     setEditing(true);
   }
 
@@ -965,18 +985,17 @@ function UserBubble({
     const trimmed = draft.trim();
     if (!trimmed || editDisabled) return;
     setEditing(false);
-    // 允许原文重试；附件随原消息一并续跑
+    // 默认 code_and_conv：截断对话并清理后续 plan / checkpoint；附件随原消息一并续跑
     onEdit?.(
       messageId,
       trimmed,
-      mode,
+      "code_and_conv",
       attachments && attachments.length > 0 ? attachments : undefined,
     );
   }
 
   function cancel(): void {
     setDraft(content);
-    setMode("code_and_conv");
     setEditing(false);
   }
 
@@ -985,63 +1004,38 @@ function UserBubble({
     const canSubmit = draft.trim().length > 0 && !editDisabled;
     return (
       <div className="user-bubble-row is-editing">
-        <div className="user-edit-card" role="form" aria-label={t("action.editAndRetry")}>
-          <div className="user-edit-card-head">
-            <span className="user-edit-card-title">{t("editRetry.title")}</span>
-            <span className="user-edit-card-hint">{t("editRetry.hint")}</span>
-          </div>
+        <div className="user-edit-bubble" role="form" aria-label={t("action.editAndRetry")}>
           <textarea
-            className="user-edit-card-input"
+            className="user-edit-bubble-input"
             value={draft}
             autoFocus
-            rows={Math.min(10, Math.max(2, lineCount))}
+            rows={Math.min(8, Math.max(1, lineCount))}
             placeholder={t("editRetry.placeholder")}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
+              if (event.nativeEvent.isComposing) return;
+              // Enter 发送；Shift+Enter 换行（与 Composer 一致）
+              if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 confirmSave();
               } else if (event.key === "Escape") {
+                event.preventDefault();
                 cancel();
               }
             }}
           />
-          <div className="user-edit-card-modes" role="group" aria-label={t("editRetry.modeLabel")}>
-            <button
-              type="button"
-              className="user-edit-mode"
-              data-active={mode === "code_and_conv" ? "true" : undefined}
-              onClick={() => setMode("code_and_conv")}
-            >
-              <span className="user-edit-mode-title">{t("editRetry.modeCodeAndConv")}</span>
-              <span className="user-edit-mode-desc">{t("editRetry.modeCodeAndConvHint")}</span>
+          <div className="user-edit-bubble-actions">
+            <button type="button" className="user-edit-bubble-btn is-cancel" onClick={cancel}>
+              {t("action.cancel")}
             </button>
             <button
               type="button"
-              className="user-edit-mode"
-              data-active={mode === "conv_only" ? "true" : undefined}
-              onClick={() => setMode("conv_only")}
+              className="user-edit-bubble-btn is-send"
+              onClick={confirmSave}
+              disabled={!canSubmit}
             >
-              <span className="user-edit-mode-title">{t("editRetry.modeConvOnly")}</span>
-              <span className="user-edit-mode-desc">{t("editRetry.modeConvOnlyHint")}</span>
+              {t("composer.send")}
             </button>
-          </div>
-          <div className="user-edit-card-footer">
-            <span className="user-edit-card-keys">{t("editRetry.keys")}</span>
-            <div className="user-edit-card-actions">
-              <button type="button" className="user-edit-btn is-ghost" onClick={cancel}>
-                {t("action.cancel")}
-              </button>
-              <button
-                type="button"
-                className="user-edit-btn is-primary"
-                onClick={confirmSave}
-                disabled={!canSubmit}
-              >
-                <RetryIcon />
-                <span>{t("action.editAndRetry")}</span>
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -1063,7 +1057,7 @@ function UserBubble({
           <div className="user-bubble-attachments">
             {visibleAttachments.map((att) => {
               const src = (() => {
-                try { return platform.filePathToUrl(att.path); } catch { return null; }
+                try { return att.dataUrl ?? platform.filePathToUrl(att.path); } catch { return null; }
               })();
               if (att.type === 'image') {
                 return src ? (
@@ -1071,7 +1065,7 @@ function UserBubble({
                     key={att.id}
                     type="button"
                     className="user-bubble-attachment is-image"
-                    onClick={() => setViewingImage(att.path)}
+                    onClick={() => setViewingImage(att.dataUrl ?? att.path)}
                     onContextMenu={(event) => handleAttachmentContextMenu(event, att)}
                     title={att.path}
                   >
@@ -1227,21 +1221,6 @@ function CheckIcon() {
   );
 }
 
-function RetryIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-      <path
-        d="M4.5 8.5a5.5 5.5 0 019.2-3.1M15.5 4.5v3h-3M15.5 11.5a5.5 5.5 0 01-9.2 3.1M4.5 15.5v-3h3"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 function FailureIcon() {
   return (
     <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
@@ -1273,25 +1252,6 @@ function ForkIcon() {
       <circle cx="14" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
       <circle cx="10" cy="15" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
       <path d="M6 7v2a4 4 0 004 4M14 7v2a4 4 0 01-4 4" stroke="currentColor" strokeWidth="1.3" fill="none" />
-    </svg>
-  );
-}
-
-function WorkflowIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-      <circle cx="5" cy="5" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
-      <circle cx="15" cy="5" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
-      <circle cx="10" cy="15" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
-      <path d="M7.25 5h5.5M5 7.25v2.25A5.5 5.5 0 0010 15M15 7.25v2.25A5.5 5.5 0 0110 15" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ChevronRightIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -1566,37 +1526,71 @@ function ApprovalInline({
 }: {
   item: ToolActivity;
   onDecision: ToolDecisionHandler;
-
 }) {
-  const [decided, setDecided] = useState<'approve' | 'reject' | null>(null);
+  const [decided, setDecided] = useState<"approve" | "reject" | null>(null);
+  const commandPreview = toolApprovalLabel(item);
+  const kindLabel = getToolKindLabel(item.name);
 
   function handleDecide(approved: boolean) {
-    setDecided(approved ? 'approve' : 'reject');
+    setDecided(approved ? "approve" : "reject");
     onDecision(item.id, approved);
   }
 
   if (decided) {
     return (
-      <div className="tool-run-approval tool-run-approval--decided" data-decision={decided}>
-        <span className="tool-run-approval-result">
-          {decided === 'approve' ? '✓ 已批准' : '✕ 已拒绝'} · {toolApprovalLabel(item)}
+      <section className="approval-card approval-card--decided" data-decision={decided}>
+        <span className="approval-card-result">
+          {decided === "approve" ? "✓ 已批准" : "✕ 已拒绝"} · {commandPreview}
         </span>
-      </div>
+      </section>
     );
   }
 
+  const argsPreview =
+    item.args && typeof item.args === "object"
+      ? (() => {
+          try {
+            return JSON.stringify(item.args, null, 2);
+          } catch {
+            return "";
+          }
+        })()
+      : "";
+
   return (
-    <div className="tool-run-approval">
-      <span>{t("tool.approvalHint")} · {toolApprovalLabel(item)}</span>
-      <div className="tool-run-approval-actions">
-        <button type="button" onClick={() => handleDecide(true)}>
-          {t("action.approveOnce")}
-        </button>
-        <button type="button" onClick={() => handleDecide(false)}>
+    <section className="approval-card gate-card" data-status="awaiting" aria-label={t("tool.approvalHint")}>
+      <header className="approval-card-head">
+        <span className="approval-card-glyph" aria-hidden="true">
+          {">_"}
+        </span>
+        <span className="approval-card-title">{kindLabel}</span>
+        <span className="approval-card-meta">{t("tool.approvalPending")}</span>
+      </header>
+      {commandPreview ? (
+        <pre className="approval-card-command">{commandPreview}</pre>
+      ) : (
+        <p className="approval-card-body">{t("tool.approvalHint")}</p>
+      )}
+      {argsPreview && argsPreview !== "{}" && argsPreview.length < 280 && (
+        <pre className="approval-card-args">{argsPreview}</pre>
+      )}
+      <div className="approval-card-actions">
+        <button
+          type="button"
+          className="approval-card-btn approval-card-btn--reject"
+          onClick={() => handleDecide(false)}
+        >
           {t("action.reject")}
         </button>
+        <button
+          type="button"
+          className="approval-card-btn approval-card-btn--allow"
+          onClick={() => handleDecide(true)}
+        >
+          {t("action.approveOnce")}
+        </button>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -1607,21 +1601,29 @@ function PlanApprovalInline({
   plan: PlanStep[];
   onDecision: (approved: boolean) => void;
 }) {
-  const [decided, setDecided] = useState<'approve' | 'reject' | null>(null);
+  const [decided, setDecided] = useState<"approve" | "reject" | null>(null);
 
   function handleDecide(approved: boolean) {
-    setDecided(approved ? 'approve' : 'reject');
+    setDecided(approved ? "approve" : "reject");
     onDecision(approved);
   }
 
+  // 决策后直接卸掉，不占输入框上方空间
+  if (decided) return null;
+
   return (
-    <section className="tool-run-summary plan-approval-inline" data-status={decided ?? "awaiting"}>
-      <div className="tool-run-head">
-        <span className="tool-run-dot" aria-hidden="true" />
-        <span className="tool-run-title">执行计划</span>
-        <span className="tool-run-names">{plan.length} 个步骤</span>
-        <span className="tool-run-status">{decided ? "已处理" : "等待确认"}</span>
-      </div>
+    <section
+      className="approval-card gate-card plan-approval-card"
+      data-status="awaiting"
+      aria-label="计划审批"
+    >
+      <header className="approval-card-head">
+        <span className="approval-card-glyph" aria-hidden="true">
+          ▤
+        </span>
+        <span className="approval-card-title">执行计划</span>
+        <span className="approval-card-meta">{plan.length} 个步骤</span>
+      </header>
       <ol className="plan-approval-steps">
         {plan.map((step, index) => (
           <li key={step.id}>
@@ -1630,25 +1632,23 @@ function PlanApprovalInline({
           </li>
         ))}
       </ol>
-      {decided ? (
-        <div className="tool-run-approval tool-run-approval--decided" data-decision={decided}>
-          <span className="tool-run-approval-result">
-            {decided === 'approve' ? '✓ 已批准' : '✕ 已拒绝'}
-          </span>
-        </div>
-      ) : (
-        <div className="tool-run-approval">
-          <span>确认后 Agent 将按该计划继续执行</span>
-          <div className="tool-run-approval-actions">
-            <button type="button" onClick={() => handleDecide(true)}>
-              {t("action.approveOnce")}
-            </button>
-            <button type="button" onClick={() => handleDecide(false)}>
-              {t("action.reject")}
-            </button>
-          </div>
-        </div>
-      )}
+      <p className="approval-card-body">确认后将按该计划继续</p>
+      <div className="approval-card-actions">
+        <button
+          type="button"
+          className="approval-card-btn approval-card-btn--reject"
+          onClick={() => handleDecide(false)}
+        >
+          {t("action.reject")}
+        </button>
+        <button
+          type="button"
+          className="approval-card-btn approval-card-btn--allow"
+          onClick={() => handleDecide(true)}
+        >
+          {t("action.approveOnce")}
+        </button>
+      </div>
     </section>
   );
 }
@@ -1672,6 +1672,35 @@ function truncateCommandLine(cmd: string): string {
   return cmd;
 }
 
+/** 工具/计划审批：固定在输入框上方（composer-dock），不进对话流 */
+export function ApprovalsDock({
+  liveToolActivity,
+  pendingApprovals,
+  phase,
+  plan,
+  onToolDecision,
+  onPlanDecision,
+}: {
+  liveToolActivity: ToolActivity[];
+  pendingApprovals?: PendingToolApproval[];
+  phase: TaskPhase | null;
+  plan: PlanStep[];
+  onToolDecision: ToolDecisionHandler;
+  onPlanDecision: (approved: boolean) => void;
+}) {
+  const approvalItems = collectApprovalItems(liveToolActivity, pendingApprovals ?? []);
+  const showPlanApproval = phase === "waiting_approval" && approvalItems.length === 0 && plan.length > 0;
+  if (approvalItems.length === 0 && !showPlanApproval) return null;
+
+  return (
+    <div className="process-gates process-gates--dock" aria-label={t("tool.approvalHint")}>
+      {approvalItems.map((item) => (
+        <ApprovalInline key={item.id} item={item} onDecision={onToolDecision} />
+      ))}
+      {showPlanApproval && <PlanApprovalInline plan={plan} onDecision={onPlanDecision} />}
+    </div>
+  );
+}
+
 // Keep references for unused type exports
 void toolActivitiesFromAssistant;
-void ClarificationCard;
