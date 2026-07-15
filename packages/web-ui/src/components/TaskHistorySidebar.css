@@ -86,6 +86,7 @@
   padding: 0 8px;
   text-align: left;
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .sidebar-action svg {
@@ -103,12 +104,12 @@
 }
 
 .sidebar-action[data-active="true"] {
-  background: var(--active);
-  color: var(--text);
+  background: var(--selection-bg, var(--active));
+  color: var(--accent-soft-fg, var(--text));
 }
 
 .sidebar-action[data-active="true"] svg {
-  color: var(--text);
+  color: var(--accent);
 }
 
 .sidebar-action:disabled {
@@ -217,7 +218,11 @@
 }
 
 .drawer-header-row[data-selected="true"] {
-  background: var(--active);
+  background: var(--selection-bg, var(--active));
+}
+
+.drawer-header-row[data-selected="true"] .drawer-header {
+  color: var(--accent-soft-fg, var(--text));
 }
 
 .drawer-header {
@@ -243,9 +248,12 @@
   color: var(--text-tertiary);
 }
 
-.drawer-header-row:hover .drawer-header svg,
-.drawer-header-row[data-selected="true"] .drawer-header svg {
+.drawer-header-row:hover .drawer-header svg {
   color: var(--text-secondary);
+}
+
+.drawer-header-row[data-selected="true"] .drawer-header svg {
+  color: var(--accent);
 }
 
 .drawer-chevron,
@@ -327,7 +335,7 @@
 }
 
 .conv-item-row:has(.conv-item[data-active="true"]) {
-  background: var(--active);
+  background: var(--selection-bg, var(--active));
 }
 
 .conv-item {
@@ -357,14 +365,20 @@
   color: var(--text-tertiary);
 }
 
-.conv-item:hover,
-.conv-item[data-active="true"] {
+.conv-item:hover {
   color: var(--text);
 }
 
-.conv-item:hover svg,
-.conv-item[data-active="true"] svg {
+.conv-item[data-active="true"] {
+  color: var(--accent-soft-fg, var(--text));
+}
+
+.conv-item:hover svg {
   color: var(--text-secondary);
+}
+
+.conv-item[data-active="true"] svg {
+  color: var(--accent);
 }
 
 .conv-copy {
@@ -454,4 +468,9 @@
 .icon-btn:hover {
   background: var(--hover);
   color: var(--text);
+}
+
+.icon-btn[data-active="true"] {
+  background: var(--selection-bg, var(--active));
+  color: var(--accent-soft-fg, var(--text));
 }

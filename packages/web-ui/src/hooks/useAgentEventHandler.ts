@@ -169,7 +169,10 @@ export function useAgentEventHandler({
         if (event.message.role === "system") break;
         const isAssistant = event.message.role === "assistant";
         const hasToolCalls = (event.message.toolCalls?.length ?? 0) > 0;
-        if (isAssistant && !hasToolCalls) setOutput("");
+        // 终稿无工具：清 live 缓存避免与历史交付重复
+        // 过程旁白（有工具）：也清掉，避免旁白残留到下一轮流式/交付区
+        if (isAssistant) setOutput("");
+        if (isAssistant && hasToolCalls) nextOutputFreshRef.current = true;
         setCurrentTask((previous) => {
           const previousMessages = previous?.messages ?? [];
           if (!previous) return previous;

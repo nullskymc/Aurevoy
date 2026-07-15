@@ -76,9 +76,8 @@ interface ConversationProps {
   /** 是否默认展开工具参数/结果详情。等待审批的工具始终展开。 */
   defaultToolDetailsOpen?: boolean;
   online?: boolean | null;
-  /** 工具审批决策回调（批准/拒绝），只作用于当前这一次工具调用。 */
+  /** 工具审批决策回调（对话内工具卡若仍展示待批时可复用；主审批在 ApprovalsDock）。 */
   onToolDecision: ToolDecisionHandler;
-  onPlanDecision: (approved: boolean) => void;
   onClarificationAnswer: (clarificationId: string, answer: string) => void;
   /** 当前任务是否可恢复（中断/失败等可续跑状态） */
   canResume?: boolean;
@@ -217,7 +216,6 @@ export function Conversation({
   hasLiveTail,
   defaultToolDetailsOpen = false,
   onToolDecision,
-  onPlanDecision,
   onClarificationAnswer,
   canResume = false,
   hasArchivedMessages = false,
@@ -309,9 +307,6 @@ export function Conversation({
         subagentRuns: task.subagentRuns ?? [],
       })
     : null;
-  const approvalItems = collectApprovalItems(viewModel.liveToolActivity, task.pendingApprovals ?? []);
-  const showPlanApproval = phase === "waiting_approval" && approvalItems.length === 0 && plan.length > 0;
-
   return (
     <div className="conversation">
       <div ref={topRef} />
@@ -338,29 +333,22 @@ export function Conversation({
           />
         ))}
 
-        {hasLiveTail && (
-          <div className="aurevoy-agent-runner-container process-gates">
-            {approvalItems.map((item) => (
-              <ApprovalInline key={item.id} item={item} onDecision={onToolDecision} />
-            ))}
-
-            {showPlanApproval && (
-              <PlanApprovalInline
-                plan={plan}
-                onDecision={onPlanDecision}
-              />
-            )}
-
-            {(task.clarifications ?? []).filter((item) => item.status === "pending").map((clarification) => (
-              <ClarificationCard
-                key={clarification.id}
-                clarification={clarification}
-                onAnswer={onClarificationAnswer}
-              />
-            ))}
-
-          </div>
-        )}
+        {/* ask-user 追问：留在对话流内 */}
+        {(() => {
+          const pending = (task.clarifications ?? []).filter((item) => item.status === "pending");
+          if (pending.length === 0) return null;
+          return (
+            <div className="process-gates process-gates--inline" aria-label={t("clarification.label")}>
+              {pending.map((clarification) => (
+                <ClarificationCard
+                  key={clarification.id}
+                  clarification={clarification}
+                  onAnswer={onClarificationAnswer}
+                />
+              ))}
+            </div>
+          );
+        })()}
         {!hasLiveTail && (
           <div className="turn-actions" aria-label={t("conv.turnActions")}>
             {hasArchivedMessages && onUnrevert && (
@@ -391,7 +379,7 @@ export function Conversation({
 
 function ConversationTurnView({
   turn,
-  isLiveTurn,
+  isLiveTurn: _isLiveTurn,
   resultMap,
   plan,
   subagentRuns,
@@ -429,20 +417,27 @@ function ConversationTurnView({
 }) {
   const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
   const attachContentToolCallIds = collectAttachContentToolCallIds(turn.agentMessages);
-  const finalMessage = isLiveTurn ? null : findFinalAssistantMessage(turn.agentMessages);
+  // 直播中也解析 final，用于把过程旁白从交付区剔除；直播正文主要靠 liveRoundData
+  const finalMessage = findFinalAssistantMessage(turn.agentMessages);
   /**
    * 用户可见交付面：按消息时间序渲染正文 + 文件卡。
-   * 旧逻辑把所有 presentation 统一甩到 final 之后，导致 attach_content 文件卡永远贴在
-   * 本轮最底部，看起来「跟哪条消息都无关」。
+   * 含非 presentation 工具的过程旁白（如「我先去看工作区…」）只进过程层，不进交付。
    */
-  const deliveryMessages = buildDeliveryMessages(assistantMessages, finalMessage);
+  const deliveryMessages = buildDeliveryMessages(assistantMessages, finalMessage, {
+    // 直播且终稿尚未落库：交付区不抢 live 流式区（避免中间条旁白当正文）
+    excludeProcessNarration: true,
+  });
   const deliveryMessageIds = new Set(deliveryMessages.map((message) => message.id));
-  const finalProcessMessages = finalMessage && isPresentationOnlyAssistantMessage(finalMessage) && hasProcessNarration(finalMessage)
-    ? [finalMessage]
-    : [];
-  const workflowMessages = assistantMessages.filter(
-    (message) => message.id !== finalMessage?.id && (!isPresentationOnlyAssistantMessage(message) || hasProcessNarration(message)),
-  ).concat(finalProcessMessages);
+  const workflowMessages = assistantMessages.filter((message) => {
+    // 含 list_dir/read 等过程工具的旁白：只进过程层
+    if (isProcessToolNarration(message)) return true;
+    if (finalMessage && message.id === finalMessage.id) {
+      // 终稿：仅当是 presentation+旁白时才进过程层，正文终稿不进
+      return isPresentationOnlyAssistantMessage(message) && hasProcessNarration(message);
+    }
+    // 非终稿：原逻辑（非纯 presentation，或 presentation 带旁白）
+    return !isPresentationOnlyAssistantMessage(message) || hasProcessNarration(message);
+  });
   const standaloneToolMessages = turn.agentMessages.filter(
     (message) => message.role === "tool" && (!message.toolCallId || !attachContentToolCallIds.has(message.toolCallId)),
   );
@@ -517,12 +512,17 @@ function ConversationTurnView({
  * 组装本 turn 对用户可见的交付消息（正文 / 文件 / UI），保持与消息历史一致的时序。
  * - file_reference / image / link：跟发起 attach 的那条 assistant 消息走
  * - 纯 present_ui（只有 ui 块、无正文）：仍放到「有正文的最终回复」之后，避免 choice 压住提问
+ * - 过程旁白（含 list_dir/read 等非 presentation 工具的中间 assistant）**不进交付**
  */
 function buildDeliveryMessages(
   assistantMessages: Message[],
   finalMessage: Message | null,
+  options?: { excludeProcessNarration?: boolean },
 ): Message[] {
+  const excludeProcess = options?.excludeProcessNarration !== false;
+
   const candidates = assistantMessages.filter((message) => {
+    if (excludeProcess && isProcessToolNarration(message)) return false;
     if (getFailureInfo(message)) return true;
     if (message.content.trim().length > 0) return true;
     if ((message.contentBlocks?.length ?? 0) > 0) return true;
@@ -547,13 +547,13 @@ function buildDeliveryMessages(
   }
 
   // 若还没有 final 正文（直播中），ui 块仍按时间序跟在当前已有交付后面
-  if (!finalMessage) {
+  if (!finalMessage || (excludeProcess && isProcessToolNarration(finalMessage))) {
     return [...primary, ...deferredUiOnly];
   }
 
   // 有 final 时：先按时间序输出正文/文件，再把纯 UI 放到末尾（通常 final 已在 primary 内）
   const primaryIds = new Set(primary.map((message) => message.id));
-  if (finalMessage && !primaryIds.has(finalMessage.id) && isRenderableAssistantMessage(finalMessage)) {
+  if (!primaryIds.has(finalMessage.id) && isRenderableAssistantMessage(finalMessage)) {
     primary.push(finalMessage);
   }
   return [...primary, ...deferredUiOnly];
@@ -665,8 +665,15 @@ function isPresentationOnlyAssistantMessage(message: Message): boolean {
   return toolCalls.length > 0 && toolCalls.every((toolCall) => isPresentationToolName(toolCall.function.name));
 }
 
+/** 含非 presentation 工具的 assistant：过程旁白/工具轮，正文不进交付区 */
+function isProcessToolNarration(message: Message): boolean {
+  const toolCalls = message.toolCalls ?? [];
+  if (toolCalls.length === 0) return false;
+  return toolCalls.some((toolCall) => !isPresentationToolName(toolCall.function.name));
+}
+
 function hasProcessNarration(message: Message): boolean {
-  return (message.toolCalls?.length ?? 0) > 0 && message.content.trim().length > 0;
+  return isProcessToolNarration(message) && message.content.trim().length > 0;
 }
 
 function isRenderableAssistantMessage(message: Message): boolean {
@@ -830,23 +837,31 @@ function ClarificationCard({
   }
 
   return (
-    <section className="clarification-card" aria-label={t("clarification.label")}>
-      <div className="clarification-head">
-        <strong>{t("clarification.title")}</strong>
-        <span>{t("clarification.waiting")}</span>
-      </div>
-      <p>{clarification.question}</p>
-      {clarification.context && <small>{clarification.context}</small>}
+    <section className="approval-card gate-card" aria-label={t("clarification.label")}>
+      <header className="approval-card-head">
+        <span className="approval-card-title">{t("clarification.title")}</span>
+        <span className="approval-card-meta">{t("clarification.waiting")}</span>
+      </header>
+      <p className="approval-card-body">{clarification.question}</p>
+      {clarification.context ? (
+        <p className="approval-card-context">{clarification.context}</p>
+      ) : null}
       {clarification.options?.length ? (
-        <div className="clarification-options">
+        <div className="gate-card-options">
           {clarification.options.map((option) => (
-            <button type="button" key={option} disabled={submitted} onClick={() => submit(option)}>
+            <button
+              type="button"
+              key={option}
+              className="gate-card-chip"
+              disabled={submitted}
+              onClick={() => submit(option)}
+            >
               {option}
             </button>
           ))}
         </div>
       ) : (
-        <div className="clarification-input-row">
+        <div className="gate-card-input-row">
           <input
             value={answer}
             disabled={submitted}
@@ -856,7 +871,12 @@ function ClarificationCard({
               if (event.key === "Enter") submit();
             }}
           />
-          <button type="button" disabled={submitted || !answer.trim()} onClick={() => submit()}>
+          <button
+            type="button"
+            className="approval-card-btn approval-card-btn--allow"
+            disabled={submitted || !answer.trim()}
+            onClick={() => submit()}
+          >
             {t("action.reply")}
           </button>
         </div>
@@ -1538,26 +1558,20 @@ function ApprovalInline({
       : "";
 
   return (
-    <section className="approval-card" data-status="awaiting" aria-label={t("tool.approvalHint")}>
+    <section className="approval-card gate-card" data-status="awaiting" aria-label={t("tool.approvalHint")}>
       <header className="approval-card-head">
         <span className="approval-card-glyph" aria-hidden="true">
           {">_"}
         </span>
         <span className="approval-card-title">{kindLabel}</span>
+        <span className="approval-card-meta">{t("tool.approvalPending")}</span>
       </header>
-      <p className="approval-card-body">
-        {t("tool.approvalHint")}
-        {commandPreview ? (
-          <>
-            {" "}
-            <code className="approval-card-inline-code">{commandPreview}</code>
-          </>
-        ) : null}
-      </p>
-      {commandPreview && (
+      {commandPreview ? (
         <pre className="approval-card-command">{commandPreview}</pre>
+      ) : (
+        <p className="approval-card-body">{t("tool.approvalHint")}</p>
       )}
-      {argsPreview && argsPreview !== "{}" && argsPreview.length < 400 && (
+      {argsPreview && argsPreview !== "{}" && argsPreview.length < 280 && (
         <pre className="approval-card-args">{argsPreview}</pre>
       )}
       <div className="approval-card-actions">
@@ -1594,18 +1608,15 @@ function PlanApprovalInline({
     onDecision(approved);
   }
 
-  if (decided) {
-    return (
-      <section className="approval-card approval-card--decided" data-decision={decided}>
-        <span className="approval-card-result">
-          {decided === "approve" ? "✓ 已批准计划" : "✕ 已拒绝计划"}
-        </span>
-      </section>
-    );
-  }
+  // 决策后直接卸掉，不占输入框上方空间
+  if (decided) return null;
 
   return (
-    <section className="approval-card plan-approval-card" data-status="awaiting" aria-label="计划审批">
+    <section
+      className="approval-card gate-card plan-approval-card"
+      data-status="awaiting"
+      aria-label="计划审批"
+    >
       <header className="approval-card-head">
         <span className="approval-card-glyph" aria-hidden="true">
           ▤
@@ -1621,7 +1632,7 @@ function PlanApprovalInline({
           </li>
         ))}
       </ol>
-      <p className="approval-card-body">确认后 Agent 将按该计划继续执行</p>
+      <p className="approval-card-body">确认后将按该计划继续</p>
       <div className="approval-card-actions">
         <button
           type="button"
@@ -1661,6 +1672,35 @@ function truncateCommandLine(cmd: string): string {
   return cmd;
 }
 
+/** 工具/计划审批：固定在输入框上方（composer-dock），不进对话流 */
+export function ApprovalsDock({
+  liveToolActivity,
+  pendingApprovals,
+  phase,
+  plan,
+  onToolDecision,
+  onPlanDecision,
+}: {
+  liveToolActivity: ToolActivity[];
+  pendingApprovals?: PendingToolApproval[];
+  phase: TaskPhase | null;
+  plan: PlanStep[];
+  onToolDecision: ToolDecisionHandler;
+  onPlanDecision: (approved: boolean) => void;
+}) {
+  const approvalItems = collectApprovalItems(liveToolActivity, pendingApprovals ?? []);
+  const showPlanApproval = phase === "waiting_approval" && approvalItems.length === 0 && plan.length > 0;
+  if (approvalItems.length === 0 && !showPlanApproval) return null;
+
+  return (
+    <div className="process-gates process-gates--dock" aria-label={t("tool.approvalHint")}>
+      {approvalItems.map((item) => (
+        <ApprovalInline key={item.id} item={item} onDecision={onToolDecision} />
+      ))}
+      {showPlanApproval && <PlanApprovalInline plan={plan} onDecision={onPlanDecision} />}
+    </div>
+  );
+}
+
 // Keep references for unused type exports
 void toolActivitiesFromAssistant;
-void ClarificationCard;

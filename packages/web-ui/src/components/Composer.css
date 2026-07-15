@@ -370,8 +370,10 @@
 }
 
 .composer-box:focus-within {
-  border-color: color-mix(in srgb, var(--text) 12%, var(--border));
-  box-shadow: var(--composer-shadow, 0 8px 28px rgba(0, 0, 0, 0.08));
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  box-shadow:
+    var(--composer-shadow, 0 8px 28px rgba(40, 90, 75, 0.11)),
+    0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .composer-input {
@@ -583,7 +585,7 @@
   color: var(--text);
 }
 
-/* 圆形发送：深灰底（可发）/ 停用半透明 */
+/* 圆形发送：Mist Teal accent / busy 用深字面 */
 .composer-send {
   display: grid;
   place-items: center;
@@ -591,15 +593,15 @@
   height: 32px;
   border: none;
   border-radius: 50%;
-  background: #6b6b6b;
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-contrast);
   cursor: pointer;
-  transition: opacity 150ms ease, background 150ms ease, transform 100ms ease;
+  transition: opacity 150ms ease, background 150ms ease, transform 100ms ease, filter 150ms ease;
   flex: 0 0 auto;
 }
 
 .composer-send:not(:disabled):hover {
-  background: #525252;
+  filter: brightness(1.06);
 }
 
 .composer-send:not(:disabled):active {
@@ -611,11 +613,13 @@
   color: var(--text-tertiary);
   opacity: 0.85;
   cursor: not-allowed;
+  filter: none;
 }
 
 .composer-send[data-busy="true"]:not(:disabled) {
   background: var(--text);
   color: var(--bg);
+  filter: none;
 }
 
 :root[data-theme="dark"] .composer-project-bar {
@@ -624,20 +628,22 @@
 }
 
 :root[data-theme="dark"] .composer-send {
-  background: #a3a3a3;
-  color: #141414;
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
 
 :root[data-theme="dark"] .composer-send:not(:disabled):hover {
-  background: #c4c4c4;
+  filter: brightness(1.08);
 }
 
 :root[data-theme="dark"] .composer-send:disabled {
   background: var(--surface-strong);
   color: var(--text-tertiary);
+  filter: none;
 }
 
 :root[data-theme="dark"] .composer-send[data-busy="true"]:not(:disabled) {
-  background: #f0f0f0;
-  color: #141414;
+  background: var(--text);
+  color: var(--bg);
+  filter: none;
 }

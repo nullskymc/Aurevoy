@@ -27,10 +27,11 @@ import { useSkills } from "./hooks/useSkills";
 import { useWorkbenchTabs } from "./hooks/useWorkbenchTabs";
 import { useTaskController } from "./hooks/useTaskController";
 import { Composer, nextThinkingLevel, type ThinkingUILevel } from "./components/Composer";
-import { Conversation } from "./components/Conversation";
+import { ApprovalsDock, Conversation } from "./components/Conversation";
 import { AppTopBar } from "./components/AppTopBar";
 import { ModelSelectorDrawer } from "./components/ModelSelectorDrawer";
 import { WorkbenchPanel } from "./components/WorkbenchPanel";
+import { OutputFloatPanel } from "./components/OutputFloatPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { ToastNotice, type ToastTone } from "./components/ToastNotice";
@@ -500,12 +501,19 @@ function App() {
     phase === "waiting_approval" ||
     output.trim().length > 0;
 
+  const [outputRailOpen, setOutputRailOpen] = useState(true);
+
+  /** 输出栏与文件工作台互斥：对话中、工作台关、用户未手动关闭时占右侧列 */
+  const showOutputRail =
+    activeView === "chat" && showConversation && !workbenchOpen && outputRailOpen;
+
   return (
     <div
       className="app-shell"
       data-active-view={activeView}
       data-left-collapsed={leftCollapsed}
       data-workbench-open={workbenchOpen}
+      data-output-rail={showOutputRail ? "true" : "false"}
       data-theme={themeMode}
       style={shellStyle}
     >
@@ -538,121 +546,196 @@ function App() {
           activeView={activeView}
           currentTask={currentTask}
           workbenchOpen={workbenchOpen}
+          outputRailOpen={outputRailOpen}
           leftCollapsed={leftCollapsed}
           phase={phase}
           status={status}
           onToggleWorkbench={() => setWorkbenchOpen((open) => !open)}
+          onToggleOutputRail={() => setOutputRailOpen((open) => !open)}
           onToggleSidebar={() => setLeftCollapsed((collapsed) => !collapsed)}
         />
 
-        {activeView === "search" ? (
-          <SearchPage
-            query={searchQuery}
-            tasks={tasks}
-            onQueryChange={setSearchQuery}
-            onSelectTask={handleSelectTask}
-          />
-        ) : activeView === "skills" ? (
-          <SkillsPage
-            skills={skills}
-            installing={installing}
-            installError={installError}
-            reloading={reloading}
-            onInstall={install}
-            onReload={reload}
-            onToggle={toggle}
-            onUninstall={uninstall}
-            onTrySkill={(name) => {
-              handleNewTask();
-              setGoal(t("skillsPage.tryPrompt").replace("{name}", name));
-            }}
-          />
-        ) : activeView === "settings" ? (
-          <SettingsPanel
-            settings={runtimeSettings}
-            mcpServers={mcpServers}
-            dataStatus={dataStatus}
-            memories={memories}
-            saving={settingsSaving}
-            fetchingModels={fetchingModels}
-            chatFontSize={chatFontSize}
-            uiFontSize={uiFontSize}
-            codeFontSize={codeFontSize}
-            workMode={workMode}
-            themeMode={themeMode}
-            locale={locale}
-            initialSection={settingsInitialSection}
-            onClose={handleCloseSettings}
-            onSave={handleSaveSettings}
-            onSaveConnection={handleSaveProviderConnection}
-            onCleanup={handleCleanupData}
-            onRefresh={refreshSettings}
-            onFetchModels={handleFetchModels}
-            onFetchModelsForProvider={handleFetchModelsForProvider}
-            onSaveEnabledModels={handleSaveEnabledModels}
-            onSaveSlotEnabledModels={handleSaveSlotEnabledModels}
-            onSaveSlotImageInputModels={handleSaveSlotImageInputModels}
-            onSaveSlotAvailableModels={handleSaveSlotAvailableModels}
-            onSelectModel={handleActivateProviderModel}
-            onRemoveProvider={handleRemoveProvider}
-            onChatFontSizeChange={handleChatFontSizeChange}
-            onUiFontSizeChange={handleUiFontSizeChange}
-            onCodeFontSizeChange={handleCodeFontSizeChange}
-            onWorkModeChange={handleWorkModeChange}
-            onThemeModeChange={setThemeMode}
-            onLocaleChange={setLocaleState}
-            onCreateMemory={handleCreateMemory}
-            onToggleMemory={handleToggleMemory}
-            onEditMemory={handleEditMemory}
-            onDeleteMemory={handleDeleteMemory}
-            onConnectionChange={refreshRuntime}
-            onNotice={setNotice}
-          />
-        ) : showConversation ? (
-          <>
-            <div className="main-scroll" ref={mainScrollRef}>
-              <Conversation
-                task={currentTask}
-                status={status}
-                phase={phase}
-                phaseDetail={phaseDetail}
-                plan={plan}
-                output={output}
-                busy={busy}
-                liveToolActivity={derivedLive}
-                liveContentBlocks={liveContentBlocks}
-                hasLiveTail={hasLiveTail}
-                defaultToolDetailsOpen={defaultToolDetailsOpen}
-                online={online}
-                onToolDecision={handleToolDecision}
-                onPlanDecision={handlePlanDecision}
-                onClarificationAnswer={handleClarificationAnswer}
-                canResume={canResume}
-                hasArchivedMessages={(currentTask?.archivedMessages?.length ?? 0) > 0}
-                onUserMessageEdit={(messageId, content, mode, messageAttachments) =>
-                  void handleRevertAndEdit(messageId, content, mode, messageAttachments)
-                }
-                onUnrevert={() => void handleUnrevert()}
-                onBranch={(messageId) => void handleBranch(messageId)}
-                onResume={() => void handleResumeTask()}
-                onUiChoice={handleUiChoice}
-                onOpenWorkspacePath={(path) => {
-                  workbenchTabs.openWorkspaceFile(path);
-                  setWorkbenchOpen(true);
-                }}
-              />
+        <div className="main-stage">
+          {activeView === "search" ? (
+            <SearchPage
+              query={searchQuery}
+              tasks={tasks}
+              onQueryChange={setSearchQuery}
+              onSelectTask={handleSelectTask}
+            />
+          ) : activeView === "skills" ? (
+            <SkillsPage
+              skills={skills}
+              installing={installing}
+              installError={installError}
+              reloading={reloading}
+              onInstall={install}
+              onReload={reload}
+              onToggle={toggle}
+              onUninstall={uninstall}
+              onTrySkill={(name) => {
+                handleNewTask();
+                setGoal(t("skillsPage.tryPrompt").replace("{name}", name));
+              }}
+            />
+          ) : activeView === "settings" ? (
+            <SettingsPanel
+              settings={runtimeSettings}
+              mcpServers={mcpServers}
+              dataStatus={dataStatus}
+              memories={memories}
+              saving={settingsSaving}
+              fetchingModels={fetchingModels}
+              chatFontSize={chatFontSize}
+              uiFontSize={uiFontSize}
+              codeFontSize={codeFontSize}
+              workMode={workMode}
+              themeMode={themeMode}
+              locale={locale}
+              initialSection={settingsInitialSection}
+              onClose={handleCloseSettings}
+              onSave={handleSaveSettings}
+              onSaveConnection={handleSaveProviderConnection}
+              onCleanup={handleCleanupData}
+              onRefresh={refreshSettings}
+              onFetchModels={handleFetchModels}
+              onFetchModelsForProvider={handleFetchModelsForProvider}
+              onSaveEnabledModels={handleSaveEnabledModels}
+              onSaveSlotEnabledModels={handleSaveSlotEnabledModels}
+              onSaveSlotImageInputModels={handleSaveSlotImageInputModels}
+              onSaveSlotAvailableModels={handleSaveSlotAvailableModels}
+              onSelectModel={handleActivateProviderModel}
+              onRemoveProvider={handleRemoveProvider}
+              onChatFontSizeChange={handleChatFontSizeChange}
+              onUiFontSizeChange={handleUiFontSizeChange}
+              onCodeFontSizeChange={handleCodeFontSizeChange}
+              onWorkModeChange={handleWorkModeChange}
+              onThemeModeChange={setThemeMode}
+              onLocaleChange={setLocaleState}
+              onCreateMemory={handleCreateMemory}
+              onToggleMemory={handleToggleMemory}
+              onEditMemory={handleEditMemory}
+              onDeleteMemory={handleDeleteMemory}
+              onConnectionChange={refreshRuntime}
+              onNotice={setNotice}
+            />
+          ) : showConversation ? (
+            <div className="main-chat">
+              <div className="main-scroll" ref={mainScrollRef}>
+                <Conversation
+                  task={currentTask}
+                  status={status}
+                  phase={phase}
+                  phaseDetail={phaseDetail}
+                  plan={plan}
+                  output={output}
+                  busy={busy}
+                  liveToolActivity={derivedLive}
+                  liveContentBlocks={liveContentBlocks}
+                  hasLiveTail={hasLiveTail}
+                  defaultToolDetailsOpen={defaultToolDetailsOpen}
+                  online={online}
+                  onToolDecision={handleToolDecision}
+                  onClarificationAnswer={handleClarificationAnswer}
+                  canResume={canResume}
+                  hasArchivedMessages={(currentTask?.archivedMessages?.length ?? 0) > 0}
+                  onUserMessageEdit={(messageId, content, mode, messageAttachments) =>
+                    void handleRevertAndEdit(messageId, content, mode, messageAttachments)
+                  }
+                  onUnrevert={() => void handleUnrevert()}
+                  onBranch={(messageId) => void handleBranch(messageId)}
+                  onResume={() => void handleResumeTask()}
+                  onUiChoice={handleUiChoice}
+                  onOpenWorkspacePath={(path) => {
+                    workbenchTabs.openWorkspaceFile(path);
+                    setWorkbenchOpen(true);
+                  }}
+                />
+              </div>
+              <div className="composer-dock">
+                <ApprovalsDock
+                  liveToolActivity={derivedLive}
+                  pendingApprovals={currentTask.pendingApprovals}
+                  phase={phase}
+                  plan={plan}
+                  onToolDecision={handleToolDecision}
+                  onPlanDecision={handlePlanDecision}
+                />
+                {health?.contextTokenBudget != null && currentTask && currentTask.messages.length > 0 && (
+                  <div className="context-hint">
+                    {t("context.label")} ~{formatContextK(currentTask.contextTokens ?? 0)} / {formatContextK(health.contextTokenBudget)} {t("context.unit")}
+                  </div>
+                )}
+                <Composer
+                  value={goal}
+                  busy={busy}
+                  online={online}
+                  variant="docked"
+                  projectName={draftProjectName}
+                  skills={skills}
+                  attachments={attachments}
+                  onAttachmentsChange={setAttachments}
+                  onPasteFiles={(files) => void handlePasteFiles(files)}
+                  onPickAttachments={() => void handlePickAttachments()}
+                  provider={health?.provider}
+                  onChange={setGoal}
+                  onSubmit={handleComposerSubmit}
+                  onOpenModelSelector={handleOpenModelSelector}
+                  modelButtonRef={modelButtonRef}
+                  onStop={handleStopStream}
+                  autoModeLevel={autoModeLevel}
+                  autoModePaused={!!autoModeState?.paused}
+                  onCycleAutoMode={cycleAutoModeLevel}
+                  onResumeAutoMode={handleResumeAutoMode}
+                  thinkingLevel={thinkingLevel}
+                  onCycleThinkingLevel={cycleThinkingLevel}
+                />
+                <ModelSelectorDrawer
+                  open={modelDrawerOpen}
+                  provider={health?.provider}
+                  settings={runtimeSettings}
+                  saving={settingsSaving}
+                  anchorRef={modelButtonRef}
+                  thinkingLevel={thinkingLevel}
+                  onThinkingLevelChange={setThinkingLevelAndPersist}
+                  onClose={() => setModelDrawerOpen(false)}
+                  onOpenFullSettings={handleOpenFullSettingsFromModelDrawer}
+                  onSave={handleSaveModelSelection}
+                />
+              </div>
             </div>
-            <div className="composer-dock">
-              {health?.contextTokenBudget != null && currentTask && currentTask.messages.length > 0 && (
-                <div className="context-hint">
-                  {t("context.label")} ~{formatContextK(currentTask.contextTokens ?? 0)} / {formatContextK(health.contextTokenBudget)} {t("context.unit")}
-                </div>
-              )}
+          ) : (
+            <div className="hero">
+              <h1 className="hero-title">{t("hero.title")}</h1>
+              <div className="hero-suggestions" role="list">
+                {(
+                  [
+                    ["hero.suggestion.explore", "hero.suggestion.explorePrompt", "explore"],
+                    ["hero.suggestion.build", "hero.suggestion.buildPrompt", "build"],
+                    ["hero.suggestion.review", "hero.suggestion.reviewPrompt", "review"],
+                    ["hero.suggestion.fix", "hero.suggestion.fixPrompt", "fix"],
+                  ] as const
+                ).map(([labelKey, promptKey, kind]) => (
+                  <button
+                    key={labelKey}
+                    type="button"
+                    role="listitem"
+                    className="hero-suggestion-card"
+                    data-kind={kind}
+                    onClick={() => setGoal(t(promptKey))}
+                  >
+                    <span className="hero-suggestion-icon" aria-hidden="true">
+                      <HeroSuggestionIcon kind={kind} />
+                    </span>
+                    <span className="hero-suggestion-label">{t(labelKey)}</span>
+                  </button>
+                ))}
+              </div>
               <Composer
                 value={goal}
                 busy={busy}
                 online={online}
-                variant="docked"
+                variant="hero"
                 projectName={draftProjectName}
                 skills={skills}
                 attachments={attachments}
@@ -685,72 +768,8 @@ function App() {
                 onSave={handleSaveModelSelection}
               />
             </div>
-          </>
-        ) : (
-          <div className="hero">
-            <h1 className="hero-title">{t("hero.title")}</h1>
-            <div className="hero-suggestions" role="list">
-              {(
-                [
-                  ["hero.suggestion.explore", "hero.suggestion.explorePrompt", "explore"],
-                  ["hero.suggestion.build", "hero.suggestion.buildPrompt", "build"],
-                  ["hero.suggestion.review", "hero.suggestion.reviewPrompt", "review"],
-                  ["hero.suggestion.fix", "hero.suggestion.fixPrompt", "fix"],
-                ] as const
-              ).map(([labelKey, promptKey, kind]) => (
-                <button
-                  key={labelKey}
-                  type="button"
-                  role="listitem"
-                  className="hero-suggestion-card"
-                  data-kind={kind}
-                  onClick={() => setGoal(t(promptKey))}
-                >
-                  <span className="hero-suggestion-icon" aria-hidden="true">
-                    <HeroSuggestionIcon kind={kind} />
-                  </span>
-                  <span className="hero-suggestion-label">{t(labelKey)}</span>
-                </button>
-              ))}
-            </div>
-            <Composer
-              value={goal}
-              busy={busy}
-              online={online}
-              variant="hero"
-              projectName={draftProjectName}
-              skills={skills}
-              attachments={attachments}
-              onAttachmentsChange={setAttachments}
-              onPasteFiles={(files) => void handlePasteFiles(files)}
-              onPickAttachments={() => void handlePickAttachments()}
-              provider={health?.provider}
-              onChange={setGoal}
-              onSubmit={handleComposerSubmit}
-              onOpenModelSelector={handleOpenModelSelector}
-              modelButtonRef={modelButtonRef}
-              onStop={handleStopStream}
-              autoModeLevel={autoModeLevel}
-              autoModePaused={!!autoModeState?.paused}
-              onCycleAutoMode={cycleAutoModeLevel}
-              onResumeAutoMode={handleResumeAutoMode}
-              thinkingLevel={thinkingLevel}
-              onCycleThinkingLevel={cycleThinkingLevel}
-            />
-            <ModelSelectorDrawer
-              open={modelDrawerOpen}
-              provider={health?.provider}
-              settings={runtimeSettings}
-              saving={settingsSaving}
-              anchorRef={modelButtonRef}
-              thinkingLevel={thinkingLevel}
-              onThinkingLevelChange={setThinkingLevelAndPersist}
-              onClose={() => setModelDrawerOpen(false)}
-              onOpenFullSettings={handleOpenFullSettingsFromModelDrawer}
-              onSave={handleSaveModelSelection}
-            />
-          </div>
-        )}
+          )}
+        </div>
       </main>
 
       <div
@@ -759,6 +778,28 @@ function App() {
         aria-label={t("a11y.resizeRight")}
         onPointerDown={(event) => startResize("right", event)}
       />
+
+      {/* 右侧列：输出栏（视觉浮卡）与文件工作台互斥，同一 grid 列 */}
+      {showOutputRail ? (
+        <aside className="output-rail" aria-label={t("output.panelLabel")}>
+          <OutputFloatPanel
+            task={currentTask}
+            liveContentBlocks={liveContentBlocks}
+            visible
+            onOpenArtifact={(artifact) => {
+              if (!currentTask?.id) return;
+              workbenchTabs.openArtifact(artifact, currentTask.id);
+              setWorkbenchOpen(true);
+            }}
+            onOpenPath={(path) => {
+              workbenchTabs.openWorkspaceFile(path);
+              setWorkbenchOpen(true);
+            }}
+            onOpenWorkbench={() => setWorkbenchOpen(true)}
+            onClose={() => setOutputRailOpen(false)}
+          />
+        </aside>
+      ) : null}
 
       <WorkbenchPanel
         open={workbenchOpen}

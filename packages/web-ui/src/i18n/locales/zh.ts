@@ -248,6 +248,7 @@ export const zh = {
   "tool.field.error": "错误",
   "tool.unknownError": "未知错误",
   "tool.approvalHint": "该工具需要你的确认才能执行",
+  "tool.approvalPending": "待确认",
   "tool.risk.dangerous": "高风险",
   "tool.risk.caution": "需确认",
   "tool.risk.dangerousShort": "高",
@@ -274,6 +275,18 @@ export const zh = {
   // 上下文提示
   "context.label": "上下文",
   "context.unit": "tokens",
+
+  // 对话输出浮框（右侧）
+  "output.panelLabel": "对话输出",
+  "output.title": "输出",
+  "output.empty": "创建文件或站点",
+  "output.createHint": "打开工作台",
+  "output.close": "关闭输出",
+  "output.show": "显示输出",
+  "output.hide": "隐藏输出",
+  "output.untitled": "未命名",
+  "output.image": "图片",
+  "output.link": "链接",
 
   // 斜杠命令
   "cmd.compact": "压缩旧消息为摘要",
@@ -713,15 +726,15 @@ export const zh = {
   "a11y.resizeLeft": "调整左侧栏宽度",
   "a11y.resizeRight": "调整右侧栏宽度",
   "a11y.closeNotice": "关闭通知",
-  "hero.title": "我们应该在 Aurevoy 中构建什么？",
-  "hero.suggestion.explore": "探索并理解代码",
-  "hero.suggestion.explorePrompt": "探索并理解当前项目的代码结构与关键模块",
-  "hero.suggestion.build": "构建新功能、应用或工具",
-  "hero.suggestion.buildPrompt": "帮我在当前项目中构建一个新功能",
-  "hero.suggestion.review": "审查代码并提出修改建议",
-  "hero.suggestion.reviewPrompt": "审查最近改动的代码并提出具体修改建议",
-  "hero.suggestion.fix": "修复问题和失败",
-  "hero.suggestion.fixPrompt": "帮助诊断并修复当前失败或错误",
+  "hero.title": "今天想推进哪件事？",
+  "hero.suggestion.explore": "梳理背景与现状",
+  "hero.suggestion.explorePrompt": "帮我梳理这件事的背景、目标和当前进展",
+  "hero.suggestion.build": "起草方案或材料",
+  "hero.suggestion.buildPrompt": "帮我起草一份可直接使用的方案或工作材料",
+  "hero.suggestion.review": "审阅并给出修改意见",
+  "hero.suggestion.reviewPrompt": "审阅我手头的材料，指出问题并给出具体修改建议",
+  "hero.suggestion.fix": "拆解卡点与待办",
+  "hero.suggestion.fixPrompt": "帮我拆解当前卡点，列出可执行的下一步待办",
 
   // 主视图副标题
   "view.search.subtitle": "搜索本地对话历史",

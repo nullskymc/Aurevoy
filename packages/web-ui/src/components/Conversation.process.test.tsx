@@ -58,7 +58,6 @@ describe("Conversation process presentation (integrated path)", () => {
         liveToolActivity={[]}
         hasLiveTail
         onToolDecision={noop}
-        onPlanDecision={noop}
         onClarificationAnswer={noop}
       />,
     );
@@ -138,7 +137,6 @@ describe("Conversation process presentation (integrated path)", () => {
         hasLiveTail={false}
         defaultToolDetailsOpen
         onToolDecision={noop}
-        onPlanDecision={noop}
         onClarificationAnswer={noop}
       />,
     );
@@ -147,13 +145,80 @@ describe("Conversation process presentation (integrated path)", () => {
     expect(html).toContain("process-completed");
     expect(html).toContain("已处理");
     expect(html).toContain("process-activity-row");
-    expect(html).toContain("Done with tools.");
+    // 过程旁白不进交付正文区（仅活动行）
+    expect(html).not.toContain("agent-final-response");
     expect(html).not.toContain("Thought process");
     expect(html).not.toContain("workflow-drawer");
     // Single process collapsible — not drawer + completed nested
     expect(html).not.toContain("workflow-drawer-toggle");
     expect(html.match(/process-completed/g)?.length ?? 0).toBe(1);
     expect((html.match(/已处理/g) ?? []).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps process narration out of final delivery body", () => {
+    const task = baseTask({
+      status: "completed",
+      phase: "finalizing",
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "梳理项目",
+          createdAt: "2026-07-10T00:00:00.000Z",
+        },
+        {
+          id: "a-narration",
+          role: "assistant",
+          content: "我先查看工作区里的项目结构和相关文档，再据此梳理背景、目标和当前进展。",
+          createdAt: "2026-07-10T00:00:01.000Z",
+          toolCalls: [
+            {
+              id: "call-1",
+              type: "function",
+              function: {
+                name: "list_directory",
+                arguments: JSON.stringify({ path: "." }),
+              },
+            },
+          ],
+        },
+        {
+          id: "t1",
+          role: "tool",
+          content: JSON.stringify({ ok: true, output: "src/" }),
+          toolCallId: "call-1",
+          createdAt: "2026-07-10T00:00:02.000Z",
+        },
+        {
+          id: "a-final",
+          role: "assistant",
+          content: "## 背景\n\n农行作为四大行之一。\n\n## 目标\n\n做结构化深度调研。",
+          createdAt: "2026-07-10T00:00:03.000Z",
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(
+      <Conversation
+        task={task}
+        status="completed"
+        phase="finalizing"
+        plan={[]}
+        output=""
+        busy={false}
+        liveToolActivity={[]}
+        hasLiveTail={false}
+        onToolDecision={noop}
+        onClarificationAnswer={noop}
+      />,
+    );
+
+    expect(html).toContain("agent-final-response");
+    expect(html).toContain("背景");
+    expect(html).toContain("目标");
+    // 过程旁白不得出现在交付区
+    const deliverySlice = html.split('class="agent-final-response"')[1] ?? "";
+    expect(deliverySlice).not.toContain("我先查看工作区里的项目结构");
   });
 
   it("merges multiple tool-calling assistant messages into one 已处理", () => {
@@ -234,7 +299,6 @@ describe("Conversation process presentation (integrated path)", () => {
         hasLiveTail={false}
         defaultToolDetailsOpen
         onToolDecision={noop}
-        onPlanDecision={noop}
         onClarificationAnswer={noop}
       />,
     );
@@ -280,7 +344,6 @@ describe("Conversation process presentation (integrated path)", () => {
         ]}
         hasLiveTail
         onToolDecision={noop}
-        onPlanDecision={noop}
         onClarificationAnswer={noop}
       />,
     );

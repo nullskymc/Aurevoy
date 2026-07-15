@@ -47,11 +47,10 @@ export function WorkbenchPanel({
   onSelectTab,
   onCloseTab,
   onOpenFile,
-  onOpenArtifact,
+  onOpenArtifact: _onOpenArtifact,
   onAttachToChat,
 }: WorkbenchPanelProps) {
   const tree = useFileTree({ taskId: task?.id, projectId });
-  const artifacts = task?.artifacts ?? [];
   const [explorerOpen, setExplorerOpen] = useState(readExplorerOpen);
   const [explorerWidth, setExplorerWidth] = useState(() =>
     readStoredPaneSize(EXPLORER_WIDTH_KEY, DEFAULT_EXPLORER_WIDTH, MIN_EXPLORER_WIDTH, MAX_EXPLORER_WIDTH),
@@ -156,12 +155,10 @@ export function WorkbenchPanel({
                   tree={tree}
                   taskId={task?.id}
                   projectId={projectId}
-                  artifacts={artifacts}
                   selectedPath={
                     activeTab?.kind === "workspace" ? activeTab.path : null
                   }
                   onOpenFile={onOpenFile}
-                  onOpenArtifact={onOpenArtifact}
                   onAttachToChat={onAttachToChat}
                   onCloseExplorer={() => setExplorerOpen(false)}
                 />

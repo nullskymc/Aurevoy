@@ -22,7 +22,8 @@
     "dev": "concurrently -n lib,types -c cyan,magenta \"vite build --config vite.lib.config.ts --watch\" \"tsc -p tsconfig.build.json --watch\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:web": "vite build",
-    "dev:web": "vite"
+    "dev:web": "vite",
+    "dev:theme-demo": "vite --open /theme-demo.html"
   },
   "dependencies": {
     "@aurevoy/shared": "*",

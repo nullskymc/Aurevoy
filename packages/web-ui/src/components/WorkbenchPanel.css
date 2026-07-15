@@ -122,10 +122,7 @@
 
 .file-tree {
   display: grid;
-  grid-template-rows:
-    minmax(80px, 1fr)
-    5px
-    var(--workbench-artifacts-height, 120px);
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -137,10 +134,6 @@
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
-}
-
-.file-tree-section[data-kind="artifacts"] {
-  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .file-tree-section-head {

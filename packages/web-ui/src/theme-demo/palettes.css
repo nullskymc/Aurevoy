@@ -1,0 +1,402 @@
+/* 五种候选色板（仅示范页使用）。通过 data-palette 覆盖 :root token。 */
+
+/* A — 对照：未修改版 Signal Green（原青绿，便于与 C Mist Teal 对比） */
+[data-palette="aurora"] {
+  color-scheme: light;
+  --bg: #f4f6f5;
+  --surface: #e8ecea;
+  --surface-strong: #dde4e0;
+  --sidebar-bg: #e4ebe7;
+  --border: #d2dbd6;
+  --border-strong: #b8c5be;
+  --text: #141816;
+  --text-secondary: #55615b;
+  --text-tertiary: #84918a;
+  --accent: #0d9488;
+  --accent-contrast: #ffffff;
+  --hover: rgba(13, 148, 136, 0.08);
+  --active: rgba(13, 148, 136, 0.13);
+  --card-bg: #ffffff;
+  --card-shadow: 0 4px 20px rgba(20, 50, 40, 0.06);
+  --code-bg: #e8ecea;
+  --input-bg: #e8ecea;
+  --input-bg-focus: #ffffff;
+  --btn-surface: #ffffff;
+  --composer-shadow: 0 2px 16px rgba(20, 50, 40, 0.07);
+  --user-bubble-bg: #e2ebe7;
+  --user-bubble-fg: #141816;
+  --process-fg: #7a8a83;
+  --pill-bg: #dde4e0;
+  --pill-fg: #55615b;
+  --accent-soft-bg: #d5f0ec;
+  --accent-soft-fg: #0a6e65;
+  --success-soft-bg: #d9f2e0;
+  --success-soft-fg: #1a7f3c;
+  --danger-soft-bg: #fbe0e0;
+  --danger-soft-fg: #d14343;
+  --warn-soft-bg: #fbeecf;
+  --warn-soft-fg: #8a6100;
+}
+
+[data-palette="aurora"][data-mode="dark"] {
+  color-scheme: dark;
+  --bg: #0e1110;
+  --surface: #151a18;
+  --surface-strong: #1c2421;
+  --sidebar-bg: #0a0c0b;
+  --border: #24302b;
+  --border-strong: #34443d;
+  --text: #e6ebe8;
+  --text-secondary: #9aaba3;
+  --text-tertiary: #6b7a73;
+  --accent: #2dd4bf;
+  --accent-contrast: #0e1110;
+  --hover: rgba(45, 212, 191, 0.1);
+  --active: rgba(45, 212, 191, 0.16);
+  --card-bg: #151a18;
+  --card-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --code-bg: #1a2220;
+  --input-bg: #1a2220;
+  --input-bg-focus: #1c2421;
+  --btn-surface: #151a18;
+  --composer-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --user-bubble-bg: #1a2220;
+  --user-bubble-fg: #e6ebe8;
+  --process-fg: #7a8a83;
+  --pill-bg: #1c2421;
+  --pill-fg: #9aaba3;
+  --accent-soft-bg: rgba(13, 148, 136, 0.22);
+  --accent-soft-fg: #5eead4;
+}
+
+/* B — Warm Paper */
+[data-palette="paper"] {
+  color-scheme: light;
+  --bg: #faf7f2;
+  --surface: #f3ede4;
+  --surface-strong: #ebe3d6;
+  --sidebar-bg: #f0e9de;
+  --border: #e6ddd0;
+  --border-strong: #d4c8b6;
+  --text: #1c1915;
+  --text-secondary: #6b6256;
+  --text-tertiary: #9a8f80;
+  --accent: #c45c26;
+  --accent-contrast: #ffffff;
+  --hover: rgba(196, 92, 38, 0.08);
+  --active: rgba(196, 92, 38, 0.12);
+  --card-bg: #fffcf7;
+  --card-shadow: 0 4px 20px rgba(80, 50, 20, 0.07);
+  --code-bg: #f0e9de;
+  --input-bg: #f3ede4;
+  --input-bg-focus: #fffcf7;
+  --btn-surface: #fffcf7;
+  --composer-shadow: 0 2px 16px rgba(80, 50, 20, 0.08);
+  --user-bubble-bg: #f0e6d8;
+  --user-bubble-fg: #1c1915;
+  --process-fg: #9a8f80;
+  --pill-bg: #ebe3d6;
+  --pill-fg: #6b6256;
+  --accent-soft-bg: #f8e6d8;
+  --accent-soft-fg: #9a3f12;
+  --success-soft-bg: #ddecd8;
+  --success-soft-fg: #2f6b2a;
+  --danger-soft-bg: #f5ddd6;
+  --danger-soft-fg: #b8432f;
+  --warn-soft-bg: #f5e8c8;
+  --warn-soft-fg: #8a6100;
+}
+
+[data-palette="paper"][data-mode="dark"] {
+  color-scheme: dark;
+  --bg: #161310;
+  --surface: #1f1b16;
+  --surface-strong: #2a241c;
+  --sidebar-bg: #12100e;
+  --border: #2e2922;
+  --border-strong: #40382e;
+  --text: #f2ebe3;
+  --text-secondary: #b0a498;
+  --text-tertiary: #7a7166;
+  --accent: #e8954a;
+  --accent-contrast: #161310;
+  --hover: rgba(232, 149, 74, 0.1);
+  --active: rgba(232, 149, 74, 0.16);
+  --card-bg: #1f1b16;
+  --card-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --code-bg: #2a241c;
+  --input-bg: #2a241c;
+  --input-bg-focus: #322b22;
+  --btn-surface: #1f1b16;
+  --composer-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --user-bubble-bg: #2a241c;
+  --user-bubble-fg: #f2ebe3;
+  --process-fg: #8a8074;
+  --pill-bg: #2a241c;
+  --pill-fg: #b0a498;
+  --accent-soft-bg: rgba(196, 92, 38, 0.22);
+  --accent-soft-fg: #f0b57a;
+}
+
+/* C — Mist Teal（灰底 + 绿阴影：面中性、阴影/软色带绿） */
+[data-palette="teal"] {
+  color-scheme: light;
+  /* 大面仍偏灰，但 surface / 气泡带回一点绿 */
+  --bg: #f4f6f5;
+  --surface: #e8eeec;
+  --surface-strong: #dde6e2;
+  --sidebar-bg: #e5ebe8;
+  --border: #d5ddd9;
+  --border-strong: #b9c6c0;
+  --text: #171c1a;
+  --text-secondary: #57615d;
+  --text-tertiary: #85918c;
+  /* accent 比纯青闷一档，比上一版灰绿更绿 */
+  --accent: #3d7a6e;
+  --accent-contrast: #ffffff;
+  --hover: rgba(61, 122, 110, 0.08);
+  --active: rgba(61, 122, 110, 0.13);
+  --card-bg: #ffffff;
+  /* 阴影带绿相，不纯黑灰 */
+  --card-shadow: 0 4px 22px rgba(40, 90, 75, 0.1);
+  --code-bg: #e9f0ed;
+  --input-bg: #e8eeec;
+  --input-bg-focus: #ffffff;
+  --btn-surface: #ffffff;
+  --composer-shadow: 0 3px 18px rgba(40, 90, 75, 0.11);
+  --user-bubble-bg: #dde8e3;
+  --user-bubble-fg: #171c1a;
+  --process-fg: #7d8c86;
+  --pill-bg: #dde6e2;
+  --pill-fg: #57615d;
+  --accent-soft-bg: #d8ebe5;
+  --accent-soft-fg: #2d5f55;
+  --success-soft-bg: #d9f2e0;
+  --success-soft-fg: #1a7f3c;
+  --danger-soft-bg: #fbe0e0;
+  --danger-soft-fg: #d14343;
+  --warn-soft-bg: #fbeecf;
+  --warn-soft-fg: #8a6100;
+  --approval-shadow: 0 4px 24px rgba(40, 90, 75, 0.12);
+  --ui-shadow-popover: 0 12px 36px rgba(35, 80, 65, 0.14);
+}
+
+[data-palette="teal"][data-mode="dark"] {
+  color-scheme: dark;
+  --bg: #101413;
+  --surface: #161c1a;
+  --surface-strong: #1f2825;
+  --sidebar-bg: #0c0f0e;
+  --border: #27312e;
+  --border-strong: #384842;
+  --text: #e6ebe8;
+  --text-secondary: #98a59f;
+  --text-tertiary: #6d7a74;
+  --accent: #6fb5a6;
+  --accent-contrast: #101413;
+  --hover: rgba(111, 181, 166, 0.1);
+  --active: rgba(111, 181, 166, 0.16);
+  --card-bg: #161c1a;
+  --card-shadow: 0 8px 28px rgba(10, 40, 30, 0.55);
+  --code-bg: #1a2320;
+  --input-bg: #1a2320;
+  --input-bg-focus: #1f2825;
+  --btn-surface: #161c1a;
+  --composer-shadow: 0 4px 24px rgba(10, 40, 30, 0.5);
+  --user-bubble-bg: #1e2a26;
+  --user-bubble-fg: #e6ebe8;
+  --process-fg: #7a8a83;
+  --pill-bg: #1f2825;
+  --pill-fg: #98a59f;
+  --accent-soft-bg: rgba(61, 122, 110, 0.28);
+  --accent-soft-fg: #9fd4c6;
+  --approval-shadow: 0 8px 28px rgba(10, 40, 30, 0.5);
+  --ui-shadow-popover: 0 12px 36px rgba(8, 35, 28, 0.55);
+}
+
+/* D — Dual-Surface（侧栏更深，主区更亮）+ 靛蓝点缀 */
+[data-palette="dual"] {
+  color-scheme: light;
+  --bg: #fcfcfe;
+  --surface: #f0f2f7;
+  --surface-strong: #e6e9f1;
+  --sidebar-bg: #1b1f27;
+  --border: #e2e5ee;
+  --border-strong: #cfd4e0;
+  --text: #15171d;
+  --text-secondary: #5e6575;
+  --text-tertiary: #9097a8;
+  --accent: #4f46e5;
+  --accent-contrast: #ffffff;
+  --hover: rgba(79, 70, 229, 0.07);
+  --active: rgba(79, 70, 229, 0.12);
+  --card-bg: #ffffff;
+  --card-shadow: 0 4px 20px rgba(20, 25, 50, 0.07);
+  --code-bg: #f0f2f7;
+  --input-bg: #f0f2f7;
+  --input-bg-focus: #ffffff;
+  --btn-surface: #ffffff;
+  --composer-shadow: 0 2px 16px rgba(20, 25, 50, 0.08);
+  --user-bubble-bg: #e8eaf5;
+  --user-bubble-fg: #15171d;
+  --process-fg: #8a90a0;
+  --pill-bg: #e6e9f1;
+  --pill-fg: #5e6575;
+  --accent-soft-bg: #e8e7ff;
+  --accent-soft-fg: #3730a3;
+  --success-soft-bg: #d9f2e0;
+  --success-soft-fg: #1a7f3c;
+  --danger-soft-bg: #fbe0e0;
+  --danger-soft-fg: #d14343;
+  --warn-soft-bg: #fbeecf;
+  --warn-soft-fg: #8a6100;
+  /* dual 侧栏反色字色 */
+  --demo-sidebar-fg: #e8eaf0;
+  --demo-sidebar-muted: #9aa3b5;
+  --demo-sidebar-hover: rgba(255, 255, 255, 0.07);
+  --demo-sidebar-active: rgba(255, 255, 255, 0.12);
+  --demo-sidebar-border: #2a303c;
+}
+
+[data-palette="dual"][data-mode="dark"] {
+  color-scheme: dark;
+  --bg: #12151c;
+  --surface: #1a1f2a;
+  --surface-strong: #232a38;
+  --sidebar-bg: #0a0c11;
+  --border: #272d3a;
+  --border-strong: #383f52;
+  --text: #e8eaf0;
+  --text-secondary: #9aa3b5;
+  --text-tertiary: #6b7386;
+  --accent: #a5b4fc;
+  --accent-contrast: #12151c;
+  --hover: rgba(165, 180, 252, 0.1);
+  --active: rgba(165, 180, 252, 0.16);
+  --card-bg: #1a1f2a;
+  --card-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --code-bg: #1e2432;
+  --input-bg: #1e2432;
+  --input-bg-focus: #232a38;
+  --btn-surface: #1a1f2a;
+  --composer-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --user-bubble-bg: #1e2432;
+  --user-bubble-fg: #e8eaf0;
+  --process-fg: #7a8498;
+  --pill-bg: #232a38;
+  --pill-fg: #9aa3b5;
+  --accent-soft-bg: rgba(79, 70, 229, 0.22);
+  --accent-soft-fg: #c7d2fe;
+  --demo-sidebar-fg: #e8eaf0;
+  --demo-sidebar-muted: #8b93a5;
+  --demo-sidebar-hover: rgba(255, 255, 255, 0.06);
+  --demo-sidebar-active: rgba(255, 255, 255, 0.1);
+  --demo-sidebar-border: #1e2430;
+}
+
+/* E — Gold Trace（中性 + 金点） */
+[data-palette="gold"] {
+  color-scheme: light;
+  --bg: #f6f6f8;
+  --surface: #eeeff2;
+  --surface-strong: #e5e6eb;
+  --sidebar-bg: #ececf0;
+  --border: #e2e2e7;
+  --border-strong: #d0d0d8;
+  --text: #171717;
+  --text-secondary: #666670;
+  --text-tertiary: #9898a3;
+  --accent: #b8860b;
+  --accent-contrast: #ffffff;
+  --hover: rgba(184, 134, 11, 0.08);
+  --active: rgba(184, 134, 11, 0.12);
+  --card-bg: #ffffff;
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  --code-bg: #f0f0f3;
+  --input-bg: #eeeff2;
+  --input-bg-focus: #ffffff;
+  --btn-surface: #ffffff;
+  --composer-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+  --user-bubble-bg: #e8e8ec;
+  --user-bubble-fg: #171717;
+  --process-fg: #8a8a94;
+  --pill-bg: #e5e6eb;
+  --pill-fg: #666670;
+  --accent-soft-bg: #f5edd4;
+  --accent-soft-fg: #8a6508;
+  --success-soft-bg: #d9f2e0;
+  --success-soft-fg: #1a7f3c;
+  --danger-soft-bg: #fbe0e0;
+  --danger-soft-fg: #d14343;
+  --warn-soft-bg: #fbeecf;
+  --warn-soft-fg: #8a6100;
+}
+
+[data-palette="gold"][data-mode="dark"] {
+  color-scheme: dark;
+  --bg: #141416;
+  --surface: #1c1c1f;
+  --surface-strong: #26262b;
+  --sidebar-bg: #101012;
+  --border: #2a2a2f;
+  --border-strong: #3a3a42;
+  --text: #f0f0f2;
+  --text-secondary: #a3a3ab;
+  --text-tertiary: #6e6e78;
+  --accent: #d4af37;
+  --accent-contrast: #141416;
+  --hover: rgba(212, 175, 55, 0.1);
+  --active: rgba(212, 175, 55, 0.16);
+  --card-bg: #1c1c1f;
+  --card-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+  --code-bg: #222228;
+  --input-bg: #222228;
+  --input-bg-focus: #26262b;
+  --btn-surface: #1c1c1f;
+  --composer-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  --user-bubble-bg: #2a2a30;
+  --user-bubble-fg: #f0f0f2;
+  --process-fg: #8a8a94;
+  --pill-bg: #2a2a30;
+  --pill-fg: #a3a3ab;
+  --accent-soft-bg: rgba(184, 134, 11, 0.2);
+  --accent-soft-fg: #e6c86a;
+}
+
+/* 当前 Codex 对照 */
+[data-palette="codex"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f5f5f5;
+  --surface-strong: #ebebeb;
+  --sidebar-bg: #f0f0f0;
+  --border: #e8e8e8;
+  --border-strong: #dcdcdc;
+  --text: #1a1a1a;
+  --text-secondary: #6b6b6b;
+  --text-tertiary: #9b9b9b;
+  --accent: #1a1a1a;
+  --accent-contrast: #ffffff;
+  --hover: rgba(0, 0, 0, 0.045);
+  --active: rgba(0, 0, 0, 0.07);
+  --card-bg: #ffffff;
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  --code-bg: #f4f4f4;
+  --input-bg: #f5f5f5;
+  --input-bg-focus: #ffffff;
+  --btn-surface: #ffffff;
+  --composer-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+  --user-bubble-bg: #ececec;
+  --user-bubble-fg: #1a1a1a;
+  --process-fg: #8a8a8a;
+  --pill-bg: #ebebeb;
+  --pill-fg: #6b6b6b;
+  --accent-soft-bg: #ececec;
+  --accent-soft-fg: #1a1a1a;
+  --success-soft-bg: #d9f2e0;
+  --success-soft-fg: #1a7f3c;
+  --danger-soft-bg: #fbe0e0;
+  --danger-soft-fg: #d14343;
+  --warn-soft-bg: #fbeecf;
+  --warn-soft-fg: #8a6100;
+}

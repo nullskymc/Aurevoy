@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -9,6 +10,10 @@ export default defineConfig({
     outDir: "dist-web",
     emptyOutDir: true,
     rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        themeDemo: resolve(__dirname, "theme-demo.html"),
+      },
       output: {
         entryFileNames: "assets/[name].[hash].js",
         chunkFileNames: "assets/[name].[hash].js",

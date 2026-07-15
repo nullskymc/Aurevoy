@@ -1,0 +1,192 @@
+/* 输出卡：在 output-rail 列内，视觉浮卡，占满列宽 */
+
+.output-float {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: calc(100vh - 72px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card-bg, #fff);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--text) 5%, transparent),
+    0 10px 28px color-mix(in srgb, var(--text) 8%, transparent);
+  overflow: hidden;
+}
+
+.output-float-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid transparent;
+}
+
+.output-float[data-collapsed="false"][data-empty="false"] .output-float-head {
+  border-bottom-color: var(--border);
+}
+
+.output-float-title-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.output-float-title-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.output-float-title {
+  font-size: calc(var(--ui-font-size) - 0.5px);
+  font-weight: 600;
+  color: inherit;
+}
+
+.output-float-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--surface-strong, var(--surface));
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.output-float-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.output-float-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.output-float-icon-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.output-float-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 6px 8px;
+}
+
+.output-float-empty {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 8px 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: calc(var(--ui-font-size) - 1px);
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.output-float-empty:hover {
+  background: var(--hover);
+  color: var(--text-secondary);
+}
+
+.output-float-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.output-float-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.output-float-item:hover {
+  background: var(--hover);
+}
+
+.output-float-item-icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.output-float-item-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.output-float-item-name {
+  overflow: hidden;
+  font-size: calc(var(--ui-font-size) - 0.5px);
+  font-weight: 550;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output-float-item-meta {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .output-rail {
+    padding: 48px 10px 12px 4px;
+  }
+}
