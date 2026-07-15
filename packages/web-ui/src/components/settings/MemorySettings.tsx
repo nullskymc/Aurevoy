@@ -59,94 +59,94 @@ export function MemorySettings({
   }
 
   return (
-    <>
-      <SettingsGroup title={`${t("memory.title")} (${memories.length} / ${enabledCount} ${t("memory.entriesInjected")})`}>
-        <div className="memory-add">
-          <select
-            className="memory-cat-select"
-            value={newCategory}
-            onChange={(e) => setNewCategory(e.target.value as MemoryCategory)}
-            aria-label={t("memory.categoryLabel")}
-          >
-            {MEMORY_CATEGORIES.map((value) => (
-              <option key={value} value={value}>{memoryCategoryLabel(value)}</option>
-            ))}
-          </select>
-          <input
-            className="memory-add-input"
-            value={newContent}
-            placeholder={t("memory.addPlaceholder")}
-            onChange={(e) => setNewContent(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") submitNew(); }}
-          />
-          <button type="button" className="memory-add-btn" onClick={submitNew} disabled={!newContent.trim()}>
-            {t("action.add")}
-          </button>
-        </div>
-      </SettingsGroup>
+    <SettingsGroup title={`${t("memory.title")} (${memories.length} / ${enabledCount} ${t("memory.entriesInjected")})`}>
+      <div className="memory-add">
+        <select
+          className="memory-cat-select"
+          value={newCategory}
+          onChange={(e) => setNewCategory(e.target.value as MemoryCategory)}
+          aria-label={t("memory.categoryLabel")}
+        >
+          {MEMORY_CATEGORIES.map((value) => (
+            <option key={value} value={value}>{memoryCategoryLabel(value)}</option>
+          ))}
+        </select>
+        <input
+          className="memory-add-input"
+          value={newContent}
+          placeholder={t("memory.addPlaceholder")}
+          onChange={(e) => setNewContent(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") submitNew(); }}
+        />
+        <button type="button" className="memory-add-btn" onClick={submitNew} disabled={!newContent.trim()}>
+          {t("action.add")}
+        </button>
+      </div>
 
       {memories.length === 0 ? (
         <p className="memory-empty">{t("memory.empty")}</p>
       ) : (
-        <SettingsGroup title="">
-          <ul className="memory-list">
-            {memories.map((memory) => (
-              <li key={memory.id} className="memory-item" data-disabled={!memory.enabled}>
-                {editingId === memory.id ? (
-                  <div className="memory-edit">
-                    <select
-                      className="memory-cat-select"
-                      value={editCategory}
-                      onChange={(e) => setEditCategory(e.target.value as MemoryCategory)}
-                    >
-                      {MEMORY_CATEGORIES.map((value) => (
-                        <option key={value} value={value}>{memoryCategoryLabel(value)}</option>
-                      ))}
-                    </select>
-                    <textarea
-                      className="memory-edit-input"
-                      value={editContent}
-                      onChange={(e) => setEditContent(e.target.value)}
-                      rows={2}
-                    />
-                    <div className="memory-edit-actions">
-                      <button type="button" className="memory-link" onClick={saveEdit}>{t("action.save")}</button>
-                      <button type="button" className="memory-link" onClick={() => setEditingId(null)}>{t("action.cancel")}</button>
-                    </div>
+        <ul className="memory-list">
+          {memories.map((memory) => (
+            <li key={memory.id} className="memory-item" data-disabled={!memory.enabled}>
+              {editingId === memory.id ? (
+                <div className="memory-edit">
+                  <select
+                    className="memory-cat-select"
+                    value={editCategory}
+                    onChange={(e) => setEditCategory(e.target.value as MemoryCategory)}
+                  >
+                    {MEMORY_CATEGORIES.map((value) => (
+                      <option key={value} value={value}>{memoryCategoryLabel(value)}</option>
+                    ))}
+                  </select>
+                  <textarea
+                    className="memory-edit-input"
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    rows={2}
+                  />
+                  <div className="memory-edit-actions">
+                    <button type="button" className="memory-link" onClick={saveEdit}>{t("action.save")}</button>
+                    <button type="button" className="memory-link" onClick={() => setEditingId(null)}>{t("action.cancel")}</button>
                   </div>
-                ) : (
-                  <>
-                    <div className="memory-item-head">
-                      <span className="memory-cat">{memoryCategoryLabel(memory.category)}</span>
-                      <span className="memory-confidence">{Math.round(memory.confidence * 100)}%</span>
-                      <label className="memory-toggle">
-                        <input
-                          type="checkbox"
-                          checked={memory.enabled}
-                          onChange={(e) => onToggle(memory.id, e.target.checked)}
-                        />
-                      </label>
-                    </div>
-                    <p className="memory-content">{memory.content}</p>
-                    <div className="memory-item-foot">
-                      <span className="memory-source">
-                        {memory.source.origin === "user"
-                          ? t("memory.sourceUser")
-                          : `${t("memory.sourceAgent")}${memory.source.taskGoal ? `${t("memory.fromTaskPrefix")}${memory.source.taskGoal}${t("memory.fromTaskSuffix")}` : ""}`}
-                      </span>
-                      <span className="memory-time">{new Date(memory.createdAt).toLocaleDateString()}</span>
-                      <span className="memory-item-actions">
-                        <button type="button" className="memory-link" onClick={() => startEdit(memory)}>{t("action.edit")}</button>
-                        <button type="button" className="memory-link danger" onClick={() => onDelete(memory.id)}>{t("action.delete")}</button>
-                      </span>
-                    </div>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
-        </SettingsGroup>
+                </div>
+              ) : (
+                <>
+                  <div className="memory-item-head">
+                    <span className="memory-cat">{memoryCategoryLabel(memory.category)}</span>
+                    <span className="memory-confidence">{Math.round(memory.confidence * 100)}%</span>
+                    {memory.embeddingUpdatedAt && (
+                      <span className="memory-vec-badge" title="已向量化，支持语义检索">🧠</span>
+                    )}
+                    <label className="memory-toggle" title={memory.enabled ? t("memory.enabledTitle") : t("memory.disabledTitle")}>
+                      <input
+                        type="checkbox"
+                        checked={memory.enabled}
+                        onChange={(e) => onToggle(memory.id, e.target.checked)}
+                      />
+                      <span>{memory.enabled ? t("memory.enable") : t("memory.disable")}</span>
+                    </label>
+                  </div>
+                  <p className="memory-content">{memory.content}</p>
+                  <div className="memory-item-foot">
+                    <span className="memory-source">
+                      {memory.source.origin === "user"
+                        ? t("memory.sourceUser")
+                        : `${t("memory.sourceAgent")}${memory.source.taskGoal ? `${t("memory.fromTaskPrefix")}${memory.source.taskGoal}${t("memory.fromTaskSuffix")}` : ""}`}
+                    </span>
+                    <span className="memory-time">{new Date(memory.createdAt).toLocaleDateString()}</span>
+                    <span className="memory-item-actions">
+                      <button type="button" className="memory-link" onClick={() => startEdit(memory)}>{t("action.edit")}</button>
+                      <button type="button" className="memory-link danger" onClick={() => onDelete(memory.id)}>{t("action.delete")}</button>
+                    </span>
+                  </div>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
-    </>
+    </SettingsGroup>
   );
 }

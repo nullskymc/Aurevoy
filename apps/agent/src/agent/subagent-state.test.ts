@@ -28,14 +28,12 @@ describe('subagent state projection', () => {
       phase: 'running',
       message: '子代理 coder 已启动',
       iteration: 0,
-      maxIterations: 12,
     });
     recordSubagentProgress(task, 'parent-call', 'coder', '完善前端', {
       runId: 'run-1',
       phase: 'tool_started',
       message: '正在调用 edit',
       iteration: 1,
-      maxIterations: 12,
       toolCallId: 'child-edit',
       toolName: 'edit',
     });
@@ -44,7 +42,6 @@ describe('subagent state projection', () => {
       phase: 'tool_completed',
       message: '已完成 edit',
       iteration: 1,
-      maxIterations: 12,
       toolCallId: 'child-edit',
       toolName: 'edit',
       toolStatus: 'completed',

@@ -15,7 +15,14 @@ import type {
 } from "@aurevoy/shared";
 import { ImageViewer } from "./ImageViewer";
 import { t } from "../i18n";
-import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData, dedupeContentBlocks, type AgentRoundData } from "./Timeline";
+import {
+  AgentRound,
+  buildAgentRoundFromMessage,
+  buildLiveAgentRoundData,
+  dedupeContentBlocks,
+  mergeAgentRoundData,
+  type AgentRoundData,
+} from "./Timeline";
 import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -332,20 +339,10 @@ export function Conversation({
         ))}
 
         {hasLiveTail && (
-          <div className="aurevoy-agent-runner-container">
-            {approvalItems.length > 0 && (
-              <section className="tool-run-summary" data-status="awaiting">
-                <div className="tool-run-head">
-                  <span className="tool-run-dot" aria-hidden="true" />
-                  <span className="tool-run-title">执行工具</span>
-                  <span className="tool-run-names">{approvalItems.map((item) => item.name).join("、")}</span>
-                  <span className="tool-run-status">等待确认 {approvalItems.length}</span>
-                </div>
-                {approvalItems.map(item => (
-                  <ApprovalInline key={item.id} item={item} onDecision={onToolDecision} />
-                ))}
-              </section>
-            )}
+          <div className="aurevoy-agent-runner-container process-gates">
+            {approvalItems.map((item) => (
+              <ApprovalInline key={item.id} item={item} onDecision={onToolDecision} />
+            ))}
 
             {showPlanApproval && (
               <PlanApprovalInline
@@ -467,7 +464,7 @@ function ConversationTurnView({
       {(deliveryMessages.length > 0 || workflowMessages.length > 0 || standaloneToolMessages.length > 0 || liveRoundData) && (
         <div className="agent-turn">
           {(workflowMessages.length > 0 || standaloneToolMessages.length > 0 || liveRoundData) && (
-            <AgentWorkflowDrawer
+            <AgentProcessStream
               assistantMessages={workflowMessages}
               presentationMessageIds={deliveryMessageIds}
               standaloneToolMessages={standaloneToolMessages}
@@ -478,9 +475,9 @@ function ConversationTurnView({
               subagentRuns={subagentRuns}
               defaultToolDetailsOpen={defaultToolDetailsOpen}
               onToolDecision={onToolDecision}
-              defaultOpen={isLiveTurn}
               onUiChoice={onUiChoice}
               onOpenWorkspacePath={onOpenWorkspacePath}
+              turnStartedAt={turn.user?.createdAt}
             />
           )}
 
@@ -495,7 +492,8 @@ function ConversationTurnView({
               ) : (
                 <AgentRound
                   data={buildAgentRoundFromMessage(
-                    stripProcessNarrationForPresentation(message),
+                    // 交付面只渲染正文/块；过程工具由 AgentProcessStream 负责，避免剥掉同条消息的用户可见交付
+                    { ...message, toolCalls: undefined },
                     resultMap,
                     plan,
                     subagentRuns,
@@ -671,10 +669,6 @@ function hasProcessNarration(message: Message): boolean {
   return (message.toolCalls?.length ?? 0) > 0 && message.content.trim().length > 0;
 }
 
-function stripProcessNarrationForPresentation(message: Message): Message {
-  return hasProcessNarration(message) ? { ...message, content: "" } : message;
-}
-
 function isRenderableAssistantMessage(message: Message): boolean {
   return !!message.failure || message.content.trim().length > 0 || (message.contentBlocks?.length ?? 0) > 0;
 }
@@ -697,7 +691,11 @@ function collectAttachContentToolCallIds(messages: Message[]): Set<string> {
   return collectPresentationToolCallIds(messages);
 }
 
-function AgentWorkflowDrawer({
+/**
+ * 主对话过程层：同一 turn 合并为 **一个** 过程块（live 状态流 或 单个「已处理」）。
+ * 不再按 assistant 消息各画一条「已处理」。
+ */
+function AgentProcessStream({
   assistantMessages,
   presentationMessageIds,
   standaloneToolMessages,
@@ -708,9 +706,9 @@ function AgentWorkflowDrawer({
   subagentRuns,
   defaultToolDetailsOpen,
   onToolDecision,
-  defaultOpen = false,
   onUiChoice,
   onOpenWorkspacePath,
+  turnStartedAt,
 }: {
   assistantMessages: Message[];
   presentationMessageIds: Set<string>;
@@ -722,12 +720,12 @@ function AgentWorkflowDrawer({
   subagentRuns: SubagentRun[];
   defaultToolDetailsOpen: boolean;
   onToolDecision: ToolDecisionHandler;
-  defaultOpen?: boolean;
   onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
   onOpenWorkspacePath?: (path: string) => void;
+  /** 本轮用户消息时间，用于「已处理 Xs」计时 */
+  turnStartedAt?: string;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const rounds = assistantMessages.map((message) =>
+  const historicalRounds = assistantMessages.map((message) =>
     buildAgentRoundFromMessage(
       stripPresentationBlocksForWorkflow(message, presentationMessageIds),
       resultMap,
@@ -735,70 +733,64 @@ function AgentWorkflowDrawer({
       subagentRuns,
     ),
   );
-  const failed = rounds.some((round) => round.status === "failed") ||
-    standaloneToolMessages.some((message) => !parseToolResultContent(message.content).ok) ||
-    liveRoundData?.status === "failed";
-  const summary = "Thought process";
+  const mergedHistorical = mergeAgentRoundData(historicalRounds, "turn-process");
+  // live 时只展示实时状态流；完成后只展示合并后的一个「已处理」
+  const showLive = Boolean(liveRoundData);
+  const showCompleted = !showLive && mergedHistorical != null;
 
-  useEffect(() => {
-    setOpen(defaultOpen);
-  }, [defaultOpen]);
+  const processStartedAtMs = resolveProcessStartMs(turnStartedAt);
+  const processDurationMs = (() => {
+    const start = turnStartedAt ? Date.parse(turnStartedAt) : NaN;
+    if (!Number.isFinite(start)) return null;
+    const endIso =
+      assistantMessages[assistantMessages.length - 1]?.createdAt ??
+      standaloneToolMessages[standaloneToolMessages.length - 1]?.createdAt;
+    if (!endIso) return null;
+    const end = Date.parse(endIso);
+    if (!Number.isFinite(end) || end < start) return null;
+    // 仅接受合理区间（避免坏时钟）
+    const ms = end - start;
+    return ms > 0 && ms < 24 * 60 * 60 * 1000 ? ms : null;
+  })();
 
   return (
-    <section className="workflow-drawer" data-open={open} data-status={failed ? "failed" : "completed"}>
-      <button
-        type="button"
-        className="workflow-drawer-toggle"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-label={`${open ? "收起" : "展开"}执行步骤${failed ? "，包含失败步骤" : ""}`}
-      >
-        <span className="workflow-drawer-icon" aria-hidden="true">
-          <WorkflowIcon />
-        </span>
-        <span className="workflow-drawer-count">{summary}</span>
-        <span className="workflow-drawer-caret" data-open={open} aria-hidden="true">
-          <ChevronRightIcon />
-        </span>
-      </button>
-
-      {open && (
-        <div className="workflow-drawer-body">
-          {rounds.map((round) => (
-            <AgentRound
-              key={round.id}
-              data={round}
-              busy={false}
-              defaultToolDetailsOpen={defaultToolDetailsOpen}
-              showWorkflow
-              showOutput
-              onUiChoice={onUiChoice}
-              onOpenWorkspacePath={onOpenWorkspacePath}
-            />
-          ))}
-          {liveRoundData && (
-            <AgentRound
-              key="live-workflow-round"
-              data={liveRoundData}
-              busy={true}
-              defaultToolDetailsOpen={defaultToolDetailsOpen}
-              showWorkflow
-              showOutput
-              onUiChoice={onUiChoice}
-              onOpenWorkspacePath={onOpenWorkspacePath}
-              phaseDetail={phaseDetail}
-            />
-          )}
-          {standaloneToolMessages.length > 0 && (
-            <ToolActivityList
-              items={standaloneToolMessages.map(standaloneToolActivityFromMessage)}
-              defaultDetailsOpen={defaultToolDetailsOpen}
-              onDecision={onToolDecision}
-            />
-          )}
-        </div>
+    <div className="agent-process-stream" data-process-stream="true">
+      {showCompleted && mergedHistorical && (
+        <AgentRound
+          key={mergedHistorical.id}
+          data={mergedHistorical}
+          busy={false}
+          defaultToolDetailsOpen={defaultToolDetailsOpen}
+          showWorkflow
+          showOutput={false}
+          processDurationMs={processDurationMs}
+          onUiChoice={onUiChoice}
+          onOpenWorkspacePath={onOpenWorkspacePath}
+        />
       )}
-    </section>
+      {showLive && liveRoundData && (
+        <AgentRound
+          key="live-process-round"
+          data={liveRoundData}
+          busy
+          defaultToolDetailsOpen={defaultToolDetailsOpen}
+          showWorkflow
+          // 流式正文：无运行中工具时打字机输出；有工具时仅灰字过程摘要
+          showOutput
+          processStartedAtMs={processStartedAtMs}
+          onUiChoice={onUiChoice}
+          onOpenWorkspacePath={onOpenWorkspacePath}
+          phaseDetail={phaseDetail}
+        />
+      )}
+      {standaloneToolMessages.length > 0 && (
+        <ToolActivityList
+          items={standaloneToolMessages.map(standaloneToolActivityFromMessage)}
+          defaultDetailsOpen={defaultToolDetailsOpen}
+          onDecision={onToolDecision}
+        />
+      )}
+    </div>
   );
 }
 
@@ -808,6 +800,16 @@ function stripPresentationBlocksForWorkflow(message: Message, presentationMessag
     return { ...message, contentBlocks: undefined };
   }
   return message;
+}
+
+/** live 计时：过旧的 createdAt（恢复会话）退回 Date.now()，避免「已处理 8000m」 */
+function resolveProcessStartMs(iso?: string): number {
+  const now = Date.now();
+  if (!iso) return now;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return now;
+  if (now - t > 6 * 60 * 60 * 1000 || t > now + 60_000) return now;
+  return t;
 }
 
 function ClarificationCard({
@@ -898,7 +900,6 @@ function UserBubble({
   const platform = usePlatform();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(content);
-  const [mode, setMode] = useState<RevertMode>("code_and_conv");
   const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   // User bubble context menu
@@ -907,7 +908,6 @@ function UserBubble({
   function beginEdit(): void {
     if (editDisabled || !onEdit) return;
     setDraft(content);
-    setMode("code_and_conv");
     setEditing(true);
   }
 
@@ -965,18 +965,17 @@ function UserBubble({
     const trimmed = draft.trim();
     if (!trimmed || editDisabled) return;
     setEditing(false);
-    // 允许原文重试；附件随原消息一并续跑
+    // 默认 code_and_conv：截断对话并清理后续 plan / checkpoint；附件随原消息一并续跑
     onEdit?.(
       messageId,
       trimmed,
-      mode,
+      "code_and_conv",
       attachments && attachments.length > 0 ? attachments : undefined,
     );
   }
 
   function cancel(): void {
     setDraft(content);
-    setMode("code_and_conv");
     setEditing(false);
   }
 
@@ -985,63 +984,38 @@ function UserBubble({
     const canSubmit = draft.trim().length > 0 && !editDisabled;
     return (
       <div className="user-bubble-row is-editing">
-        <div className="user-edit-card" role="form" aria-label={t("action.editAndRetry")}>
-          <div className="user-edit-card-head">
-            <span className="user-edit-card-title">{t("editRetry.title")}</span>
-            <span className="user-edit-card-hint">{t("editRetry.hint")}</span>
-          </div>
+        <div className="user-edit-bubble" role="form" aria-label={t("action.editAndRetry")}>
           <textarea
-            className="user-edit-card-input"
+            className="user-edit-bubble-input"
             value={draft}
             autoFocus
-            rows={Math.min(10, Math.max(2, lineCount))}
+            rows={Math.min(8, Math.max(1, lineCount))}
             placeholder={t("editRetry.placeholder")}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
+              if (event.nativeEvent.isComposing) return;
+              // Enter 发送；Shift+Enter 换行（与 Composer 一致）
+              if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 confirmSave();
               } else if (event.key === "Escape") {
+                event.preventDefault();
                 cancel();
               }
             }}
           />
-          <div className="user-edit-card-modes" role="group" aria-label={t("editRetry.modeLabel")}>
-            <button
-              type="button"
-              className="user-edit-mode"
-              data-active={mode === "code_and_conv" ? "true" : undefined}
-              onClick={() => setMode("code_and_conv")}
-            >
-              <span className="user-edit-mode-title">{t("editRetry.modeCodeAndConv")}</span>
-              <span className="user-edit-mode-desc">{t("editRetry.modeCodeAndConvHint")}</span>
+          <div className="user-edit-bubble-actions">
+            <button type="button" className="user-edit-bubble-btn is-cancel" onClick={cancel}>
+              {t("action.cancel")}
             </button>
             <button
               type="button"
-              className="user-edit-mode"
-              data-active={mode === "conv_only" ? "true" : undefined}
-              onClick={() => setMode("conv_only")}
+              className="user-edit-bubble-btn is-send"
+              onClick={confirmSave}
+              disabled={!canSubmit}
             >
-              <span className="user-edit-mode-title">{t("editRetry.modeConvOnly")}</span>
-              <span className="user-edit-mode-desc">{t("editRetry.modeConvOnlyHint")}</span>
+              {t("composer.send")}
             </button>
-          </div>
-          <div className="user-edit-card-footer">
-            <span className="user-edit-card-keys">{t("editRetry.keys")}</span>
-            <div className="user-edit-card-actions">
-              <button type="button" className="user-edit-btn is-ghost" onClick={cancel}>
-                {t("action.cancel")}
-              </button>
-              <button
-                type="button"
-                className="user-edit-btn is-primary"
-                onClick={confirmSave}
-                disabled={!canSubmit}
-              >
-                <RetryIcon />
-                <span>{t("action.editAndRetry")}</span>
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -1227,21 +1201,6 @@ function CheckIcon() {
   );
 }
 
-function RetryIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-      <path
-        d="M4.5 8.5a5.5 5.5 0 019.2-3.1M15.5 4.5v3h-3M15.5 11.5a5.5 5.5 0 01-9.2 3.1M4.5 15.5v-3h3"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 function FailureIcon() {
   return (
     <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
@@ -1273,25 +1232,6 @@ function ForkIcon() {
       <circle cx="14" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
       <circle cx="10" cy="15" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
       <path d="M6 7v2a4 4 0 004 4M14 7v2a4 4 0 01-4 4" stroke="currentColor" strokeWidth="1.3" fill="none" />
-    </svg>
-  );
-}
-
-function WorkflowIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-      <circle cx="5" cy="5" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
-      <circle cx="15" cy="5" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
-      <circle cx="10" cy="15" r="2.25" stroke="currentColor" strokeWidth="1.35" fill="none" />
-      <path d="M7.25 5h5.5M5 7.25v2.25A5.5 5.5 0 0010 15M15 7.25v2.25A5.5 5.5 0 0110 15" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ChevronRightIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -1566,37 +1506,77 @@ function ApprovalInline({
 }: {
   item: ToolActivity;
   onDecision: ToolDecisionHandler;
-
 }) {
-  const [decided, setDecided] = useState<'approve' | 'reject' | null>(null);
+  const [decided, setDecided] = useState<"approve" | "reject" | null>(null);
+  const commandPreview = toolApprovalLabel(item);
+  const kindLabel = getToolKindLabel(item.name);
 
   function handleDecide(approved: boolean) {
-    setDecided(approved ? 'approve' : 'reject');
+    setDecided(approved ? "approve" : "reject");
     onDecision(item.id, approved);
   }
 
   if (decided) {
     return (
-      <div className="tool-run-approval tool-run-approval--decided" data-decision={decided}>
-        <span className="tool-run-approval-result">
-          {decided === 'approve' ? '✓ 已批准' : '✕ 已拒绝'} · {toolApprovalLabel(item)}
+      <section className="approval-card approval-card--decided" data-decision={decided}>
+        <span className="approval-card-result">
+          {decided === "approve" ? "✓ 已批准" : "✕ 已拒绝"} · {commandPreview}
         </span>
-      </div>
+      </section>
     );
   }
 
+  const argsPreview =
+    item.args && typeof item.args === "object"
+      ? (() => {
+          try {
+            return JSON.stringify(item.args, null, 2);
+          } catch {
+            return "";
+          }
+        })()
+      : "";
+
   return (
-    <div className="tool-run-approval">
-      <span>{t("tool.approvalHint")} · {toolApprovalLabel(item)}</span>
-      <div className="tool-run-approval-actions">
-        <button type="button" onClick={() => handleDecide(true)}>
-          {t("action.approveOnce")}
-        </button>
-        <button type="button" onClick={() => handleDecide(false)}>
+    <section className="approval-card" data-status="awaiting" aria-label={t("tool.approvalHint")}>
+      <header className="approval-card-head">
+        <span className="approval-card-glyph" aria-hidden="true">
+          {">_"}
+        </span>
+        <span className="approval-card-title">{kindLabel}</span>
+      </header>
+      <p className="approval-card-body">
+        {t("tool.approvalHint")}
+        {commandPreview ? (
+          <>
+            {" "}
+            <code className="approval-card-inline-code">{commandPreview}</code>
+          </>
+        ) : null}
+      </p>
+      {commandPreview && (
+        <pre className="approval-card-command">{commandPreview}</pre>
+      )}
+      {argsPreview && argsPreview !== "{}" && argsPreview.length < 400 && (
+        <pre className="approval-card-args">{argsPreview}</pre>
+      )}
+      <div className="approval-card-actions">
+        <button
+          type="button"
+          className="approval-card-btn approval-card-btn--reject"
+          onClick={() => handleDecide(false)}
+        >
           {t("action.reject")}
         </button>
+        <button
+          type="button"
+          className="approval-card-btn approval-card-btn--allow"
+          onClick={() => handleDecide(true)}
+        >
+          {t("action.approveOnce")}
+        </button>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -1607,21 +1587,32 @@ function PlanApprovalInline({
   plan: PlanStep[];
   onDecision: (approved: boolean) => void;
 }) {
-  const [decided, setDecided] = useState<'approve' | 'reject' | null>(null);
+  const [decided, setDecided] = useState<"approve" | "reject" | null>(null);
 
   function handleDecide(approved: boolean) {
-    setDecided(approved ? 'approve' : 'reject');
+    setDecided(approved ? "approve" : "reject");
     onDecision(approved);
   }
 
+  if (decided) {
+    return (
+      <section className="approval-card approval-card--decided" data-decision={decided}>
+        <span className="approval-card-result">
+          {decided === "approve" ? "✓ 已批准计划" : "✕ 已拒绝计划"}
+        </span>
+      </section>
+    );
+  }
+
   return (
-    <section className="tool-run-summary plan-approval-inline" data-status={decided ?? "awaiting"}>
-      <div className="tool-run-head">
-        <span className="tool-run-dot" aria-hidden="true" />
-        <span className="tool-run-title">执行计划</span>
-        <span className="tool-run-names">{plan.length} 个步骤</span>
-        <span className="tool-run-status">{decided ? "已处理" : "等待确认"}</span>
-      </div>
+    <section className="approval-card plan-approval-card" data-status="awaiting" aria-label="计划审批">
+      <header className="approval-card-head">
+        <span className="approval-card-glyph" aria-hidden="true">
+          ▤
+        </span>
+        <span className="approval-card-title">执行计划</span>
+        <span className="approval-card-meta">{plan.length} 个步骤</span>
+      </header>
       <ol className="plan-approval-steps">
         {plan.map((step, index) => (
           <li key={step.id}>
@@ -1630,25 +1621,23 @@ function PlanApprovalInline({
           </li>
         ))}
       </ol>
-      {decided ? (
-        <div className="tool-run-approval tool-run-approval--decided" data-decision={decided}>
-          <span className="tool-run-approval-result">
-            {decided === 'approve' ? '✓ 已批准' : '✕ 已拒绝'}
-          </span>
-        </div>
-      ) : (
-        <div className="tool-run-approval">
-          <span>确认后 Agent 将按该计划继续执行</span>
-          <div className="tool-run-approval-actions">
-            <button type="button" onClick={() => handleDecide(true)}>
-              {t("action.approveOnce")}
-            </button>
-            <button type="button" onClick={() => handleDecide(false)}>
-              {t("action.reject")}
-            </button>
-          </div>
-        </div>
-      )}
+      <p className="approval-card-body">确认后 Agent 将按该计划继续执行</p>
+      <div className="approval-card-actions">
+        <button
+          type="button"
+          className="approval-card-btn approval-card-btn--reject"
+          onClick={() => handleDecide(false)}
+        >
+          {t("action.reject")}
+        </button>
+        <button
+          type="button"
+          className="approval-card-btn approval-card-btn--allow"
+          onClick={() => handleDecide(true)}
+        >
+          {t("action.approveOnce")}
+        </button>
+      </div>
     </section>
   );
 }

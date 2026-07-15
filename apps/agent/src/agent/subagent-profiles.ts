@@ -19,10 +19,6 @@ export interface SubagentProfile {
   tools: readonly string[];
   /** 追加进子代理 system prompt 的角色指令 */
   systemPromptAddon: string;
-  /** 子 harness 超时（毫秒） */
-  timeoutMs: number;
-  /** 子 harness 最大模型轮次；到达后在当前工具批次结束处停止 */
-  maxIterations: number;
   /** 结果截断字符数 */
   maxOutputChars: number;
 }
@@ -63,8 +59,6 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 优先用 glob/grep/list_directory 缩小范围，再用 read 精读关键文件',
       '- 输出：关键路径、发现摘要、风险/缺口；必要时列出后续建议步骤',
     ].join('\n'),
-    timeoutMs: 60_000,
-    maxIterations: 12,
     maxOutputChars: 24_000,
   },
 
@@ -81,8 +75,6 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 重要结论可 remember；最终给出可执行摘要与引用列表',
       '- 不要修改工作区文件',
     ].join('\n'),
-    timeoutMs: 90_000,
-    maxIterations: 16,
     maxOutputChars: 32_000,
   },
 
@@ -104,8 +96,6 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 可用 bash 跑类型检查/测试/格式化，但避免破坏性命令（rm -rf、强制 push 等）',
       '- 完成后列出变更文件与验证方式',
     ].join('\n'),
-    timeoutMs: 120_000,
-    maxIterations: 24,
     maxOutputChars: 40_000,
   },
 
@@ -131,8 +121,6 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 避免交互式/长时间挂起命令；避免破坏性操作',
       '- 输出：执行了什么、结果、结论与建议下一步',
     ].join('\n'),
-    timeoutMs: 90_000,
-    maxIterations: 16,
     maxOutputChars: 32_000,
   },
 
@@ -157,8 +145,6 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 文风清晰、可扫读；需要时用 create_artifact / bundle_report 交付',
       '- 引用本地路径或 URL；不要编造未验证的事实',
     ].join('\n'),
-    timeoutMs: 120_000,
-    maxIterations: 20,
     maxOutputChars: 48_000,
   },
 
@@ -184,8 +170,6 @@ const PROFILES: Record<SubagentRole, SubagentProfile> = {
       '- 优先最小充分路径；完成后给出结果摘要与产物路径',
       '- 不要调用其他子代理；不要安装 skill 或跑全局维护任务',
     ].join('\n'),
-    timeoutMs: 120_000,
-    maxIterations: 24,
     maxOutputChars: 48_000,
   },
 };

@@ -19,9 +19,11 @@
 | GET | `/api/tools` | 已注册工具（含 MCP）；禁用仍列出但不可调 |
 | PATCH | `/api/tools/:name` | `{ enabled }` |
 | GET | `/api/skills` | Skill catalog（无 body） |
+| GET | `/api/skills/:name` | Skill 详情（含 SKILL.md body） |
 | POST | `/api/skills/reload` | 重扫 skill |
 | POST | `/api/skills/install` | 从 Git 安装 |
-| DELETE | `/api/skills/:name` | 卸载用户 skill |
+| PATCH | `/api/skills/:name` | `{ enabled }` 启停 |
+| DELETE | `/api/skills/:name` | 卸载用户/系统 skill |
 | GET | `/api/mcp/status` | MCP 连接与工具数 |
 
 MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel` 优先）。

@@ -1,4 +1,4 @@
-/* ============ Composer ============ */
+/* ============ Composer（Codex 叠层：项目条 + 主输入胶囊） ============ */
 .composer {
   width: 100%;
 }
@@ -15,11 +15,51 @@
   padding: var(--ui-space-3) 34px var(--ui-space-5);
 }
 
+.composer-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+/* 上层项目条：略宽、浅底，主输入叠在下方 */
+.composer-project-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 0;
+  min-height: 40px;
+  margin: 0 10px;
+  padding: 8px 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-xl, 20px) var(--ui-radius-xl, 20px) 0 0;
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--ui-font-base);
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.composer-project-bar svg {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  color: var(--text-secondary);
+}
+
+.composer-project-bar-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 /* 拖拽悬停高亮 — Finder 拖入文件时的视觉反馈 */
 .composer[data-dragover="true"] .composer-box {
-  border-color: var(--accent, #6366f1);
-  box-shadow: 0 0 0 3px var(--accent-soft-bg, rgba(99, 102, 241, 0.15));
-  background: var(--accent-soft-bg, rgba(99, 102, 241, 0.06));
+  border-color: color-mix(in srgb, var(--text) 18%, var(--border));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--text) 6%, transparent),
+    var(--composer-shadow, 0 8px 28px rgba(0, 0, 0, 0.08));
 }
 
 .auto-mode-btn.is-active {
@@ -58,7 +98,7 @@
   border-radius: var(--ui-radius-md);
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--ui-font-xs);
   font-weight: 500;
   line-height: 1;
   padding: 0 var(--ui-space-2);
@@ -171,7 +211,7 @@
   border-radius: var(--ui-radius-md);
   background: var(--surface);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--ui-font-sm);
   border: 1px solid var(--border-subtle);
   max-width: 240px;
 }
@@ -292,7 +332,7 @@
   border-radius: var(--ui-radius-sm);
   background: transparent;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--ui-font-base);
   text-align: left;
   cursor: pointer;
 }
@@ -309,37 +349,45 @@
 
 .cmd-popup-desc {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--ui-font-sm);
 }
 
 .composer-box {
   position: relative;
-  border: var(--ui-border-width) solid var(--border-strong);
-  border-radius: var(--ui-radius-lg);
+  z-index: 1;
+  margin-top: 0;
+  border: 1px solid var(--border);
+  border-radius: 22px;
   background: var(--card-bg);
-  padding: var(--ui-space-3) var(--ui-space-4) var(--ui-space-2);
-  box-shadow: none;
+  padding: 14px 14px 10px;
+  box-shadow: var(--composer-shadow, 0 6px 24px rgba(0, 0, 0, 0.07));
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
+/* 有项目条时：输入胶囊上移叠住项目条下沿 */
+.composer[data-has-project="true"] .composer-box {
+  margin-top: -12px;
+}
+
 .composer-box:focus-within {
-  background: var(--input-bg-focus, var(--card-bg));
-  box-shadow: 0 0 0 3px var(--accent-soft-bg); /* 使用设计好的淡强调色背景作为呼吸外发光 */
+  border-color: color-mix(in srgb, var(--text) 12%, var(--border));
+  box-shadow: var(--composer-shadow, 0 8px 28px rgba(0, 0, 0, 0.08));
 }
 
 .composer-input {
   display: block;
   width: 100%;
   max-height: 200px;
+  min-height: 28px;
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: var(--ui-font-base);
-  line-height: 1.55;
+  font-size: var(--ui-font-chat);
+  line-height: 1.5;
   outline: none;
   resize: none;
   overflow-y: auto;
-  padding: 2px 2px var(--ui-space-2);
+  padding: 2px 6px 12px;
 }
 
 .composer-input:focus {
@@ -356,15 +404,16 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--ui-space-3);
+  gap: 10px;
   min-width: 0;
+  padding: 0 2px;
 }
 
 .composer-tools-left,
 .composer-tools-right {
   display: flex;
   align-items: center;
-  gap: var(--ui-space-2);
+  gap: 4px;
   min-width: 0;
 }
 
@@ -380,10 +429,10 @@
 .composer-icon-btn {
   display: grid;
   place-items: center;
-  width: var(--ui-control-sm);
-  height: var(--ui-control-sm);
+  width: 32px;
+  height: 32px;
   border: none;
-  border-radius: var(--ui-radius-md);
+  border-radius: 50%;
   background: transparent;
   color: var(--text-secondary);
 }
@@ -402,23 +451,72 @@
   background: transparent;
 }
 
+/* 模式芯片：请求批准 / 自动 — 对齐 Codex 左侧状态 */
+.composer-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  max-width: min(220px, 46vw);
+  padding: 0 10px 0 8px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--ui-font-base);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.composer-mode-chip:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.composer-mode-chip.is-plan {
+  color: var(--text-secondary);
+}
+
+.composer-mode-chip.is-paused {
+  color: #c47b16;
+  background: color-mix(in srgb, #f59e0b 10%, transparent);
+}
+
+.composer-mode-chip svg {
+  flex: 0 0 auto;
+}
+
+.composer-mode-chip > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--ui-space-2);
+  gap: 6px;
   min-width: 0;
-  min-height: var(--ui-control-sm);
+  min-height: 28px;
   border: none;
-  border-radius: var(--ui-radius-md);
+  border-radius: 999px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: var(--ui-font-sm);
-  padding: 0 var(--ui-space-2);
+  font-size: var(--ui-font-base);
+  padding: 0 8px;
+  cursor: pointer;
 }
 
 .composer-model-chip {
-  max-width: min(240px, 100%);
+  max-width: min(240px, 42vw);
   flex-shrink: 1;
+  color: var(--text-tertiary);
+}
+
+.composer-model-effort-chip {
+  max-width: min(280px, 48vw);
+  font-variant-numeric: tabular-nums;
 }
 
 .composer-model-chip > svg {
@@ -434,17 +532,17 @@
 .composer-provider-icon {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
-  border-radius: 5px;
+  border-radius: 4px;
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
   overflow: hidden;
-  background: var(--card-bg, transparent);
-  box-shadow: inset 0 0 0 1px var(--border-subtle, var(--border));
-  padding: 2px;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
 }
 
 .composer-provider-icon .provider-icon-img {
@@ -466,8 +564,9 @@
 }
 
 .thinking-level-chip {
-  max-width: min(200px, 36vw);
+  max-width: min(120px, 22vw);
   flex-shrink: 1;
+  color: var(--text-tertiary);
 }
 
 .thinking-level-chip span:last-child {
@@ -484,74 +583,23 @@
   color: var(--text);
 }
 
-.composer-footer-external {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 8px;
-  padding-left: 4px;
-}
-
-.composer-footer-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.composer-footer-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.composer-project-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  border-radius: var(--ui-radius-md);
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: 11px;
-  padding: 0 var(--ui-space-2);
-  font-weight: 500;
-  max-width: 200px;
-}
-
-.composer-project-badge span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-project-badge.is-standalone {
-  background: transparent;
-  color: var(--text-tertiary);
-  opacity: 0.7;
-}
-
-.composer-project-badge svg {
-  width: 12px;
-  height: 12px;
-  color: var(--text-tertiary);
-  flex: 0 0 auto;
-}
-
+/* 圆形发送：深灰底（可发）/ 停用半透明 */
 .composer-send {
   display: grid;
   place-items: center;
-  width: var(--ui-control-md);
-  height: var(--ui-control-md);
+  width: 32px;
+  height: 32px;
   border: none;
   border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-contrast);
+  background: #6b6b6b;
+  color: #fff;
   cursor: pointer;
   transition: opacity 150ms ease, background 150ms ease, transform 100ms ease;
+  flex: 0 0 auto;
 }
 
 .composer-send:not(:disabled):hover {
-  opacity: 0.9;
+  background: #525252;
 }
 
 .composer-send:not(:disabled):active {
@@ -559,8 +607,37 @@
 }
 
 .composer-send:disabled {
-  background: transparent;
+  background: var(--surface-strong);
   color: var(--text-tertiary);
-  opacity: 0.4;
+  opacity: 0.85;
   cursor: not-allowed;
+}
+
+.composer-send[data-busy="true"]:not(:disabled) {
+  background: var(--text);
+  color: var(--bg);
+}
+
+:root[data-theme="dark"] .composer-project-bar {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+:root[data-theme="dark"] .composer-send {
+  background: #a3a3a3;
+  color: #141414;
+}
+
+:root[data-theme="dark"] .composer-send:not(:disabled):hover {
+  background: #c4c4c4;
+}
+
+:root[data-theme="dark"] .composer-send:disabled {
+  background: var(--surface-strong);
+  color: var(--text-tertiary);
+}
+
+:root[data-theme="dark"] .composer-send[data-busy="true"]:not(:disabled) {
+  background: #f0f0f0;
+  color: #141414;
 }

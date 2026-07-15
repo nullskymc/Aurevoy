@@ -10,11 +10,6 @@ const Input = Schema.Struct({
     description: "Sub-agent role: explore | research | coder | shell | writer | general (default).",
   })),
   tools: Schema.optional(Schema.Array(Schema.String).annotations({ description: "Optional tool allowlist override." })),
-  maxIterations: Schema.optional(
-    Schema.Number.pipe(Schema.int(), Schema.between(1, 100)).annotations({
-      description: "Maximum model turns for the sub-agent (1-100).",
-    }),
-  ),
 })
 
 const Output = Schema.Struct({
@@ -74,7 +69,6 @@ export const delegateTool = make({
       role,
       allowedTools: input.tools ? [...input.tools] : undefined,
       workspaceDir: ctx.workspaceDir || process.cwd(),
-      maxIterations: input.maxIterations,
       signal: ctx.abortSignal,
       parentCallId: ctx.toolCallID,
       externalPaths: [...ctx.externalPaths],

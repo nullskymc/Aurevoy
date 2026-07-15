@@ -104,8 +104,8 @@ function inferSupportsImage(providerId: string, modelId: string): boolean {
 
 /**
  * 一次性把 Pi catalog 已知支持图片的模型从 supports_image=0 提升为 1。
- * 只升不降：用户在 UI 中手动关闭的能力不会被再次打开（回填仅跑一次）。
- * 自定义 / 网关模型仍依赖用户勾选。
+ * 只升不降；回填仅跑一次。
+ * 目录模型以 Pi 注册表为准；自定义模型仅在「添加」时声明图像能力。
  */
 function backfillImageCapabilityFromCatalog(): void {
   if (settingsStore.get(IMAGE_CAPABILITY_BACKFILL_KEY) === '1') return;
@@ -748,7 +748,8 @@ export function replaceAvailableModels(
         prevSource.get(modelId) ?? source,
         enabled,
         isDefault,
-        (prevSupportsImage.get(modelId) ?? inferSupportsImage(providerId, modelId)) ? 1 : 0,
+        // Pi catalog 可知则自动启用；否则保留已有自定义声明（只升不降）
+        (inferSupportsImage(providerId, modelId) || prevSupportsImage.get(modelId)) ? 1 : 0,
         index,
         ts,
       );
@@ -770,20 +771,26 @@ export function replaceAvailableModels(
   tx();
 }
 
-/** 保存一个 Provider 的图片输入能力白名单；未知模型会先注册为自定义模型。 */
+/**
+ * 为指定模型声明图片输入能力（只升不降）。
+ * 仅用于「添加自定义模型」路径；目录模型应靠 Pi 注册表 / 拉取时 inferSupportsImage。
+ * 未知模型会先注册为自定义模型。
+ */
 export function setImageInputModels(providerId: string, imageInputModels: string[]): void {
   ensureProviderRow(providerId);
-  const enabled = new Set(filterChatModelIds(imageInputModels));
+  const enable = filterChatModelIds(imageInputModels);
+  if (enable.length === 0) return;
   const available = getAvailableModelIds(providerId);
-  const missing = [...enabled].filter((model) => !available.includes(model));
+  const missing = enable.filter((model) => !available.includes(model));
   if (missing.length > 0) {
     replaceAvailableModels(providerId, [...available, ...missing], { source: 'custom' });
   }
   const ts = nowIso();
-  for (const modelId of getAvailableModelIds(providerId)) {
-    db.prepare(
-      `UPDATE llm_models SET supports_image = ?, updated_at = ? WHERE provider_id = ? AND model_id = ?`,
-    ).run(enabled.has(modelId) ? 1 : 0, ts, providerId, modelId);
+  const update = db.prepare(
+    `UPDATE llm_models SET supports_image = 1, updated_at = ? WHERE provider_id = ? AND model_id = ?`,
+  );
+  for (const modelId of enable) {
+    update.run(ts, providerId, modelId);
   }
 }
 

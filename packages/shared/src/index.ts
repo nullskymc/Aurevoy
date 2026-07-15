@@ -335,6 +335,22 @@ export interface TokenUsageReportBreakdown {
   updatedAt?: string;
 }
 
+/**
+ * 按本地日历日的用量点。
+ * 每个有 usage 的任务整段归入「最近一次 usage 更新日」
+ * （回退 task.updatedAt / createdAt），跨日任务不会拆分。
+ */
+export interface TokenUsageDailyPoint {
+  /** 本地日历日 YYYY-MM-DD */
+  date: string;
+  totalTokens: number;
+  promptTokens: number;
+  completionTokens: number;
+  estimatedCostUsd: number;
+  /** 归入该日的可计量任务数 */
+  tasks: number;
+}
+
 export interface TokenUsageReport {
   /** 本地记录的任务总数。 */
   tasks: number;
@@ -358,6 +374,13 @@ export interface TokenUsageReport {
   estimatedCostUsd: number;
   /** 按 provider/model 聚合的明细。 */
   breakdown: TokenUsageReportBreakdown[];
+  /**
+   * 近 N 日本地日历日活跃序列（含 0 日，按日期升序）。
+   * 由任务级 usage 时间戳推导，不是 provider 账单日汇总。
+   */
+  daily: TokenUsageDailyPoint[];
+  /** daily 窗口内峰值日；窗口全 0 时为 null。 */
+  peakDay: { date: string; totalTokens: number } | null;
 }
 
 export interface TaskCheckpoint {
@@ -382,6 +405,7 @@ export type SubagentRole = 'explore' | 'research' | 'coder' | 'shell' | 'writer'
 
 export type SubagentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
+/** 终止原因。timeout / max_iterations 仅用于历史快照兼容，新运行不再产生。 */
 export type SubagentStopReason = 'completed' | 'error' | 'timeout' | 'cancelled' | 'max_iterations';
 
 /** 子代理内部工具活动；只持久化用户可解释的元数据，不复制大段工具输出。 */
@@ -406,6 +430,7 @@ export interface SubagentRun {
   activities: SubagentActivity[];
   iterations: number;
   toolCallCount: number;
+  /** 历史字段：旧运行可能带轮次上限；新运行不再设置。 */
   maxIterations?: number;
   stopReason?: SubagentStopReason;
   result?: string;
@@ -1163,6 +1188,16 @@ export interface SkillDescriptor {
   installedAt?: string;
   /** 是否启用；禁用的 skill 不会出现在 Agent 的 skill catalog 中，也不能被 load_skill 加载。 */
   enabled: boolean;
+}
+
+/** GET /api/skills/:name — 详情（含 SKILL.md body，供详情弹层渲染）。 */
+export interface SkillDetail extends SkillDescriptor {
+  /** frontmatter 之后的 markdown 正文。 */
+  body: string;
+  resources: Array<{
+    type: 'script' | 'reference' | 'asset' | 'other';
+    relativePath: string;
+  }>;
 }
 
 /** POST /api/skills/install — 从 Git 仓库安装 skill */

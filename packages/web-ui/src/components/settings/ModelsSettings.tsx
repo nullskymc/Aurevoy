@@ -3,6 +3,7 @@ import type { RuntimeSettings } from "@aurevoy/shared";
 import { filterChatModelIds, isChatModelId } from "@aurevoy/shared";
 import { t } from "../../i18n";
 import { ProviderIcon, providerLabel } from "../providerIcons";
+import { IconEye } from "../shellIcons";
 import { catalogFor } from "./providerCatalog";
 import { modelNamespace } from "./modelNamespace";
 
@@ -95,17 +96,18 @@ export function ModelsSettings({
     return filterChatModelIds(raw);
   }
 
-  function slotImageInputModels(provider: string): string[] {
-    return provider === activeProvider
-      ? (settings?.llm.imageInputModels ?? [])
-      : (settings?.llm.providers?.find((item) => item.provider === provider)?.imageInputModels ?? []);
-  }
-
   function slotDefaultModel(provider: string): string {
     if (provider === activeProvider) {
       return activeModel;
     }
     return settings?.llm.providers?.find((item) => item.provider === provider)?.model ?? "";
+  }
+
+  /** 只读展示：目录模型来自 Pi 注册表，自定义模型来自添加时声明 */
+  function slotImageInputModels(provider: string): string[] {
+    return provider === activeProvider
+      ? (settings?.llm.imageInputModels ?? [])
+      : (settings?.llm.providers?.find((item) => item.provider === provider)?.imageInputModels ?? []);
   }
 
   function commitEnabled(provider: string, models: string[]): void {
@@ -119,13 +121,6 @@ export function ModelsSettings({
     if (checked) enabled.add(model);
     else enabled.delete(model);
     commitEnabled(provider, [...enabled]);
-  }
-
-  function toggleImageInput(provider: string, model: string, checked: boolean): void {
-    const next = new Set(slotImageInputModels(provider));
-    if (checked) next.add(model);
-    else next.delete(model);
-    onSaveSlotImageInputModels(provider, [...next]);
   }
 
   function enableAll(provider: string): void {
@@ -151,7 +146,8 @@ export function ModelsSettings({
     const nextAvailable = [...available, raw];
     onSaveSlotAvailableModels(provider, nextAvailable);
     if (customSupportsImage[provider]) {
-      onSaveSlotImageInputModels(provider, [...slotImageInputModels(provider), raw]);
+      // 只升不降：仅声明新自定义模型的图像能力（目录模型由 Pi 推断）
+      onSaveSlotImageInputModels(provider, [raw]);
     }
     // 新模型默认勾选进主界面菜单
     commitEnabled(provider, [...slotEnabled(provider), raw]);
@@ -310,8 +306,9 @@ export function ModelsSettings({
                       {models.map((model) => {
                         const isCurrent = isActiveSlot && model === current;
                         // 勾选 = 出现在输入框模型菜单；点名称 = 切换并保存为当前主模型
+                        // 图像能力：只读标签（Pi 注册表 / 自定义添加时声明），不可在此切换
                         const checked = enabledSet.has(model);
-                        const imageChecked = imageSet.has(model);
+                        const supportsImage = imageSet.has(model);
                         const ns = modelNamespace(slot.provider, model);
                         return (
                           <div
@@ -330,19 +327,17 @@ export function ModelsSettings({
                               }}
                             >
                               <span className="settings-models-row-id" title={ns}>{model}</span>
+                              {supportsImage && (
+                                <span
+                                  className="settings-models-vision-badge"
+                                  title={t("settings.visionModelBadge")}
+                                  aria-label={t("settings.visionModelBadge")}
+                                >
+                                  <IconEye size={13} />
+                                </span>
+                              )}
                               {isCurrent && <em>{t("settings.modelCurrent")}</em>}
                             </button>
-                            <input
-                              type="checkbox"
-                              checked={imageChecked}
-                              onClick={(event) => event.stopPropagation()}
-                              onChange={(event) => {
-                                event.stopPropagation();
-                                toggleImageInput(slot.provider, model, event.currentTarget.checked);
-                              }}
-                              aria-label={`${ns} ${t("settings.imageInputLabel")}`}
-                              title={t("settings.imageInputDesc")}
-                            />
                             <input
                               type="checkbox"
                               checked={checked}
@@ -412,10 +407,13 @@ export function ModelsSettings({
                         type="checkbox"
                         checked={customSupportsImage[slot.provider] ?? false}
                         disabled={saving}
-                        onChange={(event) => setCustomSupportsImage((prev) => ({
-                          ...prev,
-                          [slot.provider]: event.currentTarget.checked,
-                        }))}
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked;
+                          setCustomSupportsImage((prev) => ({
+                            ...prev,
+                            [slot.provider]: checked,
+                          }));
+                        }}
                       />
                       {t("settings.imageInputLabel")}
                     </label>

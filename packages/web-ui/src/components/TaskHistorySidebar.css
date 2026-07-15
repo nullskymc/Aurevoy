@@ -9,7 +9,7 @@
   max-width: 100%;
   min-width: 0;
   height: 100vh;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid transparent;
   background: var(--sidebar-bg);
   padding: 52px 10px 10px;
   overflow: hidden;

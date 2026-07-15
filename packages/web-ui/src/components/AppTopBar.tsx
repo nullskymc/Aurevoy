@@ -1,6 +1,5 @@
 import type { MainView } from "../app/types";
 import { t } from "../i18n";
-import { getPhaseLabel, getStatusLabel } from "./status";
 import { IconWorkbench } from "./workbenchIcons";
 import type { Task, TaskPhase, TaskStatus } from "@aurevoy/shared";
 import { taskDisplayTitle } from "@aurevoy/shared";
@@ -38,8 +37,6 @@ export function AppTopBar({
   currentTask,
   workbenchOpen,
   leftCollapsed,
-  phase,
-  status,
   onToggleWorkbench,
   onToggleSidebar,
 }: {
@@ -47,8 +44,9 @@ export function AppTopBar({
   currentTask: Task | null;
   workbenchOpen: boolean;
   leftCollapsed: boolean;
-  phase: TaskPhase | null;
-  status: TaskStatus | null;
+  /** 保留兼容：调用方仍可传入，顶栏不再展示状态/消息数 */
+  phase?: TaskPhase | null;
+  status?: TaskStatus | null;
   onToggleWorkbench: () => void;
   onToggleSidebar: () => void;
 }) {
@@ -69,16 +67,10 @@ export function AppTopBar({
       </div>
       {isChatView && showConversation ? (
         <>
-          <div className="topbar-context">
-            <div className="topbar-title-group">
-              <span className="topbar-title" title={currentTask.goal}>{taskDisplayTitle(currentTask)}</span>
-              <span className="topbar-subtitle">
-                {status === "completed" || status === "failed" || status === "cancelled"
-                  ? getStatusLabel(status)
-                  : getPhaseLabel(phase) || getStatusLabel(status)}{" "}
-                · {currentTask.messages.length} 条消息
-              </span>
-            </div>
+          <div className="topbar-context topbar-context--conversation">
+            <h1 className="topbar-conversation-title" title={currentTask.goal}>
+              {taskDisplayTitle(currentTask)}
+            </h1>
           </div>
           <div className="topbar-actions">
             <button

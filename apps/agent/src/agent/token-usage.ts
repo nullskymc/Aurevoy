@@ -1,8 +1,20 @@
-import type { AggregatedTokenUsage, Task, TokenUsageReport, TokenUsageReportBreakdown } from '@aurevoy/shared';
+import type {
+  AggregatedTokenUsage,
+  Task,
+  TokenUsageDailyPoint,
+  TokenUsageReport,
+  TokenUsageReportBreakdown,
+} from '@aurevoy/shared';
 
 type MutableBreakdown = TokenUsageReportBreakdown & { latestTime: number };
 
-export function buildTokenUsageReport(tasks: Task[]): TokenUsageReport {
+/** Default activity window for the usage dashboard chart. */
+export const TOKEN_USAGE_DAILY_WINDOW_DAYS = 14;
+
+export function buildTokenUsageReport(
+  tasks: Task[],
+  options?: { dailyDays?: number; now?: Date },
+): TokenUsageReport {
   let measuredTasks = 0;
   let promptTokens = 0;
   let completionTokens = 0;
@@ -12,6 +24,7 @@ export function buildTokenUsageReport(tasks: Task[]): TokenUsageReport {
   let cacheWriteTokens = 0;
   let estimatedCostUsd = 0;
   const byModel = new Map<string, MutableBreakdown>();
+  const byDay = new Map<string, TokenUsageDailyPoint>();
 
   for (const task of tasks) {
     const usage = task.tokenUsage;
@@ -65,7 +78,29 @@ export function buildTokenUsageReport(tasks: Task[]): TokenUsageReport {
       item.updatedAt = usage.updatedAt;
     }
     byModel.set(key, item);
+
+    const day = resolveUsageDayKey(task, usage);
+    if (day) {
+      const bucket = byDay.get(day) ?? {
+        date: day,
+        totalTokens: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        estimatedCostUsd: 0,
+        tasks: 0,
+      };
+      bucket.totalTokens += total;
+      bucket.promptTokens += prompt;
+      bucket.completionTokens += completion;
+      bucket.estimatedCostUsd += cost;
+      bucket.tasks += 1;
+      byDay.set(day, bucket);
+    }
   }
+
+  const dailyDays = Math.max(1, Math.min(90, options?.dailyDays ?? TOKEN_USAGE_DAILY_WINDOW_DAYS));
+  const daily = fillDailyWindow(byDay, dailyDays, options?.now ?? new Date());
+  const peakDay = pickPeakDay(daily);
 
   return {
     tasks: tasks.length,
@@ -81,7 +116,76 @@ export function buildTokenUsageReport(tasks: Task[]): TokenUsageReport {
     breakdown: [...byModel.values()]
       .sort((a, b) => b.totalTokens - a.totalTokens)
       .map(({ latestTime: _latestTime, ...item }) => item),
+    daily,
+    peakDay,
   };
+}
+
+/**
+ * Attribute a task's measured usage to a local calendar day.
+ * Prefer usage.updatedAt (last provider report), then task.updatedAt, then createdAt.
+ */
+export function resolveUsageDayKey(task: Task, usage: AggregatedTokenUsage): string | null {
+  const candidates = [usage.updatedAt, task.updatedAt, task.createdAt];
+  for (const iso of candidates) {
+    if (!iso) continue;
+    const key = toLocalDayKey(iso);
+    if (key) return key;
+  }
+  return null;
+}
+
+/** Local calendar day YYYY-MM-DD from an ISO timestamp. */
+export function toLocalDayKey(isoOrDate: string | Date): string | null {
+  const date = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate;
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return null;
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function fillDailyWindow(
+  byDay: Map<string, TokenUsageDailyPoint>,
+  days: number,
+  now: Date,
+): TokenUsageDailyPoint[] {
+  const end = startOfLocalDay(now);
+  const out: TokenUsageDailyPoint[] = [];
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const day = new Date(end);
+    day.setDate(end.getDate() - i);
+    const key = toLocalDayKey(day);
+    if (!key) continue;
+    out.push(
+      byDay.get(key) ?? {
+        date: key,
+        totalTokens: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        estimatedCostUsd: 0,
+        tasks: 0,
+      },
+    );
+  }
+  return out;
+}
+
+export function pickPeakDay(
+  daily: TokenUsageDailyPoint[],
+): { date: string; totalTokens: number } | null {
+  let best: { date: string; totalTokens: number } | null = null;
+  for (const point of daily) {
+    if (point.totalTokens <= 0) continue;
+    if (!best || point.totalTokens > best.totalTokens) {
+      best = { date: point.date, totalTokens: point.totalTokens };
+    }
+  }
+  return best;
+}
+
+function startOfLocalDay(now: Date): Date {
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
 function isMeasuredUsage(usage: AggregatedTokenUsage | undefined): usage is AggregatedTokenUsage {

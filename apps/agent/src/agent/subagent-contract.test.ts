@@ -12,7 +12,7 @@ describe('subagent tool contract', () => {
     unifiedToolRegistry.unregister('test_context_probe');
   });
 
-  it('exposes only the canonical delegate entry with an effective turn limit', () => {
+  it('exposes only the canonical delegate entry without turn/duration caps', () => {
     const names = unifiedToolRegistry.listNames();
     expect(names).toContain('delegate');
     expect(names).not.toContain('delegate_task');
@@ -21,7 +21,10 @@ describe('subagent tool contract', () => {
     const inputSchema = unifiedToolRegistry.get('delegate')?.inputSchema as {
       properties?: Record<string, unknown>;
     };
-    expect(inputSchema.properties).toHaveProperty('maxIterations');
+    expect(inputSchema.properties).toHaveProperty('goal');
+    expect(inputSchema.properties).toHaveProperty('role');
+    expect(inputSchema.properties).not.toHaveProperty('maxIterations');
+    expect(inputSchema.properties).not.toHaveProperty('timeoutMs');
     expect(unifiedToolRegistry.riskLevelOf('delegate')).toBe('safe');
   });
 

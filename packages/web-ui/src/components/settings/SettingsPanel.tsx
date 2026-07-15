@@ -15,6 +15,8 @@ import { KbSettings } from "./KbSettings";
 import { SearchSettings } from "./SearchSettings";
 import { UsageSettings } from "./UsageSettings";
 import "../SettingsPanel.css";
+// MemorySettings / KbSettings 复用 memory-* class；设置入口不挂载 MemoryPanel，需显式引入样式
+import "../MemoryPanel.css";
 
 export type { SettingsDraft } from "./types";
 export type { SettingsPanelProps } from "./types";

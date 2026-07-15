@@ -97,9 +97,14 @@ export function useAttachments({
         try {
           const meta = platform.getFileMetadata ? await platform.getFileMetadata(p) : null;
           if (!meta || meta.isDir) continue;
-          await appendLocalAttachment(p, meta);
-        } catch {
-          setNotice(`无法读取文件信息: ${p}`);
+          // 网页 object URL / 桌面绝对路径：图片必须带 dataUrl 才能上传到引擎
+          if (meta.mimeType.startsWith('image/')) {
+            await appendLocalAttachment(p, meta);
+          } else {
+            appendAttachment(p, meta);
+          }
+        } catch (err) {
+          setNotice(`无法读取文件: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     } catch (err) {
@@ -110,6 +115,15 @@ export function useAttachments({
   async function handlePasteFiles(files: Array<{ name: string; dataUrl: string; mimeType: string }>): Promise<void> {
     for (const f of files) {
       try {
+        if (!f.dataUrl?.startsWith('data:image/')) {
+          setNotice(`图片「${f.name}」内容无效，请重新粘贴或选择`);
+          continue;
+        }
+        if (!f.mimeType.startsWith('image/')) {
+          setNotice(`暂不支持附件类型: ${f.mimeType || 'unknown'}`);
+          continue;
+        }
+        // memory:// 仅前端占位；发送时必须带 dataUrl，由引擎落盘
         appendAttachment(`memory://${Date.now()}-${f.name}`, {
           name: f.name,
           mimeType: f.mimeType,

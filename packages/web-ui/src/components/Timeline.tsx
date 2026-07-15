@@ -7,7 +7,7 @@
  * 支持历史回看与实时执行两种模式。
  */
 import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence, LayoutGroup, MotionConfig } from "framer-motion";
+import { motion, AnimatePresence, MotionConfig } from "framer-motion";
 import type {
   ContentBlock,
   Message,
@@ -659,26 +659,7 @@ function stepDisplayLabel(step: TimelineStepData): string {
   return step.toolName ?? "Ran tool";
 }
 
-/** 聚合摘要行 */
-function AgentRoundSummary({ summary, status, stepCount }: {
-  summary: string;
-  status: AgentRoundData["status"];
-  stepCount: number;
-}) {
-  if (!summary && stepCount === 0) return null;
-  return (
-    <div className="timeline-summary">
-      <span className="timeline-summary-text">
-        {summary || `${stepCount} 个步骤`}
-      </span>
-      {status === "failed" && (
-        <span className="timeline-summary-badge is-failed">失败</span>
-      )}
-    </div>
-  );
-}
-
-/** 单个 Timeline 步骤 */
+/** 单个 Timeline 步骤（旧树形详情；主路径已改为扁平 process list） */
 function TimelineStepNode({
   step,
   defaultOpen,
@@ -985,8 +966,8 @@ function SearchPreviewView({ preview }: { preview: SearchPreviewData }) {
   );
 }
 
-/** 计划步骤分组 */
-function PlanStepGroup({
+/** @deprecated 主对话不再渲染树形分组；保留供可选详细模式 */
+export function PlanStepGroup({
   group,
   isLast,
   defaultOpen,
@@ -1242,7 +1223,8 @@ const SUBAGENT_ROLE_META: Record<SubagentRole, { label: string; glyph: string }>
   general: { label: "通用", glyph: "A" },
 };
 
-function SubagentWorkgroup({ runs }: { runs: SubagentRun[] }) {
+/** @deprecated 主对话改为扁平子代理行；保留供详细模式 */
+export function SubagentWorkgroup({ runs }: { runs: SubagentRun[] }) {
   const runningCount = runs.filter((run) => run.status === "running" || run.status === "queued").length;
   const failedCount = runs.filter((run) => run.status === "failed" || run.status === "cancelled").length;
   const completedCount = runs.filter((run) => run.status === "completed").length;
@@ -1410,12 +1392,428 @@ function formatDuration(durationMs: number): string {
   return `${minutes}m ${seconds % 60}s`;
 }
 
-/* ============ 主组件 ============ */
+/* ============ 过程呈现（Codex 语法：live 状态流 + 完成后扁平列表） ============ */
+
+export type ProcessActivityRow = {
+  id: string;
+  kind: "tool" | "subagent" | "group";
+  /** 展示用行为摘要（如「已搜索网页」），不是原始 tool 名 */
+  label: string;
+  status: "pending" | "running" | "success" | "failed";
+  /** 工具原始 title / 命令预览 */
+  detail?: string;
+  /** 行图标语义：search / browse / command / file / edit / agent / other */
+  icon?: "search" | "browse" | "command" | "file" | "edit" | "agent" | "other";
+};
 
 /**
- * AgentRound — 核心 timeline 组件。
- * 接收 AgentRoundData（可由 buildAgentRoundFromMessage / buildLiveAgentRoundData 生成），
- * 渲染三层式步骤时间轴。
+ * 将同一 conversation turn 内多条 assistant 过程 round 合并为一条，
+ * 避免界面叠多个「已处理」。
+ */
+export function mergeAgentRoundData(
+  rounds: AgentRoundData[],
+  mergedId = "turn-process",
+): AgentRoundData | null {
+  const nonempty = rounds.filter(
+    (round) =>
+      round.planStepGroups.some((g) => g.steps.length > 0) ||
+      (round.subagentRuns?.length ?? 0) > 0,
+  );
+  if (nonempty.length === 0) return null;
+
+  const planStepGroups: PlanStepGroupData[] = [];
+  const subagentRuns: SubagentRun[] = [];
+  const seenSubagentIds = new Set<string>();
+  const seenStepIds = new Set<string>();
+  let status: AgentRoundData["status"] = "completed";
+
+  for (const round of nonempty) {
+    for (const group of round.planStepGroups) {
+      const steps = group.steps.filter((step) => {
+        if (seenStepIds.has(step.id)) return false;
+        seenStepIds.add(step.id);
+        return true;
+      });
+      if (steps.length === 0) continue;
+      planStepGroups.push({
+        ...group,
+        planStepId: `${group.planStepId}__${planStepGroups.length}`,
+        steps,
+        status: steps.some((s) => s.status === "failed")
+          ? "failed"
+          : steps.some((s) => s.status === "running" || s.status === "pending")
+            ? "running"
+            : "completed",
+      });
+    }
+    for (const run of round.subagentRuns ?? []) {
+      if (seenSubagentIds.has(run.id)) continue;
+      seenSubagentIds.add(run.id);
+      subagentRuns.push(run);
+    }
+    if (round.status === "failed") status = "failed";
+    else if (round.status === "running" && status !== "failed") status = "running";
+    else if (round.status === "pending" && status === "completed") status = "pending";
+  }
+
+  const allSteps = planStepGroups.flatMap((g) => g.steps);
+  if (allSteps.length === 0 && subagentRuns.length === 0) return null;
+
+  return {
+    id: mergedId,
+    planStepGroups,
+    summary: computeSummaryFromSteps(allSteps),
+    // 过程合并块不带交付正文（交付由 delivery 面单独渲染）
+    markdownOutput: undefined,
+    contentBlocks: undefined,
+    subagentRuns: subagentRuns.length > 0 ? subagentRuns : undefined,
+    status:
+      status === "failed" ||
+      allSteps.some((s) => s.status === "failed") ||
+      subagentRuns.some((r) => r.status === "failed" || r.status === "cancelled")
+        ? "failed"
+        : status === "running" || allSteps.some((s) => s.status === "running")
+          ? "running"
+          : "completed",
+  };
+}
+
+/** 将 AgentRoundData 压成扁平活动行（完成后列表 / 测试用）。 */
+export function flattenProcessActivityRows(data: AgentRoundData): ProcessActivityRow[] {
+  const rows: ProcessActivityRow[] = [];
+  const steps = data.planStepGroups.flatMap((group) => group.steps);
+  const commandSteps = steps.filter((s) => s.kind === "command" || s.toolName === "execute_command" || s.toolName === "bash");
+  const otherSteps = steps.filter((s) => !commandSteps.includes(s));
+
+  if (commandSteps.length > 1) {
+    rows.push({
+      id: `group-commands-${data.id}`,
+      kind: "group",
+      label: `运行了多个命令`,
+      status: commandSteps.some((s) => s.status === "failed")
+        ? "failed"
+        : commandSteps.some((s) => s.status === "running" || s.status === "pending")
+          ? "running"
+          : "success",
+    });
+    for (const step of commandSteps) {
+      rows.push(toolStepToActivityRow(step, true));
+    }
+  } else {
+    for (const step of commandSteps) {
+      rows.push(toolStepToActivityRow(step, false));
+    }
+  }
+
+  for (const step of otherSteps) {
+    if (step.toolName === "delegate") continue;
+    rows.push(toolStepToActivityRow(step, false));
+  }
+
+  for (const run of data.subagentRuns ?? []) {
+    rows.push(subagentToActivityRow(run));
+  }
+
+  return rows;
+}
+
+function toolStepToActivityRow(step: TimelineStepData, underGroup: boolean): ProcessActivityRow {
+  const title = step.title?.trim() || "";
+  const running = step.status === "running" || step.status === "pending";
+  const failed = step.status === "failed";
+  const { label, icon } = describeActivityStep(step.kind, title, running, failed, underGroup);
+  return {
+    id: step.id,
+    kind: "tool",
+    label,
+    icon,
+    status: failed ? "failed" : running ? "running" : step.status === "pending" ? "pending" : "success",
+    detail: title,
+  };
+}
+
+/** 将工具步骤收成「一段时间的行为总结」文案（Codex：已搜索网页 / 已运行 cmd）。 */
+export function describeActivityStep(
+  kind: StepKind,
+  title: string,
+  running: boolean,
+  failed: boolean,
+  underGroup = false,
+): { label: string; icon: ProcessActivityRow["icon"] } {
+  const detail = title.trim();
+  const withDetail = (base: string) => (detail ? `${base} (${detail})` : base);
+
+  if (kind === "search") {
+    if (failed) return { label: withDetail("搜索网页失败"), icon: "search" };
+    if (running) return { label: detail ? `正在搜索网页 · ${detail}` : "正在搜索网页", icon: "search" };
+    return { label: withDetail("已搜索网页"), icon: "search" };
+  }
+  if (kind === "browse") {
+    if (failed) return { label: withDetail("浏览网页失败"), icon: "browse" };
+    if (running) return { label: detail ? `正在浏览 · ${detail}` : "正在浏览网页", icon: "browse" };
+    return { label: withDetail("已浏览网页"), icon: "browse" };
+  }
+  if (kind === "command") {
+    if (failed) return { label: withDetail("命令失败"), icon: "command" };
+    if (running) return { label: detail ? `正在运行 ${detail}` : "正在运行命令", icon: "command" };
+    if (underGroup) return { label: detail ? `已运行 ${detail}` : "已运行命令", icon: "command" };
+    return { label: detail ? `已运行 ${detail}` : "已运行命令", icon: "command" };
+  }
+  if (kind === "file_read") {
+    if (failed) return { label: withDetail("读取失败"), icon: "file" };
+    if (running) return { label: detail ? `正在读取 ${detail}` : "正在读取文件", icon: "file" };
+    return { label: detail ? `已读取 ${detail}` : "已读取文件", icon: "file" };
+  }
+  if (kind === "file_write") {
+    if (failed) return { label: withDetail("写入失败"), icon: "file" };
+    if (running) return { label: detail ? `正在写入 ${detail}` : "正在写入文件", icon: "file" };
+    return { label: detail ? `已写入 ${detail}` : "已写入文件", icon: "file" };
+  }
+  if (kind === "edit") {
+    if (failed) return { label: withDetail("编辑失败"), icon: "edit" };
+    if (running) return { label: detail ? `正在编辑 ${detail}` : "正在编辑文件", icon: "edit" };
+    return { label: detail ? `已编辑 ${detail}` : "已编辑文件", icon: "edit" };
+  }
+  if (failed) return { label: withDetail("步骤失败"), icon: "other" };
+  if (running) return { label: detail ? `正在处理 · ${detail}` : "正在处理", icon: "other" };
+  return { label: detail ? `已完成 · ${detail}` : "已完成一步", icon: "other" };
+}
+
+function subagentToActivityRow(run: SubagentRun): ProcessActivityRow {
+  const role = SUBAGENT_ROLE_META[run.role]?.label ?? run.role;
+  const running = run.status === "running" || run.status === "queued";
+  const failed = run.status === "failed" || run.status === "cancelled";
+  const label = running
+    ? `创建中 1 个智能体`
+    : failed
+      ? `智能体失败 · ${role}`
+      : `已创建 1 个智能体`;
+  return {
+    id: run.id,
+    kind: "subagent",
+    label: run.goal ? `${label} · ${role}` : label,
+    icon: "agent",
+    status: failed ? "failed" : running ? "running" : "success",
+    detail: run.goal || run.currentActivity,
+  };
+}
+
+/**
+ * live 状态行：一段时间的行为摘要（灰字），不是工具卡标题。
+ * 优先级：phaseDetail → 子代理活动 → 工具 progress / 行为文案 → 短流式句 → 正在思考
+ */
+export function resolveLiveStatusText(params: {
+  phaseDetail?: string;
+  data: AgentRoundData;
+}): string {
+  const phase = normalizeLiveStatus(params.phaseDetail);
+  if (phase) return phase;
+
+  const runningSub = (params.data.subagentRuns ?? []).find(
+    (r) => r.status === "running" || r.status === "queued",
+  );
+  if (runningSub?.currentActivity?.trim()) {
+    return normalizeLiveStatus(runningSub.currentActivity) ?? runningSub.currentActivity.trim();
+  }
+  if (runningSub) return "创建中 1 个智能体";
+
+  const runningStep = params.data.planStepGroups
+    .flatMap((g) => g.steps)
+    .find((s) => s.status === "running" || s.status === "pending");
+  if (runningStep) {
+    if (runningStep.progress?.message?.trim()) {
+      return normalizeLiveStatus(runningStep.progress.message) ?? runningStep.progress.message.trim();
+    }
+    const { label } = describeActivityStep(
+      runningStep.kind,
+      runningStep.title?.trim() || "",
+      true,
+      false,
+    );
+    return label;
+  }
+
+  // 流式 markdown 走打字机正文，不占用灰字状态行（避免与交付重复）
+  return "正在思考";
+}
+
+/** 去掉 "Agent " 前缀等产品噪音，保留行为描述 */
+export function normalizeLiveStatus(raw?: string | null): string | null {
+  if (!raw) return null;
+  let text = raw.trim();
+  if (!text) return null;
+  text = text.replace(/^Agent\s+/i, "");
+  if (/^(thinking|模型思考|思考中)/i.test(text)) return "正在思考";
+  return text;
+}
+
+/**
+ * 完成后摘要标签。无可靠 duration 时不编造秒数。
+ * durationMs 仅在调用方确有真实计时数据时传入。
+ */
+export function formatProcessedSummaryLabel(params: {
+  stepCount?: number;
+  subagentCount?: number;
+  durationMs?: number | null;
+  failed?: boolean;
+}): string {
+  const parts: string[] = ["已处理"];
+  if (params.durationMs != null && params.durationMs > 0 && Number.isFinite(params.durationMs)) {
+    parts.push(formatDuration(params.durationMs));
+  }
+  return parts.join(" ");
+}
+
+function ProcessActivityIcon({ icon }: { icon?: ProcessActivityRow["icon"] }) {
+  if (icon === "search" || icon === "browse") {
+    return (
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.2" stroke="currentColor" strokeWidth="1.3" />
+        <path d="M2.8 8h10.4M8 2.8a8 8 0 010 10.4M8 2.8a8 8 0 000 10.4" stroke="currentColor" strokeWidth="1.1" />
+      </svg>
+    );
+  }
+  if (icon === "agent") {
+    return <span aria-hidden="true">◎</span>;
+  }
+  if (icon === "command") {
+    return <span aria-hidden="true">&gt;_</span>;
+  }
+  if (icon === "file" || icon === "edit") {
+    return (
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+        <path d="M4 2.5h5.2L12 5.3V13.5H4V2.5z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+        <path d="M9.2 2.5V5.3H12" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  return <span aria-hidden="true">·</span>;
+}
+
+function LiveStatusLine({ text }: { text: string }) {
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={text}
+        className="process-live-status"
+        role="status"
+        aria-live="polite"
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -4 }}
+        transition={{ duration: 0.22, ease: "easeOut" }}
+      >
+        {text}
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
+/**
+ * Live 过程块（Codex）：
+ *   已处理 10s
+ *   ────────
+ *   Planning web search…   ← 仅在无打字机正文时显示灰字摘要
+ *   （正文流式时不再叠「正在思考」）
+ */
+function LiveProcessBlock({
+  statusText,
+  startedAtMs,
+  showStatus = true,
+}: {
+  statusText: string;
+  startedAtMs?: number | null;
+  /** false：正文已在打字机输出，只保留「已处理」头，不叠灰字 */
+  showStatus?: boolean;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (startedAtMs == null) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAtMs]);
+
+  const durationMs =
+    startedAtMs != null && Number.isFinite(startedAtMs)
+      ? Math.max(0, now - startedAtMs)
+      : null;
+  const header = formatProcessedSummaryLabel({ durationMs });
+
+  return (
+    <div className="process-live-block" data-process="live" data-status-visible={showStatus ? "true" : "false"}>
+      <div className="process-summary-static">{header}</div>
+      <div className="process-summary-rule is-always" aria-hidden="true" />
+      {showStatus ? <LiveStatusLine text={statusText} /> : null}
+    </div>
+  );
+}
+
+function ProcessActivityList({ rows }: { rows: ProcessActivityRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <ul className="process-activity-list" aria-label="执行过程">
+      {rows.map((row) => (
+        <li
+          key={row.id}
+          className="process-activity-row"
+          data-kind={row.kind}
+          data-status={row.status}
+          data-icon={row.icon}
+        >
+          <span className="process-activity-icon" aria-hidden="true">
+            <ProcessActivityIcon icon={row.icon} />
+          </span>
+          <span className="process-activity-label">{row.label}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CompletedProcess({
+  data,
+  defaultOpen = false,
+  durationMs,
+}: {
+  data: AgentRoundData;
+  defaultOpen?: boolean;
+  durationMs?: number | null;
+}) {
+  const rows = flattenProcessActivityRows(data);
+  const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
+  const subagentCount = data.subagentRuns?.length ?? 0;
+  if (rows.length === 0 && stepCount === 0 && subagentCount === 0) return null;
+
+  const [open, setOpen] = useState(defaultOpen);
+  const label = formatProcessedSummaryLabel({
+    stepCount,
+    subagentCount,
+    durationMs,
+    failed: data.status === "failed",
+  });
+
+  return (
+    <div className="process-completed" data-status={data.status} data-open={open ? "true" : "false"}>
+      <button
+        type="button"
+        className="process-summary-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="process-summary-label">{label}</span>
+        <span className="process-summary-caret" data-open={open ? "true" : "false"} aria-hidden="true">
+          ▾
+        </span>
+      </button>
+      <div className="process-summary-rule is-always" aria-hidden="true" />
+      {open && <ProcessActivityList rows={rows} />}
+    </div>
+  );
+}
+
+/**
+ * AgentRound — 单轮 Agent 呈现。
+ * live：状态流（无工具卡时间轴）；完成后：可展开扁平活动列表 + 裸 Markdown 交付。
  */
 export function AgentRound({
   data,
@@ -1424,6 +1822,10 @@ export function AgentRound({
   showWorkflow = true,
   showOutput = true,
   phaseDetail,
+  /** live 计时起点（ms epoch）；缺省不显示秒数 */
+  processStartedAtMs,
+  /** 完成后的耗时（ms） */
+  processDurationMs,
   onUiChoice,
   onOpenWorkspacePath,
 }: {
@@ -1433,33 +1835,36 @@ export function AgentRound({
   showWorkflow?: boolean;
   showOutput?: boolean;
   phaseDetail?: string;
+  processStartedAtMs?: number | null;
+  processDurationMs?: number | null;
   onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
   onOpenWorkspacePath?: (path: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
   const subagentRuns = data.subagentRuns ?? [];
-  const phaseLabel = phaseDetail?.trim();
-  const shouldShowWorkflow = showWorkflow && (data.planStepGroups.length > 0 || subagentRuns.length > 0 || busy);
-  const shouldLeadWithWorkflow = busy && data.planStepGroups.length === 0;
-  const shouldShowTimeline = data.planStepGroups.length > 0 || (busy && subagentRuns.length === 0);
-  const autoOpenRunningTools = true;
-  const outputNode = showOutput && data.markdownOutput ? (
-    <article className="timeline-output">
-      <div className="doc-meta">
-        <span className="doc-meta-icon">
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
-            <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.2" />
-            <path d="M5 8l2 2 4-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-          </svg>
-        </span>
-        <span>Aurevoy</span>
-      </div>
-      <div className="doc-body" style={{ paddingLeft: 0 }}>
-        <MarkdownRenderer content={data.markdownOutput} />
+  const hasProcess = stepCount > 0 || subagentRuns.length > 0;
+  const liveStatusText = resolveLiveStatusText({ phaseDetail, data });
+  const hasRunningTools = data.planStepGroups
+    .flatMap((g) => g.steps)
+    .some((s) => s.status === "running" || s.status === "pending");
+  const hasRunningSubagents = subagentRuns.some(
+    (r) => r.status === "running" || r.status === "queued",
+  );
+  // 工具/子代理进行中：只保留灰字行为摘要；空闲思考/收尾：打字机流式正文
+  const suppressBusyDelivery = busy && (hasRunningTools || hasRunningSubagents);
+  const streamText = data.markdownOutput?.trim() ?? "";
+  const showDelivery = showOutput && streamText.length > 0 && !suppressBusyDelivery;
+
+  const outputNode = showDelivery ? (
+    <article className={`timeline-output process-delivery${busy ? " is-streaming" : ""}`}>
+      <div className="doc-body process-delivery-body">
+        <MarkdownRenderer content={data.markdownOutput!} onOpenWorkspacePath={onOpenWorkspacePath} />
+        {busy ? <span className="stream-caret" aria-hidden="true" /> : null}
       </div>
     </article>
   ) : null;
+
   const contentBlocks = dedupeContentBlocks(data.contentBlocks);
   const contentBlocksNode = showOutput && contentBlocks.length > 0 ? (
     <div className="content-blocks">
@@ -1473,55 +1878,36 @@ export function AgentRound({
       ))}
     </div>
   ) : null;
-  const workflowNode = shouldShowWorkflow ? (
-    <LayoutGroup>
-      {subagentRuns.length > 0 && <SubagentWorkgroup runs={subagentRuns} />}
 
-      {/* Summary 行 */}
-      {stepCount > 0 && (
-        <AgentRoundSummary
-          summary={data.summary}
-          status={data.status}
-          stepCount={stepCount}
-        />
-      )}
-
-      {/* 时间线区域 */}
-      {shouldShowTimeline && <motion.div className="timeline-body" layout>
-        {data.planStepGroups.length > 0 ? (
-          data.planStepGroups.map((group, i) => (
-            <PlanStepGroup
-              key={group.planStepId}
-              group={group}
-              index={i}
-              isLast={i === data.planStepGroups.length - 1}
-              defaultOpen={defaultToolDetailsOpen || group.steps.some((s) => s.status === "running")}
-              autoOpenRunningTools={autoOpenRunningTools}
-            />
-          ))
-        ) : (
-          /* 无分组时仅实时阶段显示空占位 */
-          <div className="timeline-empty">
-            <span className="timeline-step-icon is-pending" />
-            <span>{phaseLabel || "思考中…"}</span>
-          </div>
-        )}
-      </motion.div>}
-    </LayoutGroup>
+  const processNode = showWorkflow ? (
+    busy ? (
+      <LiveProcessBlock
+        statusText={liveStatusText}
+        startedAtMs={processStartedAtMs}
+        // 正文已流式输出时不再叠「正在思考」；工具运行时仍显示灰字行为摘要
+        showStatus={!showDelivery}
+      />
+    ) : hasProcess ? (
+      <CompletedProcess
+        data={data}
+        defaultOpen={defaultToolDetailsOpen}
+        durationMs={processDurationMs}
+      />
+    ) : null
   ) : null;
 
+  // live：状态在前；完成后：摘要在交付之前（与 Codex 一致）
   return (
     <MotionConfig reducedMotion="user">
       <div
         ref={containerRef}
-        className={`timeline-agent-round ${busy ? "is-live" : ""} ${data.status === "failed" ? "is-failed" : ""}`}
+        className={`timeline-agent-round process-agent-round ${busy ? "is-live" : ""} ${data.status === "failed" ? "is-failed" : ""}`}
         data-status={data.status}
+        data-process={busy ? "live" : hasProcess ? "completed" : "none"}
       >
-        {shouldLeadWithWorkflow && workflowNode}
-        {/* 同一轮里模型正文先于工具调用产生，展示顺序也保持正文在前、工具过程在后。 */}
+        {processNode}
         {outputNode}
         {contentBlocksNode}
-        {!shouldLeadWithWorkflow && workflowNode}
       </div>
     </MotionConfig>
   );

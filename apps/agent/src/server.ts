@@ -258,6 +258,27 @@ export async function buildServer(externalLogger?: Logger) {
     return { skills: skillRegistry.listAll() };
   });
 
+  app.get<{ Params: { name: string } }>('/api/skills/:name', async (req, reply) => {
+    const name = req.params.name;
+    const entry = skillRegistry.get(name);
+    if (!entry) {
+      return reply.code(404).send({ error: 'skill 不存在' });
+    }
+    const summary = skillRegistry.listAll().find((s) => s.name === name);
+    if (!summary) {
+      return reply.code(404).send({ error: 'skill 不存在' });
+    }
+    const content = skillRegistry.getContent(name);
+    return {
+      ...summary,
+      body: content?.body ?? '',
+      resources: (content?.resources ?? []).map((r) => ({
+        type: r.type,
+        relativePath: r.relativePath,
+      })),
+    };
+  });
+
   app.post('/api/skills/reload', async (): Promise<SkillListResponse> => {
     const skills = reloadSkillsAndTools();
     return { skills };

@@ -23,6 +23,7 @@ import {
   type RevertMode,
   type RevertTaskResponse,
   type SkillDescriptor,
+  type SkillDetail,
   type SkillInstallResponse,
   type SkillUninstallResponse,
   type UnrevertTaskResponse,
@@ -348,6 +349,15 @@ export async function fetchSkills(): Promise<SkillDescriptor[]> {
   if (!res.ok) return [];
   const data = (await res.json()) as { skills: SkillDescriptor[] };
   return data.skills ?? [];
+}
+
+export async function fetchSkillDetail(name: string): Promise<SkillDetail> {
+  const res = await fetch(`${BASE_URL}/api/skills/${encodeURIComponent(name)}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error((err as { error?: string }).error ?? `fetch skill failed: ${res.status}`);
+  }
+  return res.json() as Promise<SkillDetail>;
 }
 
 export async function toggleSkill(name: string, enabled: boolean): Promise<SkillDescriptor> {

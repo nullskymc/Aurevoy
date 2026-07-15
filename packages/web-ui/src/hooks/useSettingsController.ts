@@ -244,7 +244,7 @@ export function useSettingsController({
       .catch((err) => setNotice(`${t("notice.saveModelListFailed")}${err instanceof Error ? err.message : String(err)}`));
   }
 
-  /** 将用户确认支持图片输入的模型写入本机注册表，不改变当前主模型。 */
+  /** 自定义模型添加时声明图片输入能力（只升不降）；目录模型由 Pi 注册表推断。 */
   function handleSaveSlotImageInputModels(provider: string, models: string[]): void {
     const imageInputModels = [...models];
     void updateSettings({ llm: { slotImageInputModels: { provider, imageInputModels } } })

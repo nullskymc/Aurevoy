@@ -1,32 +1,34 @@
 @import url("./components/ContextMenu.css");
 
 :root {
+  /* Codex 气质：浅色优先、低噪分层；深色仅夜间对称适配 */
   --bg: #ffffff;
-  --surface: #f8f8f8;
-  --surface-strong: #eeeeef;
-  --sidebar-bg: #f8f8f8;
-  --border: #ececef;
-  --border-strong: #dedee3;
-  --text: #202124;
-  --text-secondary: #686a70;
-  --text-tertiary: #9a9ca3;
-  --accent: #1f2328;
+  --surface: #f5f5f5;
+  --surface-strong: #ebebeb;
+  --sidebar-bg: #f0f0f0;
+  --border: #e8e8e8;
+  --border-strong: #dcdcdc;
+  --text: #1a1a1a;
+  --text-secondary: #6b6b6b;
+  --text-tertiary: #9b9b9b;
+  --accent: #1a1a1a;
   /* 强调色上的前景（深色模式下 accent 反相，需要独立控制） */
   --accent-contrast: #ffffff;
-  --hover: rgba(0, 0, 0, 0.055);
-  --active: rgba(0, 0, 0, 0.075);
+  --hover: rgba(0, 0, 0, 0.045);
+  --active: rgba(0, 0, 0, 0.07);
   --online: #2ea043;
   --offline: #d14343;
 
   /* ---- 语义令牌：所有表面/卡片/代码/阴影统一走这里，保证浅色与深色一致 ---- */
   --card-bg: #ffffff;
-  --card-shadow: 0 8px 28px rgba(31, 35, 40, 0.08);
-  --code-bg: #f0f0ee;
-  --input-bg: #f7f7f8;
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  --code-bg: #f4f4f4;
+  --input-bg: #f5f5f5;
   --input-bg-focus: #ffffff;
   --btn-surface: #ffffff;
   /* 主区顶部柔光：浅色下做一层极淡的高光，深色下关闭以避免灰白色带 */
-  --main-glow: rgba(247, 247, 248, 0.66);
+  --main-glow: transparent;
+  /* 与 preferences.DEFAULT_* 一致；运行时由 useShellLayout 覆盖为设置值 */
   --ui-font-size: 12.5px;
   --chat-font-size: 14px;
   --code-font-size: 12px;
@@ -47,23 +49,31 @@
   --ui-space-5: 20px;
   --ui-space-6: 24px;
   --ui-radius-sm: 6px;
-  --ui-radius-md: 8px;
-  --ui-radius-lg: 12px;
+  --ui-radius-md: 10px;
+  --ui-radius-lg: 14px;
+  --ui-radius-xl: 20px;
+  --ui-radius-pill: 999px;
   --ui-border-width: 1px;
   --ui-popover-width: 300px;
-  --ui-shadow-popover: 0 18px 42px rgba(31, 35, 40, 0.14);
+  --ui-shadow-popover: 0 12px 36px rgba(0, 0, 0, 0.1);
+  --composer-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+  --user-bubble-bg: #ececec;
+  --user-bubble-fg: #1a1a1a;
+  --process-fg: #8a8a8a;
+  --approval-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
 
   /* 柔和状态色（中性/进行中/成功/危险），浅色为浅底深字 */
-  --pill-bg: #efefec;
+  --pill-bg: #ebebeb;
   --pill-fg: var(--text-secondary);
-  --accent-soft-bg: #e6ecff;
-  --accent-soft-fg: #3548c0;
+  --accent-soft-bg: #ececec;
+  --accent-soft-fg: #1a1a1a;
   --success-soft-bg: #d9f2e0;
   --success-soft-fg: #1a7f3c;
   --danger-soft-bg: #fbe0e0;
   --danger-soft-fg: #d14343;
   --warn-soft-bg: #fbeecf;
   --warn-soft-fg: #8a6100;
+  --access-accent: #e07a2f;
 
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei",
@@ -81,36 +91,42 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #1c1c1e;
-  --surface: #232325;
-  --surface-strong: #2a2a2e;
-  --sidebar-bg: #161618;
-  --border: #2c2c2e;
-  --border-strong: #3a3a3c;
-  --text: #f2f2f4;
-  --text-secondary: #a0a0a6;
-  --text-tertiary: #6e6e74;
-  --accent: #f2f2f4;
-  --accent-contrast: #1c1c1e;
-  --hover: #28282b;
-  --active: #323236;
-  --card-bg: #232325;
-  --card-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
-  --code-bg: #2a2a2e;
-  --input-bg: #2a2a2e;
-  --input-bg-focus: #2e2e31;
-  --btn-surface: #232325;
+  --bg: #141414;
+  --surface: #1c1c1c;
+  --surface-strong: #262626;
+  --sidebar-bg: #111111;
+  --border: #2a2a2a;
+  --border-strong: #3a3a3a;
+  --text: #f0f0f0;
+  --text-secondary: #a3a3a3;
+  --text-tertiary: #6e6e6e;
+  --accent: #f0f0f0;
+  --accent-contrast: #141414;
+  --hover: #222222;
+  --active: #2c2c2c;
+  --card-bg: #1c1c1c;
+  --card-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+  --code-bg: #222222;
+  --input-bg: #222222;
+  --input-bg-focus: #262626;
+  --btn-surface: #1c1c1c;
   --main-glow: transparent;
-  --pill-bg: #2a2a2e;
+  --composer-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  --user-bubble-bg: #2a2a2a;
+  --user-bubble-fg: #f0f0f0;
+  --process-fg: #8a8a8a;
+  --approval-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --pill-bg: #2a2a2a;
   --pill-fg: var(--text-secondary);
-  --accent-soft-bg: rgba(120, 140, 255, 0.16);
-  --accent-soft-fg: #aab8ff;
+  --accent-soft-bg: #2a2a2a;
+  --accent-soft-fg: #f0f0f0;
   --success-soft-bg: rgba(46, 160, 67, 0.20);
   --success-soft-fg: #6ed98c;
   --danger-soft-bg: rgba(209, 67, 67, 0.20);
   --danger-soft-fg: #f0a3a3;
   --warn-soft-bg: rgba(180, 130, 30, 0.22);
   --warn-soft-fg: #e0b366;
+  --access-accent: #e8954a;
 }
 
 * {
@@ -244,7 +260,7 @@ button:disabled {
   gap: 12px;
   min-width: 0;
   height: 48px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid transparent;
   padding: 0 18px;
   user-select: none;
 }
@@ -282,7 +298,7 @@ button:disabled {
 
 .topbar-title-group {
   display: grid;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
 }
 
@@ -292,21 +308,39 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 650;
+  color: var(--text-secondary);
+  font-size: var(--ui-font-base);
+  font-weight: 500;
+}
+
+/* 单对话标题：仅文案，无图标/副标题 */
+.topbar-context--conversation {
+  min-width: 0;
+}
+
+.topbar-conversation-title {
+  margin: 0;
+  min-width: 0;
+  max-width: min(100%, 48vw);
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text);
+  font-size: calc(var(--ui-font-base) + 2px);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
 }
 
 .topbar-subtitle {
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: var(--ui-font-xs);
+  line-height: 1.3;
 }
 
 .topbar-kicker {
   color: var(--text);
-  font-size: 14px;
+  font-size: calc(var(--ui-font-base) + 1px);
   font-weight: 650;
 }
 
@@ -361,6 +395,95 @@ button:disabled {
   text-align: center;
 }
 
+.hero-suggestions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  max-width: 720px;
+}
+
+@media (max-width: 720px) {
+  .hero-suggestions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Codex 风格：白底、细边、无默认阴影；图标顶左、文案底左 */
+.hero-suggestion-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 108px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card-bg, #fff);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: none;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.hero-suggestion-card:hover {
+  background: var(--card-bg, #fff);
+  border-color: color-mix(in srgb, var(--text-tertiary) 35%, var(--border));
+  box-shadow: none;
+}
+
+.hero-suggestion-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  line-height: 0;
+}
+
+.hero-suggestion-icon svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+.hero-suggestion-card[data-kind="explore"] .hero-suggestion-icon {
+  color: #3b82f6;
+}
+.hero-suggestion-card[data-kind="build"] .hero-suggestion-icon {
+  color: #8b5cf6;
+}
+.hero-suggestion-card[data-kind="review"] .hero-suggestion-icon {
+  color: #22c55e;
+}
+.hero-suggestion-card[data-kind="fix"] .hero-suggestion-icon {
+  color: #f97316;
+}
+
+.hero-suggestion-label {
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.hero-suggestion-card:hover .hero-suggestion-label {
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .hero-suggestion-card {
+  background: var(--card-bg);
+  border-color: var(--border);
+  box-shadow: none;
+}
+
 /* ============ 对话流 ============ */
 .main-scroll {
   min-height: 0;
@@ -371,7 +494,7 @@ button:disabled {
   width: 100%;
   max-width: 800px;
   margin: 0 auto;
-  padding: 36px 34px 28px;
+  padding: 28px 34px 28px;
 }
 
 .conversation-thread {
@@ -747,34 +870,171 @@ button:disabled {
   padding-left: 20px;
 }
 
+.markdown-body li {
+  margin: 0.28em 0;
+}
+
+/* Codex 式行内 chip：浅灰胶囊，略小一号 */
 .markdown-body code {
-  border-radius: 5px;
-  background: var(--surface-strong);
-  padding: 1px 5px;
+  display: inline;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 7%, var(--surface, #f0f0f0));
+  color: var(--text);
+  padding: 0.12em 0.55em;
+  margin: 0 0.08em;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--ui-font-code);
+  font-size: 0.88em;
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: break-spaces;
+  word-break: break-word;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .markdown-body pre {
   overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 10px;
+  margin: 0;
+  border: none;
+  border-radius: 0 0 var(--ui-radius-lg) var(--ui-radius-lg);
+  background: transparent;
+  padding: 0 14px 14px;
 }
 
 .markdown-body pre code {
   background: transparent;
   padding: 0;
+  font-size: var(--ui-font-code);
 }
 
+/* fenced code chrome：语言标签 + 复制 */
+.markdown-code-block {
+  overflow: hidden;
+  border-radius: var(--ui-radius-lg);
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+}
+
+.markdown-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.markdown-code-lang {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-transform: lowercase;
+}
+
+.markdown-code-copy {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.markdown-code-copy:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.markdown-path-chip,
+.markdown-file-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin: 0 0.08em;
+  padding: 0.12em 0.55em;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 7%, var(--surface, #f0f0f0));
+  color: var(--text);
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  font-weight: 500;
+  line-height: 1.45;
+  vertical-align: baseline;
+  cursor: default;
+  word-break: break-word;
+}
+
+button.markdown-path-chip,
+button.markdown-file-chip {
+  cursor: pointer;
+}
+
+button.markdown-path-chip:hover,
+button.markdown-file-chip:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* 正文链接：蓝色 + 可选 favicon（外链） */
 .markdown-body a {
-  color: var(--accent);
+  color: #2563eb;
   text-decoration: none;
+  font-weight: 500;
+  word-break: break-word;
 }
 
 .markdown-body a:hover {
   text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-ext-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28em;
+  max-width: 100%;
+  vertical-align: baseline;
+  color: #2563eb;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.markdown-ext-link:hover {
+  text-decoration: none;
+}
+
+.markdown-ext-link:hover .markdown-ext-link-text {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-link-favicon {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  object-fit: contain;
+  vertical-align: -0.15em;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.markdown-ext-link-text {
+  min-width: 0;
+}
+
+:root[data-theme="dark"] .markdown-body a,
+:root[data-theme="dark"] .markdown-ext-link {
+  color: #7aa2ff;
+}
+
+:root[data-theme="dark"] .markdown-body code {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 .markdown-stream {
@@ -1317,25 +1577,35 @@ button:disabled {
 }
 
 /* ============================================================
-   无障碍：键盘焦点可见性（P2-2）
+   无障碍：键盘焦点可见性
+   勿用 --accent-soft-fg（浅色下为近黑 #1a1a1a）——全局 2px solid
+   会在点击/Tab 后给大量控件套「黑框」。仅 :focus-visible 软环。
+   各组件若有自管焦点样式（outline:none + border/shadow），可覆盖本规则。
    ============================================================ */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
 :focus-visible {
-  outline: 2px solid var(--accent-soft-fg);
+  outline: 2px solid color-mix(in srgb, var(--text) 22%, transparent);
   outline-offset: 2px;
 }
 
 button:focus-visible,
+a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-[role="tab"]:focus-visible {
-  outline: 2px solid var(--accent-soft-fg);
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="menuitem"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text) 22%, transparent);
   outline-offset: 1px;
   border-radius: inherit;
 }
 
 .conv-item:focus-visible {
-  outline: 2px solid var(--accent-soft-fg);
+  outline: 2px solid color-mix(in srgb, var(--text) 22%, transparent);
   outline-offset: -2px;
 }
 
@@ -1360,14 +1630,15 @@ textarea:focus-visible,
 }
 
 .user-bubble {
-  padding: 10px 14px;
-  border-radius: 16px 16px 4px 16px;
-  background: var(--accent-soft-bg);
-  color: var(--accent-soft-fg);
+  padding: 8px 14px;
+  border-radius: var(--ui-radius-pill);
+  background: var(--user-bubble-bg);
+  color: var(--user-bubble-fg);
   font-size: var(--ui-font-chat);
-  line-height: 1.55;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+  max-width: 100%;
 }
 
 .user-bubble-delivery {
@@ -1679,203 +1950,100 @@ button.user-bubble-attachment {
 }
 
 /* ============================================================
-   修改并重试：卡片式编辑器（替代侧边 icon 的粗糙输入框）
+   修改并重试：Codex 风格内联气泡（取消 / 发送）
    ============================================================ */
 .user-bubble-row.is-editing {
   align-items: stretch;
   width: 100%;
 }
 
-.user-edit-card {
-  display: grid;
-  gap: 10px;
-  width: min(100%, 640px);
-  margin-left: auto;
-  padding: 12px 14px 12px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: var(--surface, var(--card-bg));
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--text) 4%, transparent),
-    0 8px 24px color-mix(in srgb, var(--text) 5%, transparent);
-}
-
-.user-edit-card-head {
+.user-edit-bubble {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px 12px;
-  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  width: min(100%, 420px);
+  margin-left: auto;
+  padding: 12px 14px 10px;
+  border: none;
+  border-radius: 16px;
+  background: var(--user-bubble-bg);
+  color: var(--user-bubble-fg);
+  box-shadow: none;
 }
 
-.user-edit-card-title {
-  color: var(--text);
-  font-size: calc(var(--ui-font-size) - 0.5px);
-  font-weight: 650;
-  line-height: 1.2;
-}
-
-.user-edit-card-hint {
-  color: var(--text-tertiary);
-  font-size: calc(var(--ui-font-size) - 2px);
-  line-height: 1.3;
-}
-
-.user-edit-card-input {
+.user-edit-bubble-input {
   width: 100%;
-  min-height: 72px;
-  max-height: 280px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-subtle, var(--border));
-  border-radius: 12px;
-  background: var(--bg, var(--card-bg));
-  color: var(--text);
+  min-height: 1.5em;
+  max-height: 240px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
   font: inherit;
   font-size: var(--ui-font-chat);
-  line-height: 1.55;
-  resize: vertical;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.user-edit-card-input::placeholder {
-  color: var(--text-tertiary);
-}
-
-.user-edit-card-input:focus,
-.user-edit-card-input:focus-visible {
+  line-height: 1.5;
+  resize: none;
   outline: none;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  box-shadow: 0 0 0 3px var(--accent-soft-bg, color-mix(in srgb, var(--accent) 14%, transparent));
+  box-shadow: none;
+  field-sizing: content;
 }
 
-.user-edit-card-modes {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.user-edit-mode {
-  display: grid;
-  gap: 2px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: transparent;
-  color: var(--text-secondary);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
-}
-
-.user-edit-mode:hover {
-  background: var(--hover, var(--surface-hover));
-  color: var(--text);
-}
-
-.user-edit-mode[data-active="true"] {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  background: var(--accent-soft-bg, color-mix(in srgb, var(--accent) 10%, transparent));
-  color: var(--text);
-}
-
-.user-edit-mode-title {
-  font-size: calc(var(--ui-font-size) - 1.5px);
-  font-weight: 600;
-  line-height: 1.25;
-}
-
-.user-edit-mode-desc {
+.user-edit-bubble-input::placeholder {
   color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 1.3;
 }
 
-.user-edit-mode[data-active="true"] .user-edit-mode-desc {
-  color: var(--text-secondary);
+.user-edit-bubble-input:focus,
+.user-edit-bubble-input:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
-.user-edit-card-footer {
+.user-edit-bubble-actions {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-}
-
-.user-edit-card-keys {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 1.3;
-  font-variant-numeric: tabular-nums;
-}
-
-.user-edit-card-actions {
-  display: inline-flex;
-  align-items: center;
   gap: 8px;
-  margin-left: auto;
 }
 
-.user-edit-btn {
+.user-edit-bubble-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 32px;
+  min-height: 28px;
   padding: 0 12px;
-  border: 1px solid transparent;
+  border: none;
   border-radius: 999px;
   font: inherit;
   font-size: calc(var(--ui-font-size) - 1px);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
 }
 
-.user-edit-btn.is-ghost {
-  border-color: var(--border);
+.user-edit-bubble-btn.is-cancel {
   background: transparent;
   color: var(--text-secondary);
+  padding-left: 4px;
 }
 
-.user-edit-btn.is-ghost:hover {
-  background: var(--hover, var(--surface-hover));
+.user-edit-bubble-btn.is-cancel:hover {
   color: var(--text);
 }
 
-.user-edit-btn.is-primary {
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-  background: var(--accent);
-  color: #fff;
+.user-edit-bubble-btn.is-send {
+  background: var(--text);
+  color: var(--bg, #fff);
+  min-width: 52px;
+  font-weight: 600;
 }
 
-.user-edit-btn.is-primary:hover:not(:disabled) {
-  filter: brightness(1.06);
+.user-edit-bubble-btn.is-send:hover:not(:disabled) {
+  opacity: 0.88;
 }
 
-.user-edit-btn.is-primary:disabled {
-  opacity: 0.45;
+.user-edit-bubble-btn.is-send:disabled {
+  opacity: 0.4;
   cursor: not-allowed;
-  filter: none;
-}
-
-/* 兼容旧类名（若别处仍引用） */
-.user-bubble-edit {
-  width: min(100%, 640px);
-}
-
-.user-bubble-input {
-  width: 100%;
-  min-height: 72px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-subtle, var(--border));
-  border-radius: 12px;
-  background: var(--bg, var(--card-bg));
-  color: var(--text);
-  font: inherit;
-  font-size: var(--ui-font-chat);
-  line-height: 1.55;
-  resize: vertical;
 }

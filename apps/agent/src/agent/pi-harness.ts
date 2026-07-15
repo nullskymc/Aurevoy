@@ -553,7 +553,13 @@ async function toHarnessPromptInput(message: Message, model: PiModel<any>): Prom
     }
     images.push(await imageAttachmentToPiContent(attachment));
   }
-  return { text: message.content, images };
+  // 明确告诉模型图片已内联注入，避免再对 memory:// 或上传路径发 read
+  let text = message.content;
+  if (images.length > 0) {
+    const names = imageAttachments.map((a) => a.name).join(', ');
+    text = `${message.content}\n\n[System: ${images.length} image(s) attached inline: ${names}. Vision input is already provided — do not call read on memory:// or attachment paths.]`;
+  }
+  return { text, images };
 }
 
 function createHarnessSkills(): PiHarnessSkill[] {
@@ -712,7 +718,10 @@ async function userMessageContentToPi(message: Message, model: PiModel<any>): Pr
   const imageAttachments = (message.attachments ?? []).filter((attachment) => attachment.type === 'image');
   if (imageAttachments.length === 0) return message.content;
 
-  const content: Array<PiTextContent | PiImageContent> = [{ type: 'text', text: message.content }];
+  const content: Array<PiTextContent | PiImageContent> = [{
+    type: 'text',
+    text: `${message.content}\n\n[System: image(s) attached inline — do not call read on memory:// or attachment paths.]`,
+  }];
   for (const attachment of imageAttachments) {
     if (!model.input?.includes('image')) {
       throw new Error(`模型 ${model.provider}:${model.id} 不支持图片附件：${attachment.name}`);
@@ -1671,7 +1680,10 @@ function isTextFile(attachment: MessageAttachment): boolean {
 }
 
 function collectExternalPaths(task: Task): string[] {
-  return task.messages.flatMap((message) => message.attachments?.map((attachment) => attachment.path) ?? []);
+  const paths = task.messages.flatMap((message) => message.attachments?.map((attachment) => attachment.path) ?? []);
+  // 引擎上传目录：落盘后的图片附件可读（read 工具 externalPaths）
+  const uploadDir = join(config.workspaceDir, '.aurevoy-uploads');
+  return [...new Set([...paths, uploadDir].filter((p) => p && !p.startsWith('memory://')))];
 }
 
 function parseToolArguments(raw: string): Record<string, unknown> {
