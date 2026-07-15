@@ -42,9 +42,9 @@ export function SettingsPanel({
   onFetchModelsForProvider,
   onSaveEnabledModels: _onSaveEnabledModels,
   onSaveSlotEnabledModels,
+  onSaveSlotImageInputModels,
   onSaveSlotAvailableModels,
   onSelectModel,
-  onSaveVisionModel,
   onRemoveProvider,
   onChatFontSizeChange,
   onUiFontSizeChange,
@@ -169,9 +169,9 @@ export function SettingsPanel({
               fetchingModels={fetchingModels}
               onFetchModelsForProvider={onFetchModelsForProvider}
               onSaveSlotEnabledModels={onSaveSlotEnabledModels}
+              onSaveSlotImageInputModels={onSaveSlotImageInputModels}
               onSaveSlotAvailableModels={onSaveSlotAvailableModels}
               onSelectModel={onSelectModel}
-              onSaveVisionModel={onSaveVisionModel}
             />
           )}
 

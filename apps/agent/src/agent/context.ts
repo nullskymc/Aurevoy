@@ -61,10 +61,10 @@ export const TOOLS_WITH_LARGE_OUTPUT = new Set([
 /** 写入/确认/交付类工具（输出简短，不压缩） */
 export const TOOLS_KEEP_VERBATIM = new Set([
   'write', 'edit', 'copy_file', 'move_file', 'rename_file', 'delete_file',
-  'apply_artifact', 'create_artifact', 'attach_content', 'present_ui',
+  'apply_artifact', 'create_artifact', 'attach_content',
   'bundle_report', 'delegate', 'remember', 'recall', 'ask_user', 'load_skill',
   // 历史别名
-  'write_file', 'create_file', 'append_file',
+  'write_file', 'create_file', 'append_file', 'present_ui',
   'session_open', 'session_write', 'session_close', 'session_abort',
   'index_files',
 ]);
@@ -983,7 +983,7 @@ export function buildAgentIdentityMessage(): Message {
     '- Prefer real tool results over speculation. Never claim work is done without evidence from tools or prior verified context.',
     '- Stay inside the workspace sandbox unless the user explicitly granted external paths.',
     '- When something fails, report the concrete error and what you already verified; do not invent success.',
-    '- Keep final answers concise. Deliver large outputs via files + attach_content or present_ui, not wall-of-text dumps.',
+    '- Keep final answers concise. Deliver large outputs via files + attach_content, not wall-of-text dumps.',
   ].join('\n');
 
   return {
@@ -1007,7 +1007,7 @@ export function buildToolGuidanceMessage(): Message {
     '## Core loop',
     '1. Understand the goal; inspect the workspace before changing it.',
     '2. Use the smallest sufficient tool path; verify results.',
-    '3. Deliver to the user with the right channel (text / present_ui / attach_content).',
+    '3. Deliver to the user with the right channel (text / attach_content).',
     '4. Stop when done or clearly blocked; ask_user only when a decision is truly missing.',
     '',
     '## Workspace tools',
@@ -1021,11 +1021,8 @@ export function buildToolGuidanceMessage(): Message {
     '## Delivery (use these — do not only paste long content in chat)',
     '- `attach_content`: deliver a workspace file, image, or link. Use for HTML / Markdown / reports / images so the chat card + workbench preview open.',
     '  Prefer type=file_reference with a real path after writing the file.',
-    '- `present_ui`: constrained interactive UI in the conversation (NOT arbitrary HTML/JSX).',
-    '  kinds: data_table | stat_row | choice | calculator | stack.',
-    '  Use for comparison tables, metric rows, user choices, simple local calc, or stacked layouts.',
-    '  Reuse the same `id` to update a component in place.',
-    '- Complex visual reports (评估/调研/计划/纪要等): load skill `report-design` when available, write HTML under `report/`, then `bundle_report` → `attach_content`.',
+    '- Inline conversation UI is temporarily unavailable. For previews, dashboards, forms, or other rich content, write an HTML or Markdown file and deliver it with `attach_content`.',
+    '- Only for a user-requested long-form, inspectable, file-based report (评估/调研/计划/纪要等) should you load `report-design`, write HTML under `report/`, then `bundle_report` → `attach_content`.',
     '  Final chat reply = path + one-line summary (+ warnings). Do not restate the whole report.',
     '- `create_artifact` / `apply_artifact`: durable draft or file artifact when the user needs an inspectable intermediate, not as a substitute for attach_content delivery.',
     '',
@@ -1046,13 +1043,13 @@ export function buildToolGuidanceMessage(): Message {
     '## Web, memory, skills, user input',
     '- External facts: `web_search` then `web_fetch`; cite URLs; do not invent sources.',
     '- Long-term notes: `remember` / `recall` when useful across turns.',
-    '- Skills: if a catalog skill matches the task (especially report-design), call `load_skill` first and follow its protocol.',
+    '- Skills: load a catalog skill only when the task explicitly needs that skill. `report-design` is for long-form file reports.',
     '- Ambiguity that blocks progress: `ask_user` with few concrete questions; otherwise decide and proceed.',
     '',
     '## Honesty & safety',
     '- Tool failure is not success. Retry once with a corrected call when appropriate, then report.',
     '- Prefer minimal diffs; do not rewrite large files to change a few lines.',
-    '- Never claim HTML/UI was shown unless you actually called present_ui or attach_content (or the user already sees the file via other verified means).',
+    '- Never claim HTML/UI was shown unless you actually called attach_content (or the user already sees the file via other verified means).',
     '</operating_protocol>',
   ].join('\n');
 

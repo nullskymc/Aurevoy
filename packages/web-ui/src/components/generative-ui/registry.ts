@@ -1,9 +1,6 @@
 import type { ComponentType } from "react";
-import { DataTableCard, type DataTableProps } from "./components/DataTableCard";
-import { StatRowCard, type StatRowProps } from "./components/StatRowCard";
-import { ChoiceCard, type ChoiceProps } from "./components/ChoiceCard";
-import { CalculatorCard, type CalculatorProps } from "./components/CalculatorCard";
-import { StackCard, type StackProps } from "./components/StackCard";
+import type { UiCanvasNode, UiCanvasProps } from "@aurevoy/shared";
+import { CanvasCard } from "./components/CanvasCard";
 
 export type GenerativeUiComponentProps = {
   id: string;
@@ -23,74 +20,45 @@ function asObject(props: unknown): Record<string, unknown> | null {
   return props as Record<string, unknown>;
 }
 
-function validateDataTable(props: unknown): { ok: true; data: DataTableProps } | { ok: false; error: string } {
+
+function validateCanvas(props: unknown): { ok: true; data: UiCanvasProps } | { ok: false; error: string } {
   const o = asObject(props);
   if (!o) return { ok: false, error: "props 必须是对象" };
-  if (!Array.isArray(o.columns) || o.columns.length === 0) {
-    return { ok: false, error: "需要 columns" };
+
+  // JS 模式和声明式模式二选一：前者交给 sandbox iframe，后者走基础原语渲染器。
+  const hasCode = typeof o.html === "string" || typeof o.css === "string" || typeof o.script === "string";
+  if (hasCode) {
+    if (typeof o.html !== "string" || !o.html.trim() || typeof o.script !== "string" || !o.script.trim()) return { ok: false, error: "JS 模式需要 html + script" };
+  } else {
+    if (!Array.isArray(o.body) || o.body.length === 0) return { ok: false, error: "声明式模式需要非空 body 节点数组" };
+    if (!o.body.every(isCanvasNode)) return { ok: false, error: "body 包含无效节点" };
   }
-  if (!Array.isArray(o.rows)) return { ok: false, error: "需要 rows" };
+
+  const rawState = asObject(o.state) ?? {};
   return {
     ok: true,
     data: {
       title: typeof o.title === "string" ? o.title : undefined,
-      columns: o.columns.map(String),
-      rows: o.rows as DataTableProps["rows"],
-      features: Array.isArray(o.features) ? o.features.map(String) : ["sort", "copy"],
+      description: typeof o.description === "string" ? o.description : undefined,
+      state: rawState as UiCanvasProps["state"],
+      body: Array.isArray(o.body) ? o.body as UiCanvasNode[] : undefined,
+      html: typeof o.html === "string" ? o.html : undefined,
+      css: typeof o.css === "string" ? o.css : undefined,
+      script: typeof o.script === "string" ? o.script : undefined,
     },
   };
 }
 
-function validateStatRow(props: unknown): { ok: true; data: StatRowProps } | { ok: false; error: string } {
-  const o = asObject(props);
-  if (!o || !Array.isArray(o.items)) return { ok: false, error: "需要 items" };
-  return {
-    ok: true,
-    data: {
-      items: o.items as StatRowProps["items"],
-    },
-  };
-}
+const CANVAS_NODE_TYPES = new Set([
+  "section", "row", "column", "grid", "heading", "text", "badge", "divider", "spacer", "progress",
+  "button", "input", "textarea", "select", "checkbox",
+]);
 
-function validateChoice(props: unknown): { ok: true; data: ChoiceProps } | { ok: false; error: string } {
-  const o = asObject(props);
-  if (!o || typeof o.prompt !== "string" || !Array.isArray(o.options)) {
-    return { ok: false, error: "需要 prompt 与 options" };
-  }
-  return {
-    ok: true,
-    data: {
-      prompt: o.prompt,
-      multi: o.multi === true,
-      options: o.options as ChoiceProps["options"],
-    },
-  };
-}
-
-function validateCalculator(props: unknown): { ok: true; data: CalculatorProps } | { ok: false; error: string } {
-  const o = asObject(props);
-  if (!o || !Array.isArray(o.fields) || typeof o.formula !== "string") {
-    return { ok: false, error: "需要 fields 与 formula" };
-  }
-  return {
-    ok: true,
-    data: {
-      title: typeof o.title === "string" ? o.title : undefined,
-      formula: o.formula,
-      fields: o.fields as CalculatorProps["fields"],
-    },
-  };
-}
-
-function validateStack(props: unknown): { ok: true; data: StackProps } | { ok: false; error: string } {
-  const o = asObject(props);
-  if (!o || !Array.isArray(o.children)) return { ok: false, error: "需要 children" };
-  return {
-    ok: true,
-    data: {
-      children: o.children as StackProps["children"],
-    },
-  };
+function isCanvasNode(value: unknown, depth = 0): value is UiCanvasNode {
+  if (depth > 6) return false;
+  const node = asObject(value);
+  if (!node || typeof node.type !== "string" || !CANVAS_NODE_TYPES.has(node.type)) return false;
+  return node.children === undefined || (Array.isArray(node.children) && node.children.every((child) => isCanvasNode(child, depth + 1)));
 }
 
 // component 用宽松类型包装，避免每个卡片 props 泛型打架
@@ -100,24 +68,8 @@ export const generativeUiRegistry: Record<string, {
   validate: (props: unknown) => { ok: true; data: unknown } | { ok: false; error: string };
   component: AnyCard;
 }> = {
-  data_table: {
-    validate: validateDataTable,
-    component: DataTableCard as AnyCard,
-  },
-  stat_row: {
-    validate: validateStatRow,
-    component: StatRowCard as AnyCard,
-  },
-  choice: {
-    validate: validateChoice,
-    component: ChoiceCard as AnyCard,
-  },
-  calculator: {
-    validate: validateCalculator,
-    component: CalculatorCard as AnyCard,
-  },
-  stack: {
-    validate: validateStack,
-    component: StackCard as AnyCard,
+  canvas: {
+    validate: validateCanvas,
+    component: CanvasCard as AnyCard,
   },
 };

@@ -163,11 +163,11 @@ function App() {
     handleRemoveProvider,
     handleSaveEnabledModels,
     handleSaveSlotEnabledModels,
+    handleSaveSlotImageInputModels,
     handleSaveSlotAvailableModels,
     handleSaveModelSelection,
     handleSaveProviderConnection,
     handleSaveSettings,
-    handleSaveVisionModel,
     handleToggleMemory,
     refreshMemories,
     refreshSettings,
@@ -514,9 +514,9 @@ function App() {
             onFetchModelsForProvider={handleFetchModelsForProvider}
             onSaveEnabledModels={handleSaveEnabledModels}
             onSaveSlotEnabledModels={handleSaveSlotEnabledModels}
+            onSaveSlotImageInputModels={handleSaveSlotImageInputModels}
             onSaveSlotAvailableModels={handleSaveSlotAvailableModels}
             onSelectModel={handleActivateProviderModel}
-            onSaveVisionModel={handleSaveVisionModel}
             onRemoveProvider={handleRemoveProvider}
             onChatFontSizeChange={handleChatFontSizeChange}
             onUiFontSizeChange={handleUiFontSizeChange}

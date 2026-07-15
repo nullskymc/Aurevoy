@@ -294,7 +294,7 @@ export function Composer({
               const isImage = att.type === 'image';
               const imgSrc = isImage ? (() => {
                 try {
-                  return platform.filePathToUrl(att.path);
+                  return att.dataUrl ?? platform.filePathToUrl(att.path);
                 } catch {
                   return null;
                 }
@@ -313,7 +313,7 @@ export function Composer({
                         className="composer-attachment-thumb"
                         src={imgSrc}
                         alt={att.name}
-                        onClick={() => setViewingImage(att.path)}
+                        onClick={() => setViewingImage(att.dataUrl ?? att.path)}
                       />
                     ) : isImage ? (
                       <ImageFileIcon />

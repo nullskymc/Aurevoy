@@ -16,6 +16,7 @@ import { aurevoyCredentialStore, hasStoredCredential } from './credential-store.
 import {
   ensureLlmSchemaMigrated,
   getLlmProvider,
+  modelSupportsImage,
   readLlmCredential,
 } from './llm-store.js';
 import { providerIdSupportsXaiOauth, XAI_OAUTH_LABEL } from './xai-oauth.js';
@@ -185,8 +186,8 @@ export function resolveModelApi(api: string | undefined, baseUrl: string, provid
 }
 
 /**
- * @param modelOverride 覆盖模型 id（如全局视觉模型）
- * @param providerOverride 覆盖 provider（视觉 `provider:model` 跨槽时必须带上，避免用激活槽 baseUrl）
+ * @param modelOverride 覆盖模型 id（用于显式调用方测试或高级路由）
+ * @param providerOverride 覆盖 provider（避免使用激活槽的 baseUrl）
  */
 export function createPiModel(modelOverride?: string, providerOverride?: string): PiModel<any> {
   const provider = normalizePiProvider(providerOverride?.trim() || config.llm.provider);
@@ -233,7 +234,8 @@ export function createPiModel(modelOverride?: string, providerOverride?: string)
     baseUrl,
     reasoning: openAICompat?.reasoning ?? false,
     ...(openAICompat?.thinkingLevelMap ? { thinkingLevelMap: openAICompat.thinkingLevelMap } : {}),
-    input: ['text', 'image'],
+    // 自定义模型的图片能力来自本机注册表；未声明时在运行前明确拒绝图片请求。
+    input: modelSupportsImage(provider, modelId) ? ['text', 'image'] : ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: config.agent.contextTokenBudget,
     maxTokens: config.llm.maxTokens,

@@ -266,6 +266,7 @@ db.exec(`
                 CHECK (source IN ('remote', 'static', 'custom')),
     enabled     INTEGER NOT NULL DEFAULT 0,
     is_default  INTEGER NOT NULL DEFAULT 0,
+    supports_image INTEGER NOT NULL DEFAULT 0,
     sort_order  INTEGER NOT NULL DEFAULT 0,
     updated_at  TEXT NOT NULL,
     PRIMARY KEY (provider_id, model_id)

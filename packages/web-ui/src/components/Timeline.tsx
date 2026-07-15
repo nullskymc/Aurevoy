@@ -78,6 +78,21 @@ export interface AgentRoundData {
 
 /* ============ 工具函数 ============ */
 
+/**
+ * 按稳定 ID 合并内嵌内容块。
+ *
+ * SSE 重放、历史恢复和实时尾巴可能在不同路径重复携带同一个块；
+ * 渲染前统一收敛，避免 React key 冲突，同时保留最后一次 upsert 的内容。
+ */
+export function dedupeContentBlocks(blocks: ContentBlock[] | undefined): ContentBlock[] {
+  if (!blocks || blocks.length < 2) return blocks ?? [];
+  const byId = new Map<string, ContentBlock>();
+  for (const block of blocks) {
+    byId.set(block.id, block);
+  }
+  return [...byId.values()];
+}
+
 /** 从工具名推断步骤类型 */
 export function detectStepKind(toolName: string): StepKind {
   if (toolName === "execute_command" || toolName === "bash") return "command";
@@ -1445,9 +1460,10 @@ export function AgentRound({
       </div>
     </article>
   ) : null;
-  const contentBlocksNode = showOutput && data.contentBlocks && data.contentBlocks.length > 0 ? (
+  const contentBlocks = dedupeContentBlocks(data.contentBlocks);
+  const contentBlocksNode = showOutput && contentBlocks.length > 0 ? (
     <div className="content-blocks">
-      {data.contentBlocks.map((block) => (
+      {contentBlocks.map((block) => (
         <ContentBlockView
           key={block.id}
           block={block}

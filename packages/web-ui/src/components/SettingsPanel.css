@@ -1319,22 +1319,6 @@ button.settings-provider-line-main:focus-visible {
   line-height: 1.45;
 }
 
-.settings-models-vision {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 280px);
-  align-items: center;
-  gap: var(--ui-space-3);
-  margin: 0 0 var(--ui-space-3);
-  padding: var(--ui-space-3) var(--ui-space-4);
-  border: var(--ui-border-width) solid var(--border);
-  border-radius: var(--ui-radius-md);
-  background: color-mix(in srgb, var(--card-bg) 70%, transparent);
-}
-
-.settings-models-vision-global {
-  margin: 0 0 var(--ui-space-5);
-}
-
 .settings-models-ns {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.92em;
@@ -1346,43 +1330,6 @@ button.settings-provider-line-main:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-@media (max-width: 720px) {
-  .settings-models-vision {
-    grid-template-columns: 1fr;
-  }
-}
-
-.settings-models-vision > span {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.settings-models-vision strong {
-  color: var(--text);
-  font-size: var(--ui-font-sm);
-  font-weight: 650;
-}
-
-.settings-models-vision small {
-  color: var(--text-tertiary);
-  font-size: var(--ui-font-xs);
-  line-height: 1.35;
-}
-
-.settings-models-vision-select {
-  width: 100%;
-  min-width: 0;
-  height: 34px;
-  padding: 0 10px;
-  border: var(--ui-border-width) solid var(--border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--ui-font-sm);
 }
 
 .settings-models-sheet {
@@ -1400,7 +1347,8 @@ button.settings-provider-line-main:focus-visible {
 
 .settings-models-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px 22px;
+  /* 名称 | 图像能力 | 启用菜单 | 删除 */
+  grid-template-columns: minmax(0, 1fr) 18px 18px 22px;
   align-items: center;
   gap: var(--ui-space-3);
   min-height: 44px;
@@ -1458,6 +1406,7 @@ button.settings-provider-line-main:focus-visible {
   width: 16px;
   height: 16px;
   margin: 0;
+  border-radius: 4px;
   accent-color: var(--accent);
   cursor: pointer;
 }
@@ -1465,6 +1414,16 @@ button.settings-provider-line-main:focus-visible {
 .settings-models-row input[type="checkbox"]:disabled {
   cursor: default;
   opacity: 0.7;
+}
+
+.settings-models-add-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-tertiary);
+  font-size: var(--ui-font-xs);
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .settings-models-row-remove {

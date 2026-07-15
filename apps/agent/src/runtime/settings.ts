@@ -24,6 +24,7 @@ import {
   getAvailableModelIds,
   getDefaultModelId,
   getEnabledModelIds,
+  getImageInputModelIds,
   getLlmProvider,
   listLlmProviders,
   readLlmCredential,
@@ -31,6 +32,7 @@ import {
   replaceAvailableModels,
   setDefaultModel,
   setEnabledModels,
+  setImageInputModels,
   upsertLlmProvider,
   writeLlmGlobal,
 } from '../llm/llm-store.js';
@@ -126,7 +128,6 @@ export function loadPersistedSettings(): void {
   config.llm.temperature = global.temperature;
   config.llm.timeoutMs = global.timeoutMs;
   config.llm.maxTokens = global.maxTokens;
-  config.llm.visionModel = global.visionModel;
   if (isValidPiProviderId(global.activeProvider)) {
     activateProviderSlot(global.activeProvider);
   }
@@ -178,9 +179,9 @@ export function readRuntimeSettings(): RuntimeSettings {
       provider: activeProvider as RuntimeSettings['llm']['provider'],
       baseUrl: config.llm.baseUrl,
       model: config.llm.model,
-      visionModel: config.llm.visionModel,
       availableModels,
       enabledModels,
+      imageInputModels: getImageInputModelIds(activeProvider),
       temperature: config.llm.temperature,
       timeoutMs: config.llm.timeoutMs,
       maxTokens: config.llm.maxTokens,
@@ -276,10 +277,6 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
       }
       providerChanged = true;
     }
-    if (body.llm.visionModel !== undefined) {
-      config.llm.visionModel = body.llm.visionModel.trim();
-      writeLlmGlobal({ visionModel: config.llm.visionModel });
-    }
     if (body.llm.availableModels !== undefined) {
       replaceAvailableModels(active, body.llm.availableModels, { source: 'remote' });
       providerChanged = true;
@@ -328,6 +325,12 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
       providerChanged = true;
     }
 
+    if (body.llm.slotImageInputModels !== undefined) {
+      const pid = normalizeProvider(body.llm.slotImageInputModels.provider);
+      setImageInputModels(pid, body.llm.slotImageInputModels.imageInputModels);
+      providerChanged = true;
+    }
+
     if (body.llm.slotAvailableModels !== undefined) {
       const pid = normalizeProvider(body.llm.slotAvailableModels.provider);
       replaceAvailableModels(pid, body.llm.slotAvailableModels.availableModels, {
@@ -349,7 +352,6 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     // 保证激活指针与内存一致
     writeLlmGlobal({
       activeProvider: config.llm.provider,
-      visionModel: config.llm.visionModel,
       temperature: config.llm.temperature,
       timeoutMs: config.llm.timeoutMs,
       maxTokens: config.llm.maxTokens,
@@ -493,7 +495,6 @@ function activateProviderSlot(provider: string): void {
   config.llm.provider = provider;
   config.llm.baseUrl = slot?.baseUrl ?? (provider === 'openai-compatible' ? config.llm.baseUrl : '');
   config.llm.model = getDefaultModelId(provider) || slot?.defaultModel || '';
-  config.llm.visionModel = global.visionModel;
   if (slot?.maxTokens != null) {
     config.llm.maxTokens = slot.maxTokens;
   } else {
@@ -535,7 +536,6 @@ function removeProviderSlot(provider: string): void {
 function listProviderSlots(): LlmProviderSlot[] {
   ensureLlmSchemaMigrated();
   const active = config.llm.provider;
-  const globalVision = config.llm.visionModel;
   let providers = listLlmProviders();
   if (isValidPiProviderId(active) && !providers.some((p) => p.providerId === active)) {
     ensureProviderRow(active);
@@ -550,9 +550,9 @@ function listProviderSlots(): LlmProviderSlot[] {
         provider,
         baseUrl: isActive ? config.llm.baseUrl : slot.baseUrl,
         model: isActive ? config.llm.model : (getDefaultModelId(provider) || slot.defaultModel),
-        visionModel: globalVision,
         availableModels: getAvailableModelIds(provider),
         enabledModels: getEnabledModelIds(provider),
+        imageInputModels: getImageInputModelIds(provider),
         apiKeyConfigured: hasApiKeyCredential(provider),
         oauthConfigured: hasOauthCredential(provider),
       } satisfies LlmProviderSlot;

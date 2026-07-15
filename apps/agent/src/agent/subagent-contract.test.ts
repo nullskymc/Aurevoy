@@ -16,6 +16,7 @@ describe('subagent tool contract', () => {
     const names = unifiedToolRegistry.listNames();
     expect(names).toContain('delegate');
     expect(names).not.toContain('delegate_task');
+    expect(names).not.toContain('present_ui');
 
     const inputSchema = unifiedToolRegistry.get('delegate')?.inputSchema as {
       properties?: Record<string, unknown>;

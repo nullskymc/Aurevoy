@@ -95,6 +95,7 @@ import {
   startOauthLogin,
 } from './llm/oauth-login.js';
 import { getMcpStatuses, reloadMcpTools } from './tool/mcp-integration.js';
+import { AttachmentUploadError, materializeUploadedAttachments, MAX_UPLOADED_IMAGE_BYTES } from './agent/attachment-upload.js';
 import {
   readCleanupPolicyDays,
   readRuntimeSettings,
@@ -102,6 +103,8 @@ import {
 } from './runtime/settings.js';
 
 const startedAt = Date.now();
+const IMAGE_UPLOAD_BODY_LIMIT = Math.ceil(MAX_UPLOADED_IMAGE_BYTES * 4 / 3) + 1024 * 1024;
+const IMAGE_UPLOAD_DIR = resolve(config.workspaceDir, '.aurevoy-uploads');
 
 export async function buildServer(externalLogger?: Logger) {
   const log = externalLogger ?? pino({ level: 'info' }, pino.destination(1));
@@ -492,7 +495,7 @@ export async function buildServer(externalLogger?: Logger) {
   });
 
   // 创建并启动任务
-  app.post<{ Body: CreateTaskRequest }>('/api/tasks', async (req, reply) => {
+  app.post<{ Body: CreateTaskRequest }>('/api/tasks', { bodyLimit: IMAGE_UPLOAD_BODY_LIMIT }, async (req, reply) => {
     const goal = req.body?.goal?.trim();
     if (!goal) return reply.code(400).send({ error: 'goal is required' });
 
@@ -502,11 +505,19 @@ export async function buildServer(externalLogger?: Logger) {
       if (!project) return reply.code(404).send({ error: 'project not found' });
     }
 
+    let attachments;
+    try {
+      attachments = await materializeUploadedAttachments(req.body?.attachments, IMAGE_UPLOAD_DIR);
+    } catch (err) {
+      const message = err instanceof AttachmentUploadError ? err.message : `图片上传失败：${err instanceof Error ? err.message : String(err)}`;
+      return reply.code(400).send({ error: message });
+    }
+
     const task = createTask(
       goal,
       req.body?.budget,
       projectId,
-      req.body?.attachments,
+      attachments,
       req.body?.lifetimeBudget,
     );
     // 异步执行，立即返回；前端通过 SSE 订阅进度
@@ -524,14 +535,22 @@ export async function buildServer(externalLogger?: Logger) {
   // 多轮对话：在同一任务内追加一轮用户输入并继续执行（保留完整上下文）
   app.post<{ Params: { id: string }; Body: ContinueTaskRequest }>(
     '/api/tasks/:id/messages',
+    { bodyLimit: IMAGE_UPLOAD_BODY_LIMIT },
     async (req, reply) => {
       const task = taskStore.get(req.params.id);
       if (!task) return reply.code(404).send({ error: 'task not found' });
       const message = req.body?.message?.trim();
       if (!message) return reply.code(400).send({ error: 'message is required' });
+      let attachments;
+      try {
+        attachments = await materializeUploadedAttachments(req.body?.attachments, IMAGE_UPLOAD_DIR);
+      } catch (err) {
+        const error = err instanceof AttachmentUploadError ? err.message : `图片上传失败：${err instanceof Error ? err.message : String(err)}`;
+        return reply.code(400).send({ error });
+      }
       if (isTaskRunning(req.params.id)) {
         const delivery = req.body?.delivery === 'follow_up' ? 'follow_up' : 'steering';
-        const queued = queueRunningUserTurn(task, message, delivery, req.body?.attachments);
+        const queued = queueRunningUserTurn(task, message, delivery, attachments);
         if (!queued.delivered) {
           return reply.code(409).send({ error: '任务正在运行，但 Pi harness 队列不可用，请等待当前轮结束后再追问' });
         }
@@ -542,7 +561,7 @@ export async function buildServer(externalLogger?: Logger) {
         return reply.code(202).send(body);
       }
 
-      addUserTurn(task, message, req.body?.attachments);
+      addUserTurn(task, message, attachments);
       // 异步带完整历史重跑循环；前端通过同一 SSE 地址订阅这一轮
       void runHarnessTask(task);
 

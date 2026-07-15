@@ -15,7 +15,7 @@ import type {
 } from "@aurevoy/shared";
 import { ImageViewer } from "./ImageViewer";
 import { t } from "../i18n";
-import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData, type AgentRoundData } from "./Timeline";
+import { AgentRound, buildAgentRoundFromMessage, buildLiveAgentRoundData, dedupeContentBlocks, type AgentRoundData } from "./Timeline";
 import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -287,9 +287,9 @@ export function Conversation({
   });
   // 已落到历史消息上的 contentBlocks 不再塞进 live tail，避免「每条消息底部都挂同一文件卡」
   const historicalContentBlockIds = new Set(
-    messages.flatMap((message) => (message.contentBlocks ?? []).map((block) => block.id)),
+    messages.flatMap((message) => dedupeContentBlocks(message.contentBlocks).map((block) => block.id)),
   );
-  const liveOnlyContentBlocks = liveContentBlocks.filter(
+  const liveOnlyContentBlocks = dedupeContentBlocks(liveContentBlocks).filter(
     (block) => !historicalContentBlockIds.has(block.id),
   );
   const liveRoundData = hasLiveTail
@@ -1063,7 +1063,7 @@ function UserBubble({
           <div className="user-bubble-attachments">
             {visibleAttachments.map((att) => {
               const src = (() => {
-                try { return platform.filePathToUrl(att.path); } catch { return null; }
+                try { return att.dataUrl ?? platform.filePathToUrl(att.path); } catch { return null; }
               })();
               if (att.type === 'image') {
                 return src ? (
@@ -1071,7 +1071,7 @@ function UserBubble({
                     key={att.id}
                     type="button"
                     className="user-bubble-attachment is-image"
-                    onClick={() => setViewingImage(att.path)}
+                    onClick={() => setViewingImage(att.dataUrl ?? att.path)}
                     onContextMenu={(event) => handleAttachmentContextMenu(event, att)}
                     title={att.path}
                   >

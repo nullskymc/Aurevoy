@@ -239,9 +239,9 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
 
   try {
     assertPiLLMConfigured();
-    const selectedModel = selectPiModelForTask(task);
+    const selectedModel = selectPiModelForTask();
     assertPiModelSupportsAttachments(task, selectedModel);
-    const controller = new ActivePiTaskController(() => selectPiModelForTask(task));
+    const controller = new ActivePiTaskController(() => selectPiModelForTask());
     const harness = await createPiHarness(task, options, selectedModel, controller);
 
     publish({ type: 'phase', taskId: task.id, phase: 'thinking', detail: 'Agent 正在思考' });
@@ -691,32 +691,9 @@ async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<st
   return messages.map((message) => message.content).join('\n\n');
 }
 
-function selectPiModelForTask(task: Task): PiModel<any> {
-  const hasImageAttachment = task.messages.some((message) =>
-    message.attachments?.some((attachment) => attachment.type === 'image'),
-  );
-  if (!hasImageAttachment || !config.llm.visionModel.trim()) {
-    return createPiModel();
-  }
-  // 全局视觉：支持 namespace `provider:model`，也兼容裸 model id；
-  // 跨槽时必须带 provider，否则会误用当前激活槽的 baseUrl/key 路由。
-  const visionRef = parseModelNamespace(config.llm.visionModel);
-  return createPiModel(visionRef.model, visionRef.provider);
-}
-
-/** 解析 `provider:model`；provider 段需为合法 id，否则整串当作 model id。 */
-function parseModelNamespace(value: string): { provider?: string; model: string } {
-  const raw = value.trim();
-  if (!raw) return { model: '' };
-  const [maybeProvider, rest] = raw.split(/:(.*)/s);
-  if (
-    rest !== undefined &&
-    rest.length > 0 &&
-    /^[a-z0-9][a-z0-9-]*$/.test(maybeProvider)
-  ) {
-    return { provider: maybeProvider, model: rest };
-  }
-  return { model: raw };
+function selectPiModelForTask(): PiModel<any> {
+  // 一个任务只使用用户当前选择的主模型；图片只是该模型的输入能力，不触发隐式换模型。
+  return createPiModel();
 }
 
 function assertPiModelSupportsAttachments(task: Task, model: PiModel<any>): void {
@@ -742,7 +719,7 @@ async function userMessageContentToPi(message: Message, model: PiModel<any>): Pr
     }
     content.push({
       type: 'text',
-      text: `[Attached image: ${attachment.name}, mime: ${attachment.mimeType}, path: ${attachment.path}]`,
+      text: `[Attached image: ${attachment.name}, mime: ${attachment.mimeType}]`,
     });
     content.push(await imageAttachmentToPiContent(attachment));
   }

@@ -5,7 +5,7 @@
 
 ## 约定
 
-- JSON 请求/响应；SSE：`text/event-stream`，事件体为 `AgentEvent` JSON。  
+- JSON 请求/响应；SSE：`text/event-stream`，事件体为 `AgentEvent` JSON。图片附件以 data URL 随任务请求上传，单张上限 20MB；引擎落盘后任务历史只保存内部路径。
 - 鉴权：本机进程，无公网鉴权层。  
 - 改接口：先 shared → `build:shared` → agent / web-ui。
 

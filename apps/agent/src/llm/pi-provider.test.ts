@@ -1,11 +1,13 @@
 import { describe, expect, it, afterEach } from "vitest"
 import { config } from "../config.js"
 import { createPiModel, resolveModelBaseUrl } from "./pi-provider.js"
-import { settingsStore } from "../store/db.js"
+import {
+  ensureLlmSchemaMigrated,
+  getLlmProvider,
+  upsertLlmProvider,
+} from "./llm-store.js"
 
 const originalLlm = { ...config.llm }
-const PROVIDERS_KEY = "llm.providers"
-let previousProviders: string | undefined
 
 function withLlmConfig(overrides: Partial<typeof config.llm>, fn: () => void): void {
   Object.assign(config.llm, originalLlm, overrides)
@@ -16,30 +18,26 @@ function withLlmConfig(overrides: Partial<typeof config.llm>, fn: () => void): v
   }
 }
 
+/**
+ * 通过 llm-store / SQLite 槽位写入 baseUrl（生产路径），并在结束后恢复。
+ * 旧 KV `llm.providers` 已不再被 resolveModelBaseUrl 读取。
+ */
 function withProviderMap(map: Record<string, { baseUrl: string }>, fn: () => void): void {
-  previousProviders = settingsStore.get(PROVIDERS_KEY)
-  settingsStore.set(
-    PROVIDERS_KEY,
-    JSON.stringify(
-      Object.fromEntries(
-        Object.entries(map).map(([id, slot]) => [
-          id,
-          {
-            baseUrl: slot.baseUrl,
-            model: "",
-            visionModel: "",
-            availableModels: [],
-            enabledModels: [],
-          },
-        ]),
-      ),
-    ),
-  )
+  ensureLlmSchemaMigrated()
+  const previous = new Map<string, { baseUrl: string; existed: boolean }>()
+  for (const [id, slot] of Object.entries(map)) {
+    const cur = getLlmProvider(id)
+    previous.set(id, { baseUrl: cur?.baseUrl ?? "", existed: Boolean(cur) })
+    upsertLlmProvider(id, { baseUrl: slot.baseUrl })
+  }
   try {
     fn()
   } finally {
-    if (previousProviders === undefined) settingsStore.delete(PROVIDERS_KEY)
-    else settingsStore.set(PROVIDERS_KEY, previousProviders)
+    for (const [id, prev] of previous) {
+      // 仅恢复 baseUrl；测试不删除可能被 ensureProviderRow 新建的行，
+      // 避免误删用户本机真实 provider 记录之外的副作用扩大。
+      upsertLlmProvider(id, { baseUrl: prev.baseUrl })
+    }
   }
 }
 
@@ -77,16 +75,17 @@ describe("createPiModel", () => {
     })
   })
 
-  it("uses an explicit model override for vision routing", () => {
+  it("uses an explicit model override", () => {
     withLlmConfig({
       provider: "openai-compatible",
       baseUrl: "https://example.test/v1",
       model: "text-model",
     }, () => {
-      const model = createPiModel("vision-model")
+      const model = createPiModel("override-model")
 
-      expect(model.id).toBe("vision-model")
-      expect(model.name).toBe("vision-model")
+      expect(model.id).toBe("override-model")
+      expect(model.name).toBe("override-model")
+      expect(model.input).toEqual(["text"])
     })
   })
 
@@ -171,7 +170,7 @@ describe("resolveModelBaseUrl provider isolation", () => {
     })
   })
 
-  it("createPiModel with provider override uses that slot for vision routing", () => {
+  it("createPiModel with provider override uses that provider slot", () => {
     withLlmConfig({
       provider: "openai-codex",
       baseUrl: "",

@@ -110,8 +110,6 @@ export function ProviderSettings({
       baseUrl: savedBase,
       model: slot?.model
         ?? (isActive ? (settings?.llm.model ?? "") : draft.model),
-      // 视觉模型全局，不随槽位回填
-      visionModel: settings?.llm.visionModel ?? "",
       apiKey: "",
     });
   }

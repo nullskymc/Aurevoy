@@ -346,9 +346,9 @@ function buildModelGroups(settings: RuntimeSettings | null): ModelGroup[] {
         provider: settings.llm.provider,
         baseUrl: settings.llm.baseUrl,
         model: settings.llm.model,
-        visionModel: settings.llm.visionModel,
         availableModels: settings.llm.availableModels,
         enabledModels: settings.llm.enabledModels,
+        imageInputModels: settings.llm.imageInputModels,
         apiKeyConfigured: settings.llm.apiKeyConfigured,
         oauthConfigured: settings.llm.oauthConfigured,
       }];

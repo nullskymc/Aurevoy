@@ -78,7 +78,7 @@ export function useSettingsController({
     }
   }
 
-  /** Provider 连接：只写密钥 / Base URL / maxTokens，不改默认模型、启用列表、视觉模型。 */
+  /** Provider 连接：只写密钥 / Base URL / maxTokens，不改默认模型或启用列表。 */
   function handleSaveProviderConnection(
     draft: SettingsDraft,
     options?: { silent?: boolean },
@@ -177,22 +177,6 @@ export function useSettingsController({
       .finally(() => setSettingsSaving(false));
   }
 
-  /**
-   * 全局视觉模型：只写 visionModel，不切换激活 provider。
-   * 值推荐 namespace：`provider:model`；空字符串表示清除（回退主模型）。
-   */
-  function handleSaveVisionModel(visionModel: string): void {
-    setSettingsSaving(true);
-    void updateSettings({ llm: { visionModel } })
-      .then((next) => {
-        setRuntimeSettings(next);
-        setNotice(t("notice.settingsSaved"));
-        return refreshSettings();
-      })
-      .catch((err) => setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => setSettingsSaving(false));
-  }
-
   function handleSaveModelSelection(draft: ModelSelectorDraft): void {
     setSettingsSaving(true);
     // 跨 provider 切换：写入 provider + model；后端会激活槽位、持久化，并自动启用该模型
@@ -255,6 +239,17 @@ export function useSettingsController({
           next.llm.providers.find((item) => item.provider === provider)?.enabledModels.length
           ?? (next.llm.provider === provider ? next.llm.enabledModels.length : 0);
         setNotice(`${t("notice.enabledModelsPrefix")} ${count} ${t("notice.enabledModelsSuffix")}`);
+        return refreshSettings();
+      })
+      .catch((err) => setNotice(`${t("notice.saveModelListFailed")}${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  /** 将用户确认支持图片输入的模型写入本机注册表，不改变当前主模型。 */
+  function handleSaveSlotImageInputModels(provider: string, models: string[]): void {
+    const imageInputModels = [...models];
+    void updateSettings({ llm: { slotImageInputModels: { provider, imageInputModels } } })
+      .then((next) => {
+        setRuntimeSettings(next);
         return refreshSettings();
       })
       .catch((err) => setNotice(`${t("notice.saveModelListFailed")}${err instanceof Error ? err.message : String(err)}`));
@@ -412,12 +407,12 @@ export function useSettingsController({
     handleSaveEnabledModels,
     handleSaveSlotDefaultModel,
     handleSaveSlotEnabledModels,
+    handleSaveSlotImageInputModels,
     handleSaveSlotAvailableModels,
     handleRemoveProvider,
     handleSaveModelSelection,
     handleSaveProviderConnection,
     handleSaveSettings,
-    handleSaveVisionModel,
     handleToggleMemory,
     refreshMemories,
     refreshSettings,

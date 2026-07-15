@@ -2,7 +2,7 @@
  * Multi-provider LLM 持久化真相源。
  *
  * 表：
- * - llm_global：激活 provider + 视觉/温度等全局项
+ * - llm_global：激活 provider + 温度等全局项
  * - llm_providers：每 provider 连接（baseUrl / default model / maxTokens）
  * - llm_credentials：每 provider 唯一鉴权（api_key | oauth 互斥）
  * - llm_models：每 provider 模型目录（available/enabled/default）
@@ -11,18 +11,20 @@
  * 仅作一次性迁移来源，迁移后不再写入。
  */
 import type { Credential } from '@earendil-works/pi-ai';
+import { getModel } from '@earendil-works/pi-ai/compat';
 import { filterChatModelIds } from '@aurevoy/shared';
 import { db, settingsStore } from '../store/db.js';
 
 const SCHEMA_VERSION_KEY = 'schema.llm.version';
-const SCHEMA_VERSION = '2';
+const SCHEMA_VERSION = '3';
+/** 一次性：把 catalog 可知的图片能力写回 supports_image=0 的旧行。 */
+const IMAGE_CAPABILITY_BACKFILL_KEY = 'schema.llm.image_capability_backfill';
 
 export type LlmAuthType = 'api_key' | 'oauth';
 export type LlmModelSource = 'remote' | 'static' | 'custom';
 
 export interface LlmGlobalRow {
   activeProvider: string;
-  visionModel: string;
   temperature: number;
   timeoutMs: number;
   maxTokens: number;
@@ -42,6 +44,7 @@ export interface LlmModelRow {
   source: LlmModelSource;
   enabled: boolean;
   isDefault: boolean;
+  supportsImage: boolean;
   sortOrder: number;
 }
 
@@ -58,15 +61,72 @@ function isValidProviderId(id: string): boolean {
 // ---------------------------------------------------------------------------
 
 export function ensureLlmSchemaMigrated(): void {
+  ensureImageCapabilityColumn();
   const current = settingsStore.get(SCHEMA_VERSION_KEY);
   if (current === SCHEMA_VERSION) {
     // 表可能在新安装时已建；保证至少有 global 行
     ensureGlobalRow();
+    backfillImageCapabilityFromCatalog();
+    return;
+  }
+  // 已迁移过正式表的用户只补充新列，不能再用旧 KV 覆盖现有 Provider/模型设置。
+  if (current) {
+    settingsStore.set(SCHEMA_VERSION_KEY, SCHEMA_VERSION);
+    ensureGlobalRow();
+    backfillImageCapabilityFromCatalog();
     return;
   }
   migrateFromAppSettingsKv();
   settingsStore.set(SCHEMA_VERSION_KEY, SCHEMA_VERSION);
   ensureGlobalRow();
+  // 首次 KV 迁移已在 insert 时调用 inferSupportsImage；标记回填完成避免重复。
+  settingsStore.set(IMAGE_CAPABILITY_BACKFILL_KEY, '1');
+}
+
+/** 为已有数据库补上模型图片能力列；能力只在本机注册表中保存。 */
+function ensureImageCapabilityColumn(): void {
+  const columns = db.prepare('PRAGMA table_info(llm_models)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'supports_image')) {
+    db.exec('ALTER TABLE llm_models ADD COLUMN supports_image INTEGER NOT NULL DEFAULT 0');
+  }
+}
+
+function inferSupportsImage(providerId: string, modelId: string): boolean {
+  try {
+    return Boolean(
+      (getModel as (provider: string, model: string) => { input?: string[] } | undefined)(providerId, modelId)
+        ?.input?.includes('image'),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 一次性把 Pi catalog 已知支持图片的模型从 supports_image=0 提升为 1。
+ * 只升不降：用户在 UI 中手动关闭的能力不会被再次打开（回填仅跑一次）。
+ * 自定义 / 网关模型仍依赖用户勾选。
+ */
+function backfillImageCapabilityFromCatalog(): void {
+  if (settingsStore.get(IMAGE_CAPABILITY_BACKFILL_KEY) === '1') return;
+  const rows = db
+    .prepare(
+      `SELECT provider_id, model_id FROM llm_models WHERE supports_image = 0`,
+    )
+    .all() as Array<{ provider_id: string; model_id: string }>;
+  const ts = nowIso();
+  const update = db.prepare(
+    `UPDATE llm_models SET supports_image = 1, updated_at = ? WHERE provider_id = ? AND model_id = ?`,
+  );
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      if (inferSupportsImage(row.provider_id, row.model_id)) {
+        update.run(ts, row.provider_id, row.model_id);
+      }
+    }
+  });
+  tx();
+  settingsStore.set(IMAGE_CAPABILITY_BACKFILL_KEY, '1');
 }
 
 function ensureGlobalRow(): void {
@@ -83,24 +143,21 @@ function migrateFromAppSettingsKv(): void {
   const ts = nowIso();
 
   const activeProvider = (entries['llm.provider'] || 'openai').trim() || 'openai';
-  const visionModel = entries['llm.visionModel'] || '';
   const temperature = Number(entries['llm.temperature'] ?? 0.7);
   const timeoutMs = Number(entries['llm.timeoutMs'] ?? 120_000);
   const maxTokens = Number(entries['llm.maxTokens'] ?? 8192);
 
   db.prepare(
     `INSERT INTO llm_global (id, active_provider, vision_model, temperature, timeout_ms, max_tokens, updated_at)
-     VALUES (1, @activeProvider, @visionModel, @temperature, @timeoutMs, @maxTokens, @ts)
+     VALUES (1, @activeProvider, '', @temperature, @timeoutMs, @maxTokens, @ts)
      ON CONFLICT(id) DO UPDATE SET
        active_provider=excluded.active_provider,
-       vision_model=excluded.vision_model,
        temperature=excluded.temperature,
        timeout_ms=excluded.timeout_ms,
        max_tokens=excluded.max_tokens,
        updated_at=excluded.updated_at`,
   ).run({
     activeProvider,
-    visionModel,
     temperature: Number.isFinite(temperature) ? temperature : 0.7,
     timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : 120_000,
     maxTokens: Number.isFinite(maxTokens) ? maxTokens : 8192,
@@ -149,8 +206,8 @@ function migrateFromAppSettingsKv(): void {
   const clearModels = db.prepare('DELETE FROM llm_models WHERE provider_id = ?');
   const insertModel = db.prepare(
     `INSERT OR REPLACE INTO llm_models
-      (provider_id, model_id, source, enabled, is_default, sort_order, updated_at)
-     VALUES (@providerId, @modelId, @source, @enabled, @isDefault, @sortOrder, @ts)`,
+      (provider_id, model_id, source, enabled, is_default, supports_image, sort_order, updated_at)
+     VALUES (@providerId, @modelId, @source, @enabled, @isDefault, @supportsImage, @sortOrder, @ts)`,
   );
 
   const upsertApiKey = db.prepare(
@@ -214,6 +271,7 @@ function migrateFromAppSettingsKv(): void {
           source: 'remote',
           enabled: enabledSet.has(modelId) ? 1 : 0,
           isDefault: defModel && modelId === defModel ? 1 : 0,
+          supportsImage: inferSupportsImage(providerId, modelId) ? 1 : 0,
           sortOrder: index,
           ts,
         });
@@ -225,6 +283,7 @@ function migrateFromAppSettingsKv(): void {
           source: 'custom',
           enabled: 1,
           isDefault: 1,
+          supportsImage: inferSupportsImage(providerId, defModel) ? 1 : 0,
           sortOrder: models.length,
           ts,
         });
@@ -311,13 +370,12 @@ export function readLlmGlobal(): LlmGlobalRow {
   ensureLlmSchemaMigrated();
   const row = db
     .prepare(
-      `SELECT active_provider, vision_model, temperature, timeout_ms, max_tokens
+      `SELECT active_provider, temperature, timeout_ms, max_tokens
        FROM llm_global WHERE id = 1`,
     )
     .get() as
     | {
         active_provider: string;
-        vision_model: string;
         temperature: number;
         timeout_ms: number;
         max_tokens: number;
@@ -326,7 +384,6 @@ export function readLlmGlobal(): LlmGlobalRow {
   if (!row) {
     return {
       activeProvider: 'openai',
-      visionModel: '',
       temperature: 0.7,
       timeoutMs: 120_000,
       maxTokens: 8192,
@@ -334,7 +391,6 @@ export function readLlmGlobal(): LlmGlobalRow {
   }
   return {
     activeProvider: row.active_provider,
-    visionModel: row.vision_model ?? '',
     temperature: row.temperature,
     timeoutMs: row.timeout_ms,
     maxTokens: row.max_tokens,
@@ -346,7 +402,6 @@ export function writeLlmGlobal(patch: Partial<LlmGlobalRow>): LlmGlobalRow {
   const cur = readLlmGlobal();
   const next: LlmGlobalRow = {
     activeProvider: patch.activeProvider?.trim() || cur.activeProvider,
-    visionModel: patch.visionModel !== undefined ? patch.visionModel : cur.visionModel,
     temperature: patch.temperature ?? cur.temperature,
     timeoutMs: patch.timeoutMs ?? cur.timeoutMs,
     maxTokens: patch.maxTokens ?? cur.maxTokens,
@@ -357,7 +412,6 @@ export function writeLlmGlobal(patch: Partial<LlmGlobalRow>): LlmGlobalRow {
   db.prepare(
     `UPDATE llm_global SET
       active_provider = @activeProvider,
-      vision_model = @visionModel,
       temperature = @temperature,
       timeout_ms = @timeoutMs,
       max_tokens = @maxTokens,
@@ -608,7 +662,7 @@ export function listLlmModels(providerId: string): LlmModelRow[] {
   ensureLlmSchemaMigrated();
   const rows = db
     .prepare(
-      `SELECT provider_id, model_id, source, enabled, is_default, sort_order
+      `SELECT provider_id, model_id, source, enabled, is_default, supports_image, sort_order
        FROM llm_models WHERE provider_id = ? ORDER BY sort_order, model_id`,
     )
     .all(providerId) as Array<{
@@ -617,6 +671,7 @@ export function listLlmModels(providerId: string): LlmModelRow[] {
     source: string;
     enabled: number;
     is_default: number;
+    supports_image: number;
     sort_order: number;
   }>;
   return rows.map((r) => ({
@@ -625,6 +680,7 @@ export function listLlmModels(providerId: string): LlmModelRow[] {
     source: (r.source as LlmModelSource) || 'remote',
     enabled: r.enabled === 1,
     isDefault: r.is_default === 1,
+    supportsImage: r.supports_image === 1,
     sortOrder: r.sort_order,
   }));
 }
@@ -637,6 +693,16 @@ export function getEnabledModelIds(providerId: string): string[] {
   return listLlmModels(providerId)
     .filter((m) => m.enabled)
     .map((m) => m.modelId);
+}
+
+export function getImageInputModelIds(providerId: string): string[] {
+  return listLlmModels(providerId)
+    .filter((model) => model.supportsImage)
+    .map((model) => model.modelId);
+}
+
+export function modelSupportsImage(providerId: string, modelId: string): boolean {
+  return listLlmModels(providerId).some((model) => model.modelId === modelId && model.supportsImage);
 }
 
 export function getDefaultModelId(providerId: string): string {
@@ -661,6 +727,7 @@ export function replaceAvailableModels(
   const prevEnabled = new Set(prev.filter((m) => m.enabled).map((m) => m.modelId));
   const prevDefault = prev.find((m) => m.isDefault)?.modelId;
   const prevSource = new Map(prev.map((m) => [m.modelId, m.source]));
+  const prevSupportsImage = new Map(prev.map((m) => [m.modelId, m.supportsImage]));
   const source = options?.source ?? 'remote';
   const enableNew = options?.enableNew ?? false;
   const ts = nowIso();
@@ -673,14 +740,15 @@ export function replaceAvailableModels(
       const isDefault = prevDefault === modelId ? 1 : 0;
       db.prepare(
         `INSERT INTO llm_models
-          (provider_id, model_id, source, enabled, is_default, sort_order, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          (provider_id, model_id, source, enabled, is_default, supports_image, sort_order, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         providerId,
         modelId,
         prevSource.get(modelId) ?? source,
         enabled,
         isDefault,
+        (prevSupportsImage.get(modelId) ?? inferSupportsImage(providerId, modelId)) ? 1 : 0,
         index,
         ts,
       );
@@ -700,6 +768,23 @@ export function replaceAvailableModels(
     }
   });
   tx();
+}
+
+/** 保存一个 Provider 的图片输入能力白名单；未知模型会先注册为自定义模型。 */
+export function setImageInputModels(providerId: string, imageInputModels: string[]): void {
+  ensureProviderRow(providerId);
+  const enabled = new Set(filterChatModelIds(imageInputModels));
+  const available = getAvailableModelIds(providerId);
+  const missing = [...enabled].filter((model) => !available.includes(model));
+  if (missing.length > 0) {
+    replaceAvailableModels(providerId, [...available, ...missing], { source: 'custom' });
+  }
+  const ts = nowIso();
+  for (const modelId of getAvailableModelIds(providerId)) {
+    db.prepare(
+      `UPDATE llm_models SET supports_image = ?, updated_at = ? WHERE provider_id = ? AND model_id = ?`,
+    ).run(enabled.has(modelId) ? 1 : 0, ts, providerId, modelId);
+  }
 }
 
 export function setEnabledModels(providerId: string, enabledModels: string[]): void {

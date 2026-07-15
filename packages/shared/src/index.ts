@@ -53,7 +53,7 @@ export interface MessageToolCall {
   };
 }
 
-/** 用户附加到消息的文件引用。Agent 运行在本机，通过路径直接读取文件内容。 */
+/** 用户附加到消息的文件引用。图片会先上传到引擎，再以引擎管理的路径持久化。 */
 export interface MessageAttachment {
   id: string;
   /** 文件名（含扩展名） */
@@ -66,16 +66,78 @@ export interface MessageAttachment {
   size: number;
   /** 附件类型；为图片等后续扩展预留 */
   type: 'file' | 'image';
+  /**
+   * 仅图片上传请求使用的 data URL；引擎落盘后会移除此字段，避免图片内容写进任务 JSON。
+   * 支持 image/png、image/jpeg、image/gif、image/webp。
+   */
+  dataUrl?: string;
 }
 
 /** Agent 主动发送到对话框的富内容块类型 */
 export type ContentBlockType = 'file_reference' | 'image' | 'link' | 'ui';
 
 /**
- * 对话内限定 UI 组件 kind（前端 registry 白名单）。
- * 扩展能力靠加 kind，禁止 Agent 输出可执行 JSX。
+ * 对话内 UI 组件 kind。当前只保留 canvas：它提供声明式基础原语和隔离的 HTML/CSS/JS 模式。
+ * Agent 不得输出可访问宿主 DOM/API 的 JSX；canvas JS 只能通过受控 bridge 回传事件。
  */
-export type UiComponentKind = 'data_table' | 'stat_row' | 'choice' | 'calculator' | 'stack';
+export type UiComponentKind = 'canvas';
+
+export type UiCanvasPrimitive = string | number | boolean | null;
+
+/** canvas UI 可使用的受控视觉 token；不接受任意 CSS。 */
+export interface UiCanvasStyle {
+  tone?: 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
+  variant?: 'plain' | 'soft' | 'outline' | 'solid';
+  width?: 'auto' | 'full';
+  columns?: 1 | 2 | 3 | 4;
+  gap?: 0 | 1 | 2 | 3 | 4;
+  padding?: 0 | 1 | 2 | 3 | 4;
+  align?: 'start' | 'center' | 'end' | 'stretch';
+}
+
+export interface UiCanvasAction {
+  type: 'submit' | 'set' | 'toggle';
+  /** submit 时作为返回给 Agent 的 actionId。 */
+  id?: string;
+  stateKey?: string;
+  value?: UiCanvasPrimitive;
+  /** submit 时是否把完整 UI state 一并返回。 */
+  includeState?: boolean;
+}
+
+export interface UiCanvasNode {
+  id?: string;
+  type:
+    | 'section' | 'row' | 'column' | 'grid'
+    | 'heading' | 'text' | 'badge' | 'divider' | 'spacer' | 'progress'
+    | 'button' | 'input' | 'textarea' | 'select' | 'checkbox';
+  text?: string;
+  label?: string;
+  placeholder?: string;
+  stateKey?: string;
+  value?: UiCanvasPrimitive;
+  options?: Array<{ label: string; value: string }>;
+  action?: UiCanvasAction;
+  children?: UiCanvasNode[];
+  style?: UiCanvasStyle;
+  /** stateKey 的值等于 equals 时显示该节点。 */
+  visibleWhen?: { stateKey: string; equals: UiCanvasPrimitive };
+}
+
+/** Agent 自由组合的内嵌 UI；声明式模式使用安全原语，JS 模式运行在 sandbox iframe。 */
+export interface UiCanvasProps {
+  title?: string;
+  description?: string;
+  state?: Record<string, UiCanvasPrimitive>;
+  /** 声明式模式的基础节点；与 html/script 模式二选一。 */
+  body?: UiCanvasNode[];
+  /** JS 模式：在 sandbox iframe 中渲染的 HTML 片段。 */
+  html?: string;
+  /** JS 模式：仅允许内联 CSS，避免加载外部资源。 */
+  css?: string;
+  /** JS 模式：在 sandbox iframe 中执行的 Agent 脚本。 */
+  script?: string;
+}
 
 /** Agent 主动附加到消息的富内容块，可嵌入对话中呈现为文件引用、图片、超链接或限定 UI。 */
 export interface ContentBlock {
@@ -1188,15 +1250,12 @@ export interface LlmProviderSlot {
   baseUrl: string;
   /** 该 provider 上次使用的主模型 */
   model: string;
-  /**
-   * @deprecated 视觉模型已改为全局（llm.visionModel），不按槽位区分。
-   * API 仍回显全局值以兼容旧客户端；写入槽位时忽略。
-   */
-  visionModel: string;
   /** 最近一次从该 Provider 获取到的完整模型列表 */
   availableModels: string[];
   /** 用户勾选后允许出现在主界面模型菜单中的模型列表 */
   enabledModels: string[];
+  /** 在本机模型注册表中声明支持图片输入的模型 id。 */
+  imageInputModels: string[];
   apiKeyConfigured: boolean;
   /** 是否已配置 OAuth 订阅凭证（密钥永不回显） */
   oauthConfigured: boolean;
@@ -1243,15 +1302,12 @@ export interface RuntimeSettings {
     provider: string;
     baseUrl: string;
     model: string;
-    /**
-     * 全局视觉模型（namespace：`provider:model`，或裸 model id）。
-     * 消息带图片附件时自动切换；空则用主模型。不随 provider 槽位切换而改变。
-     */
-    visionModel: string;
     /** 当前激活 Provider 的完整模型列表（与 providers[active].availableModels 一致）。 */
     availableModels: string[];
     /** 当前激活 Provider 的已启用模型（与 providers[active].enabledModels 一致）。 */
     enabledModels: string[];
+    /** 当前激活 Provider 中声明支持图片输入的模型。 */
+    imageInputModels: string[];
     temperature: number;
     timeoutMs: number;
     maxTokens: number;
@@ -1317,8 +1373,6 @@ export interface UpdateRuntimeSettingsRequest {
     provider: string;
     baseUrl: string;
     model: string;
-    /** 全局视觉模型：`provider:model` 或裸 id；空字符串表示清除 */
-    visionModel: string;
     availableModels: string[];
     enabledModels: string[];
     temperature: number;
@@ -1339,6 +1393,11 @@ export interface UpdateRuntimeSettingsRequest {
     slotEnabledModels: {
       provider: string;
       enabledModels: string[];
+    };
+    /** 更新指定槽位中支持图片输入的模型；能力在本机注册并在请求前校验。 */
+    slotImageInputModels: {
+      provider: string;
+      imageInputModels: string[];
     };
     /**
      * 更新指定槽位的 availableModels（完整目录，含用户自定义 id）。

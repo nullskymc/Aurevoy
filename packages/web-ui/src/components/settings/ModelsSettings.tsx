@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { RuntimeSettings } from "@aurevoy/shared";
 import { filterChatModelIds, isChatModelId } from "@aurevoy/shared";
 import { t } from "../../i18n";
 import { ProviderIcon, providerLabel } from "../providerIcons";
 import { catalogFor } from "./providerCatalog";
-import { modelNamespace, parseModelNamespace } from "./modelNamespace";
+import { modelNamespace } from "./modelNamespace";
 
 export function ModelsSettings({
   settings,
@@ -12,32 +12,32 @@ export function ModelsSettings({
   fetchingModels,
   onFetchModelsForProvider,
   onSaveSlotEnabledModels,
+  onSaveSlotImageInputModels,
   onSaveSlotAvailableModels,
   onSelectModel,
-  onSaveVisionModel,
 }: {
   settings: RuntimeSettings | null;
   saving: boolean;
   fetchingModels: boolean;
   onFetchModelsForProvider: (provider: string, options?: { silent?: boolean }) => void;
   onSaveSlotEnabledModels: (provider: string, models: string[]) => void;
+  onSaveSlotImageInputModels: (provider: string, models: string[]) => void;
   onSaveSlotAvailableModels: (provider: string, models: string[]) => void;
   onSelectModel: (provider: string, model: string) => void;
-  onSaveVisionModel: (visionModel: string) => void;
 }) {
   const [query, setQuery] = useState("");
   /** 本地乐观启用列表：取消勾选立即生效，不被 saving/回写时序弹回 */
   const [enabledLocal, setEnabledLocal] = useState<Record<string, string[]>>({});
   /** 各 provider 自定义模型输入框草稿 */
   const [customDraft, setCustomDraft] = useState<Record<string, string>>({});
+  /** 新增自定义模型时，是否写入图片输入能力。 */
+  const [customSupportsImage, setCustomSupportsImage] = useState<Record<string, boolean>>({});
   /** 展开的 provider 抽屉；默认只开当前激活槽 */
   const [openProviders, setOpenProviders] = useState<Record<string, boolean>>({});
 
   const providers = settings?.llm.providers ?? [];
   const activeProvider = settings?.llm.provider;
   const activeModel = settings?.llm.model ?? "";
-  /** 全局视觉：namespace `provider:model` 或裸 id */
-  const globalVision = settings?.llm.visionModel ?? "";
   const normalizedQuery = query.trim().toLowerCase();
 
   useEffect(() => {
@@ -95,6 +95,12 @@ export function ModelsSettings({
     return filterChatModelIds(raw);
   }
 
+  function slotImageInputModels(provider: string): string[] {
+    return provider === activeProvider
+      ? (settings?.llm.imageInputModels ?? [])
+      : (settings?.llm.providers?.find((item) => item.provider === provider)?.imageInputModels ?? []);
+  }
+
   function slotDefaultModel(provider: string): string {
     if (provider === activeProvider) {
       return activeModel;
@@ -113,6 +119,13 @@ export function ModelsSettings({
     if (checked) enabled.add(model);
     else enabled.delete(model);
     commitEnabled(provider, [...enabled]);
+  }
+
+  function toggleImageInput(provider: string, model: string, checked: boolean): void {
+    const next = new Set(slotImageInputModels(provider));
+    if (checked) next.add(model);
+    else next.delete(model);
+    onSaveSlotImageInputModels(provider, [...next]);
   }
 
   function enableAll(provider: string): void {
@@ -137,9 +150,13 @@ export function ModelsSettings({
     }
     const nextAvailable = [...available, raw];
     onSaveSlotAvailableModels(provider, nextAvailable);
+    if (customSupportsImage[provider]) {
+      onSaveSlotImageInputModels(provider, [...slotImageInputModels(provider), raw]);
+    }
     // 新模型默认勾选进主界面菜单
     commitEnabled(provider, [...slotEnabled(provider), raw]);
     setCustomDraft((prev) => ({ ...prev, [provider]: "" }));
+    setCustomSupportsImage((prev) => ({ ...prev, [provider]: false }));
   }
 
   function removeModel(provider: string, model: string): void {
@@ -150,50 +167,6 @@ export function ModelsSettings({
       slotEnabled(provider).filter((m) => m !== model),
     );
   }
-
-  /** 跨 provider 的视觉候选：namespace 保证同名模型不冲突 */
-  const visionOptions = useMemo(() => {
-    const options: Array<{ value: string; label: string }> = [];
-    const seen = new Set<string>();
-    for (const slot of providers) {
-      const models = new Set([
-        ...slotAvailable(slot.provider),
-        ...slotEnabled(slot.provider),
-        ...(slotDefaultModel(slot.provider) ? [slotDefaultModel(slot.provider)] : []),
-      ]);
-      for (const model of models) {
-        if (!isChatModelId(model)) continue;
-        const value = modelNamespace(slot.provider, model);
-        if (seen.has(value)) continue;
-        seen.add(value);
-        options.push({
-          value,
-          label: `${providerLabel(slot.provider)} / ${model}`,
-        });
-      }
-    }
-    if (globalVision && !seen.has(globalVision)) {
-      const parsed = parseModelNamespace(globalVision);
-      options.unshift({
-        value: globalVision,
-        label: parsed.provider
-          ? `${providerLabel(parsed.provider)} / ${parsed.model}`
-          : globalVision,
-      });
-    }
-    return options;
-  }, [providers, settings, globalVision, activeProvider, activeModel]);
-
-  const visionSelectValue = (() => {
-    if (!globalVision) return "";
-    if (visionOptions.some((opt) => opt.value === globalVision)) return globalVision;
-    if (activeProvider) {
-      const ns = modelNamespace(activeProvider, globalVision);
-      if (visionOptions.some((opt) => opt.value === ns)) return ns;
-    }
-    const bare = visionOptions.find((opt) => parseModelNamespace(opt.value).model === globalVision);
-    return bare?.value ?? globalVision;
-  })();
 
   const groups = providers
     .map((slot) => {
@@ -236,28 +209,6 @@ export function ModelsSettings({
         />
       </div>
 
-      {providers.length > 0 && (
-        <label className="settings-models-vision settings-models-vision-global">
-          <span>
-            <strong>{t("settings.visionModelTitle")}</strong>
-            <small>{t("settings.visionModelDesc")}</small>
-          </span>
-          <select
-            className="settings-models-vision-select"
-            value={visionSelectValue}
-            disabled={saving || visionOptions.length === 0}
-            onChange={(event) => onSaveVisionModel(event.currentTarget.value)}
-          >
-            <option value="">{t("settings.visionModelPlaceholder")}</option>
-            {visionOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-
       {providers.length === 0 ? (
         <div className="settings-provider-empty">
           <p>{t("settings.modelsNeedProvider")}</p>
@@ -269,10 +220,10 @@ export function ModelsSettings({
       ) : (
         groups.map(({ slot, models }) => {
           const enabledSet = new Set(slotEnabled(slot.provider));
+          const imageSet = new Set(slotImageInputModels(slot.provider));
           const current = slotDefaultModel(slot.provider);
           const available = slotAvailable(slot.provider);
           const isActiveSlot = slot.provider === activeProvider;
-          const visionParsed = parseModelNamespace(globalVision);
           const allEnabled = available.length > 0 && available.every((m) => enabledSet.has(m));
           const slotCatalog = catalogFor(settings, slot.provider);
           // 搜索时强制展开匹配组；否则看抽屉状态（默认仅激活槽展开）
@@ -360,11 +311,8 @@ export function ModelsSettings({
                         const isCurrent = isActiveSlot && model === current;
                         // 勾选 = 出现在输入框模型菜单；点名称 = 切换并保存为当前主模型
                         const checked = enabledSet.has(model);
+                        const imageChecked = imageSet.has(model);
                         const ns = modelNamespace(slot.provider, model);
-                        const isVision =
-                          globalVision === ns
-                          || (visionParsed.provider === slot.provider && visionParsed.model === model)
-                          || (!visionParsed.provider && globalVision === model);
                         return (
                           <div
                             key={ns}
@@ -383,8 +331,18 @@ export function ModelsSettings({
                             >
                               <span className="settings-models-row-id" title={ns}>{model}</span>
                               {isCurrent && <em>{t("settings.modelCurrent")}</em>}
-                              {isVision && !isCurrent && <em>{t("settings.modelVisionTag")}</em>}
                             </button>
+                            <input
+                              type="checkbox"
+                              checked={imageChecked}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={(event) => {
+                                event.stopPropagation();
+                                toggleImageInput(slot.provider, model, event.currentTarget.checked);
+                              }}
+                              aria-label={`${ns} ${t("settings.imageInputLabel")}`}
+                              title={t("settings.imageInputDesc")}
+                            />
                             <input
                               type="checkbox"
                               checked={checked}
@@ -449,6 +407,18 @@ export function ModelsSettings({
                     >
                       {t("settings.addModel")}
                     </button>
+                    <label className="settings-models-add-image" title={t("settings.imageInputDesc")}>
+                      <input
+                        type="checkbox"
+                        checked={customSupportsImage[slot.provider] ?? false}
+                        disabled={saving}
+                        onChange={(event) => setCustomSupportsImage((prev) => ({
+                          ...prev,
+                          [slot.provider]: event.currentTarget.checked,
+                        }))}
+                      />
+                      {t("settings.imageInputLabel")}
+                    </label>
                   </div>
                 </div>
               )}
