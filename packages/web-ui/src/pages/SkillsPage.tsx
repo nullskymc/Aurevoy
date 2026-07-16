@@ -7,6 +7,9 @@ import "./SkillsPage.css";
 
 type SourceTab = "personal" | "system";
 
+/** 主列表默认可见条数；超出部分折叠，点击后在原网格继续展开 */
+const VISIBLE_SKILL_LIMIT = 6;
+
 function isPersonal(skill: SkillDescriptor): boolean {
   return skill.sourceDir === "user" || skill.sourceDir === "workspace";
 }
@@ -23,6 +26,22 @@ function matchesQuery(skill: SkillDescriptor, query: string): boolean {
   if (!query) return true;
   const q = query.toLowerCase();
   return skill.name.toLowerCase().includes(q) || skill.description.toLowerCase().includes(q);
+}
+
+function formatOverflowLabel(overflow: SkillDescriptor[]): string {
+  if (overflow.length === 0) return "";
+  const a = overflow[0]?.name ?? "";
+  const b = overflow[1]?.name ?? "";
+  if (overflow.length === 1) {
+    return t("skillsPage.overflowViewOne").replace("{a}", a);
+  }
+  if (overflow.length === 2) {
+    return t("skillsPage.overflowViewTwo").replace("{a}", a).replace("{b}", b);
+  }
+  return t("skillsPage.overflowViewMore")
+    .replace("{a}", a)
+    .replace("{b}", b)
+    .replace("{n}", String(overflow.length - 2));
 }
 
 export function SkillsPage({
@@ -163,11 +182,7 @@ export function SkillsPage({
         <>
           <section className="skills-section">
             <h2 className="skills-section-title">{t("skillsPage.installed")}</h2>
-            <div className="skills-grid">
-              {installed.map((skill) => (
-                <SkillListCard key={skill.name} skill={skill} onOpen={() => setSelectedName(skill.name)} />
-              ))}
-            </div>
+            <SkillsSectionList skills={installed} onOpen={(name) => setSelectedName(name)} />
           </section>
 
           <section className="skills-section">
@@ -196,11 +211,11 @@ export function SkillsPage({
             {tabSkills.length === 0 ? (
               <p className="skills-empty is-inline">{t("skillsPage.emptyTab")}</p>
             ) : (
-              <div className="skills-grid">
-                {tabSkills.map((skill) => (
-                  <SkillListCard key={skill.name} skill={skill} onOpen={() => setSelectedName(skill.name)} />
-                ))}
-              </div>
+              <SkillsSectionList
+                key={sourceTab}
+                skills={tabSkills}
+                onOpen={(name) => setSelectedName(name)}
+              />
             )}
           </section>
         </>
@@ -217,6 +232,49 @@ export function SkillsPage({
         />
       )}
     </section>
+  );
+}
+
+function SkillsSectionList({
+  skills,
+  onOpen,
+}: {
+  skills: SkillDescriptor[];
+  onOpen: (name: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const hasOverflow = skills.length > VISIBLE_SKILL_LIMIT;
+  const overflow = skills.slice(VISIBLE_SKILL_LIMIT);
+  const shown = expanded || !hasOverflow ? skills : skills.slice(0, VISIBLE_SKILL_LIMIT);
+
+  return (
+    <>
+      <div className="skills-grid">
+        {shown.map((skill) => (
+          <SkillListCard key={skill.name} skill={skill} onOpen={() => onOpen(skill.name)} />
+        ))}
+      </div>
+      {hasOverflow && !expanded && (
+        <button
+          type="button"
+          className="skills-overflow-trigger"
+          onClick={() => setExpanded(true)}
+          aria-label={t("skillsPage.overflowAria").replace("{n}", String(skills.length))}
+        >
+          <span className="skills-overflow-label">{formatOverflowLabel(overflow)}</span>
+        </button>
+      )}
+      {hasOverflow && expanded && (
+        <button
+          type="button"
+          className="skills-overflow-trigger"
+          onClick={() => setExpanded(false)}
+          aria-label={t("skillsPage.overflowCollapse")}
+        >
+          <span className="skills-overflow-label">{t("skillsPage.overflowCollapse")}</span>
+        </button>
+      )}
+    </>
   );
 }
 
@@ -462,3 +520,5 @@ function ReloadIcon({ spinning }: { spinning?: boolean }) {
     </svg>
   );
 }
+
+

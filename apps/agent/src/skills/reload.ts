@@ -101,7 +101,7 @@ export function startSkillWatcher(): () => void {
     }
   }
 
-  log.info({ dirCount: dirs.length, watcherCount: watchers.length }, 'skill 热监听已启动');
+  log.debug({ dirCount: dirs.length, watcherCount: watchers.length }, 'skill 热监听已启动');
 
   return () => {
     for (const w of watchers) {
@@ -109,6 +109,6 @@ export function startSkillWatcher(): () => void {
     }
     watchers.length = 0;
     if (debounceTimer) clearTimeout(debounceTimer);
-    log.info('skill 监听已停止');
+    log.debug('skill 监听已停止');
   };
 }

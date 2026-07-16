@@ -286,6 +286,22 @@ export function GeneralSettings({
 
       <SettingsGroup title={t("settings.general")}>
         <SettingsSelectRow
+          title={t("settings.logLevelTitle")}
+          description={t("settings.logLevelDesc")}
+          value={draft.logLevel}
+          options={[
+            { value: "debug", label: t("settings.logLevelDebug") },
+            { value: "info", label: t("settings.logLevelInfo") },
+            { value: "warn", label: t("settings.logLevelWarn") },
+            { value: "error", label: t("settings.logLevelError") },
+          ]}
+          onChange={(value) => onDraftChange({ ...draft, logLevel: value })}
+        />
+        <SettingsInfoRow
+          title={t("settings.logFileTitle")}
+          description={settings?.logging?.logFile ?? t("settings.notConnected")}
+        />
+        <SettingsSelectRow
           title={t("settings.cleanupPolicyTitle")}
           description={t("settings.cleanupPolicyDesc")}
           value={String(draft.cleanupPolicyDays)}

@@ -52,6 +52,8 @@ export interface SettingsDraft {
   searchProvider: string;
   searchBaseUrl: string;
   searchApiKey: string;
+  /** 引擎运维日志等级 */
+  logLevel: string;
 }
 
 export interface SettingsPanelProps {

@@ -13,6 +13,9 @@
  *   - *.app.tar.gz (+ .sig)     → darwin-{arch}
  *   - *setup.exe / *.nsis.zip   → windows-x86_64
  *   - *.AppImage                → linux-x86_64
+ *
+ * 注意：mac 构建必须产出 .app.tar.gz（tauri build --bundles app,dmg），
+ * 仅 dmg 不会生成热更新包，客户端会报 platforms 缺少 darwin-aarch64。
  */
 import fs from "node:fs";
 import path from "node:path";

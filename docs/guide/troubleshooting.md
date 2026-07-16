@@ -18,6 +18,7 @@ description: Aurevoy 故障排查：引擎离线、模型失败、审批卡住�
 2. 仅正式版 Release 会出现在 `latest` 通道；带 `-` 的预发布不会被标为 latest  
 3. 设置页手动再点一次 **检查更新**；仍失败时从 Releases 手动下载安装包  
 4. 开发者：确认 CI 已上传 `latest.json` 与对应平台的 `.sig`，见 [自动更新](/dev/auto-update)
+5. Mac 报 `None of the fallback platforms ["darwin-aarch64-app", "darwin-aarch64"] were found`：说明 `latest.json` 的 `platforms` 里没有 `darwin-aarch64`，通常是 Release **缺** `*.app.tar.gz` + `.sig`（只发了 DMG）。修复：mac 构建用 `--bundles app,dmg` 后重发；见 [自动更新](/dev/auto-update)
 
 ### 引擎一直离线
 

@@ -18,28 +18,25 @@ async function main() {
   const rootLogger = createLogger(config.logging);
   const log = getLogger('server');
 
-  log.info({ provider: config.llm.provider, model: config.llm.model, host: config.host, port: config.port, db: config.dbPath }, '加载配置完成');
-
   loadPersistedSettings();
   skillRegistry.load();
 
   // 初始化统一工具框架（Effect-TS + 基础工具 + Skill 工具）
   initializeUnifiedToolFramework();
-  log.info('统一工具框架已初始化');
-
-  log.info({ count: skillRegistry.list().length }, 'skill 模块已加载');
   const stopSkillWatcher = startSkillWatcher();
 
   log.info(
     {
-      provider: config.llm.provider, model: config.llm.model, baseUrl: config.llm.baseUrl,
+      provider: config.llm.provider,
+      model: config.llm.model,
+      host: config.host,
+      port: config.port,
+      skills: skillRegistry.list().length,
       apiKeyConfigured: config.llm.apiKey.trim().length > 0,
-      apiKeySource: 'settings',
     },
-    '运行时配置已加载',
+    '引擎初始化完成',
   );
 
-  log.info('初始化 MCP 连接中...');
   const mcp = await initializeMcpTools();
 
   const app = await buildServer(rootLogger);

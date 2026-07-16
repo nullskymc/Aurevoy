@@ -108,11 +108,31 @@ const IMAGE_UPLOAD_DIR = resolve(config.workspaceDir, '.aurevoy-uploads');
 
 export async function buildServer(externalLogger?: Logger) {
   const log = externalLogger ?? pino({ level: 'info' }, pino.destination(1));
-  const app = Fastify({ loggerInstance: log });
+  // 默认关闭 access log：/api/health 与 UI 轮询会占日志大半；需要时设 AUREVOY_LOG_HTTP=1
+  const app = Fastify({
+    loggerInstance: log,
+    disableRequestLogging: !config.logging.http,
+  });
 
   app.addHook('onRequest', async (req) => {
     (req.raw as unknown as Record<string, unknown>).requestId = randomUUID();
   });
+
+  // 未开完整 HTTP 日志时，仍记录 4xx/5xx，避免静默吞客户端错误
+  if (!config.logging.http) {
+    app.addHook('onResponse', async (req, reply) => {
+      if (reply.statusCode < 400) return;
+      req.log.warn(
+        {
+          method: req.method,
+          url: req.url,
+          statusCode: reply.statusCode,
+          responseTime: reply.elapsedTime,
+        },
+        'request failed',
+      );
+    });
+  }
 
   // 应用工具设置
   const toolSettings = toolSettingsStore.list();

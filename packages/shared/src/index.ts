@@ -1248,6 +1248,9 @@ export interface PiProviderCatalogEntry {
   custom?: boolean;
 }
 
+/** 引擎运维日志等级（Pino）。 */
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+
 export interface RuntimeSettings {
   llm: {
     /** 当前激活的 Pi provider id。 */
@@ -1314,6 +1317,12 @@ export interface RuntimeSettings {
     provider: 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom';
     baseUrl: string;
     apiKeyConfigured: boolean;
+  };
+  /** 引擎运维日志（文件在 logFile；任务审计轨迹仍写 SQLite） */
+  logging: {
+    level: LogLevel;
+    /** 当前日志文件路径（只读展示） */
+    logFile: string;
   };
 }
 
@@ -1401,6 +1410,10 @@ export interface UpdateRuntimeSettingsRequest {
     baseUrl: string;
     /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */
     apiKey: string;
+  }>;
+  /** 运维日志；仅 level 可写，路径只读 */
+  logging?: Partial<{
+    level: LogLevel;
   }>;
 }
 

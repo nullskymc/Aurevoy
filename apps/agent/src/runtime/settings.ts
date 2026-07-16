@@ -4,6 +4,7 @@ import type {
   AgentToolExecutionMode,
   AutoModeLevel,
   LlmProviderSlot,
+  LogLevel,
   RuntimeSettings,
   TaskBudget,
   UpdateRuntimeSettingsRequest,
@@ -38,6 +39,7 @@ import {
   writeLlmGlobal,
 } from '../llm/llm-store.js';
 import { settingsStore } from '../store/db.js';
+import { setLogLevel } from '../logging/logger.js';
 import { resetPythonCache } from './python-runtime.js';
 
 const SETTING_KEYS = {
@@ -66,7 +68,10 @@ const SETTING_KEYS = {
   searchProvider: 'search.provider',
   searchBaseUrl: 'search.baseUrl',
   searchApiKey: 'search.apiKey',
+  logLevel: 'logging.level',
 } as const;
+
+const LOG_LEVELS: readonly LogLevel[] = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'];
 
 const DEFAULT_CLEANUP_POLICY_DAYS = 30;
 
@@ -156,6 +161,12 @@ export function loadPersistedSettings(): void {
   applyBudgetSetting(entries[SETTING_KEYS.budgetLifetimeMaxToolCalls], 'lifetime', 'maxToolCalls');
   applyBudgetSetting(entries[SETTING_KEYS.budgetLifetimeMaxWallTimeMs], 'lifetime', 'maxWallTimeMs');
   applyBudgetSetting(entries[SETTING_KEYS.budgetLifetimeMaxOutputBytes], 'lifetime', 'maxOutputBytes');
+
+  const logLevel = normalizeLogLevel(entries[SETTING_KEYS.logLevel]);
+  if (logLevel) {
+    config.logging.level = logLevel;
+    setLogLevel(logLevel);
+  }
 }
 
 function safeListPiProviderCatalog(): PiProviderCatalogEntry[] {
@@ -212,6 +223,10 @@ export function readRuntimeSettings(): RuntimeSettings {
       provider: config.search.provider,
       baseUrl: config.search.baseUrl,
       apiKeyConfigured: config.search.apiKey.trim().length > 0,
+    },
+    logging: {
+      level: config.logging.level,
+      logFile: config.logging.file,
     },
   };
 }
@@ -471,8 +486,21 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     }
   }
 
+  if (body.logging?.level !== undefined) {
+    const level = normalizeLogLevel(body.logging.level);
+    if (!level) throw new Error('logging.level 非法');
+    config.logging.level = level;
+    settingsStore.set(SETTING_KEYS.logLevel, level);
+    setLogLevel(level);
+  }
+
   if (providerChanged) resetPiProviderCache();
   return { settings: readRuntimeSettings(), mcpChanged };
+}
+
+function normalizeLogLevel(value: unknown): LogLevel | null {
+  if (typeof value !== 'string') return null;
+  return (LOG_LEVELS as readonly string[]).includes(value) ? (value as LogLevel) : null;
 }
 
 export function readCleanupPolicyDays(): number {

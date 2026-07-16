@@ -29,6 +29,8 @@ export const config = {
       | 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal',
     file: process.env.AUREVOY_LOG_FILE ?? resolve(homedir(), '.aurevoy', 'logs', 'aurevoy.log'),
     pretty: process.env.AUREVOY_LOG_PRETTY !== 'false',
+    /** HTTP access log；默认关（health/列表轮询会刷屏）。设 AUREVOY_LOG_HTTP=1 开启 */
+    http: process.env.AUREVOY_LOG_HTTP === '1' || process.env.AUREVOY_LOG_HTTP === 'true',
   },
 
   host: process.env.AUREVOY_HOST ?? AGENT_DEFAULT_HOST,

@@ -34,5 +34,6 @@ export function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
     searchProvider: settings?.search?.provider ?? "duckduckgo_lite",
     searchBaseUrl: settings?.search?.baseUrl ?? "",
     searchApiKey: "",
+    logLevel: settings?.logging?.level ?? "info",
   };
 }

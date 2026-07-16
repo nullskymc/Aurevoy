@@ -158,6 +158,9 @@ export function useSettingsController({
         baseUrl: draft.searchBaseUrl,
         ...(draft.searchApiKey ? { apiKey: draft.searchApiKey } : {}),
       },
+      logging: {
+        level: draft.logLevel as "trace" | "debug" | "info" | "warn" | "error" | "fatal",
+      },
     };
     setSettingsSaving(true);
     void updateSettings(body)
