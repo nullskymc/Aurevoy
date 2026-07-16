@@ -56,13 +56,48 @@ npx tauri signer generate -w ~/.tauri/aurevoy.key
 npx tauri signer generate -w ~/.tauri/aurevoy.key --ci
 ```
 
-将 **公钥内容** 写入 `tauri.conf.json` → `plugins.updater.pubkey`。  
-私钥内容配置为 GitHub Secrets：
+将 **公钥内容** 写入 `tauri.conf.json` → `plugins.updater.pubkey`。
+
+### GitHub Secret 配置（最容易踩坑）
 
 | Secret | 说明 |
 |---|---|
-| `TAURI_SIGNING_PRIVATE_KEY` | 私钥文件全文（或路径内容） |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 若生成时设了密码则必填，否则可空 |
+| `TAURI_SIGNING_PRIVATE_KEY` | **`~/.tauri/aurevoy.key` 文件的整行原文**（一条 base64，约 300+ 字符） |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | **仅在生成密钥时设了密码才创建**；无密码则不要建这个 Secret |
+
+正确复制：
+
+```bash
+# 预览：应是单行、以 dW50… 开头、以 == 结尾、无空格无引号
+wc -c ~/.tauri/aurevoy.key    # 本仓库生成的密钥约为 348
+cat ~/.tauri/aurevoy.key
+# macOS 一键拷贝到剪贴板后粘贴进 Secret：
+pbcopy < ~/.tauri/aurevoy.key
+```
+
+**不要**这样配：
+
+| 错误 | 后果 |
+|---|---|
+| 再 `base64` 编一层 | 解码失败或签出无效签名 |
+| 加引号 `"dW50…"` | base64 非法字符 |
+| 填本地路径 `~/.tauri/…` | runner 上没有该文件 |
+| 填公钥 `.pub` | 无法签名 |
+| 粘贴解码后的多行 `untrusted comment:…` | `Invalid symbol 58`（冒号）等 |
+| 无密码却建了空的/错的 `…_PASSWORD` | 解密失败 |
+
+本地校验密钥可用：
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/aurevoy.key)"
+# 不要 export 空密码变量，除非真的设了密码
+echo test > /tmp/t.bin
+cd apps/desktop && npx tauri signer sign /tmp/t.bin
+# 成功会生成 /tmp/t.bin.sig
+```
+
+CI 里 workflow 会把 Secret 写成临时文件，再把 `TAURI_SIGNING_PRIVATE_KEY` 设为**文件路径**（Tauri 支持 path 或内容），避免环境变量里夹换行导致  
+`failed to decode base64 secret key: Invalid symbol 61`。
 
 **丢失私钥 = 无法再给已安装客户端推送可验证更新**，需重新生成密钥并发布强制换钥版本。
 
