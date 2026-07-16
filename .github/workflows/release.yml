@@ -8,11 +8,6 @@ on:
 permissions:
   contents: write
 
-env:
-  # Tauri updater 签名密钥（minisign）。缺失时构建会失败——必须在仓库 Secrets 中配置。
-  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-
 jobs:
   build-macos:
     name: Build (macOS ARM64)
@@ -48,12 +43,45 @@ jobs:
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli
 
-      - name: Require updater signing key
+      - name: Prepare updater signing key
+        env:
+          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "Missing secret TAURI_SIGNING_PRIVATE_KEY (Tauri updater minisign private key)."
+          set -euo pipefail
+          if [ -z "${RAW_KEY:-}" ]; then
+            echo "Missing secret TAURI_SIGNING_PRIVATE_KEY"
+            echo "Value must be the exact one-line content of ~/.tauri/aurevoy.key (no quotes)."
             exit 1
           fi
+          # 去掉首尾空白/换行；不要再 base64 编一层
+          KEY="$(printf '%s' "$RAW_KEY" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          # 若误包了一层引号则剥掉
+          if [[ "$KEY" == \"*\" && "$KEY" == *\" ]]; then
+            KEY="${KEY:1:${#KEY}-2}"
+          fi
+          KEY_FILE="${RUNNER_TEMP}/tauri_signing.key"
+          # 单行写入，无尾部换行，避免 base64 解码踩 Invalid symbol
+          printf '%s' "$KEY" > "$KEY_FILE"
+          # 校验：应为单行 base64（约 300+ 字符），不能是路径、不能是多行 minisign 明文
+          if grep -q ':' "$KEY_FILE"; then
+            echo "Secret looks like multi-line minisign text (contains ':')."
+            echo "Use the one-line file from: cat ~/.tauri/aurevoy.key"
+            exit 1
+          fi
+          LEN=$(wc -c < "$KEY_FILE" | tr -d ' ')
+          echo "Updater key file bytes: ${LEN}"
+          if [ "$LEN" -lt 200 ]; then
+            echo "Key too short (${LEN}). Did you paste the public key or a path?"
+            exit 1
+          fi
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY=${KEY_FILE}"
+            # 仅在真正设置了密码时导出；空密码密钥不要设假密码
+            if [ -n "${RAW_PASSWORD:-}" ]; then
+              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${RAW_PASSWORD}"
+            fi
+          } >> "$GITHUB_ENV"
 
       - name: Tauri Build (DMG + updater artifacts)
         run: cd apps/desktop && tauri build --bundles dmg
@@ -98,13 +126,39 @@ jobs:
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli
 
-      - name: Require updater signing key
+      - name: Prepare updater signing key
         shell: bash
+        env:
+          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "Missing secret TAURI_SIGNING_PRIVATE_KEY (Tauri updater minisign private key)."
+          set -euo pipefail
+          if [ -z "${RAW_KEY:-}" ]; then
+            echo "Missing secret TAURI_SIGNING_PRIVATE_KEY"
             exit 1
           fi
+          KEY="$(printf '%s' "$RAW_KEY" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [[ "$KEY" == \"*\" && "$KEY" == *\" ]]; then
+            KEY="${KEY:1:${#KEY}-2}"
+          fi
+          KEY_FILE="${RUNNER_TEMP}/tauri_signing.key"
+          printf '%s' "$KEY" > "$KEY_FILE"
+          if grep -q ':' "$KEY_FILE"; then
+            echo "Secret looks like multi-line minisign text. Use: cat ~/.tauri/aurevoy.key"
+            exit 1
+          fi
+          LEN=$(wc -c < "$KEY_FILE" | tr -d ' ')
+          echo "Updater key file bytes: ${LEN}"
+          if [ "$LEN" -lt 200 ]; then
+            echo "Key too short (${LEN})."
+            exit 1
+          fi
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY=${KEY_FILE}"
+            if [ -n "${RAW_PASSWORD:-}" ]; then
+              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${RAW_PASSWORD}"
+            fi
+          } >> "$GITHUB_ENV"
 
       - name: Tauri Build (NSIS + updater artifacts)
         run: cd apps/desktop && tauri build --bundles nsis
@@ -164,12 +218,38 @@ jobs:
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli
 
-      - name: Require updater signing key
+      - name: Prepare updater signing key
+        env:
+          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "Missing secret TAURI_SIGNING_PRIVATE_KEY (Tauri updater minisign private key)."
+          set -euo pipefail
+          if [ -z "${RAW_KEY:-}" ]; then
+            echo "Missing secret TAURI_SIGNING_PRIVATE_KEY"
             exit 1
           fi
+          KEY="$(printf '%s' "$RAW_KEY" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [[ "$KEY" == \"*\" && "$KEY" == *\" ]]; then
+            KEY="${KEY:1:${#KEY}-2}"
+          fi
+          KEY_FILE="${RUNNER_TEMP}/tauri_signing.key"
+          printf '%s' "$KEY" > "$KEY_FILE"
+          if grep -q ':' "$KEY_FILE"; then
+            echo "Secret looks like multi-line minisign text. Use: cat ~/.tauri/aurevoy.key"
+            exit 1
+          fi
+          LEN=$(wc -c < "$KEY_FILE" | tr -d ' ')
+          echo "Updater key file bytes: ${LEN}"
+          if [ "$LEN" -lt 200 ]; then
+            echo "Key too short (${LEN})."
+            exit 1
+          fi
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY=${KEY_FILE}"
+            if [ -n "${RAW_PASSWORD:-}" ]; then
+              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${RAW_PASSWORD}"
+            fi
+          } >> "$GITHUB_ENV"
 
       - name: Tauri Build (Deb + AppImage + updater artifacts)
         run: cd apps/desktop && tauri build --bundles deb,appimage
@@ -242,7 +322,6 @@ jobs:
             artifacts/aurevoy-linux-appimage/**
             latest.json
           generate_release_notes: true
-          # latest.json 只会被非 prerelease 的 latest 指向；正式版保持 false
           prerelease: ${{ contains(steps.meta.outputs.version, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
