@@ -67,7 +67,7 @@ export const TOOLS_KEEP_VERBATIM = new Set([
   'apply_artifact', 'create_artifact', 'attach_content',
   'bundle_report', 'delegate', 'remember', 'recall', 'ask_user', 'load_skill',
   // 历史别名
-  'write_file', 'create_file', 'append_file', 'present_ui',
+  'write_file', 'create_file', 'append_file',
   'session_open', 'session_write', 'session_close', 'session_abort',
   'index_files',
 ]);
@@ -161,18 +161,39 @@ function buildToolNameMap(messages: Message[]): Map<string, string> {
   return map;
 }
 
-/** 按工具类型对单个 tool_result 的 content 做结构化压缩。返回 null = 不需要压缩。 */
-export function compactToolResult(toolName: string, rawContent: string): string | null {
-  let parsed: Record<string, unknown>;
+const TEXT_COMPACT_HEAD = 800;
+const TEXT_COMPACT_TAIL = 400;
+const TEXT_COMPACT_MIN = TEXT_COMPACT_HEAD + TEXT_COMPACT_TAIL + 80;
+
+/** 超长纯文本：保留头尾，确定性结构，避免二次漂移。 */
+function compactPlainTextPayload(raw: string, label = 'output'): string | null {
+  if (raw.length < TEXT_COMPACT_MIN) return null;
+  return JSON.stringify({
+    [label]: `${raw.slice(0, TEXT_COMPACT_HEAD)}\n…\n${raw.slice(-TEXT_COMPACT_TAIL)}`,
+    char_count: raw.length,
+    _compacted: true,
+    _note: `全文 ${raw.length} 字符，保留头 ${TEXT_COMPACT_HEAD} + 尾 ${TEXT_COMPACT_TAIL}`,
+  });
+}
+
+function tryParseToolJson(raw: string): Record<string, unknown> | null {
   try {
-    parsed = JSON.parse(rawContent) as Record<string, unknown>;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+/** 按工具类型对单个 tool_result 的 content 做结构化压缩。返回 null = 不需要压缩。 */
+export function compactToolResult(toolName: string, rawContent: string): string | null {
+  const parsed = tryParseToolJson(rawContent);
 
   switch (toolName) {
     case 'open_file':
     case 'scroll': {
+      if (!parsed) return compactPlainTextPayload(rawContent, 'content');
       const path = parsed.path as string | undefined;
       const totalLines = parsed.total_lines as number | undefined;
       const winStart = parsed.window_start as number | undefined;
@@ -189,7 +210,19 @@ export function compactToolResult(toolName: string, rawContent: string): string 
       });
     }
 
-    case 'search_grep': {
+    case 'search_grep':
+    case 'grep': {
+      if (!parsed) {
+        // Effect grep 常以纯文本 path:line:text 多行输出
+        const lines = rawContent.split('\n').filter(Boolean);
+        if (lines.length <= 8 && rawContent.length < TEXT_COMPACT_MIN) return null;
+        return JSON.stringify({
+          match_count: lines.length,
+          matches: lines.slice(0, 8).map((line) => line.slice(0, 240)),
+          _compacted: true,
+          _note: lines.length > 8 ? `前 8/${lines.length} 条匹配` : `已截断匹配预览`,
+        });
+      }
       const pattern = parsed.pattern as string | undefined;
       const count = parsed.match_count as number | undefined;
       const matches = Array.isArray(parsed.matches) ? parsed.matches as Record<string, unknown>[] : [];
@@ -200,7 +233,7 @@ export function compactToolResult(toolName: string, rawContent: string): string 
         matches: matches.slice(0, 3).map(m => ({
           file: m.file,
           line: m.line,
-          content: String(m.content ?? '').slice(0, 200),
+          content: String(m.content ?? m.text ?? '').slice(0, 200),
         })),
         _compacted: true,
         _note: count && count > 3
@@ -210,6 +243,7 @@ export function compactToolResult(toolName: string, rawContent: string): string 
     }
 
     case 'web_fetch': {
+      if (!parsed) return compactPlainTextPayload(rawContent, 'content');
       const url = parsed.url as string | undefined;
       const status = parsed.status as number | undefined;
       const text = (parsed.content as string | undefined) ?? '';
@@ -228,6 +262,7 @@ export function compactToolResult(toolName: string, rawContent: string): string 
     }
 
     case 'web_search': {
+      if (!parsed) return compactPlainTextPayload(rawContent, 'results');
       const query = parsed.query as string | undefined;
       const error = parsed.error as string | undefined;
       const results = Array.isArray(parsed.results)
@@ -250,25 +285,90 @@ export function compactToolResult(toolName: string, rawContent: string): string 
       });
     }
 
+    case 'bash':
     case 'execute_command': {
+      if (!parsed) return compactPlainTextPayload(rawContent, 'output');
+      // bash Effect 工具：{ exit, output, truncated }；旧 execute_command：stdout/stderr
+      const output = String(parsed.output ?? parsed.stdout ?? '');
+      const stderr = String(parsed.stderr ?? '');
+      const exitCode = parsed.exit ?? parsed.exitCode ?? parsed.exit_code;
       const command = parsed.command as string | undefined;
       const args = parsed.args as string[] | undefined;
-      const exitCode = parsed.exitCode as number | undefined;
-      const stdout = (parsed.stdout as string | undefined) ?? '';
-      const stderr = (parsed.stderr as string | undefined) ?? '';
-      const cmdStr = `${command}${args?.length ? ' ' + args.join(' ') : ''}`;
+      const cmdStr = command
+        ? `${command}${args?.length ? ` ${args.join(' ')}` : ''}`
+        : undefined;
+      if (output.length + stderr.length < TEXT_COMPACT_MIN) {
+        // 已经较短的 JSON 结果无需再压
+        return null;
+      }
       return JSON.stringify({
         command: cmdStr,
         exit_code: exitCode,
-        stdout_tail: stdout.slice(-500),
+        output_tail: output.slice(-500),
         stderr_tail: stderr.slice(-500),
+        truncated: parsed.truncated === true,
+        timeout: parsed.timeout === true,
+        char_count: output.length + stderr.length,
         _compacted: true,
-        _note: `stdout ${stdout.length} 字符，stderr ${stderr.length} 字符，保留末尾 500 字符。`,
+        _note: `output ${output.length} 字符，stderr ${stderr.length} 字符，保留末尾 500 字符。`,
       });
+    }
+
+    case 'read': {
+      if (!parsed) return compactPlainTextPayload(rawContent, 'content');
+      // Effect read 可能是 full-text / text-page 结构，或 formatUnknown 后的包装
+      const content = String(
+        parsed.content
+        ?? (typeof parsed.text === 'string' ? parsed.text : '')
+        ?? '',
+      );
+      if (!content && typeof parsed.type === 'string') {
+        // directory listing 等：压成条目预览
+        const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+        if (entries.length <= 40 && rawContent.length < TEXT_COMPACT_MIN) return null;
+        return JSON.stringify({
+          type: parsed.type,
+          entry_count: entries.length,
+          entries_preview: entries.slice(0, 40).map((e) =>
+            typeof e === 'string' ? e : String((e as { path?: string }).path ?? e).slice(0, 200),
+          ),
+          truncated: parsed.truncated === true,
+          _compacted: true,
+          _note: entries.length > 40 ? `目录条目 ${entries.length}，保留前 40` : undefined,
+        });
+      }
+      if (content.length < TEXT_COMPACT_MIN) return null;
+      return JSON.stringify({
+        type: parsed.type,
+        offset: parsed.offset,
+        truncated: parsed.truncated === true,
+        next: parsed.next,
+        content_preview: content.slice(0, TEXT_COMPACT_HEAD),
+        content_tail: content.slice(-TEXT_COMPACT_TAIL),
+        char_count: content.length,
+        _compacted: true,
+        _note: `全文 ${content.length} 字符，保留头 ${TEXT_COMPACT_HEAD} + 尾 ${TEXT_COMPACT_TAIL}`,
+      });
+    }
+
+    case 'glob':
+    case 'list_directory': {
+      if (!parsed) {
+        const lines = rawContent.split('\n').filter(Boolean);
+        if (lines.length <= 40 && rawContent.length < TEXT_COMPACT_MIN) return null;
+        return JSON.stringify({
+          entry_count: lines.length,
+          entries_preview: lines.slice(0, 40),
+          _compacted: true,
+          _note: lines.length > 40 ? `共 ${lines.length} 条路径，保留前 40` : undefined,
+        });
+      }
+      return compactPlainTextPayload(rawContent, 'entries');
     }
 
     case 'edit_lines':
     case 'replace_lines': {
+      if (!parsed) return null;
       const path = parsed.path as string | undefined;
       const replaced = parsed.replaced_lines as number | undefined;
       const newCount = parsed.new_lines_count as number | undefined;
@@ -286,7 +386,7 @@ export function compactToolResult(toolName: string, rawContent: string): string 
     }
 
     default:
-      return null;
+      return compactPlainTextPayload(rawContent);
   }
 }
 
@@ -966,8 +1066,9 @@ export function buildStableWorkspaceContextMessage(
 }
 
 /**
- * 易变时间上下文（分钟精度）。放在稳定 system 前缀**之后**，避免分钟跳动使
- * identity / protocol / skills / workspace 整段 cache miss。
+ * 墙钟时间上下文（分钟精度）。
+ * 主循环在 **run 开始时写入 system 一次并 pin**，本 run 内不再更新；
+ * 切勿每轮重建，否则会从时间字段起冲掉整段对话 prompt cache。
  */
 export function buildVolatileTimeContextMessage(now: Date = new Date()): Message {
   const timeStr = now.toLocaleDateString('en-US', {
@@ -1043,7 +1144,8 @@ export function buildStableSystemPromptParts(options: {
 }
 
 /**
- * 每轮可变化的 system 后缀部件（时间、附件等）。始终接在稳定前缀之后。
+ * 仅用于测试/兼容：时间（与可选附件）作为 system 后缀。
+ * 生产路径应 pin 完整 system（见 pi-harness buildPiSystemPrompt），附件挂在 user 消息。
  */
 export function buildVolatileSystemPromptParts(options: {
   now?: Date;
@@ -1102,8 +1204,8 @@ export function buildToolGuidanceMessage(): Message {
     '',
     '## Workspace tools',
     '- Discover: `glob`, `grep`, `list_directory`, then `read` the few files that matter.',
-    '- Create or fully rewrite: `write` (modes: create / overwrite / append).',
-    '- Local edit: `edit` with exact oldString → newString; prefer edit over full rewrite.',
+    '- Create new files: `write` (omit mode, or mode=create). Existing paths require explicit mode=overwrite (full replace) or mode=append.',
+    '- Local edit (preferred for revisions): `edit` with unique exact oldString → newString. Do not full-rewrite a report with write just to change a section.',
     '- Shell / checks: `bash` for builds, tests, diagnostics. Avoid destructive commands (rm -rf, force push, wiping data).',
     '- File ops: `copy_file`, `move_file` / `rename_file`. `delete_file` may be disabled; do not assume it works.',
     '- Do not invent obsolete tools (`open_file`, `write_file`, `edit_lines`, `session_*`, `scroll`). Use the names above.',
@@ -1138,7 +1240,7 @@ export function buildToolGuidanceMessage(): Message {
     '',
     '## Honesty & safety',
     '- Tool failure is not success. Retry once with a corrected call when appropriate, then report.',
-    '- Prefer minimal diffs; do not rewrite large files to change a few lines.',
+    '- Prefer minimal diffs: use `edit` on existing files. Full `write` overwrite only when the whole document must change and you pass mode=overwrite.',
     '- Never claim HTML/UI was shown unless you actually called attach_content (or the user already sees the file via other verified means).',
     '</operating_protocol>',
   ].join('\n');

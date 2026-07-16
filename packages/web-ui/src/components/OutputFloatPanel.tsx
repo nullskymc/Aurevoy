@@ -32,7 +32,6 @@ function collectOutputItems(task: Task | null, liveBlocks: ContentBlock[]): Outp
   blocks.push(...liveBlocks);
 
   for (const block of blocks) {
-    if (block.type === "ui") continue;
     const key = `block:${block.id}`;
     if (seen.has(key)) continue;
     seen.add(key);

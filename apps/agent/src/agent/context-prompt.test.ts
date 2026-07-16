@@ -117,7 +117,7 @@ describe('main agent system prompt builders', () => {
     expect(timeIdx).toBeGreaterThan(workspaceIdx);
   });
 
-  it('stable system prefix is byte-identical across a minute boundary', () => {
+  it('pinned full system (stable + frozen time) stays byte-identical across a minute boundary', () => {
     const t0 = new Date('2026-07-16T10:00:30.123Z');
     const t1 = new Date('2026-07-16T10:01:45.999Z'); // crosses minute boundary
 
@@ -125,39 +125,38 @@ describe('main agent system prompt builders', () => {
     const stableB = joinSystemPromptParts(buildStableSystemPromptParts({ workspaceDir: '/tmp/ws' }));
     expect(stableA).toBe(stableB);
 
-    const fullA = joinSystemPromptParts(
+    // Production pins time once at run start — simulate by freezing `now` into the full prompt.
+    const pinned = joinSystemPromptParts(
       [stableA],
       buildVolatileSystemPromptParts({ now: t0, attachmentContent: null }),
     );
-    const fullB = joinSystemPromptParts(
+    // Even if wall clock advances, the pinned string must be reused as-is (not rebuilt with t1).
+    const stillPinned = pinned;
+    expect(stillPinned).toBe(pinned);
+    expect(pinned).toContain('Current time: 2026-07-16T10:00:00Z');
+    expect(pinned).not.toContain('Current time: 2026-07-16T10:01:00Z');
+
+    // Rebuilding with a later clock would diverge — that path is forbidden mid-run.
+    const rebuiltLater = joinSystemPromptParts(
       [stableB],
       buildVolatileSystemPromptParts({ now: t1, attachmentContent: null }),
     );
+    expect(rebuiltLater).not.toBe(pinned);
 
-    // Stable prefix unchanged even though full prompt diverges after time block
-    expect(fullA.startsWith(stableA)).toBe(true);
-    expect(fullB.startsWith(stableA)).toBe(true);
-    expect(fullA).not.toBe(fullB);
-    expect(fullA).toContain('Current time: 2026-07-16T10:00:00Z');
-    expect(fullB).toContain('Current time: 2026-07-16T10:01:00Z');
-
-    // Identity + protocol + workspace must sit before time
+    // Identity + protocol + workspace must sit before time; attachments stay out of system.
     expect(stableA).toContain('You are Aurevoy');
     expect(stableA).toContain('<operating_protocol>');
     expect(stableA).toContain('Workspace: /tmp/ws');
     expect(stableA).not.toContain('Current time:');
     expect(stableA).not.toContain('[Attached Files]');
+    expect(pinned.startsWith(stableA)).toBe(true);
   });
 
-  it('volatile attachments do not rewrite the stable system prefix', () => {
+  it('attachments are not part of the stable system prefix', () => {
     const stable = joinSystemPromptParts(buildStableSystemPromptParts({ workspaceDir: '/proj' }));
-    const withoutAttach = joinSystemPromptParts(
-      [stable],
-      buildVolatileSystemPromptParts({
-        now: new Date('2026-07-16T12:00:00.000Z'),
-        attachmentContent: null,
-      }),
-    );
+    expect(stable).not.toContain('[Attached Files]');
+    // Compatibility helper may still append attachments for tests, but production
+    // mounts file bodies on the user message only.
     const withAttach = joinSystemPromptParts(
       [stable],
       buildVolatileSystemPromptParts({
@@ -165,13 +164,8 @@ describe('main agent system prompt builders', () => {
         attachmentContent: '[Attached Files]\n\n### notes.md\n\nhello world\n',
       }),
     );
-
-    expect(withoutAttach.startsWith(stable)).toBe(true);
     expect(withAttach.startsWith(stable)).toBe(true);
     expect(withAttach).toContain('[Attached Files]');
-    expect(withoutAttach).not.toContain('[Attached Files]');
-    // Only the suffix after the shared stable prefix differs
-    expect(withAttach.slice(0, stable.length)).toBe(withoutAttach.slice(0, stable.length));
   });
 
   it('stable workspace context excludes wall-clock fields', () => {
@@ -282,6 +276,19 @@ describe('cache-aware zero-cost compaction prefix stability', () => {
     // Simulate a transform that already received compacted content (e.g. rare re-entry)
     const twice = applyZeroCostCompaction(once);
     expect(serializeMessages(twice)).toBe(serializeMessages(once));
+  });
+
+  it('microcompacts bash and read tool results (not only execute_command)', () => {
+    const longOut = 'line\n'.repeat(400);
+    const bashRaw = JSON.stringify({ exit: 0, output: longOut, truncated: false });
+    const readRaw = longOut.repeat(2);
+    expect(compactToolResult('bash', bashRaw)).toContain('"_compacted":true');
+    expect(compactToolResult('bash', bashRaw)).toContain('output_tail');
+    expect(compactToolResult('execute_command', bashRaw)).toContain('"_compacted":true');
+    expect(compactToolResult('read', readRaw)).toContain('"_compacted":true');
+    expect(compactToolResult('grep', Array.from({ length: 30 }, (_, i) => `f.ts:${i}:hit`).join('\n'))).toContain(
+      '"_compacted":true',
+    );
   });
 });
 

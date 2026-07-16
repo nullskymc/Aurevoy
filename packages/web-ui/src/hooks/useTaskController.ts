@@ -158,17 +158,6 @@ export function useTaskController({
     }
   }
 
-  function handleUiChoice(payload: { partId: string; actionId: string; selection: unknown }): void {
-    const selection =
-      typeof payload.selection === "string"
-        ? payload.selection
-        : JSON.stringify(payload.selection);
-    const text =
-      `[UI ${payload.actionId}] part=${payload.partId}\n` +
-      `selection=${selection}`;
-    void continueGoal(text);
-  }
-
   function handleComposerSubmit(): void {
     const trimmed = goal.trim();
     if (trimmed === "/compact") {
@@ -355,7 +344,6 @@ export function useTaskController({
     handleBranch,
     handleClarificationAnswer,
     handleComposerSubmit,
-    handleUiChoice,
     handleNewTask,
 
     handleResumeTask,

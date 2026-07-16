@@ -235,6 +235,20 @@ describe("process presentation helpers", () => {
     ).toBe("正在思考");
   });
 
+  it("resolveLiveStatusText keeps write-prep phase detail (not collapsed to 正在思考)", () => {
+    expect(
+      resolveLiveStatusText({
+        phaseDetail: "正在撰写 report.md（1.2k 字）",
+        data: {
+          id: "r",
+          planStepGroups: [],
+          summary: "",
+          status: "running",
+        },
+      }),
+    ).toBe("正在撰写 report.md（1.2k 字）");
+  });
+
   it("resolveLiveStatusText falls back to behavioral activity summary", () => {
     expect(
       resolveLiveStatusText({
@@ -473,6 +487,26 @@ describe("AgentRound", () => {
     expect(html).toContain("已处理");
     expect(html).toContain("正在思考");
     expect(html).toContain("process-live-status");
+  });
+
+  it("shows write-prep phase detail while generating file body", () => {
+    const html = renderToStaticMarkup(
+      <AgentRound
+        busy
+        phaseDetail="正在撰写 a-share.md（3.4k 字）"
+        processStartedAtMs={Date.now()}
+        data={{
+          id: "live-write-prep",
+          planStepGroups: [],
+          summary: "",
+          status: "running",
+        }}
+      />,
+    );
+
+    expect(html).toContain("正在撰写 a-share.md（3.4k 字）");
+    expect(html).toContain("process-live-status");
+    expect(html).not.toContain("正在思考");
   });
 
   it("hides typewriter delivery while a tool is running", () => {

@@ -1577,6 +1577,24 @@ button.markdown-file-chip:hover {
   border-top: 1px solid var(--border);
 }
 
+/* KaTeX 数学公式 */
+.markdown-body .katex {
+  font-size: 1.05em;
+  color: inherit;
+}
+.markdown-body .katex-display {
+  margin: 0.85em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.15em 0;
+}
+.markdown-body .katex-error {
+  color: var(--danger-soft-fg, #c44);
+  background: color-mix(in srgb, var(--danger-soft-bg, #fee) 35%, transparent);
+  border-radius: 4px;
+  padding: 0 0.2em;
+}
+
 /* highlight.js 令牌着色（跟随主题 CSS 变量，暗色模式自动适配） */
 .markdown-body pre code.hljs {
   display: block;

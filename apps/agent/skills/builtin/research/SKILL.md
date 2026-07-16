@@ -34,7 +34,8 @@ metadata:
 2. HTML 仅在用户要求或组件版式明显更合适时。  
 3. 最终回复 = **路径 + 一句话摘要**；不复述全文。  
 4. 文件交付后 `attach_content`。HTML 须先 `bundle_report`。  
-5. **禁止**把「按字段 key 全量展开」当作主报告。
+5. **禁止**把「按字段 key 全量展开」当作主报告。  
+6. **改稿纪律**：首次用 `write` 落草稿；之后补证据/改段落用 `edit`（精确 old→new），禁止为小改反复 `write` 整篇覆盖。
 
 ---
 
@@ -143,7 +144,7 @@ JSON 留在 `results/` 即可。不要生成「字段 dump」当 `report.md`。
 ## HTML（两种模式共用）
 
 - **禁止**读取或粘贴 `components.js`；`bundle_report` 会内联。  
-- 一次写完草稿；小改用 `edit`。  
+- 一次 `write` 写完草稿；小改只用 `edit`（不要再整页 `write` overwrite）。  
 - 草稿含 `<script src="./components.js"></script>`、`<report-container>`、`report-header`、`report-footer`。  
 - 禁止自定义样式；`body` 仅背景/字体/间距。  
 - 组件细节见 `references/api.md`（仅不熟时读）。
@@ -190,3 +191,5 @@ JSON 留在 `results/` 即可。不要生成「字段 dump」当 `report.md`。
 - 无必要拆 18 个 item 又共享超大 fields  
 - 默认上 HTML  
 - 静默假装完成未通过校验的 deep item  
+- 报告已存在后仍多次 `write` 整文件重写（应 `edit`）  
+

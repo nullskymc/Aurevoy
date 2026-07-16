@@ -1,8 +1,12 @@
-import type { PlatformAdapter } from '@aurevoy/web-ui';
+import type { AppUpdateInfo, AppUpdateProgress, PlatformAdapter } from '@aurevoy/web-ui';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { LogicalSize, currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
+import type { Update } from '@tauri-apps/plugin-updater';
 
 const registeredWindowDragHandlers = new Set<string>();
+
+/** 最近一次 check 返回的 Update，供 install 复用，避免重复请求。 */
+let pendingUpdate: Update | null = null;
 
 /**
  * Tauri 桌面壳的 PlatformAdapter 实现。
@@ -178,5 +182,89 @@ export const tauriPlatformAdapter: PlatformAdapter = {
     // Requires core:window:allow-set-size in capabilities — do not swallow errors so
     // callers can detect a failed expand (otherwise workbench opens then auto-collapses).
     await win.setSize(new LogicalSize(Math.ceil(target), Math.ceil(heightLogical)));
+  },
+
+  async getAppVersion() {
+    try {
+      const { getVersion } = await import('@tauri-apps/api/app');
+      return await getVersion();
+    } catch {
+      return null;
+    }
+  },
+
+  async checkForAppUpdate(): Promise<AppUpdateInfo> {
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const { getVersion } = await import('@tauri-apps/api/app');
+      const currentVersion = await getVersion();
+      // 关闭上一轮未安装的 Update 句柄
+      if (pendingUpdate) {
+        try {
+          await pendingUpdate.close();
+        } catch {
+          // ignore
+        }
+        pendingUpdate = null;
+      }
+      const update = await check();
+      if (!update) {
+        return { available: false, currentVersion };
+      }
+      pendingUpdate = update;
+      return {
+        available: true,
+        currentVersion: update.currentVersion || currentVersion,
+        version: update.version,
+        notes: update.body ?? null,
+        date: update.date ?? null,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(message || '检查更新失败');
+    }
+  },
+
+  async installAppUpdate(options) {
+    const update = pendingUpdate;
+    if (!update) {
+      throw new Error('没有待安装的更新，请先检查更新');
+    }
+    let downloaded = 0;
+    let contentLength: number | null | undefined;
+    await update.downloadAndInstall((event) => {
+      const progress: AppUpdateProgress = {
+        event: event.event,
+      };
+      if (event.event === 'Started') {
+        contentLength = event.data.contentLength ?? null;
+        downloaded = 0;
+        progress.contentLength = contentLength;
+        progress.downloaded = 0;
+      } else if (event.event === 'Progress') {
+        downloaded += event.data.chunkLength;
+        progress.chunkLength = event.data.chunkLength;
+        progress.contentLength = contentLength;
+        progress.downloaded = downloaded;
+      } else if (event.event === 'Finished') {
+        progress.contentLength = contentLength;
+        progress.downloaded = downloaded;
+      }
+      options?.onProgress?.(progress);
+    });
+    pendingUpdate = null;
+
+    // 更新包替换完成后清 quarantine，避免重启后再次被 Gatekeeper 拦截。
+    // 仅 macOS 有实际动作；失败不阻断 relaunch（用户仍可手动 xattr）。
+    try {
+      await invoke<string>('clear_app_quarantine');
+    } catch {
+      // best-effort
+    }
+
+    if (options?.relaunch !== false) {
+      const { relaunch } = await import('@tauri-apps/plugin-process');
+      await relaunch();
+    }
   },
 };

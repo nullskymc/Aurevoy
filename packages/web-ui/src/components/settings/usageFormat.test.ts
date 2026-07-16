@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   avgTokensPerTask,
   buildCompositionRows,
+  cacheHitRate,
   composeInputShare,
   composeOutputShare,
   dailyBarHeight,
@@ -43,6 +44,20 @@ describe("formatCost", () => {
     expect(formatCost(0.0042)).toBe("$0.0042");
     expect(formatCost(0.42)).toBe("$0.420");
     expect(formatCost(3.2)).toBe("$3.20");
+  });
+});
+
+describe("cacheHitRate", () => {
+  it("excludes cacheWrite from the denominator", () => {
+    // prompt = input(50) + cacheRead(40) + cacheWrite(10) = 100
+    // hit = 40 / (100 - 10) = 44.44..., not 40/100
+    expect(cacheHitRate(40, 100, 10)).toBeCloseTo(44.444, 2);
+    expect(cacheHitRate(40, 100, 0)).toBe(40);
+  });
+
+  it("returns null when there is no eligible prompt volume", () => {
+    expect(cacheHitRate(0, 0, 0)).toBeNull();
+    expect(cacheHitRate(10, 10, 10)).toBeNull();
   });
 });
 
@@ -107,7 +122,8 @@ describe("buildCompositionRows", () => {
     expect(reasoning?.relativeShare).toBe(25);
     const cache = rows.find((r) => r.id === "cache-read");
     expect(cache?.relativeOf).toBe("input");
-    expect(cache?.relativeShare).toBeCloseTo(33.333, 2);
+    // 40 / (120 - 5) — write excluded from hit-rate denominator
+    expect(cache?.relativeShare).toBeCloseTo(34.783, 2);
   });
 
   it("handles zero-total unmeasured-style aggregates", () => {

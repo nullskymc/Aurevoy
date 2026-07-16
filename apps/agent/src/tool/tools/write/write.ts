@@ -8,10 +8,14 @@ const Input = Schema.Struct({
     description: "File path to write. Relative paths resolve from the workspace root.",
   }),
   content: Schema.String.annotations({
-    description: "Content to write to the file.",
+    description: "Full file content for create / overwrite / append. Prefer the edit tool for small changes to an existing file.",
   }),
   mode: Schema.optional(Schema.Literal("create", "overwrite", "append").annotations({
-    description: "Write mode: create (fail if exists), overwrite (default, replaces existing), append (adds to end).",
+    description:
+      "create: fail if the file exists. " +
+      "overwrite: replace the entire file (required when the file already exists). " +
+      "append: add to the end. " +
+      "Omit mode only when creating a new file; existing files need an explicit mode.",
   })),
 })
 
@@ -19,34 +23,51 @@ const Output = Schema.Struct({
   operation: Schema.Literal("created", "wrote", "appended"),
   resource: Schema.String,
   existed: Schema.Boolean,
+  note: Schema.optional(Schema.String),
 })
 
 export const writeTool = make({
   name: "write",
   description:
-    "Write content to a file. Supports create (fail if exists), overwrite (default), and append modes. " +
-    "Preserves UTF-8 BOM if the file already has one. Relative paths resolve from the workspace root.",
+    "Create a new file or intentionally rewrite/append an entire file. " +
+    "For local revisions to an existing file, prefer `edit` (exact oldString → newString) instead of rewriting the whole document. " +
+    "If the path already exists you must pass mode=\"overwrite\" (full replace) or mode=\"append\"; omitting mode fails so accidental full rewrites are harder. " +
+    "Preserves UTF-8 BOM when overwriting a file that already has one. Relative paths resolve from the workspace root.",
   input: Input,
   output: Output,
   execute: async (input, ctx) => {
     const path = resolve(ctx.workspaceDir, input.path)
-    const mode = input.mode ?? "overwrite"
-
-    if (mode === "create") {
-      try {
-        await fs.stat(path)
-        throw new Error(`File already exists: ${input.path}. Use overwrite mode to replace.`)
-      } catch (err: unknown) {
-        const e = err as NodeJS.ErrnoException
-        if (e.code !== "ENOENT") throw err
-      }
-    }
 
     let existed = false
     try {
       const s = await fs.stat(path)
       existed = s.isFile()
-    } catch {}
+    } catch (err: unknown) {
+      const e = err as NodeJS.ErrnoException
+      if (e.code !== "ENOENT") throw err
+    }
+
+    // 已存在文件必须显式 mode，避免模型默认 overwrite 把报告整篇重写。
+    let mode = input.mode
+    if (existed) {
+      if (mode === undefined) {
+        throw new Error(
+          `File already exists: ${input.path}. ` +
+            `For small/local changes use the edit tool (oldString → newString). ` +
+            `For intentional full rewrite pass mode="overwrite". To add at the end pass mode="append".`,
+        )
+      }
+      if (mode === "create") {
+        throw new Error(`File already exists: ${input.path}. Use edit for partial changes, or mode="overwrite" / mode="append".`)
+      }
+    } else {
+      // 新文件：未指定 mode 视为创建
+      mode = mode ?? "create"
+      if (mode === "append") {
+        // 不存在时 append 等价于创建
+        mode = "create"
+      }
+    }
 
     let existingBom = false
     if (mode === "overwrite" && existed) {
@@ -67,9 +88,19 @@ export const writeTool = make({
       operation: existed ? "wrote" as const : "created" as const,
       resource: input.path,
       existed,
+      note:
+        existed && mode === "overwrite"
+          ? "Full file overwrite applied. Prefer edit for future small revisions of this path."
+          : undefined,
     }
   },
-  toModelOutput: (_input, output): ReadonlyArray<ContentPart> => [
-    { type: "text", text: output.operation === "created" ? `Created file: ${output.resource}` : output.operation === "appended" ? `Appended to: ${output.resource}` : `Wrote file: ${output.resource}` },
-  ],
+  toModelOutput: (_input, output): ReadonlyArray<ContentPart> => {
+    const head =
+      output.operation === "created"
+        ? `Created file: ${output.resource}`
+        : output.operation === "appended"
+          ? `Appended to: ${output.resource}`
+          : `Wrote file (full overwrite): ${output.resource}`
+    return [{ type: "text", text: output.note ? `${head}\n${output.note}` : head }]
+  },
 })

@@ -6,7 +6,7 @@
 
 Aurevoy 是**本地个人 AI Agent 桌面应用**：用户用自然语言给目标，引擎规划、调工具、持续执行直至完成。
 
-- 版本：v0.6.5-dev（下一发布目标；已发布 tag `v0.6.4`）
+- 版本：v0.6.5（tag `v0.6.5`）
 - 形态：macOS 优先，Windows 扩展时主要重打包壳
 - 原则：真实链路、可恢复、可审计；禁止 Mock / 假能力
 
@@ -35,8 +35,11 @@ packages/shared  ← 跨进程类型唯一来源
 | [CONVENTIONS](./docs/CONVENTIONS.md) | 代码与扩展约定 |
 | [TECH_STACK](./docs/TECH_STACK.md) | 选型理由 |
 | [ROADMAP](./docs/ROADMAP.md) | 已完成能力 + 未竟项 |
+| **文档站** | 用户文档：`docs/guide/`（quickstart / prompting / best-practices…）；开发者：`docs/dev/` + 下文协作页 → [aurevoy.nullskymc.site](https://aurevoy.nullskymc.site/) |
 
-类型真相在 `packages/shared/src/`，API 细节以代码为准；文档只做索引与约定。
+类型真相在 `packages/shared/src/`，API 细节以代码为准。用户可见行为变化时优先改 `docs/guide/`（可操作步骤 + 示例 + 反例）；契约/架构变化再改协作参考页。
+
+文档站：`npm run docs:dev` / `docs:build` / `docs:preview`。推送 `docs/**` 到 `main`/`dev` 时由 `.github/workflows/docs.yml` 部署 Pages。
 
 ## 硬性规则
 
@@ -59,6 +62,7 @@ npm run typecheck        # 全仓类型检查
 npm run build            # shared → agent → desktop
 npm run build:shared     # 改 shared 后必做
 npm run regression:m3    # … m8 见 package.json
+npm run docs:dev         # 文档站本地预览
 ```
 
 环境：Node ≥ 22.19.0、Rust stable、macOS Xcode CLT。
@@ -69,5 +73,6 @@ npm run regression:m3    # … m8 见 package.json
 内联编辑重试/分支/压缩、子代理（并发与工作组 UI）、Skill、网页搜索、多模态、项目工作区、  
 双层预算、记忆向量 + KB RAG、设置/数据管理、CI。
 
-**进行中：** macOS 签名公证与自动更新、隐式 KB 召回、评测与发布体验。  
+**进行中：** macOS Apple 签名与公证、隐式 KB 召回、评测与发布体验。  
+**已交付（分发）：** GitHub Releases 自动更新（Tauri updater + `latest.json`）。维护见 [docs/dev/auto-update.md](./docs/dev/auto-update.md)。  
 清单与验收见 [ROADMAP](./docs/ROADMAP.md)。

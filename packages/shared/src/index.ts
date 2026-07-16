@@ -74,90 +74,18 @@ export interface MessageAttachment {
 }
 
 /** Agent 主动发送到对话框的富内容块类型 */
-export type ContentBlockType = 'file_reference' | 'image' | 'link' | 'ui';
+export type ContentBlockType = 'file_reference' | 'image' | 'link';
 
-/**
- * 对话内 UI 组件 kind。当前只保留 canvas：它提供声明式基础原语和隔离的 HTML/CSS/JS 模式。
- * Agent 不得输出可访问宿主 DOM/API 的 JSX；canvas JS 只能通过受控 bridge 回传事件。
- */
-export type UiComponentKind = 'canvas';
-
-export type UiCanvasPrimitive = string | number | boolean | null;
-
-/** canvas UI 可使用的受控视觉 token；不接受任意 CSS。 */
-export interface UiCanvasStyle {
-  tone?: 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
-  variant?: 'plain' | 'soft' | 'outline' | 'solid';
-  width?: 'auto' | 'full';
-  columns?: 1 | 2 | 3 | 4;
-  gap?: 0 | 1 | 2 | 3 | 4;
-  padding?: 0 | 1 | 2 | 3 | 4;
-  align?: 'start' | 'center' | 'end' | 'stretch';
-}
-
-export interface UiCanvasAction {
-  type: 'submit' | 'set' | 'toggle';
-  /** submit 时作为返回给 Agent 的 actionId。 */
-  id?: string;
-  stateKey?: string;
-  value?: UiCanvasPrimitive;
-  /** submit 时是否把完整 UI state 一并返回。 */
-  includeState?: boolean;
-}
-
-export interface UiCanvasNode {
-  id?: string;
-  type:
-    | 'section' | 'row' | 'column' | 'grid'
-    | 'heading' | 'text' | 'badge' | 'divider' | 'spacer' | 'progress'
-    | 'button' | 'input' | 'textarea' | 'select' | 'checkbox';
-  text?: string;
-  label?: string;
-  placeholder?: string;
-  stateKey?: string;
-  value?: UiCanvasPrimitive;
-  options?: Array<{ label: string; value: string }>;
-  action?: UiCanvasAction;
-  children?: UiCanvasNode[];
-  style?: UiCanvasStyle;
-  /** stateKey 的值等于 equals 时显示该节点。 */
-  visibleWhen?: { stateKey: string; equals: UiCanvasPrimitive };
-}
-
-/** Agent 自由组合的内嵌 UI；声明式模式使用安全原语，JS 模式运行在 sandbox iframe。 */
-export interface UiCanvasProps {
-  title?: string;
-  description?: string;
-  state?: Record<string, UiCanvasPrimitive>;
-  /** 声明式模式的基础节点；与 html/script 模式二选一。 */
-  body?: UiCanvasNode[];
-  /** JS 模式：在 sandbox iframe 中渲染的 HTML 片段。 */
-  html?: string;
-  /** JS 模式：仅允许内联 CSS，避免加载外部资源。 */
-  css?: string;
-  /** JS 模式：在 sandbox iframe 中执行的 Agent 脚本。 */
-  script?: string;
-}
-
-/** Agent 主动附加到消息的富内容块，可嵌入对话中呈现为文件引用、图片、超链接或限定 UI。 */
+/** Agent 主动附加到消息的富内容块，可嵌入对话中呈现为文件引用、图片或超链接。 */
 export interface ContentBlock {
   id: string;
   type: ContentBlockType;
-  /**
-   * file_reference / image / link: 路径或 URL。
-   * ui: 可用 fallback 摘要字符串（可空）。
-   */
+  /** file_reference / image / link: 路径或 URL。 */
   content: string;
   /** 显示名称（可选） */
   name?: string;
   mimeType?: string;
   size?: number;
-  /** type==='ui'：registry key */
-  kind?: string;
-  /** type==='ui'：组件 props（前端 zod/校验后渲染） */
-  props?: unknown;
-  /** type==='ui'：纯文本降级（历史导出、未知 kind、校验失败） */
-  fallbackText?: string;
 }
 
 /** 一条对话消息 */
@@ -179,7 +107,7 @@ export interface Message {
   attachments?: MessageAttachment[];
   /** 运行中追加用户消息时的 Pi 队列投递方式。首轮/非运行中消息为空。 */
   delivery?: 'steering' | 'follow_up';
-  /** Agent 主动附加的富内容块（文件/图片/链接/ui），由 attach_content / present_ui 生成 */
+  /** Agent 主动附加的富内容块（文件/图片/链接），由 attach_content 生成 */
   contentBlocks?: ContentBlock[];
 }
 
@@ -685,6 +613,9 @@ export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' |
 /** Pi harness 的工具执行策略。 */
 export type AgentToolExecutionMode = 'sequential' | 'parallel';
 
+/** Provider prompt cache 保留策略（Pi streamOptions.cacheRetention）。 */
+export type AgentCacheRetention = 'short' | 'long';
+
 // ============================================================
 // Agent 事件流 (通过 SSE 推送给前端)
 // ============================================================
@@ -792,8 +723,6 @@ export type AgentEvent =
   | { type: 'skill_installed'; taskId: string; skillNames: string[]; repoUrl: string }
   | { type: 'skill_uninstalled'; taskId: string; skillName: string }
   | { type: 'content_blocks_added'; taskId: string; messageId: string; blocks: ContentBlock[] }
-  /** 按 block.id upsert（present_ui 更新同一交互组件时使用） */
-  | { type: 'content_blocks_upserted'; taskId: string; messageId: string; blocks: ContentBlock[] }
   | { type: 'auto_mode_state'; taskId: string; state: AutoModeState }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
@@ -1360,6 +1289,8 @@ export interface RuntimeSettings {
   agentThinkingLevel: AgentThinkingLevel;
   /** Pi harness 工具执行策略。 */
   agentToolExecution: AgentToolExecutionMode;
+  /** Prompt cache 保留时长：long 利于多轮/长任务；short 更省 provider 侧缓存配额。 */
+  agentCacheRetention: AgentCacheRetention;
   /**
    * 新建任务时的默认执行预算（写入任务快照）。
    * 运行中任务不受此处后续修改影响。
@@ -1448,6 +1379,7 @@ export interface UpdateRuntimeSettingsRequest {
   autoModeSafetyEnabled?: boolean;
   agentThinkingLevel?: AgentThinkingLevel;
   agentToolExecution?: AgentToolExecutionMode;
+  agentCacheRetention?: AgentCacheRetention;
   /** 覆盖默认任务预算；仅影响此后新建的任务。 */
   budget?: {
     run?: Partial<TaskBudget>;

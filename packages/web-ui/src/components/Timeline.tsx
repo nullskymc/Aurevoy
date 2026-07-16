@@ -17,7 +17,6 @@ import type {
   SubagentRun,
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
-import { GenerativeUiBlock } from "./generative-ui/GenerativeUiBlock";
 import { usePlatform } from "../platform/context";
 import { t } from "../i18n";
 import { ContextMenu } from "./ContextMenu";
@@ -108,7 +107,7 @@ export function detectStepKind(toolName: string): StepKind {
 }
 
 function shouldHideToolFromWorkflow(toolName: string): boolean {
-  return toolName === "attach_content" || toolName === "present_ui" || toolName === "delegate";
+  return toolName === "attach_content" || toolName === "delegate";
 }
 
 /** 生成聚合摘要文本 */
@@ -1059,14 +1058,12 @@ export function PlanStepGroup({
 
 /* ============ 内容块渲染 ============ */
 
-/** Agent 通过 attach_content / present_ui 工具附加的富内容块。 */
+/** Agent 通过 attach_content 工具附加的富内容块。 */
 function ContentBlockView({
   block,
-  onUiChoice,
   onOpenWorkspacePath,
 }: {
   block: ContentBlock;
-  onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
   /** 在侧边工作台打开文件预览（attach_content 默认行为） */
   onOpenWorkspacePath?: (path: string) => void;
 }) {
@@ -1217,8 +1214,6 @@ function ContentBlockView({
         </>
       );
     }
-    case "ui":
-      return <GenerativeUiBlock block={block} onChoiceSubmit={onUiChoice} />;
     default:
       return null;
   }
@@ -1734,7 +1729,6 @@ export function AgentRound({
   processStartedAtMs,
   /** 完成后的耗时（ms） */
   processDurationMs,
-  onUiChoice,
   onOpenWorkspacePath,
 }: {
   data: AgentRoundData;
@@ -1745,7 +1739,6 @@ export function AgentRound({
   phaseDetail?: string;
   processStartedAtMs?: number | null;
   processDurationMs?: number | null;
-  onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
   onOpenWorkspacePath?: (path: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1780,7 +1773,6 @@ export function AgentRound({
         <ContentBlockView
           key={block.id}
           block={block}
-          onUiChoice={onUiChoice}
           onOpenWorkspacePath={onOpenWorkspacePath}
         />
       ))}

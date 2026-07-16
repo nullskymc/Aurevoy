@@ -153,6 +153,33 @@ function App() {
       ?? (/失败|失敗|failed|error|错误|錯誤|無法|无法|못|에러/i.test(message) ? "error" : "info");
     setNoticeState({ message, tone: inferred });
   };
+
+  // 启动后静默检查更新（仅桌面壳）；有新版本时 toast 提示，不自动安装
+  useEffect(() => {
+    if (!platform.checkForAppUpdate) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void platform
+        .checkForAppUpdate?.()
+        .then((info) => {
+          if (cancelled || !info?.available || !info.version) return;
+          setNotice(
+            t("settings.updateAvailable").replace("{version}", info.version),
+            "info",
+          );
+        })
+        .catch(() => {
+          // 启动检查失败不打扰用户（网络/未配置密钥等）
+        });
+    }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // 仅挂载时检查一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [platform]);
+
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const {
@@ -340,7 +367,6 @@ function App() {
     handleBranch,
     handleClarificationAnswer,
     handleComposerSubmit,
-    handleUiChoice,
     handleNewTask,
 
     handleResumeTask,
@@ -632,7 +658,6 @@ function App() {
                   onUnrevert={() => void handleUnrevert()}
                   onBranch={(messageId) => void handleBranch(messageId)}
                   onResume={() => void handleResumeTask()}
-                  onUiChoice={handleUiChoice}
                   onOpenWorkspacePath={(path) => {
                     workbenchTabs.openWorkspaceFile(path);
                     setWorkbenchOpen(true);

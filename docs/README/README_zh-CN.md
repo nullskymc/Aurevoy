@@ -44,7 +44,7 @@ npm run dev
 npm run typecheck
 ```
 
-协作入口：[AGENTS.md](../../AGENTS.md) · 文档：[docs/](../)
+协作入口：[AGENTS.md](../../AGENTS.md) · 文档：[docs/](../) · 文档站：[aurevoy.nullskymc.site](https://aurevoy.nullskymc.site/)
 
 ## 技术概要
 

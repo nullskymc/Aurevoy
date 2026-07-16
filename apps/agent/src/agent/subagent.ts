@@ -186,7 +186,7 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
         timeoutMs: config.llm.timeoutMs,
         maxRetries: 2,
         maxRetryDelayMs: 30_000,
-        cacheRetention: 'short',
+        cacheRetention: config.agent.cacheRetention === 'short' ? 'short' : 'long',
       },
     });
 

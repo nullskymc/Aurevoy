@@ -286,9 +286,7 @@ export function useAgentEventHandler({
       case "artifact_updated":
         mergeArtifact(event.artifact);
         break;
-      case "content_blocks_added":
-      case "content_blocks_upserted": {
-        const upsert = event.type === "content_blocks_upserted";
+      case "content_blocks_added": {
         setCurrentTask((previous) => {
           if (!previous) return previous;
           const previousMessages = previous.messages ?? [];
@@ -297,7 +295,7 @@ export function useAgentEventHandler({
           if (hitIndex >= 0) {
             messages = previousMessages.map((msg, index) =>
               index === hitIndex
-                ? { ...msg, contentBlocks: mergeContentBlocks(msg.contentBlocks, event.blocks, upsert) }
+                ? { ...msg, contentBlocks: mergeContentBlocks(msg.contentBlocks, event.blocks) }
                 : msg,
             );
           } else {
@@ -307,7 +305,7 @@ export function useAgentEventHandler({
               if (next[i].role !== "assistant") continue;
               next[i] = {
                 ...next[i],
-                contentBlocks: mergeContentBlocks(next[i].contentBlocks, event.blocks, upsert),
+                contentBlocks: mergeContentBlocks(next[i].contentBlocks, event.blocks),
               };
               messages = next;
               break;
@@ -321,7 +319,7 @@ export function useAgentEventHandler({
         const blockIds = new Set(event.blocks.map((block) => block.id));
         setLiveContentBlocks((prev) => prev.filter((block) => !blockIds.has(block.id)));
         // attach_content 文件引用：默认在侧边栏打开可预览类型（html/md 等）
-        if (event.type === "content_blocks_added" && onAttachedPreviewFiles) {
+        if (onAttachedPreviewFiles) {
           const paths = event.blocks
             .filter((b) => b.type === "file_reference" || b.type === "image")
             .map((b) => b.content)
@@ -500,7 +498,6 @@ export function useAgentEventHandler({
 function mergeContentBlocks(
   existing: ContentBlock[] | undefined,
   incoming: ContentBlock[],
-  upsert: boolean,
 ): ContentBlock[] {
   // 用 Map 同时处理历史重复和单个 SSE 批次内的重复，避免重复 block 继续流入 React。
   const map = new Map<string, ContentBlock>();
@@ -508,7 +505,7 @@ function mergeContentBlocks(
     map.set(block.id, block);
   }
   for (const block of incoming) {
-    if (upsert || !map.has(block.id)) {
+    if (!map.has(block.id)) {
       map.set(block.id, block);
     }
   }

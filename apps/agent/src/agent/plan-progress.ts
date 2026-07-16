@@ -14,7 +14,7 @@ const EXPLORE_TOOL =
 
 /** 写入/产出类工具：推进到 synthesize→deliver。 */
 const PRODUCE_TOOL =
-  /^(write|edit|create_file|append_file|replace_lines|apply_artifact|create_artifact|bash|execute_command|present_ui|attach_content|delete_file|move_file|copy_file|install_skill)/i;
+  /^(write|edit|create_file|append_file|replace_lines|apply_artifact|create_artifact|bash|execute_command|attach_content|delete_file|move_file|copy_file|install_skill)/i;
 
 export function isHeuristicTriPlan(plan: PlanStep[]): boolean {
   if (plan.length < 3) return false;
