@@ -14,6 +14,7 @@ import type {
   ToolRiskLevel,
 } from "@aurevoy/shared";
 import { ImageViewer } from "./ImageViewer";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import { t } from "../i18n";
 import {
   AgentRound,
@@ -842,9 +843,13 @@ function ClarificationCard({
         <span className="approval-card-title">{t("clarification.title")}</span>
         <span className="approval-card-meta">{t("clarification.waiting")}</span>
       </header>
-      <p className="approval-card-body">{clarification.question}</p>
+      <div className="approval-card-body gate-card-markdown">
+        <MarkdownRenderer content={clarification.question} />
+      </div>
       {clarification.context ? (
-        <p className="approval-card-context">{clarification.context}</p>
+        <div className="approval-card-context gate-card-markdown">
+          <MarkdownRenderer content={clarification.context} />
+        </div>
       ) : null}
       {clarification.options?.length ? (
         <div className="gate-card-options">
@@ -1594,65 +1599,6 @@ function ApprovalInline({
   );
 }
 
-function PlanApprovalInline({
-  plan,
-  onDecision,
-}: {
-  plan: PlanStep[];
-  onDecision: (approved: boolean) => void;
-}) {
-  const [decided, setDecided] = useState<"approve" | "reject" | null>(null);
-
-  function handleDecide(approved: boolean) {
-    setDecided(approved ? "approve" : "reject");
-    onDecision(approved);
-  }
-
-  // 决策后直接卸掉，不占输入框上方空间
-  if (decided) return null;
-
-  return (
-    <section
-      className="approval-card gate-card plan-approval-card"
-      data-status="awaiting"
-      aria-label="计划审批"
-    >
-      <header className="approval-card-head">
-        <span className="approval-card-glyph" aria-hidden="true">
-          ▤
-        </span>
-        <span className="approval-card-title">执行计划</span>
-        <span className="approval-card-meta">{plan.length} 个步骤</span>
-      </header>
-      <ol className="plan-approval-steps">
-        {plan.map((step, index) => (
-          <li key={step.id}>
-            <span>{index + 1}</span>
-            <p>{step.description}</p>
-          </li>
-        ))}
-      </ol>
-      <p className="approval-card-body">确认后将按该计划继续</p>
-      <div className="approval-card-actions">
-        <button
-          type="button"
-          className="approval-card-btn approval-card-btn--reject"
-          onClick={() => handleDecide(false)}
-        >
-          {t("action.reject")}
-        </button>
-        <button
-          type="button"
-          className="approval-card-btn approval-card-btn--allow"
-          onClick={() => handleDecide(true)}
-        >
-          {t("action.approveOnce")}
-        </button>
-      </div>
-    </section>
-  );
-}
-
 function toolApprovalLabel(item: ToolActivity): string {
   if (item.name !== "execute_command" && item.name !== "bash") return item.name;
   const argsObj = item.args as Record<string, unknown> | null;
@@ -1672,32 +1618,24 @@ function truncateCommandLine(cmd: string): string {
   return cmd;
 }
 
-/** 工具/计划审批：固定在输入框上方（composer-dock），不进对话流 */
+/** 工具审批：固定在输入框上方（composer-dock），不进对话流 */
 export function ApprovalsDock({
   liveToolActivity,
   pendingApprovals,
-  phase,
-  plan,
   onToolDecision,
-  onPlanDecision,
 }: {
   liveToolActivity: ToolActivity[];
   pendingApprovals?: PendingToolApproval[];
-  phase: TaskPhase | null;
-  plan: PlanStep[];
   onToolDecision: ToolDecisionHandler;
-  onPlanDecision: (approved: boolean) => void;
 }) {
   const approvalItems = collectApprovalItems(liveToolActivity, pendingApprovals ?? []);
-  const showPlanApproval = phase === "waiting_approval" && approvalItems.length === 0 && plan.length > 0;
-  if (approvalItems.length === 0 && !showPlanApproval) return null;
+  if (approvalItems.length === 0) return null;
 
   return (
     <div className="process-gates process-gates--dock" aria-label={t("tool.approvalHint")}>
       {approvalItems.map((item) => (
         <ApprovalInline key={item.id} item={item} onDecision={onToolDecision} />
       ))}
-      {showPlanApproval && <PlanApprovalInline plan={plan} onDecision={onPlanDecision} />}
     </div>
   );
 }

@@ -392,13 +392,42 @@ describe("AgentRound", () => {
     );
 
     expect(html).toContain("process-live-block");
-    expect(html).toContain("process-live-status");
     expect(html).toContain("已处理");
-    expect(html).toContain("正在调用 edit");
+    // live：每个子代理一行，与工具行并列；无协作工作组
     expect(html).not.toContain("协作工作组");
+    expect(html).not.toContain("subagent-workgroup");
+    expect(html).toContain("process-activity-list");
+    expect(html).toContain('data-live="true"');
+    expect(html).toContain('data-kind="subagent"');
+    expect(html).toContain("正在调用 edit");
+    expect(html).toContain("pwd");
+    expect(html).not.toContain("调用工具 delegate");
     expect(html).not.toContain("timeline-step");
     expect(html).not.toContain("timeline-empty");
     expect(html).toContain('data-process="live"');
+  });
+
+  it("resolveLiveStatusText ignores bare 调用工具 delegate and prefers subagent", () => {
+    expect(
+      resolveLiveStatusText({
+        phaseDetail: "调用工具 delegate",
+        data: {
+          id: "r",
+          planStepGroups: [],
+          summary: "",
+          status: "running",
+          subagentRuns: [
+            makeSubagentRun({
+              id: "sa1",
+              status: "running",
+              role: "explore",
+              goal: "勘察仓库结构",
+              currentActivity: "正在列出目录",
+            }),
+          ],
+        },
+      }),
+    ).toMatch(/子智能体|勘察|列出/);
   });
 
   it("streams typewriter delivery while thinking without stacking 正在思考", () => {
@@ -521,7 +550,7 @@ describe("AgentRound", () => {
     expect(html).not.toContain("doc-meta");
   });
 
-  it("completed subagent rounds render as activity rows not workgroup cards", () => {
+  it("completed subagent rounds render as flat activity rows", () => {
     const html = renderToStaticMarkup(
       <AgentRound
         defaultToolDetailsOpen
@@ -537,8 +566,50 @@ describe("AgentRound", () => {
 
     expect(html).toContain("process-activity-row");
     expect(html).toContain('data-kind="subagent"');
+    expect(html).toContain("已创建子智能体");
     expect(html).not.toContain("协作工作组");
     expect(html).not.toContain("subagent-workgroup");
+  });
+
+  it("live shows one activity row per subagent", () => {
+    const html = renderToStaticMarkup(
+      <AgentRound
+        busy
+        processStartedAtMs={Date.now() - 3000}
+        data={{
+          id: "multi-sa",
+          planStepGroups: [],
+          summary: "",
+          subagentRuns: [
+            makeSubagentRun({
+              id: "sa-a",
+              parentCallId: "c-a",
+              role: "research",
+              status: "running",
+              goal: "搜索农行信息",
+              currentActivity: "正在搜索网页",
+            }),
+            makeSubagentRun({
+              id: "sa-b",
+              parentCallId: "c-b",
+              role: "coder",
+              status: "running",
+              goal: "改 UI",
+              currentActivity: "正在编辑文件",
+            }),
+          ],
+          status: "running",
+        }}
+      />,
+    );
+
+    expect(html).toContain('data-kind="subagent"');
+    // 有 currentActivity 时优先展示活动，否则展示 goal
+    expect(html).toContain("调研 · 正在搜索网页");
+    expect(html).toContain("编码 · 正在编辑文件");
+    // 两个子代理各一行
+    expect(html.match(/data-kind="subagent"/g)?.length).toBe(2);
+    expect(html).not.toContain("协作工作组");
   });
 });
 

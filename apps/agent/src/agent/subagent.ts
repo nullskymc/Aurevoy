@@ -7,7 +7,6 @@ import {
 } from '@earendil-works/pi-agent-core';
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node';
 import type {
-  AutoModeLevel,
   SubagentStopReason,
   Task,
   TaskErrorCategory,
@@ -58,7 +57,7 @@ export interface SubTask {
   /** 显式工具白名单（若提供则覆盖角色默认集） */
   allowedTools?: string[];
   workspaceDir: string;
-  /** 父任务权限配置。子代理继承父代理 auto/plan 与 paused/planApproved。 */
+  /** 父任务权限配置。子代理继承父代理 paused 状态。 */
   approvalConfig?: ApprovalConfig;
   /** 父任务快照，用于权限、工具上下文与审计关联。 */
   parentTask?: Task;
@@ -320,12 +319,10 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
 
 function resolveSubagentApprovalConfig(subTask: SubTask): ApprovalConfig {
   if (subTask.approvalConfig) return subTask.approvalConfig;
-  const level: AutoModeLevel = config.autoMode.level === 'plan' ? 'plan' : 'auto';
-  if (subTask.parentTask) return approvalConfigFromTask(subTask.parentTask, level);
+  if (subTask.parentTask) return approvalConfigFromTask(subTask.parentTask, 'auto');
   return {
-    autoModeLevel: level,
+    autoModeLevel: 'auto',
     autoModePaused: false,
-    planApproved: level === 'auto',
   };
 }
 
@@ -336,18 +333,18 @@ function buildSubagentSystemPrompt(
   approvalConfig: ApprovalConfig,
 ): string {
   const profile = getSubagentProfile(role);
-  const permissionLine =
-    approvalConfig.autoModeLevel === 'auto' || approvalConfig.planApproved
-      ? '权限：继承父代理，当前可在工具白名单内自动执行（含写入/命令，若白名单包含）。'
-      : '权限：继承父代理 Plan 模式且计划尚未批准，非 safe 工具会被 runtime 拦截。';
+  const permissionLine = approvalConfig.autoModePaused
+    ? '权限：父任务已暂停自动执行，非 safe 工具会被 runtime 拦截。'
+    : '权限：继承父代理，当前可在工具白名单内自动执行（含写入/命令，若白名单包含）。';
 
+  // 时间放在末尾且分钟精度，避免秒级墙钟污染可缓存前缀
+  const stableTimestamp = new Date().toISOString().replace(/:\d{2}\.\d{3}Z$/, ':00Z');
   return [
     `你是 Aurevoy 的子代理（角色：${profile.label} / ${role}）。`,
     '你的任务是完成主代理委托给你的独立子任务；主代理仍持有用户对话与最终答复权。',
     `工作区：${subTask.workspaceDir}`,
     subTask.parentTask?.goal ? `父任务目标：${subTask.parentTask.goal}` : '',
     `当前环境：${process.platform} ${process.arch}`,
-    `当前时间：${new Date().toISOString()}`,
     '',
     profile.systemPromptAddon,
     '',
@@ -357,6 +354,8 @@ function buildSubagentSystemPrompt(
     '- 优先收敛，不要重复无效调用；完成后立即输出最终结果',
     '- 只返回主代理完成任务所需的结论、变更与验证；不要回传大段原始工具输出',
     '- 无法完成时明确说明阻塞原因和已经验证的事实',
+    '',
+    `当前时间：${stableTimestamp}`,
   ].filter(Boolean).join('\n');
 }
 

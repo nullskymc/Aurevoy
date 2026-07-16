@@ -132,21 +132,13 @@ export function loadPersistedSettings(): void {
     activateProviderSlot(global.activeProvider);
   }
 
-  const autoModeStored = entries[SETTING_KEYS.autoModeLevel];
-  if (autoModeStored === 'auto' || autoModeStored === 'plan') {
-    config.autoMode.level = autoModeStored;
-  } else if (autoModeStored === 'off' || autoModeStored === 'auto-edit' || autoModeStored === 'full') {
-    config.autoMode.level = 'auto';
-    settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
-  } else if (autoModeStored !== undefined) {
-    config.autoMode.level = 'auto';
+  // 产品仅保留 agent（auto）；历史 plan/off 等一律收敛
+  config.autoMode.level = 'auto';
+  if (entries[SETTING_KEYS.autoModeLevel] !== 'auto') {
     settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
   }
-
-  if (!settingsStore.get('autoMode.migratedV2')) {
-    config.autoMode.level = 'auto';
-    settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
-    settingsStore.set('autoMode.migratedV2', 'true');
+  if (!settingsStore.get('autoMode.migratedV3')) {
+    settingsStore.set('autoMode.migratedV3', 'true');
   }
   const thinkingLevel = normalizeThinkingLevel(entries[SETTING_KEYS.agentThinkingLevel]);
   if (thinkingLevel) config.agent.thinkingLevel = thinkingLevel;
@@ -370,11 +362,8 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   }
 
   if (body.autoModeLevel !== undefined) {
-    const valid = (['auto', 'plan'] as const).includes(body.autoModeLevel as never);
-    if (valid) {
-      settingsStore.set(SETTING_KEYS.autoModeLevel, body.autoModeLevel);
-      config.autoMode.level = body.autoModeLevel;
-    }
+    settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
+    config.autoMode.level = 'auto';
   }
 
   if (body.autoModeSafetyEnabled !== undefined) {

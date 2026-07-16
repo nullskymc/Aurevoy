@@ -375,33 +375,8 @@ export function useAgentEventHandler({
       case "compacted":
         break;
       case "plan_approval_request":
-        setStatus("paused");
-        setPhase("waiting_approval");
-        setPlan(event.plan);
-        setCurrentTask((previous) => {
-          if (!previous) return previous;
-          const nextTask = {
-            ...previous,
-            status: "paused" as const,
-            phase: "waiting_approval" as const,
-            plan: event.plan,
-          };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
-        break;
       case "plan_approval_resolved":
-        setCurrentTask((previous) => {
-          if (!previous) return previous;
-          const nextPlan = previous.plan.map((step, index) => ({
-            ...step,
-            status: event.approved ? (index === 0 ? "running" as const : "pending" as const) : "pending" as const,
-          }));
-          setPlan(nextPlan);
-          const nextTask = { ...previous, plan: nextPlan };
-          updateTaskList(nextTask);
-          return nextTask;
-        });
+        // 计划审批模式已移除；忽略历史事件
         break;
       case "skill_installed":
       case "skill_deactivated":

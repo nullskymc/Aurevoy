@@ -42,10 +42,13 @@ export function buildSkillCatalogMessage(): Message | null {
  * 三层递进压缩（由轻到重）：
  *   1. Snip（零成本） → 2. Microcompact（零成本） → 3. Context Collapse（LLM 摘要）
  *
- * Cache-aware：
- *   - Snip 和 Microcompact 只作用于 cachedUpTo 之后的新消息，不破坏 prompt cache
- *   - Context Collapse 修改旧消息 → 返回 collapsed=true，调用方重置缓存边界
- *   - Read/Write/Edit 工具结果不压缩：截断会导致 LLM 重读，得不偿失
+ * Cache-aware（前缀稳定）：
+ *   - Snip / Microcompact 是确定性纯函数，每一轮对整表重放。
+ *     会话里始终存原文；重放后已发送前缀字节与上一轮一致，不会“解压”回原文。
+ *   - 切勿用“消息条数边界”跳过已发送区：边界按条数记、会话回灌原文时会把
+ *     已 microcompact 的 tool 结果重新展开，破坏 prompt cache 前缀。
+ *   - Context Collapse 会改写旧消息 → 返回 collapsed=true，调用方重置缓存边界
+ *   - 写入/确认类工具结果不压缩
  */
 
 // ---- 工具类型分类 ----
@@ -90,15 +93,15 @@ export interface CompactContextResult {
 
 /**
  * 移除空的 tool_result 消息及其配对的 assistant（如果该 assistant 的所有工具结果都被移除）。
- * 只操作 cachedUpTo 之后的消息，不破坏 prompt cache 前缀。
+ * 对整表确定性重放，保证多轮 append 时前缀字节稳定。
  */
-function snipToolResults(messages: Message[], cachedUpTo: number): Message[] {
+export function snipToolResults(messages: Message[]): Message[] {
   // 构建 toolCallId → toolName 映射
   const toolCallToName = buildToolNameMap(messages);
 
   // 找出可以 snip 的 tool_result index
   const snipToolResultIndices = new Set<number>();
-  for (let i = cachedUpTo; i < messages.length; i++) {
+  for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (m.role !== 'tool' || !m.toolCallId) continue;
 
@@ -116,7 +119,7 @@ function snipToolResults(messages: Message[], cachedUpTo: number): Message[] {
 
   // 同时检查配对的 assistant：如果它的所有 tool_results 都被 snip 了，也移除该 assistant
   const snipAssistantIndices = new Set<number>();
-  for (let i = cachedUpTo; i < messages.length; i++) {
+  for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (m.role !== 'assistant' || !m.toolCalls?.length) continue;
 
@@ -288,28 +291,36 @@ export function compactToolResult(toolName: string, rawContent: string): string 
 }
 
 /**
- * 对 cachedUpTo 之后的新 tool_result 消息做结构化压缩。
+ * 对 tool_result 做结构化压缩（确定性，整表重放）。
  * 保留 toolCallId 和 role，只压缩 content 字段。
  */
-function microcompactToolResults(messages: Message[], cachedUpTo: number): Message[] {
+export function microcompactToolResults(messages: Message[]): Message[] {
   const toolCallToName = buildToolNameMap(messages);
-  let changedCount = 0;
 
-  const result = messages.map((msg, i) => {
-    if (i < cachedUpTo) return msg;
+  return messages.map((msg) => {
     if (msg.role !== 'tool' || !msg.toolCallId) return msg;
 
     const toolName = toolCallToName.get(msg.toolCallId);
     if (!toolName || !TOOLS_WITH_LARGE_OUTPUT.has(toolName)) return msg;
 
+    // 已压缩过的结果保持原样，避免二次结构漂移
+    if (msg.content?.includes('"_compacted":true') || msg.content?.includes('"_compacted": true')) {
+      return msg;
+    }
+
     const compacted = compactToolResult(toolName, msg.content);
     if (compacted === null) return msg;
 
-    changedCount++;
     return { ...msg, content: compacted };
   });
+}
 
-  return result;
+/**
+ * 零成本 cache-aware 变换：Snip + Microcompact。
+ * 纯函数、对整表确定性重放；多轮仅追加新消息时，已发送前缀字节保持不变。
+ */
+export function applyZeroCostCompaction(messages: Message[]): Message[] {
+  return microcompactToolResults(snipToolResults(messages));
 }
 
 // ---- 3. Context Collapse: LLM 消息范围摘要 ----
@@ -407,7 +418,8 @@ function deterministicContextSummary(transcript: string): string {
  *   Snip → Microcompact → Collapse（仅在超预算时）
  *
  * cache-aware：
- *   - cachedUpTo 之前的消息不动（它们在 prompt cache 中）
+ *   - Snip/Microcompact 整表确定性重放（见 applyZeroCostCompaction）
+ *   - `cachedUpTo` 仅保留 API 兼容；零成本层不再用它跳过前缀（跳过会导致原文回灌）
  *   - Context Collapse 执行时返回 collapsed=true，调用方应重置缓存边界为 0
  */
 export async function compactContext(
@@ -415,22 +427,24 @@ export async function compactContext(
   cachedUpTo: number,
   tokenBudget?: number,
 ): Promise<CompactContextResult> {
+  void cachedUpTo; // 兼容旧调用方；零成本层改为整表重放
   const budget = tokenBudget ?? config.agent.contextTokenBudget;
   const originalTokens = totalTokens(messages);
 
-  // Step 1: Snip — 移除空 tool_result（仅新消息）
-  const afterSnip = snipToolResults(messages, cachedUpTo);
+  // Step 1–2: Snip + Microcompact — 整表确定性重放
+  const afterSnip = snipToolResults(messages);
   const snippedCount = messages.length - afterSnip.length;
+  const afterMc = microcompactToolResults(afterSnip);
 
-  // Step 2: Microcompact — 结构化压缩（仅新消息）
-  const afterMc = microcompactToolResults(afterSnip, cachedUpTo);
-
-  // 计算被 microcompact 的条数
+  // 计算被 microcompact 的条数（按 toolCallId 对齐原文）
   let microCount = 0;
-  for (let i = cachedUpTo; i < afterMc.length; i++) {
-    if (afterMc[i]?.content !== messages[i]?.content) {
-      microCount++;
-    }
+  const originalByToolId = new Map(
+    messages.filter((m) => m.role === 'tool' && m.toolCallId).map((m) => [m.toolCallId!, m.content]),
+  );
+  for (const msg of afterMc) {
+    if (msg.role !== 'tool' || !msg.toolCallId) continue;
+    const original = originalByToolId.get(msg.toolCallId);
+    if (original !== undefined && original !== msg.content) microCount++;
   }
 
   // Step 3: 检查是否需要 LLM Collapse
@@ -922,36 +936,16 @@ export async function buildMemorySystemMessage(
 }
 
 /**
- * 构建环境上下文系统消息（始终注入）。
- *
- * 提供模型感知世界所必需的基础信息：
- * - 当前日期/时间
- * - 操作系统与平台
- * - 工作区目录（文件沙箱边界）
- * - Aurevoy 配置目录（skills / DB / 设置所在）
- * - 项目名称/路径
+ * 稳定环境上下文（无墙钟）：平台、工作区、项目。
+ * 属于 system prompt 的 cacheable 前缀，单次任务 run 内应字节不变。
  */
-export function buildSystemContextMessage(
+export function buildStableWorkspaceContextMessage(
   workspaceDir: string,
   configDir?: string,
   projectInfo?: { name: string; path: string },
 ): Message {
-  const now = new Date();
-  const timeStr = now.toLocaleDateString('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
-
-  // 时间戳降为分钟级精度（截断秒/毫秒），减少跨任务恢复和连续调用时的 cache miss。
-  // prompt cache 按前缀精确匹配，秒级时间戳会让整个 system prompt 每次都 cache miss。
-  const stableTimestamp = now.toISOString().replace(/:\d{2}\.\d{3}Z$/, ':00Z');
-
   const lines: string[] = [];
   lines.push('<system_context>');
-  lines.push(`Current time: ${stableTimestamp}`);
-  lines.push(`Today: ${timeStr}`);
   lines.push(`Platform: ${process.platform} ${process.arch}`);
   lines.push(`Shell: ${process.env.SHELL ?? 'unknown'}`);
   lines.push('');
@@ -967,8 +961,104 @@ export function buildSystemContextMessage(
     id: randomUUID(),
     role: 'system',
     content: lines.join('\n'),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 易变时间上下文（分钟精度）。放在稳定 system 前缀**之后**，避免分钟跳动使
+ * identity / protocol / skills / workspace 整段 cache miss。
+ */
+export function buildVolatileTimeContextMessage(now: Date = new Date()): Message {
+  const timeStr = now.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  // 分钟精度：秒级时间戳会让 volatile 后缀每秒都变
+  const stableTimestamp = now.toISOString().replace(/:\d{2}\.\d{3}Z$/, ':00Z');
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content: [
+      '<system_time>',
+      `Current time: ${stableTimestamp}`,
+      `Today: ${timeStr}`,
+      '</system_time>',
+    ].join('\n'),
     createdAt: now.toISOString(),
   };
+}
+
+/**
+ * 构建环境上下文系统消息（兼容入口）。
+ *
+ * 顺序：稳定环境事实在前，墙钟时间在后——即使合在一条消息里，时间变化也只影响尾部。
+ */
+export function buildSystemContextMessage(
+  workspaceDir: string,
+  configDir?: string,
+  projectInfo?: { name: string; path: string },
+  now: Date = new Date(),
+): Message {
+  const stable = buildStableWorkspaceContextMessage(workspaceDir, configDir, projectInfo);
+  const time = buildVolatileTimeContextMessage(now);
+  // 拆掉各自的外层标签，合成一条 <system_context>…</system_context>
+  const stableBody = stable.content
+    .replace(/^<system_context>\n?/, '')
+    .replace(/\n?<\/system_context>$/, '');
+  const timeBody = time.content
+    .replace(/^<system_time>\n?/, '')
+    .replace(/\n?<\/system_time>$/, '');
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content: ['<system_context>', stableBody, '', timeBody, '</system_context>'].join('\n'),
+    createdAt: now.toISOString(),
+  };
+}
+
+/**
+ * 单次任务 run 内应冻结的 system 前缀部件（无时间、无附件）。
+ * 顺序：identity → protocol → skills → workspace，最大化可缓存公共前缀。
+ */
+export function buildStableSystemPromptParts(options: {
+  workspaceDir: string;
+  configDir?: string;
+  projectInfo?: { name: string; path: string };
+}): string[] {
+  return [
+    buildAgentIdentityMessage().content,
+    buildToolGuidanceMessage().content,
+    buildSkillCatalogMessage()?.content,
+    buildStableWorkspaceContextMessage(
+      options.workspaceDir,
+      options.configDir,
+      options.projectInfo,
+    ).content,
+  ].filter((part): part is string => typeof part === 'string' && part.length > 0);
+}
+
+/**
+ * 每轮可变化的 system 后缀部件（时间、附件等）。始终接在稳定前缀之后。
+ */
+export function buildVolatileSystemPromptParts(options: {
+  now?: Date;
+  attachmentContent?: string | null;
+}): string[] {
+  const parts: string[] = [buildVolatileTimeContextMessage(options.now).content];
+  if (options.attachmentContent?.trim()) {
+    parts.push(options.attachmentContent);
+  }
+  return parts;
+}
+
+/** 拼接 system prompt：稳定前缀 + 易变后缀。 */
+export function joinSystemPromptParts(stableParts: string[], volatileParts: string[] = []): string {
+  return [...stableParts, ...volatileParts].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -1022,7 +1112,7 @@ export function buildToolGuidanceMessage(): Message {
     '- `attach_content`: deliver a workspace file, image, or link. Use for HTML / Markdown / reports / images so the chat card + workbench preview open.',
     '  Prefer type=file_reference with a real path after writing the file.',
     '- Inline conversation UI is temporarily unavailable. For previews, dashboards, forms, or other rich content, write an HTML or Markdown file and deliver it with `attach_content`.',
-    '- Only for a user-requested long-form, inspectable, file-based report (评估/调研/计划/纪要等) should you load `report-design`, write HTML under `report/`, then `bundle_report` → `attach_content`.',
+    '- Research or file reports (调研/简报/评估/计划/纪要等): load `research`. Prefer quick report; use deep mode only for multi-item structured research. Default file delivery is Markdown; HTML + `bundle_report` only when the user wants a single-page/component layout. Then `attach_content`.',
     '  Final chat reply = path + one-line summary (+ warnings). Do not restate the whole report.',
     '- `create_artifact` / `apply_artifact`: durable draft or file artifact when the user needs an inspectable intermediate, not as a substitute for attach_content delivery.',
     '',
@@ -1043,7 +1133,7 @@ export function buildToolGuidanceMessage(): Message {
     '## Web, memory, skills, user input',
     '- External facts: `web_search` then `web_fetch`; cite URLs; do not invent sources.',
     '- Long-term notes: `remember` / `recall` when useful across turns.',
-    '- Skills: load a catalog skill only when the task explicitly needs that skill. `report-design` is for long-form file reports.',
+    '- Skills: load a catalog skill only when the task explicitly needs that skill. `research` is for research and file reports (quick or deep; Markdown default, HTML optional).',
     '- Ambiguity that blocks progress: `ask_user` with few concrete questions; otherwise decide and proceed.',
     '',
     '## Honesty & safety',

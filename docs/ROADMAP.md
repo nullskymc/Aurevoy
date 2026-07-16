@@ -9,7 +9,7 @@
 |---|---|
 | 底座 | Monorepo、HTTP+SSE、shared 契约、Tauri 壳、Pi AgentHarness |
 | 工具与安全 | 内置文件/网络工具、三级风险、审批门、MCP、Effect 工具框架、沙箱边界 |
-| 规划与模式 | Scout、LLM 计划、auto/plan、计划门禁、安全暂停 |
+| 规划与模式 | Scout、执行计划展示、Agent 自动执行、安全暂停 |
 | 会话控制 | 多轮、resume、内联编辑重试（revert+continue）、unrevert、branch、compact |
 | 子代理 | 多角色 `delegate`、并发闸门、进度 SSE、Timeline 工作组 |
 | 记忆与知识 | 长期记忆 CRUD、sqlite-vec 混合检索、Dreams、KB 索引/recall、设置面板 |
@@ -46,6 +46,7 @@ npm run regression:m3   # … m8 见 package.json
 **浏览器**
 
 - [x] 预装 browser skill + Playwright MCP 兼容说明  
+- [x] 预装 research skill（快速/深度报告；Markdown 默认，HTML 可选）  
 - [ ] 推荐 MCP 模板（默认关闭高风险动作）  
 - [ ] 截图/DOM 摘要更顺畅进入 workbench
 

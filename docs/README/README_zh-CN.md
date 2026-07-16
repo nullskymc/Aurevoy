@@ -32,7 +32,7 @@ Aurevoy 是**本地桌面 Agent**（优先 macOS）。你描述目标，它规�
 
 1. **安装** — [Releases](../../releases) 下载 DMG  
 2. **配置** — 设置里填 Provider / Base URL / 模型 / Key  
-3. **对话** — 输入目标；`/` 查看 skill（如 web-search、browser）
+3. **对话** — 输入目标；`/` 查看 skill（如 web-search、browser、research）
 
 ### 开发
 

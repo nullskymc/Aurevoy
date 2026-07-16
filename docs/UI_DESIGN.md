@@ -24,7 +24,7 @@
 | 侧栏 | 新对话、历史（时间倒序）、设置/记忆/搜索等真入口 | 统计仪表盘、装饰卡片 |
 | 主区空态 | 引导句 + 建议 prompt 卡 + 大 Composer | 教程墙 |
 | 主区对话 | 用户右胶囊、裸 Markdown 交付、过程状态流/扁平列表 | 运行中默认展开工具卡时间轴；常驻「运行详情」侧栏 |
-| Composer | Enter 发送、模型选择、auto/plan、busy 时停止 | 未配置时仍假装可聊 |
+| Composer | Enter 发送、模型选择、Agent 状态、busy 时停止 | 未配置时仍假装可聊 |
 | 工作台 | 固定文件树 + 打开文档/产物预览 | 把树做成页签；叫 inspector |
 | 输出栏 | 右侧 **grid 列**（与工作台同列位、互斥）；卡式视觉，主对话不压在其下 | absolute 叠层挡内容 |
 
@@ -87,7 +87,7 @@
 |---|---|
 | `App` | 视图切换、全局状态拼装 |
 | `Conversation` / `Timeline` | 轮次、工具、子代理、失败卡 |
-| `Composer` | 输入、附件、模型、auto/plan、斜杠命令 |
+| `Composer` | 输入、附件、模型、Agent 状态、斜杠命令 |
 | `WorkbenchPanel` | 文件树与预览 |
 | `SettingsPanel` | 真设置（LLM 槽位、工具、MCP、KB、搜索…） |
 | hooks | SSE、任务控制、设置、附件 |

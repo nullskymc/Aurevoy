@@ -12,7 +12,6 @@ interface SlashCommand {
   description?: string;
 }
 
-export type AutoModeUILevel = 'auto' | 'plan';
 export type ThinkingUILevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 const THINKING_LEVEL_CYCLE: ThinkingUILevel[] = [
@@ -44,13 +43,9 @@ interface ComposerProps {
   onPasteFiles?: (files: Array<{ name: string; dataUrl: string; mimeType: string }>) => void;
   /** 点击 "+" 按钮打开文件选择器 */
   onPickAttachments?: () => void;
-  /** Auto mode 等级 */
-  autoModeLevel?: AutoModeUILevel;
-  /** Auto mode 暂停状态 */
+  /** Agent 自动执行被暂停时 */
   autoModePaused?: boolean;
-  /** 点击切换 auto mode */
-  onCycleAutoMode?: () => void;
-  /** 恢复暂停的 auto mode */
+  /** 恢复暂停的自动执行 */
   onResumeAutoMode?: () => void;
   /** 推理深度（与模型能力相关，仅支持推理的模型会生效） */
   thinkingLevel?: ThinkingUILevel;
@@ -77,9 +72,7 @@ export function Composer({
   onOpenModelSelector,
   modelButtonRef,
   onStop,
-  autoModeLevel,
   autoModePaused,
-  onCycleAutoMode,
   onResumeAutoMode,
   thinkingLevel = "medium",
 }: ComposerProps) {
@@ -250,16 +243,6 @@ export function Composer({
   }
 
   const hasAttachments = attachments && attachments.length > 0;
-  const modeLabel = autoModePaused
-    ? t("composer.mode.paused")
-    : autoModeLevel === "plan"
-      ? t("composer.mode.plan")
-      : t("composer.mode.auto");
-  const modeTitle = autoModePaused
-    ? t("composer.mode.pausedHint")
-    : autoModeLevel === "plan"
-      ? t("composer.mode.planHint")
-      : t("composer.mode.autoHint");
 
   return (
     <div
@@ -382,26 +365,21 @@ export function Composer({
               >
                 <PlusIcon />
               </button>
-              {(onCycleAutoMode || onResumeAutoMode) && (
+              {autoModePaused && onResumeAutoMode ? (
                 <button
                   type="button"
-                  className={
-                    "composer-mode-chip" +
-                    (autoModePaused ? " is-paused" : "") +
-                    (autoModeLevel === "plan" && !autoModePaused ? " is-plan" : "")
-                  }
-                  onClick={autoModePaused ? onResumeAutoMode : onCycleAutoMode}
-                  title={modeTitle}
+                  className="composer-mode-chip is-paused"
+                  onClick={onResumeAutoMode}
+                  title={t("composer.mode.pausedHint")}
                 >
-                  {autoModePaused ? (
-                    <span className="auto-mode-dot paused" />
-                  ) : autoModeLevel === "plan" ? (
-                    <HandIcon />
-                  ) : (
-                    <span className="auto-mode-dot" />
-                  )}
-                  <span>{modeLabel}</span>
+                  <span className="auto-mode-dot paused" />
+                  <span>{t("composer.mode.paused")}</span>
                 </button>
+              ) : (
+                <span className="composer-mode-chip is-agent" title={t("composer.mode.agentHint")}>
+                  <span className="auto-mode-dot" />
+                  <span>{t("composer.mode.agent")}</span>
+                </span>
               )}
             </div>
 
@@ -544,20 +522,6 @@ function StopDot() {
   return (
     <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
       <rect x="6" y="6" width="8" height="8" rx="1.5" fill="currentColor" />
-    </svg>
-  );
-}
-
-function HandIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none">
-      <path
-        d="M5.2 7.2V4.4a1 1 0 012 0v2.2M7.2 6.6V3.6a1 1 0 012 0v3.2M9.2 6.8V4.8a1 1 0 012 0v4.2c0 2.1-1.5 3.6-3.6 3.6H8c-2 0-3.6-1.2-3.6-3.2V7.8a1 1 0 012 0v.6"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
     </svg>
   );
 }

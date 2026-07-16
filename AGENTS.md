@@ -65,7 +65,7 @@ npm run regression:m3    # … m8 见 package.json
 
 ## 能力现状（摘要）
 
-**已交付：** Pi harness、多协议 LLM、Effect 工具 + MCP、auto/plan、规划/侦查、审批、多轮/恢复、  
+**已交付：** Pi harness、多协议 LLM、Effect 工具 + MCP、agent 自动执行、规划/侦查、工具门禁（暂停恢复）、多轮/恢复、  
 内联编辑重试/分支/压缩、子代理（并发与工作组 UI）、Skill、网页搜索、多模态、项目工作区、  
 双层预算、记忆向量 + KB RAG、设置/数据管理、CI。
 

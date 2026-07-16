@@ -62,7 +62,7 @@ Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Roadmap: [docs/ROA
 
 ## Capabilities (current)
 
-Autonomous plan & tools · multi-provider LLM · auto/plan modes · multi-turn & resume ·  
+Autonomous agent & tools · multi-provider LLM · multi-turn & resume ·  
 inline edit-retry / branch / compact · multi-role subagents · skills · web search ·  
 multimodal · projects · dual task budgets · long-term memory + KB RAG · settings & CI  
 

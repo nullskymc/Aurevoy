@@ -548,14 +548,11 @@ export interface Project {
 export type ToolRiskLevel = 'safe' | 'caution' | 'dangerous';
 
 /**
- * Auto Mode 等级（仅两档，原语而非特性）。
- * - auto: 全自动执行，所有工具自动批准，无弹出式审批。安全由沙箱/工具层保障。
- * - plan: 先确认执行计划，用户批准后执行期与 auto 相同（不再逐工具审批）。
- * 子代理继承父任务的同一档权限，不单独设权限模式。
+ * Agent 执行等级。产品仅保留自动执行（agent）；历史 `plan` 值读入时按 auto 处理。
  */
-export type AutoModeLevel = 'auto' | 'plan';
+export type AutoModeLevel = 'auto';
 
-/** Auto Mode 在运行时中的统计与状态 */
+/** Agent 运行时的统计与状态（工具默认自动放行；paused 时拦截非 safe 工具） */
 export interface AutoModeState {
   level: AutoModeLevel;
   /** 自动批准的工具调用累计次数 */
@@ -566,15 +563,6 @@ export interface AutoModeState {
   paused: boolean;
   /** 暂停原因（paused 时有效） */
   pausedReason?: string;
-  /**
-   * Plan 模式：用户是否已批准本任务的执行计划。
-   * 批准后执行期工具权限与 auto 相同。auto 模式下忽略此字段。
-   */
-  planApproved?: boolean;
-  /** Plan Mode: Agent 是否已输出计划待审批（展示用） */
-  planReady?: boolean;
-  /** Plan Mode: Agent 输出的计划内容（展示用） */
-  planContent?: string;
 }
 
 /** 任务轨迹记录类型，用于审计、诊断和回放。 */
@@ -1364,7 +1352,7 @@ export interface RuntimeSettings {
   commandExecutionEnabled: boolean;
   mcpServersJson: string;
   cleanupPolicyDays: number;
-  /** 全局 auto mode 等级，直接作用于审批层 */
+  /** 始终为 auto（兼容字段；UI 不再提供切换） */
   autoModeLevel: AutoModeLevel;
   /** 是否启用 auto mode 安全规则（拦截 destroy/exfiltrate 等危险操作） */
   autoModeSafetyEnabled: boolean;

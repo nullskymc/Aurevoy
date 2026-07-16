@@ -2,7 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import type { AgentEvent, MessageAttachment, PlanStep, RevertMode, Task, TaskPhase, TaskStatus, TaskTraceEntry } from "@aurevoy/shared";
 import {
   answerClarification,
-  approvePlan,
+
   approveToolCall,
   branchTask,
   cancelTask,
@@ -342,15 +342,6 @@ export function useTaskController({
     });
   }
 
-  function handlePlanDecision(approved: boolean): void {
-    const taskId = currentTask?.id;
-    if (!taskId) return;
-    setNotice(null);
-    void approvePlan(taskId, approved).catch((err) => {
-      setNotice(`${t("notice.planApprovalFailed")}${err instanceof Error ? err.message : String(err)}`);
-    });
-  }
-
   function handleClarificationAnswer(clarificationId: string, answer: string): void {
     const taskId = currentTask?.id;
     if (!taskId) return;
@@ -366,7 +357,7 @@ export function useTaskController({
     handleComposerSubmit,
     handleUiChoice,
     handleNewTask,
-    handlePlanDecision,
+
     handleResumeTask,
     handleRevertAndEdit,
     handleSelectTask,

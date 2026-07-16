@@ -10,7 +10,7 @@ const Input = Schema.Struct({
     description: "Path for the bundled output. Defaults to overwriting htmlPath.",
   })),
   componentsPath: Schema.optional(Schema.String.annotations({
-    description: "Override path to the report components.js library. Defaults to the built-in report-design skill components.",
+    description: "Override path to the report components.js library. Defaults to the built-in research skill components.",
   })),
   inlineImages: Schema.optional(Schema.Boolean.annotations({
     description: "Base64-encode local images into the HTML. Default true.",

@@ -23,7 +23,7 @@ import {
   runPiHarnessTask,
   steerPiHarnessTask,
 } from './pi-harness.js';
-import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval, waitForPlanApproval } from './pi-approval.js';
+import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval } from './pi-approval.js';
 import { createInitialAutoModeState, syncAutoModeState } from './approval.js';
 import { taskStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
@@ -34,7 +34,7 @@ import {
   mergeBudget,
   snapshotTaskBudgets,
 } from './m6-state.js';
-import { initialTaskTitle, isTitleStillAuto } from './task-title.js';
+import { initialTaskTitle } from './task-title.js';
 
 /** 进程重启后不会再有内存执行句柄的状态；启动时必须收敛成可解释失败。 */
 const INTERRUPTED_STATUSES: readonly TaskStatus[] = ['pending', 'planning', 'running', 'paused'];
@@ -265,8 +265,7 @@ export function branchTask(
     tokenUsage: { available: false, provider: config.llm.provider, model: config.llm.model },
     parentTaskId: parentTask.id,
     projectId: parentTask.projectId,
-    // 分支任务重新走权限门禁，不继承父任务的 planApproved
-    autoModeState: createInitialAutoModeState(currentAutoModeLevel()),
+    autoModeState: createInitialAutoModeState(),
     createdAt: now,
     updatedAt: now,
   };
@@ -345,18 +344,7 @@ export function addUserTurn(
   }
 
   const parsed = parseSlashCommand(content);
-  const messageContent = parsed.planRequested ? (parsed.text || task.goal) : content;
-  if (parsed.planRequested) {
-    task.goal = messageContent;
-    if (isTitleStillAuto(task)) {
-      task.title = initialTaskTitle(messageContent);
-      task.titleSource = 'truncated';
-    }
-    // /plan 重新要求确认计划
-    const state = syncAutoModeState(task, currentAutoModeLevel());
-    state.planApproved = false;
-    state.planReady = false;
-  }
+  const messageContent = parsed.text || content;
 
   const userMsg: Message = {
     id: randomUUID(),
@@ -438,12 +426,12 @@ export function resolveApproval(
   return resolvePiApproval(taskId, callId, approved);
 }
 
-/** 投递一次计划审批决策到 Pi 运行前的计划门禁。 */
+/** @deprecated 计划审批已移除；保留 API 兼容，恒返回 false。 */
 export function resolvePlanApprovalDecision(
-  taskId: string,
-  approved: boolean,
+  _taskId: string,
+  _approved: boolean,
 ): boolean {
-  return resolvePlanApproval(taskId, approved);
+  return resolvePlanApproval(_taskId, _approved);
 }
 
 /** 投递 ask_user 工具的用户补充答案。 */
@@ -465,7 +453,7 @@ export function createTask(
 ): Task {
   const now = new Date().toISOString();
   const parsed = parseSlashCommand(goal);
-  const taskGoal = parsed.planRequested ? (parsed.text || goal) : goal;
+  const taskGoal = parsed.text || goal;
   const userMsg: Message = {
     id: randomUUID(),
     role: 'user',
@@ -543,11 +531,6 @@ export async function runHarnessTask(task: Task): Promise<void> {
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
   try {
-    // plan：先批计划；已批准则跳过。auto：直接执行。
-    if (autoModeLevel === 'plan' && !task.autoModeState?.planApproved) {
-      const approved = await requestManualPlanApproval(task, abortController.signal);
-      if (!approved) return;
-    }
     await runPiHarnessTask(task, {
       workspaceDir: await resolveTaskWorkspace(task),
       signal: abortController.signal,
@@ -559,7 +542,7 @@ export async function runHarnessTask(task: Task): Promise<void> {
 }
 
 function currentAutoModeLevel(): AutoModeLevel {
-  return config.autoMode.level === 'plan' ? 'plan' : 'auto';
+  return 'auto';
 }
 
 function createInitialPlan(task: Task): PlanStep[] {
@@ -578,79 +561,11 @@ function shouldUseMultiStepPlan(goal: string): boolean {
   return /(整理|报告|Markdown|材料|多步|计划|report|markdown|plan|summari[sz]e|organize)/i.test(goal);
 }
 
-async function requestManualPlanApproval(task: Task, signal: AbortSignal): Promise<boolean> {
-  const state = syncAutoModeState(task, currentAutoModeLevel());
-  state.planReady = true;
-  state.planApproved = false;
-  task.status = 'paused';
-  task.phase = 'waiting_approval';
-  task.updatedAt = new Date().toISOString();
-  taskStore.save(task);
-  taskEvents.publish({ type: 'status', taskId: task.id, status: 'paused' });
-  taskEvents.publish({ type: 'phase', taskId: task.id, phase: 'waiting_approval', detail: '等待确认执行计划' });
-  taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...state } });
-  taskEvents.publish({
-    type: 'plan_approval_request',
-    taskId: task.id,
-    plan: task.plan,
-    reasoning: '当前为 Plan 模式：请确认执行计划后，Agent 将自动执行（执行期不再逐工具审批）。',
-  });
-
-  const decision = await waitForPlanApproval(task.id, signal, config.agent.approvalTimeoutMs);
-  taskEvents.publish({
-    type: 'plan_approval_resolved',
-    taskId: task.id,
-    approved: decision.approved,
-    reason: decision.approved ? undefined : '用户拒绝或超时未确认执行计划',
-  });
-
-  if (!decision.approved) {
-    if (task.autoModeState) {
-      task.autoModeState.planReady = false;
-      task.autoModeState.planApproved = false;
-    }
-    task.status = 'cancelled';
-    task.phase = 'cancelled';
-    task.updatedAt = new Date().toISOString();
-    taskStore.save(task);
-    taskEvents.publish({ type: 'status', taskId: task.id, status: task.status });
-    taskEvents.publish({ type: 'phase', taskId: task.id, phase: task.phase });
-    if (task.autoModeState) {
-      taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...task.autoModeState } });
-    }
-    taskEvents.publish({ type: 'done', taskId: task.id, status: task.status });
-    writeTrace(task.id, 'approval', 'cancelled', {
-      ok: false,
-      errorCategory: 'permission',
-      summary: '执行计划未获批准，任务已取消',
-    });
-    return false;
-  }
-
-  // 计划已批：执行期与 auto 相同
-  const approvedState = syncAutoModeState(task, currentAutoModeLevel());
-  approvedState.planApproved = true;
-  approvedState.planReady = false;
-  task.status = 'running';
-  task.phase = 'initializing';
-  task.plan = resumeIncompletePlan(task.plan);
-  task.updatedAt = new Date().toISOString();
-  taskStore.save(task);
-  taskEvents.publish({ type: 'status', taskId: task.id, status: task.status });
-  taskEvents.publish({ type: 'phase', taskId: task.id, phase: task.phase, detail: '计划已确认，启动 Pi harness' });
-  taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
-  taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...approvedState } });
-  writeTrace(task.id, 'approval', 'initializing', {
-    ok: true,
-    summary: '执行计划已批准，执行期自动放行工具（等同 auto）',
-  });
-  return true;
-}
-
 function parseSlashCommand(content: string): { planRequested: boolean; text: string } {
+  // /plan 历史兼容：剥掉前缀，不再进入计划审批
   const match = content.match(/^\/(\S+)(?:\s+(.*))?/s);
   if (!match) return { planRequested: false, text: content };
-  if (match[1] === 'plan') return { planRequested: true, text: match[2]?.trim() || '' };
+  if (match[1] === 'plan') return { planRequested: false, text: match[2]?.trim() || content };
   return { planRequested: false, text: content };
 }
 

@@ -37,7 +37,7 @@ import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { ToastNotice, type ToastTone } from "./components/ToastNotice";
 import { SearchPage } from "./pages/SearchPage";
 import { SkillsPage } from "./pages/SkillsPage";
-import { SETTINGS_SECTION_IDS, type AutoModeLevel, type MainView, type SettingsSectionId } from "./app/types";
+import { SETTINGS_SECTION_IDS, type MainView, type SettingsSectionId } from "./app/types";
 import { formatContextK } from "./app/taskUtils";
 import { t } from "./i18n";
 import "./App.css";
@@ -127,11 +127,6 @@ function App() {
     setThemeMode,
     startResize,
   } = useShellLayout();
-  const [autoModeLevel, setAutoModeLevel] = useState<AutoModeLevel>(() => {
-    const stored = localStorage.getItem("aurevoy.autoModeLevel");
-    if (stored === 'plan') return 'plan';
-    return 'auto';
-  });
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingUILevel>(() => {
     const stored = localStorage.getItem("aurevoy.thinkingLevel");
     if (
@@ -243,7 +238,6 @@ function App() {
     onModelSaved: () => setModelDrawerOpen(false),
     refreshRuntime,
     runtimeSettings,
-    setAutoModeLevel,
     setDataStatus,
     setFetchingModels,
     setHealth,
@@ -284,13 +278,6 @@ function App() {
     } catch (err) {
       setNotice(`恢复 auto mode 失败: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }
-
-  function cycleAutoModeLevel(): void {
-    const next = autoModeLevel === 'auto' ? 'plan' : 'auto';
-    setAutoModeLevel(next);
-    localStorage.setItem("aurevoy.autoModeLevel", next);
-    void updateSettings({ autoModeLevel: next }).catch(() => {});
   }
 
   function cycleThinkingLevel(): void {
@@ -355,7 +342,7 @@ function App() {
     handleComposerSubmit,
     handleUiChoice,
     handleNewTask,
-    handlePlanDecision,
+
     handleResumeTask,
     handleRevertAndEdit,
     handleSelectTask,
@@ -656,10 +643,7 @@ function App() {
                 <ApprovalsDock
                   liveToolActivity={derivedLive}
                   pendingApprovals={currentTask.pendingApprovals}
-                  phase={phase}
-                  plan={plan}
                   onToolDecision={handleToolDecision}
-                  onPlanDecision={handlePlanDecision}
                 />
                 {health?.contextTokenBudget != null && currentTask && currentTask.messages.length > 0 && (
                   <div className="context-hint">
@@ -683,9 +667,7 @@ function App() {
                   onOpenModelSelector={handleOpenModelSelector}
                   modelButtonRef={modelButtonRef}
                   onStop={handleStopStream}
-                  autoModeLevel={autoModeLevel}
                   autoModePaused={!!autoModeState?.paused}
-                  onCycleAutoMode={cycleAutoModeLevel}
                   onResumeAutoMode={handleResumeAutoMode}
                   thinkingLevel={thinkingLevel}
                   onCycleThinkingLevel={cycleThinkingLevel}
@@ -748,9 +730,7 @@ function App() {
                 onOpenModelSelector={handleOpenModelSelector}
                 modelButtonRef={modelButtonRef}
                 onStop={handleStopStream}
-                autoModeLevel={autoModeLevel}
                 autoModePaused={!!autoModeState?.paused}
-                onCycleAutoMode={cycleAutoModeLevel}
                 onResumeAutoMode={handleResumeAutoMode}
                 thinkingLevel={thinkingLevel}
                 onCycleThinkingLevel={cycleThinkingLevel}

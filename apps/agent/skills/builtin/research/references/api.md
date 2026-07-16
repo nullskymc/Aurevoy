@@ -1,4 +1,4 @@
-# report-design 组件 API（按需阅读）
+# research HTML 组件 API（按需）
 
 主 SKILL 已覆盖常用组件。仅在需要少用组件或完整属性示例时读本文。  
 **不要**读取 `components.js` 源码。

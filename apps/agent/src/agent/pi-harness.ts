@@ -63,10 +63,9 @@ import { taskStore, projectStore } from '../store/db.js';
 import { unifiedToolRegistry, validateToolInputSchema } from '../tool/unified-registry.js';
 import { initializeUnifiedToolFramework, getAgentToolsForPi, createToolContext } from '../tool/index.js';
 import {
-  buildAgentIdentityMessage,
-  buildSkillCatalogMessage,
-  buildSystemContextMessage,
-  buildToolGuidanceMessage,
+  buildStableSystemPromptParts,
+  buildVolatileSystemPromptParts,
+  joinSystemPromptParts,
   totalTokens,
   TOOLS_WITH_LARGE_OUTPUT,
   TOOLS_KEEP_VERBATIM,
@@ -130,11 +129,10 @@ const lifetimeWallAtRunStartByTask = new Map<string, number>();
 const invalidPiToolCallErrors = new Map<string, Map<string, string>>();
 
 /**
- * 每个任务的 prompt cache 前缀长度追踪。
- * key = taskId, value = 已发送给 LLM 并被缓存的 Pi 消息条数。
- * convertToLlm 时，[0..cachePrefix) 的消息已缓存不动，[cachePrefix..) 的新消息做 Snip+Microcompact。
+ * 每个任务 run 内冻结的稳定 system 前缀（identity + protocol + skills + workspace）。
+ * 时间与附件接在其后，避免每轮重算/分钟跳动使整段 system cache miss。
  */
-const cachePrefixByTask = new Map<string, number>();
+const pinnedStableSystemPrefixByTask = new Map<string, string>();
 const SEARCH_FILES_INPUT_SCHEMA = {
   type: 'object',
   properties: {
@@ -259,7 +257,7 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
       options.signal.removeEventListener('abort', onAbort);
       activePiControllers.delete(task.id);
       invalidPiToolCallErrors.delete(task.id);
-      cachePrefixByTask.delete(task.id);
+      pinnedStableSystemPrefixByTask.delete(task.id);
       const wallStart = lifetimeWallAtRunStartByTask.get(task.id) ?? 0;
       finalizeRunWallTime(task, wallStart, options.taskStartedAtMs);
       lifetimeWallAtRunStartByTask.delete(task.id);
@@ -336,9 +334,8 @@ async function createPiHarness(
     const filtered = event.messages.filter((message): message is PiMessage =>
       message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult',
     );
-    const cachedUpTo = cachePrefixByTask.get(task.id) ?? 0;
-    const compacted = compactPiMessagesCacheAware(filtered, cachedUpTo);
-    cachePrefixByTask.set(task.id, compacted.length);
+    // 整表确定性 Snip+Microcompact：会话存原文，重放保证已发送前缀字节稳定
+    const compacted = compactPiMessagesCacheAware(filtered);
     return { messages: compacted as AgentMessage[] };
   });
   harness.on('tool_call', async (event) => {
@@ -683,18 +680,22 @@ async function inferScoutTechStack(workspaceDir: string): Promise<string[]> {
 
 async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<string> {
   const projectInfo = task.projectId ? projectStore.get(task.projectId) : undefined;
-  const messages = [
-    buildAgentIdentityMessage(),
-    buildSystemContextMessage(
-      workspaceDir,
-      undefined,
-      projectInfo ? { name: projectInfo.name, path: projectInfo.path } : undefined,
-    ),
-    buildToolGuidanceMessage(),
-    buildSkillCatalogMessage(),
-    await buildAttachmentContextMessage(task),
-  ].filter((message): message is { content: string } => !!message?.content);
-  return messages.map((message) => message.content).join('\n\n');
+  let stable = pinnedStableSystemPrefixByTask.get(task.id);
+  if (!stable) {
+    stable = joinSystemPromptParts(
+      buildStableSystemPromptParts({
+        workspaceDir,
+        projectInfo: projectInfo ? { name: projectInfo.name, path: projectInfo.path } : undefined,
+      }),
+    );
+    pinnedStableSystemPrefixByTask.set(task.id, stable);
+  }
+
+  const attachment = await buildAttachmentContextMessage(task);
+  const volatile = buildVolatileSystemPromptParts({
+    attachmentContent: attachment?.content ?? null,
+  });
+  return joinSystemPromptParts([stable], volatile);
 }
 
 function selectPiModelForTask(): PiModel<any> {
@@ -1024,9 +1025,8 @@ async function gatePiToolCall(
   }
 
   const riskLevel = unifiedToolRegistry.riskLevelOf(call.toolName);
-  const autoModeLevel = config.autoMode.level === 'plan' ? 'plan' : 'auto';
   const permission = decideToolPermission(
-    approvalConfigFromTask(task, autoModeLevel),
+    approvalConfigFromTask(task, 'auto'),
     call.toolName,
     riskLevel,
   );
@@ -1039,13 +1039,8 @@ async function gatePiToolCall(
     return undefined;
   }
 
-  // plan 未批准时的回退：单次工具审批（正常路径应在 harness 启动前完成计划审批）
-  const autoModeReason =
-    autoModeLevel === 'plan' && !task.autoModeState?.planApproved
-      ? 'not_covered' as const
-      : task.autoModeState?.paused
-        ? 'paused' as const
-        : undefined;
+  // 仅 paused 等少数情况会走到单次工具审批
+  const autoModeReason = task.autoModeState?.paused ? ('paused' as const) : undefined;
 
   task.pendingApprovals = [
     ...(task.pendingApprovals ?? []),
@@ -1148,16 +1143,40 @@ async function handlePiEvent(
           rememberInvalidPiToolCall(task.id, event.toolCallId, `schema_validation_failed: ${validationError}`);
         }
       }
-      publish({ type: 'phase', taskId: task.id, phase: 'calling_tool', detail: `调用工具 ${event.toolName}` });
-      publish({ type: 'tool_call', taskId: task.id, call: toAurevoyToolCall(task, event.toolCallId, event.toolName, event.args) });
-      writePiTrace(task, 'tool_call', {
-        ok: true,
-        callId: event.toolCallId,
-        toolName: event.toolName,
-        riskLevel: unifiedToolRegistry.riskLevelOf(event.toolName),
-        summary: `调用工具 ${event.toolName}`,
-        data: { args: event.args },
-      });
+      {
+        // delegate 对用户是「子智能体」，不要露出裸工具名
+        const phaseDetail =
+          event.toolName === 'delegate'
+            ? (() => {
+                const args = event.args && typeof event.args === 'object' && !Array.isArray(event.args)
+                  ? (event.args as Record<string, unknown>)
+                  : {};
+                const role = typeof args.role === 'string' ? args.role : '';
+                const goal = typeof args.goal === 'string' ? args.goal.trim() : '';
+                const roleLabel =
+                  role === 'explore' ? '探索'
+                  : role === 'research' ? '调研'
+                  : role === 'coder' ? '编码'
+                  : role === 'shell' ? '验证'
+                  : role === 'writer' ? '写作'
+                  : role ? role : '';
+                if (goal && roleLabel) return `创建子智能体 · ${roleLabel}：${goal.slice(0, 48)}${goal.length > 48 ? '…' : ''}`;
+                if (goal) return `创建子智能体：${goal.slice(0, 56)}${goal.length > 56 ? '…' : ''}`;
+                if (roleLabel) return `创建子智能体 · ${roleLabel}`;
+                return '创建子智能体';
+              })()
+            : `调用工具 ${event.toolName}`;
+        publish({ type: 'phase', taskId: task.id, phase: 'calling_tool', detail: phaseDetail });
+        publish({ type: 'tool_call', taskId: task.id, call: toAurevoyToolCall(task, event.toolCallId, event.toolName, event.args) });
+        writePiTrace(task, 'tool_call', {
+          ok: true,
+          callId: event.toolCallId,
+          toolName: event.toolName,
+          riskLevel: unifiedToolRegistry.riskLevelOf(event.toolName),
+          summary: event.toolName === 'delegate' ? '创建子智能体' : `调用工具 ${event.toolName}`,
+          data: { args: event.args },
+        });
+      }
       break;
     case 'tool_execution_update':
       publish({
@@ -1846,13 +1865,13 @@ function piMessageText(content: unknown): string {
 
 /**
  * Snip：移除空/无意义的 toolResult 消息及其配对的 assistant。
- * 只操作 cachedUpTo 之后的消息，不破坏 prompt cache 前缀。
+ * 整表确定性重放，保证多轮 append 时前缀字节稳定。
  */
-function snipPiToolResults(messages: PiMessage[], cachedUpTo: number): PiMessage[] {
+function snipPiToolResults(messages: PiMessage[]): PiMessage[] {
   const toolNameMap = buildPiToolNameMap(messages);
 
   const snipToolResultIndices = new Set<number>();
-  for (let i = cachedUpTo; i < messages.length; i++) {
+  for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.role !== 'toolResult') continue;
     const toolName = msg.toolName ?? toolNameMap.get(msg.toolCallId ?? '');
@@ -1868,7 +1887,7 @@ function snipPiToolResults(messages: PiMessage[], cachedUpTo: number): PiMessage
 
   // 如果某 assistant 的所有 toolCall 结果都被 snip，也移除该 assistant
   const snipAssistantIndices = new Set<number>();
-  for (let i = cachedUpTo; i < messages.length; i++) {
+  for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
 
@@ -1904,19 +1923,17 @@ function snipPiToolResults(messages: PiMessage[], cachedUpTo: number): PiMessage
 }
 
 /**
- * Microcompact：对大输出工具的 toolResult 做结构化压缩。
- * 只操作 cachedUpTo 之后的消息，不破坏 prompt cache 前缀。
+ * Microcompact：对大输出工具的 toolResult 做结构化压缩（整表确定性重放）。
  */
-function microcompactPiToolResults(messages: PiMessage[], cachedUpTo: number): PiMessage[] {
+function microcompactPiToolResults(messages: PiMessage[]): PiMessage[] {
   let changed = false;
-  const result = messages.map((msg, i) => {
-    if (i < cachedUpTo) return msg;
+  const result = messages.map((msg) => {
     if (msg.role !== 'toolResult') return msg;
     const toolName = msg.toolName ?? '';
     if (!TOOLS_WITH_LARGE_OUTPUT.has(toolName)) return msg;
 
     const text = piMessageText(msg.content);
-    if (!text || text.includes('"_compacted":true')) return msg;
+    if (!text || text.includes('"_compacted":true') || text.includes('"_compacted": true')) return msg;
 
     const compacted = compactToolResult(toolName, text);
     if (compacted === null || compacted === text) return msg;
@@ -1932,14 +1949,13 @@ function microcompactPiToolResults(messages: PiMessage[], cachedUpTo: number): P
 }
 
 /**
- * Cache-aware 零成本压缩：在 convertToLlm 阶段对未缓存的新消息做 Snip + Microcompact。
- * 已缓存的前缀 [0..cachedUpTo) 保持不变，避免破坏 prompt cache。
+ * Cache-aware 零成本压缩：对整表确定性 Snip + Microcompact。
+ * 会话消息始终是原文；每轮重放后，仅追加新尾部时前缀字节与上一轮一致。
+ * 导出供单元测试验证多轮前缀稳定性。
  */
-function compactPiMessagesCacheAware(messages: PiMessage[], cachedUpTo: number): PiMessage[] {
-  if (messages.length <= cachedUpTo) return messages;
-  const afterSnip = snipPiToolResults(messages, cachedUpTo);
-  const afterMc = microcompactPiToolResults(afterSnip, cachedUpTo);
-  return afterMc;
+export function compactPiMessagesCacheAware(messages: PiMessage[]): PiMessage[] {
+  const afterSnip = snipPiToolResults(messages);
+  return microcompactPiToolResults(afterSnip);
 }
 
 function formatUnknown(value: unknown): string {
