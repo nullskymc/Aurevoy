@@ -4,6 +4,42 @@ import { config } from '../config.js';
 const MAX_FETCH_BYTES = 1024 * 1024;
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_FETCH_REDIRECTS = 3;
+const DEFAULT_SEARCH_TIMEOUT_MS = 45_000;
+const DEFAULT_SEARCH_MAX_CONCURRENCY = 2;
+
+/** 进程内搜索并发闸：多路 web_search 排队，避免打爆自建 SearXNG。 */
+const searchConcurrency = {
+  active: 0,
+  waiters: [] as Array<() => void>,
+};
+
+function searchTimeoutMs(): number {
+  const n = config.search.timeoutMs;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 1000 ? Math.floor(n) : DEFAULT_SEARCH_TIMEOUT_MS;
+}
+
+function searchMaxConcurrency(): number {
+  const n = config.search.maxConcurrency;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_SEARCH_MAX_CONCURRENCY;
+}
+
+async function acquireSearchSlot(): Promise<() => void> {
+  for (;;) {
+    if (searchConcurrency.active < searchMaxConcurrency()) {
+      searchConcurrency.active += 1;
+      return releaseSearchSlot;
+    }
+    await new Promise<void>((resolve) => {
+      searchConcurrency.waiters.push(resolve);
+    });
+  }
+}
+
+function releaseSearchSlot(): void {
+  searchConcurrency.active = Math.max(0, searchConcurrency.active - 1);
+  const next = searchConcurrency.waiters.shift();
+  if (next) next();
+}
 
 export interface WebFetchResult {
   url: string;
@@ -68,29 +104,34 @@ export async function fetchWebContent(rawUrl: string): Promise<WebFetchResult> {
 export async function searchWeb(rawQuery: string): Promise<WebSearchResponse> {
   const query = rawQuery.trim();
   if (!query) throw new Error('query 不能为空');
-  let results: WebSearchResult[];
-  switch (config.search.provider) {
-    case 'searxng':
-      results = await searchSearxng(query);
-      break;
-    case 'tavily':
-      results = await searchTavily(query);
-      break;
-    case 'custom':
-      results = await searchCustomJson(query);
-      break;
-    case 'duckduckgo_lite':
-    default:
-      results = await searchDuckDuckGoLite(query);
-      break;
+  const release = await acquireSearchSlot();
+  try {
+    let results: WebSearchResult[];
+    switch (config.search.provider) {
+      case 'searxng':
+        results = await searchSearxng(query);
+        break;
+      case 'tavily':
+        results = await searchTavily(query);
+        break;
+      case 'custom':
+        results = await searchCustomJson(query);
+        break;
+      case 'duckduckgo_lite':
+      default:
+        results = await searchDuckDuckGoLite(query);
+        break;
+    }
+    return {
+      provider: config.search.provider,
+      query,
+      resultCount: results.length,
+      searchedAt: new Date().toISOString(),
+      results,
+    };
+  } finally {
+    release();
   }
-  return {
-    provider: config.search.provider,
-    query,
-    resultCount: results.length,
-    searchedAt: new Date().toISOString(),
-    results,
-  };
 }
 
 async function fetchWithPolicy(rawUrl: string): Promise<{ url: URL; res: Response; redirects: string[] }> {
@@ -278,7 +319,7 @@ async function searchDuckDuckGoLite(query: string): Promise<WebSearchResult[]> {
   url.searchParams.set('q', query);
   const resp = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Aurevoy/1.0)' },
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(searchTimeoutMs()),
   });
   if (!resp.ok) throw new Error(`DuckDuckGo Lite 搜索失败: HTTP ${resp.status}`);
   return parseDuckDuckGoLiteResults(await resp.text());
@@ -290,7 +331,7 @@ async function searchSearxng(query: string): Promise<WebSearchResult[]> {
   endpoint.searchParams.set('format', 'json');
   const resp = await fetch(endpoint, {
     headers: searchHeaders(),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(searchTimeoutMs()),
   });
   if (!resp.ok) throw new Error(`SearXNG 搜索失败: HTTP ${resp.status}`);
   return parseSearchJson(await resp.json());
@@ -305,7 +346,7 @@ async function searchTavily(query: string): Promise<WebSearchResult[]> {
     method: 'POST',
     headers: { ...searchHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ api_key: config.search.apiKey, query, max_results: 10 }),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(searchTimeoutMs()),
   });
   if (!resp.ok) throw new Error(`Tavily 搜索失败: HTTP ${resp.status}`);
   return parseSearchJson(await resp.json());
@@ -316,7 +357,7 @@ async function searchCustomJson(query: string): Promise<WebSearchResult[]> {
   if (!hasSearchParam(endpoint, 'q')) endpoint.searchParams.set('q', query);
   const resp = await fetch(endpoint, {
     headers: searchHeaders(),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(searchTimeoutMs()),
   });
   if (!resp.ok) throw new Error(`自定义搜索失败: HTTP ${resp.status}`);
   return parseSearchJson(await resp.json());

@@ -57,6 +57,8 @@ export const config = {
     approvalTimeoutMs: 5 * 60 * 1000,
     thinkingLevel: 'off' as 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh',
     toolExecution: 'parallel' as 'sequential' | 'parallel',
+    /** 默认 long：多轮 agent 循环依赖跨请求 prompt cache。 */
+    cacheRetention: 'long' as 'short' | 'long',
     subagentMaxConcurrency: 4,
     contextCharBudget: 1_000_000,
     recentMessageWindow: 8,
@@ -133,6 +135,10 @@ export const config = {
     provider: 'duckduckgo_lite' as 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom',
     baseUrl: '',
     apiKey: '',
+    /** 单次搜索 HTTP 超时（自建 SearXNG 冷启动/慢引擎常超过 15s）。 */
+    timeoutMs: 45_000,
+    /** 同时进行的 web_search 上限，避免并行工具打满搜索后端。 */
+    maxConcurrency: 2,
   },
 };
 
@@ -234,6 +240,8 @@ if (process.env.AUREVOY_TEST_BOOTSTRAP === '1') {
       provider: (process.env.AUREVOY_SEARCH_PROVIDER ?? config.search.provider) as typeof config.search.provider,
       baseUrl: process.env.AUREVOY_SEARCH_BASE_URL ?? config.search.baseUrl,
       apiKey: process.env.AUREVOY_SEARCH_API_KEY ?? config.search.apiKey,
+      timeoutMs: parseNumber(process.env.AUREVOY_SEARCH_TIMEOUT_MS, config.search.timeoutMs),
+      maxConcurrency: parseNumber(process.env.AUREVOY_SEARCH_MAX_CONCURRENCY, config.search.maxConcurrency),
     },
     network: {
       httpFetchPrivateHostAllowlist: (process.env.AUREVOY_HTTP_FETCH_PRIVATE_HOST_ALLOWLIST ?? '')

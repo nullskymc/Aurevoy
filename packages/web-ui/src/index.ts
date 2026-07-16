@@ -7,7 +7,7 @@
 export { default as App } from './App';
 
 // 平台抽象
-export type { PlatformAdapter } from './platform/types';
+export type { PlatformAdapter, AppUpdateInfo, AppUpdateProgress } from './platform/types';
 export { PlatformContext, usePlatform, browserPlatform } from './platform';
 
 // API 客户端

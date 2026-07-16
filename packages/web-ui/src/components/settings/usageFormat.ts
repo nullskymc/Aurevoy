@@ -36,6 +36,25 @@ export function pct(part: number, whole: number): number {
   return (part / whole) * 100;
 }
 
+/**
+ * Prompt cache hit rate.
+ * Denominator excludes cacheWrite so first-turn warmups don't drag the rate down:
+ * cacheRead / (promptTokens - cacheWriteTokens) ≈ cacheRead / (input + cacheRead).
+ * Returns null when there is no eligible prompt volume.
+ */
+export function cacheHitRate(
+  cacheReadTokens: number,
+  promptTokens: number,
+  cacheWriteTokens = 0,
+): number | null {
+  if (!Number.isFinite(cacheReadTokens) || cacheReadTokens < 0) return null;
+  if (!Number.isFinite(promptTokens) || promptTokens <= 0) return null;
+  const write = Number.isFinite(cacheWriteTokens) && cacheWriteTokens > 0 ? cacheWriteTokens : 0;
+  const denom = promptTokens - write;
+  if (denom <= 0) return null;
+  return pct(cacheReadTokens, denom);
+}
+
 /** Compact token count for glance UI (1.2k, 3.45M). */
 export function formatTokenCount(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0";
@@ -122,11 +141,12 @@ export function buildCompositionRows(input: UsageCompositionInput): UsageComposi
   }
 
   if (cacheReadTokens > 0) {
+    const hit = cacheHitRate(cacheReadTokens, promptTokens, cacheWriteTokens);
     rows.push({
       id: "cache-read",
       value: cacheReadTokens,
       shareOfTotal: pct(cacheReadTokens, totalTokens),
-      relativeShare: pct(cacheReadTokens, promptTokens),
+      relativeShare: hit,
       relativeOf: "input",
       tone: "is-cache",
     });

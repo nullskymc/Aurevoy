@@ -42,10 +42,13 @@ export function buildSkillCatalogMessage(): Message | null {
  * 三层递进压缩（由轻到重）：
  *   1. Snip（零成本） → 2. Microcompact（零成本） → 3. Context Collapse（LLM 摘要）
  *
- * Cache-aware：
- *   - Snip 和 Microcompact 只作用于 cachedUpTo 之后的新消息，不破坏 prompt cache
- *   - Context Collapse 修改旧消息 → 返回 collapsed=true，调用方重置缓存边界
- *   - Read/Write/Edit 工具结果不压缩：截断会导致 LLM 重读，得不偿失
+ * Cache-aware（前缀稳定）：
+ *   - Snip / Microcompact 是确定性纯函数，每一轮对整表重放。
+ *     会话里始终存原文；重放后已发送前缀字节与上一轮一致，不会“解压”回原文。
+ *   - 切勿用“消息条数边界”跳过已发送区：边界按条数记、会话回灌原文时会把
+ *     已 microcompact 的 tool 结果重新展开，破坏 prompt cache 前缀。
+ *   - Context Collapse 会改写旧消息 → 返回 collapsed=true，调用方重置缓存边界
+ *   - 写入/确认类工具结果不压缩
  */
 
 // ---- 工具类型分类 ----
@@ -64,7 +67,7 @@ export const TOOLS_KEEP_VERBATIM = new Set([
   'apply_artifact', 'create_artifact', 'attach_content',
   'bundle_report', 'delegate', 'remember', 'recall', 'ask_user', 'load_skill',
   // 历史别名
-  'write_file', 'create_file', 'append_file', 'present_ui',
+  'write_file', 'create_file', 'append_file',
   'session_open', 'session_write', 'session_close', 'session_abort',
   'index_files',
 ]);
@@ -90,15 +93,15 @@ export interface CompactContextResult {
 
 /**
  * 移除空的 tool_result 消息及其配对的 assistant（如果该 assistant 的所有工具结果都被移除）。
- * 只操作 cachedUpTo 之后的消息，不破坏 prompt cache 前缀。
+ * 对整表确定性重放，保证多轮 append 时前缀字节稳定。
  */
-function snipToolResults(messages: Message[], cachedUpTo: number): Message[] {
+export function snipToolResults(messages: Message[]): Message[] {
   // 构建 toolCallId → toolName 映射
   const toolCallToName = buildToolNameMap(messages);
 
   // 找出可以 snip 的 tool_result index
   const snipToolResultIndices = new Set<number>();
-  for (let i = cachedUpTo; i < messages.length; i++) {
+  for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (m.role !== 'tool' || !m.toolCallId) continue;
 
@@ -116,7 +119,7 @@ function snipToolResults(messages: Message[], cachedUpTo: number): Message[] {
 
   // 同时检查配对的 assistant：如果它的所有 tool_results 都被 snip 了，也移除该 assistant
   const snipAssistantIndices = new Set<number>();
-  for (let i = cachedUpTo; i < messages.length; i++) {
+  for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (m.role !== 'assistant' || !m.toolCalls?.length) continue;
 
@@ -158,18 +161,39 @@ function buildToolNameMap(messages: Message[]): Map<string, string> {
   return map;
 }
 
-/** 按工具类型对单个 tool_result 的 content 做结构化压缩。返回 null = 不需要压缩。 */
-export function compactToolResult(toolName: string, rawContent: string): string | null {
-  let parsed: Record<string, unknown>;
+const TEXT_COMPACT_HEAD = 800;
+const TEXT_COMPACT_TAIL = 400;
+const TEXT_COMPACT_MIN = TEXT_COMPACT_HEAD + TEXT_COMPACT_TAIL + 80;
+
+/** 超长纯文本：保留头尾，确定性结构，避免二次漂移。 */
+function compactPlainTextPayload(raw: string, label = 'output'): string | null {
+  if (raw.length < TEXT_COMPACT_MIN) return null;
+  return JSON.stringify({
+    [label]: `${raw.slice(0, TEXT_COMPACT_HEAD)}\n…\n${raw.slice(-TEXT_COMPACT_TAIL)}`,
+    char_count: raw.length,
+    _compacted: true,
+    _note: `全文 ${raw.length} 字符，保留头 ${TEXT_COMPACT_HEAD} + 尾 ${TEXT_COMPACT_TAIL}`,
+  });
+}
+
+function tryParseToolJson(raw: string): Record<string, unknown> | null {
   try {
-    parsed = JSON.parse(rawContent) as Record<string, unknown>;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+/** 按工具类型对单个 tool_result 的 content 做结构化压缩。返回 null = 不需要压缩。 */
+export function compactToolResult(toolName: string, rawContent: string): string | null {
+  const parsed = tryParseToolJson(rawContent);
 
   switch (toolName) {
     case 'open_file':
     case 'scroll': {
+      if (!parsed) return compactPlainTextPayload(rawContent, 'content');
       const path = parsed.path as string | undefined;
       const totalLines = parsed.total_lines as number | undefined;
       const winStart = parsed.window_start as number | undefined;
@@ -186,7 +210,19 @@ export function compactToolResult(toolName: string, rawContent: string): string 
       });
     }
 
-    case 'search_grep': {
+    case 'search_grep':
+    case 'grep': {
+      if (!parsed) {
+        // Effect grep 常以纯文本 path:line:text 多行输出
+        const lines = rawContent.split('\n').filter(Boolean);
+        if (lines.length <= 8 && rawContent.length < TEXT_COMPACT_MIN) return null;
+        return JSON.stringify({
+          match_count: lines.length,
+          matches: lines.slice(0, 8).map((line) => line.slice(0, 240)),
+          _compacted: true,
+          _note: lines.length > 8 ? `前 8/${lines.length} 条匹配` : `已截断匹配预览`,
+        });
+      }
       const pattern = parsed.pattern as string | undefined;
       const count = parsed.match_count as number | undefined;
       const matches = Array.isArray(parsed.matches) ? parsed.matches as Record<string, unknown>[] : [];
@@ -197,7 +233,7 @@ export function compactToolResult(toolName: string, rawContent: string): string 
         matches: matches.slice(0, 3).map(m => ({
           file: m.file,
           line: m.line,
-          content: String(m.content ?? '').slice(0, 200),
+          content: String(m.content ?? m.text ?? '').slice(0, 200),
         })),
         _compacted: true,
         _note: count && count > 3
@@ -207,6 +243,7 @@ export function compactToolResult(toolName: string, rawContent: string): string 
     }
 
     case 'web_fetch': {
+      if (!parsed) return compactPlainTextPayload(rawContent, 'content');
       const url = parsed.url as string | undefined;
       const status = parsed.status as number | undefined;
       const text = (parsed.content as string | undefined) ?? '';
@@ -225,6 +262,7 @@ export function compactToolResult(toolName: string, rawContent: string): string 
     }
 
     case 'web_search': {
+      if (!parsed) return compactPlainTextPayload(rawContent, 'results');
       const query = parsed.query as string | undefined;
       const error = parsed.error as string | undefined;
       const results = Array.isArray(parsed.results)
@@ -247,25 +285,90 @@ export function compactToolResult(toolName: string, rawContent: string): string 
       });
     }
 
+    case 'bash':
     case 'execute_command': {
+      if (!parsed) return compactPlainTextPayload(rawContent, 'output');
+      // bash Effect 工具：{ exit, output, truncated }；旧 execute_command：stdout/stderr
+      const output = String(parsed.output ?? parsed.stdout ?? '');
+      const stderr = String(parsed.stderr ?? '');
+      const exitCode = parsed.exit ?? parsed.exitCode ?? parsed.exit_code;
       const command = parsed.command as string | undefined;
       const args = parsed.args as string[] | undefined;
-      const exitCode = parsed.exitCode as number | undefined;
-      const stdout = (parsed.stdout as string | undefined) ?? '';
-      const stderr = (parsed.stderr as string | undefined) ?? '';
-      const cmdStr = `${command}${args?.length ? ' ' + args.join(' ') : ''}`;
+      const cmdStr = command
+        ? `${command}${args?.length ? ` ${args.join(' ')}` : ''}`
+        : undefined;
+      if (output.length + stderr.length < TEXT_COMPACT_MIN) {
+        // 已经较短的 JSON 结果无需再压
+        return null;
+      }
       return JSON.stringify({
         command: cmdStr,
         exit_code: exitCode,
-        stdout_tail: stdout.slice(-500),
+        output_tail: output.slice(-500),
         stderr_tail: stderr.slice(-500),
+        truncated: parsed.truncated === true,
+        timeout: parsed.timeout === true,
+        char_count: output.length + stderr.length,
         _compacted: true,
-        _note: `stdout ${stdout.length} 字符，stderr ${stderr.length} 字符，保留末尾 500 字符。`,
+        _note: `output ${output.length} 字符，stderr ${stderr.length} 字符，保留末尾 500 字符。`,
       });
+    }
+
+    case 'read': {
+      if (!parsed) return compactPlainTextPayload(rawContent, 'content');
+      // Effect read 可能是 full-text / text-page 结构，或 formatUnknown 后的包装
+      const content = String(
+        parsed.content
+        ?? (typeof parsed.text === 'string' ? parsed.text : '')
+        ?? '',
+      );
+      if (!content && typeof parsed.type === 'string') {
+        // directory listing 等：压成条目预览
+        const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+        if (entries.length <= 40 && rawContent.length < TEXT_COMPACT_MIN) return null;
+        return JSON.stringify({
+          type: parsed.type,
+          entry_count: entries.length,
+          entries_preview: entries.slice(0, 40).map((e) =>
+            typeof e === 'string' ? e : String((e as { path?: string }).path ?? e).slice(0, 200),
+          ),
+          truncated: parsed.truncated === true,
+          _compacted: true,
+          _note: entries.length > 40 ? `目录条目 ${entries.length}，保留前 40` : undefined,
+        });
+      }
+      if (content.length < TEXT_COMPACT_MIN) return null;
+      return JSON.stringify({
+        type: parsed.type,
+        offset: parsed.offset,
+        truncated: parsed.truncated === true,
+        next: parsed.next,
+        content_preview: content.slice(0, TEXT_COMPACT_HEAD),
+        content_tail: content.slice(-TEXT_COMPACT_TAIL),
+        char_count: content.length,
+        _compacted: true,
+        _note: `全文 ${content.length} 字符，保留头 ${TEXT_COMPACT_HEAD} + 尾 ${TEXT_COMPACT_TAIL}`,
+      });
+    }
+
+    case 'glob':
+    case 'list_directory': {
+      if (!parsed) {
+        const lines = rawContent.split('\n').filter(Boolean);
+        if (lines.length <= 40 && rawContent.length < TEXT_COMPACT_MIN) return null;
+        return JSON.stringify({
+          entry_count: lines.length,
+          entries_preview: lines.slice(0, 40),
+          _compacted: true,
+          _note: lines.length > 40 ? `共 ${lines.length} 条路径，保留前 40` : undefined,
+        });
+      }
+      return compactPlainTextPayload(rawContent, 'entries');
     }
 
     case 'edit_lines':
     case 'replace_lines': {
+      if (!parsed) return null;
       const path = parsed.path as string | undefined;
       const replaced = parsed.replaced_lines as number | undefined;
       const newCount = parsed.new_lines_count as number | undefined;
@@ -283,33 +386,41 @@ export function compactToolResult(toolName: string, rawContent: string): string 
     }
 
     default:
-      return null;
+      return compactPlainTextPayload(rawContent);
   }
 }
 
 /**
- * 对 cachedUpTo 之后的新 tool_result 消息做结构化压缩。
+ * 对 tool_result 做结构化压缩（确定性，整表重放）。
  * 保留 toolCallId 和 role，只压缩 content 字段。
  */
-function microcompactToolResults(messages: Message[], cachedUpTo: number): Message[] {
+export function microcompactToolResults(messages: Message[]): Message[] {
   const toolCallToName = buildToolNameMap(messages);
-  let changedCount = 0;
 
-  const result = messages.map((msg, i) => {
-    if (i < cachedUpTo) return msg;
+  return messages.map((msg) => {
     if (msg.role !== 'tool' || !msg.toolCallId) return msg;
 
     const toolName = toolCallToName.get(msg.toolCallId);
     if (!toolName || !TOOLS_WITH_LARGE_OUTPUT.has(toolName)) return msg;
 
+    // 已压缩过的结果保持原样，避免二次结构漂移
+    if (msg.content?.includes('"_compacted":true') || msg.content?.includes('"_compacted": true')) {
+      return msg;
+    }
+
     const compacted = compactToolResult(toolName, msg.content);
     if (compacted === null) return msg;
 
-    changedCount++;
     return { ...msg, content: compacted };
   });
+}
 
-  return result;
+/**
+ * 零成本 cache-aware 变换：Snip + Microcompact。
+ * 纯函数、对整表确定性重放；多轮仅追加新消息时，已发送前缀字节保持不变。
+ */
+export function applyZeroCostCompaction(messages: Message[]): Message[] {
+  return microcompactToolResults(snipToolResults(messages));
 }
 
 // ---- 3. Context Collapse: LLM 消息范围摘要 ----
@@ -407,7 +518,8 @@ function deterministicContextSummary(transcript: string): string {
  *   Snip → Microcompact → Collapse（仅在超预算时）
  *
  * cache-aware：
- *   - cachedUpTo 之前的消息不动（它们在 prompt cache 中）
+ *   - Snip/Microcompact 整表确定性重放（见 applyZeroCostCompaction）
+ *   - `cachedUpTo` 仅保留 API 兼容；零成本层不再用它跳过前缀（跳过会导致原文回灌）
  *   - Context Collapse 执行时返回 collapsed=true，调用方应重置缓存边界为 0
  */
 export async function compactContext(
@@ -415,22 +527,24 @@ export async function compactContext(
   cachedUpTo: number,
   tokenBudget?: number,
 ): Promise<CompactContextResult> {
+  void cachedUpTo; // 兼容旧调用方；零成本层改为整表重放
   const budget = tokenBudget ?? config.agent.contextTokenBudget;
   const originalTokens = totalTokens(messages);
 
-  // Step 1: Snip — 移除空 tool_result（仅新消息）
-  const afterSnip = snipToolResults(messages, cachedUpTo);
+  // Step 1–2: Snip + Microcompact — 整表确定性重放
+  const afterSnip = snipToolResults(messages);
   const snippedCount = messages.length - afterSnip.length;
+  const afterMc = microcompactToolResults(afterSnip);
 
-  // Step 2: Microcompact — 结构化压缩（仅新消息）
-  const afterMc = microcompactToolResults(afterSnip, cachedUpTo);
-
-  // 计算被 microcompact 的条数
+  // 计算被 microcompact 的条数（按 toolCallId 对齐原文）
   let microCount = 0;
-  for (let i = cachedUpTo; i < afterMc.length; i++) {
-    if (afterMc[i]?.content !== messages[i]?.content) {
-      microCount++;
-    }
+  const originalByToolId = new Map(
+    messages.filter((m) => m.role === 'tool' && m.toolCallId).map((m) => [m.toolCallId!, m.content]),
+  );
+  for (const msg of afterMc) {
+    if (msg.role !== 'tool' || !msg.toolCallId) continue;
+    const original = originalByToolId.get(msg.toolCallId);
+    if (original !== undefined && original !== msg.content) microCount++;
   }
 
   // Step 3: 检查是否需要 LLM Collapse
@@ -922,36 +1036,16 @@ export async function buildMemorySystemMessage(
 }
 
 /**
- * 构建环境上下文系统消息（始终注入）。
- *
- * 提供模型感知世界所必需的基础信息：
- * - 当前日期/时间
- * - 操作系统与平台
- * - 工作区目录（文件沙箱边界）
- * - Aurevoy 配置目录（skills / DB / 设置所在）
- * - 项目名称/路径
+ * 稳定环境上下文（无墙钟）：平台、工作区、项目。
+ * 属于 system prompt 的 cacheable 前缀，单次任务 run 内应字节不变。
  */
-export function buildSystemContextMessage(
+export function buildStableWorkspaceContextMessage(
   workspaceDir: string,
   configDir?: string,
   projectInfo?: { name: string; path: string },
 ): Message {
-  const now = new Date();
-  const timeStr = now.toLocaleDateString('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
-
-  // 时间戳降为分钟级精度（截断秒/毫秒），减少跨任务恢复和连续调用时的 cache miss。
-  // prompt cache 按前缀精确匹配，秒级时间戳会让整个 system prompt 每次都 cache miss。
-  const stableTimestamp = now.toISOString().replace(/:\d{2}\.\d{3}Z$/, ':00Z');
-
   const lines: string[] = [];
   lines.push('<system_context>');
-  lines.push(`Current time: ${stableTimestamp}`);
-  lines.push(`Today: ${timeStr}`);
   lines.push(`Platform: ${process.platform} ${process.arch}`);
   lines.push(`Shell: ${process.env.SHELL ?? 'unknown'}`);
   lines.push('');
@@ -967,8 +1061,106 @@ export function buildSystemContextMessage(
     id: randomUUID(),
     role: 'system',
     content: lines.join('\n'),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 墙钟时间上下文（分钟精度）。
+ * 主循环在 **run 开始时写入 system 一次并 pin**，本 run 内不再更新；
+ * 切勿每轮重建，否则会从时间字段起冲掉整段对话 prompt cache。
+ */
+export function buildVolatileTimeContextMessage(now: Date = new Date()): Message {
+  const timeStr = now.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  // 分钟精度：秒级时间戳会让 volatile 后缀每秒都变
+  const stableTimestamp = now.toISOString().replace(/:\d{2}\.\d{3}Z$/, ':00Z');
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content: [
+      '<system_time>',
+      `Current time: ${stableTimestamp}`,
+      `Today: ${timeStr}`,
+      '</system_time>',
+    ].join('\n'),
     createdAt: now.toISOString(),
   };
+}
+
+/**
+ * 构建环境上下文系统消息（兼容入口）。
+ *
+ * 顺序：稳定环境事实在前，墙钟时间在后——即使合在一条消息里，时间变化也只影响尾部。
+ */
+export function buildSystemContextMessage(
+  workspaceDir: string,
+  configDir?: string,
+  projectInfo?: { name: string; path: string },
+  now: Date = new Date(),
+): Message {
+  const stable = buildStableWorkspaceContextMessage(workspaceDir, configDir, projectInfo);
+  const time = buildVolatileTimeContextMessage(now);
+  // 拆掉各自的外层标签，合成一条 <system_context>…</system_context>
+  const stableBody = stable.content
+    .replace(/^<system_context>\n?/, '')
+    .replace(/\n?<\/system_context>$/, '');
+  const timeBody = time.content
+    .replace(/^<system_time>\n?/, '')
+    .replace(/\n?<\/system_time>$/, '');
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content: ['<system_context>', stableBody, '', timeBody, '</system_context>'].join('\n'),
+    createdAt: now.toISOString(),
+  };
+}
+
+/**
+ * 单次任务 run 内应冻结的 system 前缀部件（无时间、无附件）。
+ * 顺序：identity → protocol → skills → workspace，最大化可缓存公共前缀。
+ */
+export function buildStableSystemPromptParts(options: {
+  workspaceDir: string;
+  configDir?: string;
+  projectInfo?: { name: string; path: string };
+}): string[] {
+  return [
+    buildAgentIdentityMessage().content,
+    buildToolGuidanceMessage().content,
+    buildSkillCatalogMessage()?.content,
+    buildStableWorkspaceContextMessage(
+      options.workspaceDir,
+      options.configDir,
+      options.projectInfo,
+    ).content,
+  ].filter((part): part is string => typeof part === 'string' && part.length > 0);
+}
+
+/**
+ * 仅用于测试/兼容：时间（与可选附件）作为 system 后缀。
+ * 生产路径应 pin 完整 system（见 pi-harness buildPiSystemPrompt），附件挂在 user 消息。
+ */
+export function buildVolatileSystemPromptParts(options: {
+  now?: Date;
+  attachmentContent?: string | null;
+}): string[] {
+  const parts: string[] = [buildVolatileTimeContextMessage(options.now).content];
+  if (options.attachmentContent?.trim()) {
+    parts.push(options.attachmentContent);
+  }
+  return parts;
+}
+
+/** 拼接 system prompt：稳定前缀 + 易变后缀。 */
+export function joinSystemPromptParts(stableParts: string[], volatileParts: string[] = []): string {
+  return [...stableParts, ...volatileParts].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -1012,8 +1204,8 @@ export function buildToolGuidanceMessage(): Message {
     '',
     '## Workspace tools',
     '- Discover: `glob`, `grep`, `list_directory`, then `read` the few files that matter.',
-    '- Create or fully rewrite: `write` (modes: create / overwrite / append).',
-    '- Local edit: `edit` with exact oldString → newString; prefer edit over full rewrite.',
+    '- Create new files: `write` (omit mode, or mode=create). Existing paths require explicit mode=overwrite (full replace) or mode=append.',
+    '- Local edit (preferred for revisions): `edit` with unique exact oldString → newString. Do not full-rewrite a report with write just to change a section.',
     '- Shell / checks: `bash` for builds, tests, diagnostics. Avoid destructive commands (rm -rf, force push, wiping data).',
     '- File ops: `copy_file`, `move_file` / `rename_file`. `delete_file` may be disabled; do not assume it works.',
     '- Do not invent obsolete tools (`open_file`, `write_file`, `edit_lines`, `session_*`, `scroll`). Use the names above.',
@@ -1022,7 +1214,7 @@ export function buildToolGuidanceMessage(): Message {
     '- `attach_content`: deliver a workspace file, image, or link. Use for HTML / Markdown / reports / images so the chat card + workbench preview open.',
     '  Prefer type=file_reference with a real path after writing the file.',
     '- Inline conversation UI is temporarily unavailable. For previews, dashboards, forms, or other rich content, write an HTML or Markdown file and deliver it with `attach_content`.',
-    '- Only for a user-requested long-form, inspectable, file-based report (评估/调研/计划/纪要等) should you load `report-design`, write HTML under `report/`, then `bundle_report` → `attach_content`.',
+    '- Research or file reports (调研/简报/评估/计划/纪要等): load `research`. Prefer quick report; use deep mode only for multi-item structured research. Default file delivery is Markdown; HTML + `bundle_report` only when the user wants a single-page/component layout. Then `attach_content`.',
     '  Final chat reply = path + one-line summary (+ warnings). Do not restate the whole report.',
     '- `create_artifact` / `apply_artifact`: durable draft or file artifact when the user needs an inspectable intermediate, not as a substitute for attach_content delivery.',
     '',
@@ -1043,12 +1235,12 @@ export function buildToolGuidanceMessage(): Message {
     '## Web, memory, skills, user input',
     '- External facts: `web_search` then `web_fetch`; cite URLs; do not invent sources.',
     '- Long-term notes: `remember` / `recall` when useful across turns.',
-    '- Skills: load a catalog skill only when the task explicitly needs that skill. `report-design` is for long-form file reports.',
+    '- Skills: load a catalog skill only when the task explicitly needs that skill. `research` is for research and file reports (quick or deep; Markdown default, HTML optional).',
     '- Ambiguity that blocks progress: `ask_user` with few concrete questions; otherwise decide and proceed.',
     '',
     '## Honesty & safety',
     '- Tool failure is not success. Retry once with a corrected call when appropriate, then report.',
-    '- Prefer minimal diffs; do not rewrite large files to change a few lines.',
+    '- Prefer minimal diffs: use `edit` on existing files. Full `write` overwrite only when the whole document must change and you pass mode=overwrite.',
     '- Never claim HTML/UI was shown unless you actually called attach_content (or the user already sees the file via other verified means).',
     '</operating_protocol>',
   ].join('\n');

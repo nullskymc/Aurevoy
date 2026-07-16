@@ -82,18 +82,71 @@ fn read_image_data_url(path: String) -> Result<String, String> {
     ))
 }
 
+/// 定位当前进程所属的 `.app` 包路径（`…/Aurevoy.app`）。
+#[cfg(target_os = "macos")]
+fn macos_app_bundle_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    for ancestor in exe.ancestors() {
+        if ancestor.extension().and_then(|s| s.to_str()) == Some("app") {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+/// 清除本应用 bundle 的 quarantine 属性。
+///
+/// 用于**自动更新安装完成后、重启前**：未签名分发时，更新包常再次带上
+/// `com.apple.quarantine`，导致「已损坏 / 无法验证」。首次从网上下载仍需用户手动放行一次。
+/// 非 macOS 为 no-op；失败不抛致命错误（由调用方决定是否忽略）。
+#[tauri::command]
+fn clear_app_quarantine() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bundle = macos_app_bundle_path()
+            .ok_or_else(|| "无法定位 .app bundle（非标准 macOS 应用布局？）".to_string())?;
+        let status = std::process::Command::new("/usr/bin/xattr")
+            .args(["-cr"])
+            .arg(&bundle)
+            .status()
+            .map_err(|e| format!("执行 xattr 失败: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "xattr -cr {:?} 退出码 {:?}",
+                bundle,
+                status.code()
+            ));
+        }
+        Ok(bundle.to_string_lossy().into_owned())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(String::new())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            #[cfg(desktop)]
+            {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
+            Ok(())
+        })
         .manage(AgentProcessState::default())
         .invoke_handler(tauri::generate_handler![
             ensure_agent_process,
             agent_process_status,
             file_metadata,
             save_temp_file,
-            read_image_data_url
+            read_image_data_url,
+            clear_app_quarantine
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

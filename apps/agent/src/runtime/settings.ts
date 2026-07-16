@@ -1,4 +1,5 @@
 import type {
+  AgentCacheRetention,
   AgentThinkingLevel,
   AgentToolExecutionMode,
   AutoModeLevel,
@@ -48,6 +49,7 @@ const SETTING_KEYS = {
   autoModeSafetyEnabled: 'autoMode.safetyEnabled',
   agentThinkingLevel: 'agent.thinkingLevel',
   agentToolExecution: 'agent.toolExecution',
+  agentCacheRetention: 'agent.cacheRetention',
   budgetRunMaxIterations: 'budget.run.maxIterations',
   budgetRunMaxToolCalls: 'budget.run.maxToolCalls',
   budgetRunMaxWallTimeMs: 'budget.run.maxWallTimeMs',
@@ -132,24 +134,18 @@ export function loadPersistedSettings(): void {
     activateProviderSlot(global.activeProvider);
   }
 
-  const autoModeStored = entries[SETTING_KEYS.autoModeLevel];
-  if (autoModeStored === 'auto' || autoModeStored === 'plan') {
-    config.autoMode.level = autoModeStored;
-  } else if (autoModeStored === 'off' || autoModeStored === 'auto-edit' || autoModeStored === 'full') {
-    config.autoMode.level = 'auto';
-    settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
-  } else if (autoModeStored !== undefined) {
-    config.autoMode.level = 'auto';
+  // 产品仅保留 agent（auto）；历史 plan/off 等一律收敛
+  config.autoMode.level = 'auto';
+  if (entries[SETTING_KEYS.autoModeLevel] !== 'auto') {
     settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
   }
-
-  if (!settingsStore.get('autoMode.migratedV2')) {
-    config.autoMode.level = 'auto';
-    settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
-    settingsStore.set('autoMode.migratedV2', 'true');
+  if (!settingsStore.get('autoMode.migratedV3')) {
+    settingsStore.set('autoMode.migratedV3', 'true');
   }
   const thinkingLevel = normalizeThinkingLevel(entries[SETTING_KEYS.agentThinkingLevel]);
   if (thinkingLevel) config.agent.thinkingLevel = thinkingLevel;
+  const cacheRetention = normalizeCacheRetention(entries[SETTING_KEYS.agentCacheRetention]);
+  if (cacheRetention) config.agent.cacheRetention = cacheRetention;
   const toolExecution = normalizeToolExecution(entries[SETTING_KEYS.agentToolExecution]);
   if (toolExecution) config.agent.toolExecution = toolExecution;
   applyBudgetSetting(entries[SETTING_KEYS.budgetRunMaxIterations], 'run', 'maxIterations');
@@ -199,6 +195,7 @@ export function readRuntimeSettings(): RuntimeSettings {
     autoModeSafetyEnabled: readAutoModeSafetyEnabled(),
     agentThinkingLevel: config.agent.thinkingLevel,
     agentToolExecution: config.agent.toolExecution,
+    agentCacheRetention: config.agent.cacheRetention,
     budget: {
       run: { ...config.budget.run },
       lifetime: { ...config.budget.lifetime },
@@ -370,11 +367,8 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   }
 
   if (body.autoModeLevel !== undefined) {
-    const valid = (['auto', 'plan'] as const).includes(body.autoModeLevel as never);
-    if (valid) {
-      settingsStore.set(SETTING_KEYS.autoModeLevel, body.autoModeLevel);
-      config.autoMode.level = body.autoModeLevel;
-    }
+    settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
+    config.autoMode.level = 'auto';
   }
 
   if (body.autoModeSafetyEnabled !== undefined) {
@@ -393,6 +387,13 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     if (!value) throw new Error('agentToolExecution 非法');
     config.agent.toolExecution = value;
     settingsStore.set(SETTING_KEYS.agentToolExecution, value);
+  }
+
+  if (body.agentCacheRetention !== undefined) {
+    const value = normalizeCacheRetention(body.agentCacheRetention);
+    if (!value) throw new Error('agentCacheRetention 非法');
+    config.agent.cacheRetention = value;
+    settingsStore.set(SETTING_KEYS.agentCacheRetention, value);
   }
 
   if (body.budget?.run) {
@@ -632,6 +633,10 @@ function normalizeThinkingLevel(value: unknown): AgentThinkingLevel | null {
 
 function normalizeToolExecution(value: unknown): AgentToolExecutionMode | null {
   return value === 'sequential' || value === 'parallel' ? value : null;
+}
+
+function normalizeCacheRetention(value: unknown): AgentCacheRetention | null {
+  return value === 'short' || value === 'long' ? value : null;
 }
 
 function validateBaseUrl(raw: string, required: boolean): string {

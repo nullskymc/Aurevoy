@@ -53,6 +53,7 @@ import type {
   TaskTraceKind,
   ToolCall,
   ToolResult,
+  AgentCacheRetention,
   AgentThinkingLevel,
   AgentToolExecutionMode,
 } from '@aurevoy/shared';
@@ -63,10 +64,9 @@ import { taskStore, projectStore } from '../store/db.js';
 import { unifiedToolRegistry, validateToolInputSchema } from '../tool/unified-registry.js';
 import { initializeUnifiedToolFramework, getAgentToolsForPi, createToolContext } from '../tool/index.js';
 import {
-  buildAgentIdentityMessage,
-  buildSkillCatalogMessage,
-  buildSystemContextMessage,
-  buildToolGuidanceMessage,
+  buildStableSystemPromptParts,
+  buildVolatileTimeContextMessage,
+  joinSystemPromptParts,
   totalTokens,
   TOOLS_WITH_LARGE_OUTPUT,
   TOOLS_KEEP_VERBATIM,
@@ -130,11 +130,14 @@ const lifetimeWallAtRunStartByTask = new Map<string, number>();
 const invalidPiToolCallErrors = new Map<string, Map<string, string>>();
 
 /**
- * 每个任务的 prompt cache 前缀长度追踪。
- * key = taskId, value = 已发送给 LLM 并被缓存的 Pi 消息条数。
- * convertToLlm 时，[0..cachePrefix) 的消息已缓存不动，[cachePrefix..) 的新消息做 Snip+Microcompact。
+ * 每个任务 run 内冻结的完整 system prompt（稳定前缀 + 一次时间）。
+ * 本 run 内字节不变，避免分钟跳动/附件重读冲掉整段对话 prompt cache。
+ * 文本附件改挂到对应 user 消息，不再进 system。
  */
-const cachePrefixByTask = new Map<string, number>();
+const pinnedSystemPromptByTask = new Map<string, string>();
+/** toolcall 流式准备阶段 phase 节流（taskId → 上次推送时刻 / 文案） */
+const lastPrepPhaseAtByTask = new Map<string, number>();
+const lastPrepPhaseDetailByTask = new Map<string, string>();
 const SEARCH_FILES_INPUT_SCHEMA = {
   type: 'object',
   properties: {
@@ -259,7 +262,9 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
       options.signal.removeEventListener('abort', onAbort);
       activePiControllers.delete(task.id);
       invalidPiToolCallErrors.delete(task.id);
-      cachePrefixByTask.delete(task.id);
+      pinnedSystemPromptByTask.delete(task.id);
+      lastPrepPhaseAtByTask.delete(task.id);
+      lastPrepPhaseDetailByTask.delete(task.id);
       const wallStart = lifetimeWallAtRunStartByTask.get(task.id) ?? 0;
       finalizeRunWallTime(task, wallStart, options.taskStartedAtMs);
       lifetimeWallAtRunStartByTask.delete(task.id);
@@ -323,7 +328,7 @@ async function createPiHarness(
     streamOptions: {
       maxRetries: 2,
       maxRetryDelayMs: 60_000,
-      cacheRetention: 'short',
+      cacheRetention: runtimeCacheRetention(),
     },
   });
 
@@ -336,9 +341,8 @@ async function createPiHarness(
     const filtered = event.messages.filter((message): message is PiMessage =>
       message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult',
     );
-    const cachedUpTo = cachePrefixByTask.get(task.id) ?? 0;
-    const compacted = compactPiMessagesCacheAware(filtered, cachedUpTo);
-    cachePrefixByTask.set(task.id, compacted.length);
+    // 整表确定性 Snip+Microcompact：会话存原文，重放保证已发送前缀字节稳定
+    const compacted = compactPiMessagesCacheAware(filtered);
     return { messages: compacted as AgentMessage[] };
   });
   harness.on('tool_call', async (event) => {
@@ -553,13 +557,7 @@ async function toHarnessPromptInput(message: Message, model: PiModel<any>): Prom
     }
     images.push(await imageAttachmentToPiContent(attachment));
   }
-  // 明确告诉模型图片已内联注入，避免再对 memory:// 或上传路径发 read
-  let text = message.content;
-  if (images.length > 0) {
-    const names = imageAttachments.map((a) => a.name).join(', ');
-    text = `${message.content}\n\n[System: ${images.length} image(s) attached inline: ${names}. Vision input is already provided — do not call read on memory:// or attachment paths.]`;
-  }
-  return { text, images };
+  return { text: await buildUserMessageTextWithAttachments(message), images };
 }
 
 function createHarnessSkills(): PiHarnessSkill[] {
@@ -682,19 +680,20 @@ async function inferScoutTechStack(workspaceDir: string): Promise<string[]> {
 }
 
 async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<string> {
+  const pinned = pinnedSystemPromptByTask.get(task.id);
+  if (pinned) return pinned;
+
   const projectInfo = task.projectId ? projectStore.get(task.projectId) : undefined;
-  const messages = [
-    buildAgentIdentityMessage(),
-    buildSystemContextMessage(
+  // 整段 system 在 run 开始时只拼一次：稳定部件 + 冻结墙钟；后续轮次原样返回。
+  const full = joinSystemPromptParts(
+    buildStableSystemPromptParts({
       workspaceDir,
-      undefined,
-      projectInfo ? { name: projectInfo.name, path: projectInfo.path } : undefined,
-    ),
-    buildToolGuidanceMessage(),
-    buildSkillCatalogMessage(),
-    await buildAttachmentContextMessage(task),
-  ].filter((message): message is { content: string } => !!message?.content);
-  return messages.map((message) => message.content).join('\n\n');
+      projectInfo: projectInfo ? { name: projectInfo.name, path: projectInfo.path } : undefined,
+    }),
+    [buildVolatileTimeContextMessage().content],
+  );
+  pinnedSystemPromptByTask.set(task.id, full);
+  return full;
 }
 
 function selectPiModelForTask(): PiModel<any> {
@@ -716,12 +715,10 @@ function assertPiModelSupportsAttachments(task: Task, model: PiModel<any>): void
 
 async function userMessageContentToPi(message: Message, model: PiModel<any>): Promise<string | Array<PiTextContent | PiImageContent>> {
   const imageAttachments = (message.attachments ?? []).filter((attachment) => attachment.type === 'image');
-  if (imageAttachments.length === 0) return message.content;
+  const text = await buildUserMessageTextWithAttachments(message);
+  if (imageAttachments.length === 0) return text;
 
-  const content: Array<PiTextContent | PiImageContent> = [{
-    type: 'text',
-    text: `${message.content}\n\n[System: image(s) attached inline — do not call read on memory:// or attachment paths.]`,
-  }];
+  const content: Array<PiTextContent | PiImageContent> = [{ type: 'text', text }];
   for (const attachment of imageAttachments) {
     if (!model.input?.includes('image')) {
       throw new Error(`模型 ${model.provider}:${model.id} 不支持图片附件：${attachment.name}`);
@@ -733,6 +730,29 @@ async function userMessageContentToPi(message: Message, model: PiModel<any>): Pr
     content.push(await imageAttachmentToPiContent(attachment));
   }
   return content;
+}
+
+/**
+ * 用户消息正文：目标文本 + 可选图片说明 + 文本附件正文。
+ * 附件只挂在发出该消息的一轮，不再每轮重写进 system（避免冲 prompt cache）。
+ */
+async function buildUserMessageTextWithAttachments(message: Message): Promise<string> {
+  let text = message.content;
+  const imageAttachments = (message.attachments ?? []).filter((attachment) => attachment.type === 'image');
+  if (imageAttachments.length > 0) {
+    const names = imageAttachments.map((a) => a.name).join(', ');
+    text =
+      `${message.content}\n\n[System: ${imageAttachments.length} image(s) attached inline: ${names}. ` +
+      'Vision input is already provided — do not call read on memory:// or attachment paths.]';
+  }
+  const fileAttachments = (message.attachments ?? []).filter((attachment) => attachment.type !== 'image');
+  if (fileAttachments.length === 0) return text;
+
+  const lines = ['', '[Attached Files]', ''];
+  for (const attachment of fileAttachments) {
+    lines.push(await formatAttachment(attachment));
+  }
+  return `${text}\n${lines.join('\n')}`;
 }
 
 async function imageAttachmentToPiContent(attachment: MessageAttachment): Promise<PiImageContent> {
@@ -1024,9 +1044,8 @@ async function gatePiToolCall(
   }
 
   const riskLevel = unifiedToolRegistry.riskLevelOf(call.toolName);
-  const autoModeLevel = config.autoMode.level === 'plan' ? 'plan' : 'auto';
   const permission = decideToolPermission(
-    approvalConfigFromTask(task, autoModeLevel),
+    approvalConfigFromTask(task, 'auto'),
     call.toolName,
     riskLevel,
   );
@@ -1039,13 +1058,8 @@ async function gatePiToolCall(
     return undefined;
   }
 
-  // plan 未批准时的回退：单次工具审批（正常路径应在 harness 启动前完成计划审批）
-  const autoModeReason =
-    autoModeLevel === 'plan' && !task.autoModeState?.planApproved
-      ? 'not_covered' as const
-      : task.autoModeState?.paused
-        ? 'paused' as const
-        : undefined;
+  // 仅 paused 等少数情况会走到单次工具审批
+  const autoModeReason = task.autoModeState?.paused ? ('paused' as const) : undefined;
 
   task.pendingApprovals = [
     ...(task.pendingApprovals ?? []),
@@ -1148,16 +1162,40 @@ async function handlePiEvent(
           rememberInvalidPiToolCall(task.id, event.toolCallId, `schema_validation_failed: ${validationError}`);
         }
       }
-      publish({ type: 'phase', taskId: task.id, phase: 'calling_tool', detail: `调用工具 ${event.toolName}` });
-      publish({ type: 'tool_call', taskId: task.id, call: toAurevoyToolCall(task, event.toolCallId, event.toolName, event.args) });
-      writePiTrace(task, 'tool_call', {
-        ok: true,
-        callId: event.toolCallId,
-        toolName: event.toolName,
-        riskLevel: unifiedToolRegistry.riskLevelOf(event.toolName),
-        summary: `调用工具 ${event.toolName}`,
-        data: { args: event.args },
-      });
+      {
+        // delegate 对用户是「子智能体」，不要露出裸工具名
+        const phaseDetail =
+          event.toolName === 'delegate'
+            ? (() => {
+                const args = event.args && typeof event.args === 'object' && !Array.isArray(event.args)
+                  ? (event.args as Record<string, unknown>)
+                  : {};
+                const role = typeof args.role === 'string' ? args.role : '';
+                const goal = typeof args.goal === 'string' ? args.goal.trim() : '';
+                const roleLabel =
+                  role === 'explore' ? '探索'
+                  : role === 'research' ? '调研'
+                  : role === 'coder' ? '编码'
+                  : role === 'shell' ? '验证'
+                  : role === 'writer' ? '写作'
+                  : role ? role : '';
+                if (goal && roleLabel) return `创建子智能体 · ${roleLabel}：${goal.slice(0, 48)}${goal.length > 48 ? '…' : ''}`;
+                if (goal) return `创建子智能体：${goal.slice(0, 56)}${goal.length > 56 ? '…' : ''}`;
+                if (roleLabel) return `创建子智能体 · ${roleLabel}`;
+                return '创建子智能体';
+              })()
+            : `调用工具 ${event.toolName}`;
+        publish({ type: 'phase', taskId: task.id, phase: 'calling_tool', detail: phaseDetail });
+        publish({ type: 'tool_call', taskId: task.id, call: toAurevoyToolCall(task, event.toolCallId, event.toolName, event.args) });
+        writePiTrace(task, 'tool_call', {
+          ok: true,
+          callId: event.toolCallId,
+          toolName: event.toolName,
+          riskLevel: unifiedToolRegistry.riskLevelOf(event.toolName),
+          summary: event.toolName === 'delegate' ? '创建子智能体' : `调用工具 ${event.toolName}`,
+          data: { args: event.args },
+        });
+      }
       break;
     case 'tool_execution_update':
       publish({
@@ -1196,6 +1234,10 @@ function runtimeToolExecution(): AgentToolExecutionMode {
   return config.agent.toolExecution;
 }
 
+function runtimeCacheRetention(): AgentCacheRetention {
+  return config.agent.cacheRetention === 'short' ? 'short' : 'long';
+}
+
 function toAurevoyMessageStartRole(role: AgentMessage['role']): 'user' | 'assistant' | 'toolResult' {
   if (role === 'assistant' || role === 'user' || role === 'toolResult') return role;
   return 'user';
@@ -1209,7 +1251,155 @@ function publishPiMessageDelta(task: Task, event: PiAssistantMessageEvent): void
   if (event.type === 'text_delta') {
     addOutputBytes(task, event.delta);
     publish({ type: 'token', taskId: task.id, delta: event.delta });
+    return;
   }
+
+  // 深度推理流：避免长时间只显示「正在思考」且无任何过程提示
+  if (event.type === 'thinking_start' || event.type === 'thinking_delta') {
+    publishThrottledPrepPhase(task, '正在深度推理…', event.type === 'thinking_start');
+    return;
+  }
+
+  // 工具参数流式生成（尤其 write 大段正文）在 tool_execution_start 之前可能持续很久
+  if (event.type === 'toolcall_start' || event.type === 'toolcall_delta') {
+    const block = event.partial?.content?.[event.contentIndex];
+    if (!isRecord(block) || block.type !== 'toolCall') return;
+    const name = typeof block.name === 'string' && block.name.trim() ? block.name.trim() : 'tool';
+    const args = normalizePartialToolArgs(block.arguments);
+    const detail = describePreparingToolCall(name, args);
+    publishThrottledPrepPhase(task, detail, event.type === 'toolcall_start');
+  }
+}
+
+/** 准备阶段 phase 节流：start 立即推；delta 约 300ms 或文案实质变化时推。 */
+function publishThrottledPrepPhase(task: Task, detail: string, force: boolean): void {
+  const now = Date.now();
+  const lastAt = lastPrepPhaseAtByTask.get(task.id) ?? 0;
+  const lastDetail = lastPrepPhaseDetailByTask.get(task.id) ?? '';
+  const meaningfulChange =
+    detail !== lastDetail &&
+    // 路径/字数从无到有、或字数档位变化时立刻刷新
+    (detail.length > lastDetail.length + 24 ||
+      /（/.test(detail) !== /（/.test(lastDetail) ||
+      extractPrepPathHint(detail) !== extractPrepPathHint(lastDetail));
+  if (!force && !meaningfulChange && now - lastAt < 300) return;
+  lastPrepPhaseAtByTask.set(task.id, now);
+  lastPrepPhaseDetailByTask.set(task.id, detail);
+  publish({ type: 'phase', taskId: task.id, phase: 'thinking', detail });
+}
+
+function extractPrepPathHint(detail: string): string {
+  const m = /(?:撰写|写入|编辑|准备写入)\s+(\S+)/.exec(detail);
+  return m?.[1] ?? '';
+}
+
+function normalizePartialToolArgs(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // 流式 JSON 未闭合：尝试从残片里抠 path / content 预览
+      return extractArgsFromPartialJson(raw);
+    }
+  }
+  return {};
+}
+
+/** 从不完整 JSON 字符串里尽量抽出 path/content/query 等字段（best-effort）。 */
+function extractArgsFromPartialJson(raw: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const path = /"(?:path|file|file_path|htmlPath)"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw);
+  if (path) out.path = path[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
+  const query = /"(?:query|q|pattern)"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw);
+  if (query) out.query = query[1].replace(/\\"/g, '"');
+  const contentKey = /"(content|contents|text|html|body|markdown)"\s*:\s*"/.exec(raw);
+  if (contentKey) {
+    // 粗算已流出的 content 长度（不含完整反序列化）
+    const from = contentKey.index + contentKey[0].length;
+    out.content = raw.slice(from).replace(/\\n/g, '\n').replace(/\\"/g, '"');
+  }
+  const command = /"(?:command|cmd)"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw);
+  if (command) out.command = command[1].replace(/\\"/g, '"');
+  const url = /"url"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw);
+  if (url) out.url = url[1].replace(/\\"/g, '"');
+  const goal = /"goal"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw);
+  if (goal) out.goal = goal[1].replace(/\\"/g, '"');
+  const role = /"role"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw);
+  if (role) out.role = role[1].replace(/\\"/g, '"');
+  return out;
+}
+
+function partialArgString(args: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return '';
+}
+
+function formatDraftChars(n: number): string {
+  if (n < 1000) return `${n} 字`;
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k 字`;
+  return `${Math.round(n / 1000)}k 字`;
+}
+
+/**
+ * 工具参数仍在流式生成时的用户可见行为文案。
+ * 目标：长 write/正文阶段不再长时间只显示「正在思考」。
+ */
+function describePreparingToolCall(name: string, args: Record<string, unknown>): string {
+  const path = partialArgString(args, ['path', 'file', 'file_path', 'filename', 'htmlPath']);
+  const base = path.split(/[/\\]/).filter(Boolean).pop() || path;
+  const content = partialArgString(args, ['content', 'contents', 'text', 'html', 'body', 'markdown']);
+  const query = partialArgString(args, ['query', 'q', 'pattern']);
+  const command = partialArgString(args, ['command', 'cmd']);
+  const url = partialArgString(args, ['url']);
+  const goal = partialArgString(args, ['goal']);
+  const role = partialArgString(args, ['role']);
+
+  if (/^(write|write_file|create_file|append_file|session_write)$/.test(name)) {
+    if (base && content.length > 0) return `正在撰写 ${base}（${formatDraftChars(content.length)}）`;
+    if (base) return `正在准备写入 ${base}`;
+    if (content.length > 0) return `正在撰写文件内容（${formatDraftChars(content.length)}）`;
+    return '正在撰写文件内容…';
+  }
+  if (/^(edit|edit_lines|replace_lines|apply_diff)$/.test(name)) {
+    return base ? `正在准备编辑 ${base}` : '正在准备编辑文件…';
+  }
+  if (name === 'web_search' || name === 'search_grep' || name === 'grep' || name === 'glob') {
+    return query
+      ? `正在准备搜索 · ${query.slice(0, 48)}${query.length > 48 ? '…' : ''}`
+      : '正在准备搜索…';
+  }
+  if (name === 'web_fetch' || name === 'http_fetch') {
+    return url
+      ? `正在准备抓取 · ${url.slice(0, 56)}${url.length > 56 ? '…' : ''}`
+      : '正在准备抓取网页…';
+  }
+  if (name === 'bash' || name === 'execute_command') {
+    return command
+      ? `正在准备命令 · ${command.slice(0, 40)}${command.length > 40 ? '…' : ''}`
+      : '正在准备运行命令…';
+  }
+  if (name === 'delegate') {
+    if (goal) {
+      const roleBit = role ? ` · ${role}` : '';
+      return `正在准备子智能体${roleBit}：${goal.slice(0, 40)}${goal.length > 40 ? '…' : ''}`;
+    }
+    return '正在准备创建子智能体…';
+  }
+  if (name === 'bundle_report') {
+    return base ? `正在准备打包报告 · ${base}` : '正在准备打包报告…';
+  }
+  if (name === 'attach_content') return '正在准备附加内容…';
+  if (name === 'load_skill') return '正在准备加载技能…';
+  return `正在准备 · ${name}`;
 }
 
 function addOutputBytes(task: Task, delta: string): void {
@@ -1305,29 +1495,25 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
     data: { output: toolResult.output },
   });
 
-  // attach_content / present_ui：提取 contentBlock 并挂到「发起该 tool_call 的 assistant」消息。
+  // attach_content：提取 contentBlock 并挂到「发起该 tool_call 的 assistant」消息。
   // 禁止回退挂到 tool 消息 id——前端交付面只渲染 assistant，挂错会导致文件卡丢归属/反复出现在 live tail。
-  if (!isError && (toolName === 'attach_content' || toolName === 'present_ui')) {
+  if (!isError && toolName === 'attach_content') {
     const raw = extractAttachContentBlock(result, details);
     if (isRecord(raw) && typeof raw.type === 'string') {
-      const block = buildContentBlockFromTool(raw, workspaceDir, toolName);
+      const block = buildContentBlockFromTool(raw, workspaceDir);
       if (block) {
         let assistantMessageId: string | undefined;
         for (let i = task.messages.length - 1; i >= 0; i--) {
           const msg = task.messages[i];
           if (msg.role === 'assistant' && msg.toolCalls?.some((tc) => tc.id === callId)) {
-            msg.contentBlocks = upsertContentBlocks(msg.contentBlocks, block);
+            msg.contentBlocks = [...(msg.contentBlocks ?? []), block];
             assistantMessageId = msg.id;
             break;
           }
         }
         if (assistantMessageId) {
           saveTask(task);
-          if (toolName === 'present_ui') {
-            publish({ type: 'content_blocks_upserted', taskId: task.id, messageId: assistantMessageId, blocks: [block] });
-          } else {
-            publish({ type: 'content_blocks_added', taskId: task.id, messageId: assistantMessageId, blocks: [block] });
-          }
+          publish({ type: 'content_blocks_added', taskId: task.id, messageId: assistantMessageId, blocks: [block] });
         }
       }
     }
@@ -1364,47 +1550,11 @@ function extractAttachContentBlock(result: unknown, details: unknown): unknown {
   return undefined;
 }
 
-function upsertContentBlocks(
-  existing: ContentBlock[] | undefined,
-  block: ContentBlock,
-): ContentBlock[] {
-  const list = existing ?? [];
-  const idx = list.findIndex((b) => b.id === block.id);
-  if (idx < 0) return [...list, block];
-  const next = list.slice();
-  next[idx] = block;
-  return next;
-}
-
 function buildContentBlockFromTool(
   raw: Record<string, unknown>,
   workspaceDir: string,
-  toolName: string,
 ): ContentBlock | null {
   const type = String(raw.type);
-  if (type === 'ui' || toolName === 'present_ui') {
-    const kind = typeof raw.kind === 'string' ? raw.kind : '';
-    if (!kind) return null;
-    const fallbackText =
-      typeof raw.fallbackText === 'string'
-        ? raw.fallbackText
-        : typeof raw.content === 'string'
-          ? raw.content
-          : '';
-    const id =
-      typeof raw.id === 'string' && raw.id.trim()
-        ? raw.id.trim()
-        : randomUUID();
-    return {
-      id,
-      type: 'ui',
-      content: fallbackText,
-      kind,
-      props: raw.props,
-      fallbackText: fallbackText || undefined,
-    };
-  }
-
   if (typeof raw.content !== 'string') return null;
   if (type !== 'file_reference' && type !== 'image' && type !== 'link') return null;
 
@@ -1629,20 +1779,6 @@ function coerceUsageNumber(value: unknown): number {
   return 0;
 }
 
-async function buildAttachmentContextMessage(task: Task): Promise<{ content: string } | null> {
-  const lastMessage = [...task.messages]
-    .reverse()
-    .find((message) => message.role === 'user' && message.attachments?.length);
-  if (!lastMessage?.attachments?.length) return null;
-
-  const lines = ['[Attached Files]', ''];
-  for (const attachment of lastMessage.attachments) {
-    if (attachment.type === 'image') continue;
-    lines.push(await formatAttachment(attachment));
-  }
-  return { content: lines.join('\n') };
-}
-
 async function formatAttachment(attachment: MessageAttachment): Promise<string> {
   if (!isTextFile(attachment)) {
     return `### ${attachment.name} (path: ${attachment.path}, type: ${attachment.mimeType})\n[非文本文件，使用 read_file 工具读取，路径: ${attachment.path}]\n`;
@@ -1846,13 +1982,13 @@ function piMessageText(content: unknown): string {
 
 /**
  * Snip：移除空/无意义的 toolResult 消息及其配对的 assistant。
- * 只操作 cachedUpTo 之后的消息，不破坏 prompt cache 前缀。
+ * 整表确定性重放，保证多轮 append 时前缀字节稳定。
  */
-function snipPiToolResults(messages: PiMessage[], cachedUpTo: number): PiMessage[] {
+function snipPiToolResults(messages: PiMessage[]): PiMessage[] {
   const toolNameMap = buildPiToolNameMap(messages);
 
   const snipToolResultIndices = new Set<number>();
-  for (let i = cachedUpTo; i < messages.length; i++) {
+  for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.role !== 'toolResult') continue;
     const toolName = msg.toolName ?? toolNameMap.get(msg.toolCallId ?? '');
@@ -1868,7 +2004,7 @@ function snipPiToolResults(messages: PiMessage[], cachedUpTo: number): PiMessage
 
   // 如果某 assistant 的所有 toolCall 结果都被 snip，也移除该 assistant
   const snipAssistantIndices = new Set<number>();
-  for (let i = cachedUpTo; i < messages.length; i++) {
+  for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
 
@@ -1904,19 +2040,17 @@ function snipPiToolResults(messages: PiMessage[], cachedUpTo: number): PiMessage
 }
 
 /**
- * Microcompact：对大输出工具的 toolResult 做结构化压缩。
- * 只操作 cachedUpTo 之后的消息，不破坏 prompt cache 前缀。
+ * Microcompact：对大输出工具的 toolResult 做结构化压缩（整表确定性重放）。
  */
-function microcompactPiToolResults(messages: PiMessage[], cachedUpTo: number): PiMessage[] {
+function microcompactPiToolResults(messages: PiMessage[]): PiMessage[] {
   let changed = false;
-  const result = messages.map((msg, i) => {
-    if (i < cachedUpTo) return msg;
+  const result = messages.map((msg) => {
     if (msg.role !== 'toolResult') return msg;
     const toolName = msg.toolName ?? '';
     if (!TOOLS_WITH_LARGE_OUTPUT.has(toolName)) return msg;
 
     const text = piMessageText(msg.content);
-    if (!text || text.includes('"_compacted":true')) return msg;
+    if (!text || text.includes('"_compacted":true') || text.includes('"_compacted": true')) return msg;
 
     const compacted = compactToolResult(toolName, text);
     if (compacted === null || compacted === text) return msg;
@@ -1932,14 +2066,13 @@ function microcompactPiToolResults(messages: PiMessage[], cachedUpTo: number): P
 }
 
 /**
- * Cache-aware 零成本压缩：在 convertToLlm 阶段对未缓存的新消息做 Snip + Microcompact。
- * 已缓存的前缀 [0..cachedUpTo) 保持不变，避免破坏 prompt cache。
+ * Cache-aware 零成本压缩：对整表确定性 Snip + Microcompact。
+ * 会话消息始终是原文；每轮重放后，仅追加新尾部时前缀字节与上一轮一致。
+ * 导出供单元测试验证多轮前缀稳定性。
  */
-function compactPiMessagesCacheAware(messages: PiMessage[], cachedUpTo: number): PiMessage[] {
-  if (messages.length <= cachedUpTo) return messages;
-  const afterSnip = snipPiToolResults(messages, cachedUpTo);
-  const afterMc = microcompactPiToolResults(afterSnip, cachedUpTo);
-  return afterMc;
+export function compactPiMessagesCacheAware(messages: PiMessage[]): PiMessage[] {
+  const afterSnip = snipPiToolResults(messages);
+  return microcompactPiToolResults(afterSnip);
 }
 
 function formatUnknown(value: unknown): string {

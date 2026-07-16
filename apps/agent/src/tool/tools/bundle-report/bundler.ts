@@ -7,14 +7,16 @@ function findDefaultComponentsPath(): string {
   const candidates: string[] = []
   try {
     const thisDir = dirname(fileURLToPath(import.meta.url))
-    candidates.push(resolve(thisDir, "..", "..", "..", "..", "skills", "builtin", "report-design", "components.js"))
+    candidates.push(
+      resolve(thisDir, "..", "..", "..", "..", "skills", "builtin", "research", "components.js"),
+    )
   } catch {
     // ignore
   }
   candidates.push(
-    resolve(process.cwd(), "skills", "builtin", "report-design", "components.js"),
-    resolve(process.cwd(), "apps", "agent", "skills", "builtin", "report-design", "components.js"),
-    resolve(process.cwd(), "src", "skills", "builtin", "report-design", "components.js"),
+    resolve(process.cwd(), "skills", "builtin", "research", "components.js"),
+    resolve(process.cwd(), "apps", "agent", "skills", "builtin", "research", "components.js"),
+    resolve(process.cwd(), "src", "skills", "builtin", "research", "components.js"),
   )
   for (const p of candidates) {
     try {

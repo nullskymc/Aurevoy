@@ -11,6 +11,7 @@ import { SettingsChoiceGroup } from "./layout";
 import {
   avgTokensPerTask,
   buildCompositionRows,
+  cacheHitRate,
   composeInputShare,
   composeOutputShare,
   dailyBarHeight,
@@ -114,8 +115,11 @@ function UsageReportView({
   const outputShare = composeOutputShare(report.promptTokens, report.completionTokens);
   const composeBase = report.promptTokens + report.completionTokens;
   const coveragePct = pct(report.measuredTasks, report.tasks);
-  const cacheHitPct =
-    report.promptTokens > 0 ? pct(report.cacheReadTokens, report.promptTokens) : null;
+  const cacheHitPct = cacheHitRate(
+    report.cacheReadTokens,
+    report.promptTokens,
+    report.cacheWriteTokens,
+  );
   const topShare = report.breakdown[0]
     ? pct(report.breakdown[0].totalTokens, report.totalTokens)
     : 0;
@@ -487,7 +491,7 @@ function ModelUsageCard({
 }) {
   const share = pct(item.totalTokens, totalTokens);
   const cacheHit =
-    item.promptTokens > 0 ? pct(item.cacheReadTokens, item.promptTokens) : 0;
+    cacheHitRate(item.cacheReadTokens, item.promptTokens, item.cacheWriteTokens) ?? 0;
 
   return (
     <article className="usage-model-card">

@@ -1,3 +1,7 @@
+---
+description: 从源码开发 Aurevoy：环境要求、npm 命令、仓库结构与文档站构建。
+---
+
 # 本地开发
 
 面向贡献者与二次开发。完整协作规则见仓库根目录 [`AGENTS.md`](https://github.com/nullskymc/Aurevoy/blob/dev/AGENTS.md)。
@@ -59,7 +63,7 @@ docs/            用户文档 + VitePress + 协作参考
 4. 外部能力缺失时明确失败或降级  
 5. 密钥不进仓库  
 
-更多见 [开发约定](/CONVENTIONS)、[架构](/ARCHITECTURE)。
+发布与自动更新见 [自动更新](/dev/auto-update)。更多见 [开发约定](/CONVENTIONS)、[架构](/ARCHITECTURE)。
 
 ## 引擎地址
 

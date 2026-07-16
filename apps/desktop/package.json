@@ -1,7 +1,7 @@
 {
   "name": "@aurevoy/desktop",
   "private": true,
-  "version": "0.6.4",
+  "version": "0.6.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,12 +16,14 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@aurevoy/web-ui": "*",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "@aurevoy/web-ui": "*"
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

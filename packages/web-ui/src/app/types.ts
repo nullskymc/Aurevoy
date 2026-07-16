@@ -12,7 +12,6 @@ export type SettingsSectionId =
   | "usage";
 export type ThemeMode = "system" | "light" | "dark";
 export type WorkMode = "coding" | "daily";
-export type AutoModeLevel = "auto" | "plan";
 
 export const SETTINGS_SECTION_IDS: SettingsSectionId[] = [
   "general",

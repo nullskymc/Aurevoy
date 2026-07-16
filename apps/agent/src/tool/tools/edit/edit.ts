@@ -53,8 +53,10 @@ const previewLines = (value: string, prefix: "+" | "-"): string[] => {
 export const editTool = make({
   name: "edit",
   description:
-    "Replace exact text in one file. The oldString must match exactly including whitespace and indentation. " +
-    "Use replaceAll=true to replace all occurrences. Relative paths resolve from the workspace root.",
+    "Preferred way to revise an existing file: replace exact oldString with newString (include enough surrounding context so the match is unique). " +
+    "Use this for report/section fixes, wording, and small structural changes instead of rewrite-via-write. " +
+    "oldString must match exactly including whitespace and indentation; set replaceAll=true only when every occurrence should change. " +
+    "Relative paths resolve from the workspace root. To create a new file or intentionally replace the entire file, use write.",
   input: Input,
   output: Output,
   execute: async (input, ctx) => {

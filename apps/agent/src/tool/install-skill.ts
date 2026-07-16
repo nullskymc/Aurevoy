@@ -13,7 +13,7 @@ export function registerInstallSkillTool(): void {
       '调用前必须先读取用户给出的网页、GitHub 页面或仓库内容，确认其中确实存在 SKILL.md，并记录准确的 skill 目录路径。\n' +
       '不要把普通网页、README、文章页、搜索结果页或未检查的仓库 URL 直接传给本工具；不确定时应先用 web_search/web_fetch 或询问用户。\n' +
       '安装后 skill 立即生效，可通过 load_skill 工具加载。\n' +
-      '示例：install_skill({ repoUrl: "https://github.com/user/skill-collection", skillPaths: ["skills/report-design"], inspectionSummary: "已检查仓库树，skills/report-design/SKILL.md 存在且 frontmatter 含 name/description。" })',
+      '示例：install_skill({ repoUrl: "https://github.com/user/skill-collection", skillPaths: ["skills/research"], inspectionSummary: "已检查仓库树，skills/research/SKILL.md 存在且 frontmatter 含 name/description。" })',
     inputSchema: {
       type: 'object',
       properties: {

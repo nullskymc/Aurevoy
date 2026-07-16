@@ -28,7 +28,8 @@ npm run regression:m3   # … m8 见 package.json
 ### M5 分发 🚧
 
 - [x] 设置 / 工具 / 数据 / MCP / 模型槽位 / i18n / 引擎托管 / CI  
-- [ ] macOS 签名、公证、自动更新（需 Apple Developer）  
+- [x] 自动更新（Tauri updater + GitHub Releases `latest.json`；设置页检查/安装）  
+- [ ] macOS Apple 代码签名与公证（需 Apple Developer）  
 - [ ] Windows 适配（WebView2、原生模块、路径）
 
 ### M8 体验深化 🚧
@@ -53,7 +54,8 @@ npm run regression:m3   # … m8 见 package.json
 **发布**
 
 - [ ] 首次启动向导、健康页、数据导出/清理体验  
-- [ ] macOS / Windows 安装包与更新通道
+- [x] GitHub Releases 多平台安装包 + updater 通道（`latest.json`）  
+- [ ] macOS 公证安装体验、Windows 签名安装体验
 
 ## 原则
 

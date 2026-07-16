@@ -3,7 +3,7 @@ import type { SubagentRole } from '@aurevoy/shared';
 /**
  * 内置子代理角色定义。
  *
- * 权限仍只继承父任务的 auto/plan；此处只定义「任务面」——角色说明 + 工具白名单。
+ * 权限继承父任务；此处只定义「任务面」——角色说明 + 工具白名单。
  * 子代理默认禁止再委托（不含 delegate；同时屏蔽旧名 delegate_task），避免递归爆炸。
  */
 

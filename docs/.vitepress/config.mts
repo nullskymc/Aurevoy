@@ -1,8 +1,13 @@
 import { defineConfig } from 'vitepress'
 
 const repo = 'https://github.com/nullskymc/Aurevoy'
-/** Custom domain (aurevoy.nullskymc.site) uses root. Override with DOCS_BASE if needed. */
+const siteUrl = 'https://aurevoy.nullskymc.site'
+/** Custom domain uses root. Override with DOCS_BASE if needed. */
 const base = process.env.DOCS_BASE ?? '/'
+
+const siteTitle = 'Aurevoy'
+const siteDescription =
+  '本地个人 AI Agent 桌面应用。用自然语言描述目标，在本机规划、调用工具并完成任务。开源、可审批、数据默认留在本地。'
 
 const userSidebar = [
   {
@@ -38,9 +43,7 @@ const userSidebar = [
   },
   {
     text: '参考',
-    items: [
-      { text: '故障排查', link: '/guide/troubleshooting' },
-    ],
+    items: [{ text: '故障排查', link: '/guide/troubleshooting' }],
   },
 ]
 
@@ -49,6 +52,7 @@ const devSidebar = [
     text: '开发者',
     items: [
       { text: '本地开发', link: '/dev/develop' },
+      { text: '自动更新', link: '/dev/auto-update' },
       { text: '架构', link: '/ARCHITECTURE' },
       { text: 'API 契约', link: '/API' },
       { text: '技术栈', link: '/TECH_STACK' },
@@ -59,29 +63,147 @@ const devSidebar = [
   },
 ]
 
+/** Map VitePress relativePath to public URL path (cleanUrls: false → .html). */
+function pagePath(relativePath: string): string {
+  let p = relativePath.replace(/\\/g, '/').replace(/\.md$/, '')
+  if (p === 'index') return '/'
+  if (p.endsWith('/index')) p = p.slice(0, -'/index'.length)
+  return `/${p}.html`
+}
+
+function absoluteUrl(path: string): string {
+  if (path === '/') return siteUrl + '/'
+  return siteUrl + path
+}
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'WebSite',
+      name: siteTitle,
+      url: siteUrl + '/',
+      description: siteDescription,
+      inLanguage: 'zh-CN',
+      publisher: {
+        '@type': 'Organization',
+        name: 'Aurevoy',
+        url: siteUrl + '/',
+        sameAs: [repo],
+      },
+    },
+    {
+      '@type': 'SoftwareApplication',
+      name: 'Aurevoy',
+      applicationCategory: 'DesktopApplication',
+      operatingSystem: 'macOS',
+      description: siteDescription,
+      url: siteUrl + '/',
+      downloadUrl: `${repo}/releases`,
+      softwareVersion: '0.6',
+      offers: {
+        '@type': 'Offer',
+        price: '0',
+        priceCurrency: 'USD',
+      },
+      license: 'https://opensource.org/licenses/MIT',
+      codeRepository: repo,
+    },
+  ],
+}
+
 export default defineConfig({
-  title: 'Aurevoy',
-  description: '本地个人 AI Agent。描述目标，在你的电脑上规划、调用工具并完成任务。',
+  title: siteTitle,
+  titleTemplate: ':title · Aurevoy',
+  description: siteDescription,
   lang: 'zh-CN',
   base,
   cleanUrls: false,
   lastUpdated: true,
   ignoreDeadLinks: [/^https?:\/\/127\.0\.0\.1/],
-  srcExclude: ['README/**'],
+  srcExclude: ['README/**', 'package.json', 'package-lock.json'],
+  sitemap: {
+    hostname: siteUrl,
+    transformItems: (items) =>
+      items.filter(
+        (item) =>
+          !item.url.includes('/404') &&
+          !item.url.includes('package') &&
+          !item.url.includes('README'),
+      ),
+  },
   head: [
     ['link', { rel: 'icon', type: 'image/png', href: `${base}aurevoy.png` }],
+    ['link', { rel: 'apple-touch-icon', href: `${base}aurevoy.png` }],
     ['meta', { name: 'theme-color', content: '#3d7a6e' }],
-    ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:title', content: 'Aurevoy' }],
+    ['meta', { name: 'author', content: 'Aurevoy' }],
     [
       'meta',
       {
-        property: 'og:description',
-        content: '本地个人 AI Agent。告诉它做什么，不必教它怎么做。',
+        name: 'keywords',
+        content:
+          'Aurevoy,AI Agent,本地Agent,个人AI,桌面Agent,开源,Tauri,macOS,MCP,Skill,知识库',
       },
     ],
-    ['meta', { property: 'og:image', content: `${base}aurevoy.png` }],
+    ['meta', { name: 'robots', content: 'index,follow,max-image-preview:large' }],
+    ['meta', { property: 'og:type', content: 'website' }],
+    ['meta', { property: 'og:site_name', content: 'Aurevoy' }],
+    ['meta', { property: 'og:locale', content: 'zh_CN' }],
+    ['meta', { property: 'og:title', content: `${siteTitle} · 本地个人 AI Agent` }],
+    ['meta', { property: 'og:description', content: siteDescription }],
+    ['meta', { property: 'og:url', content: siteUrl + '/' }],
+    ['meta', { property: 'og:image', content: `${siteUrl}/aurevoy.png` }],
+    ['meta', { property: 'og:image:alt', content: 'Aurevoy' }],
+    ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:title', content: `${siteTitle} · 本地个人 AI Agent` }],
+    ['meta', { name: 'twitter:description', content: siteDescription }],
+    ['meta', { name: 'twitter:image', content: `${siteUrl}/aurevoy.png` }],
+    ['link', { rel: 'canonical', href: siteUrl + '/' }],
+    [
+      'script',
+      { type: 'application/ld+json' },
+      JSON.stringify(jsonLd),
+    ],
   ],
+  transformPageData(pageData) {
+    const path = pagePath(pageData.relativePath)
+    const url = absoluteUrl(path)
+    const title = pageData.frontmatter.title || pageData.title || siteTitle
+    const description =
+      (pageData.frontmatter.description as string | undefined) ||
+      pageData.description ||
+      siteDescription
+    const isHome = pageData.relativePath === 'index.md'
+    const displayTitle = isHome
+      ? `${siteTitle} · 本地个人 AI Agent`
+      : `${title} · Aurevoy`
+
+    const prev = (pageData.frontmatter.head ?? []) as Array<
+      [string, Record<string, string>, string?]
+    >
+    const kept = prev.filter((h) => {
+      const a = h?.[1]
+      if (!a) return true
+      if (a.rel === 'canonical') return false
+      if (a.property?.startsWith('og:')) return false
+      if (a.name?.startsWith('twitter:') || a.name === 'description') return false
+      return true
+    })
+
+    pageData.frontmatter.head = [
+      ...kept,
+      ['link', { rel: 'canonical', href: url }],
+      ['meta', { property: 'og:url', content: url }],
+      ['meta', { property: 'og:title', content: displayTitle }],
+      ['meta', { property: 'og:description', content: description }],
+      ['meta', { property: 'og:type', content: isHome ? 'website' : 'article' }],
+      ['meta', { property: 'og:image', content: `${siteUrl}/aurevoy.png` }],
+      ['meta', { name: 'twitter:title', content: displayTitle }],
+      ['meta', { name: 'twitter:description', content: description }],
+      ['meta', { name: 'twitter:image', content: `${siteUrl}/aurevoy.png` }],
+      ['meta', { name: 'description', content: description }],
+    ]
+  },
   themeConfig: {
     logo: { src: '/aurevoy-wordmark.svg', alt: 'Aurevoy' },
     siteTitle: false,
@@ -96,6 +218,7 @@ export default defineConfig({
         text: '开发者',
         items: [
           { text: '本地开发', link: '/dev/develop' },
+          { text: '自动更新', link: '/dev/auto-update' },
           { text: '架构', link: '/ARCHITECTURE' },
           { text: 'API', link: '/API' },
           { text: '技术栈', link: '/TECH_STACK' },

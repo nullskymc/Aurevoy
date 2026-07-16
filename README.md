@@ -66,7 +66,8 @@ Autonomous agent & tools · multi-provider LLM · multi-turn & resume ·
 inline edit-retry / branch / compact · multi-role subagents · skills · web search ·  
 multimodal · projects · dual task budgets · long-term memory + KB RAG · settings & CI  
 
-**In progress:** code signing / auto-update, implicit KB recall, evals, release polish.
+**In progress:** Apple code signing / notarization, implicit KB recall, evals, release polish.  
+**Shipped (distribution):** in-app auto-update via GitHub Releases (Tauri updater).
 
 ---
 

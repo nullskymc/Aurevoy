@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DataStatusResponse, RuntimeSettings } from "@aurevoy/shared";
+import type { AppUpdateInfo } from "../../platform/types";
+import { usePlatform } from "../../platform/context";
 import { t } from "../../i18n";
 import { setBaseUrl } from "../../api";
 import type { WorkMode } from "../../app/types";
@@ -14,6 +16,15 @@ import {
   SettingsSelectRow,
   SettingsSwitchRow,
 } from "./layout";
+
+type UpdateUiState =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "upToDate"; currentVersion?: string }
+  | { kind: "available"; info: AppUpdateInfo }
+  | { kind: "downloading"; percent: number | null; version?: string }
+  | { kind: "installing"; version?: string }
+  | { kind: "error"; message: string };
 
 export function GeneralSettings({
   draft,
@@ -36,10 +47,24 @@ export function GeneralSettings({
   onSave: (draft: SettingsDraft) => void;
   onConnectionChange?: () => void;
 }) {
+  const platform = usePlatform();
   const [agentUrl, setAgentUrl] = useState<string>(
     typeof window !== "undefined" ? window.localStorage.getItem("aurevoy.agentBaseUrl") ?? "" : ""
   );
   const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [updateState, setUpdateState] = useState<UpdateUiState>({ kind: "idle" });
+  const canCheckUpdate = typeof platform.checkForAppUpdate === "function";
+
+  useEffect(() => {
+    let cancelled = false;
+    void platform.getAppVersion?.().then((version) => {
+      if (!cancelled) setAppVersion(version);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [platform]);
 
   async function testAndConnect() {
     const url = agentUrl.replace(/\/+$/, '');
@@ -58,6 +83,79 @@ export function GeneralSettings({
       setTestState('fail');
     }
   }
+
+  async function handleCheckUpdate() {
+    if (!platform.checkForAppUpdate) return;
+    setUpdateState({ kind: "checking" });
+    try {
+      const info = await platform.checkForAppUpdate();
+      if (info.currentVersion) setAppVersion(info.currentVersion);
+      if (!info.available) {
+        setUpdateState({ kind: "upToDate", currentVersion: info.currentVersion });
+        return;
+      }
+      setUpdateState({ kind: "available", info });
+    } catch (error) {
+      setUpdateState({
+        kind: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async function handleInstallUpdate() {
+    if (!platform.installAppUpdate) return;
+    const version =
+      updateState.kind === "available" ? updateState.info.version : undefined;
+    setUpdateState({ kind: "downloading", percent: null, version });
+    try {
+      await platform.installAppUpdate({
+        relaunch: true,
+        onProgress: (progress) => {
+          if (progress.event === "Started" || progress.event === "Progress") {
+            const total = progress.contentLength ?? null;
+            const downloaded = progress.downloaded ?? 0;
+            const percent =
+              total && total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : null;
+            setUpdateState({ kind: "downloading", percent, version });
+          } else if (progress.event === "Finished") {
+            setUpdateState({ kind: "installing", version });
+          }
+        },
+      });
+    } catch (error) {
+      setUpdateState({
+        kind: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  function updateStatusText(): string {
+    switch (updateState.kind) {
+      case "checking":
+        return t("settings.updateChecking");
+      case "upToDate":
+        return t("settings.updateUpToDate");
+      case "available":
+        return t("settings.updateAvailable").replace("{version}", updateState.info.version ?? "");
+      case "downloading":
+        return updateState.percent == null
+          ? t("settings.updateDownloading")
+          : t("settings.updateDownloadingPercent").replace("{percent}", String(updateState.percent));
+      case "installing":
+        return t("settings.updateInstalling");
+      case "error":
+        return updateState.message || t("settings.updateFailed");
+      default:
+        return t("settings.updateHint");
+    }
+  }
+
+  const busy =
+    updateState.kind === "checking" ||
+    updateState.kind === "downloading" ||
+    updateState.kind === "installing";
 
   return (
     <>
@@ -246,6 +344,59 @@ export function GeneralSettings({
             </div>
           }
         />
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.about")}>
+        <SettingsInfoRow
+          title={t("settings.appVersion")}
+          description={appVersion ? `v${appVersion}` : t("settings.appVersionUnknown")}
+        />
+        {canCheckUpdate ? (
+          <>
+            <SettingsActionRow
+              title={t("settings.updateTitle")}
+              description={updateStatusText()}
+              control={
+                <div className="settings-inline-row">
+                  <button
+                    type="button"
+                    className="settings-inline-btn"
+                    disabled={busy}
+                    onClick={() => void handleCheckUpdate()}
+                  >
+                    {updateState.kind === "checking"
+                      ? t("settings.updateChecking")
+                      : t("settings.checkForUpdates")}
+                  </button>
+                  {updateState.kind === "available" && (
+                    <button
+                      type="button"
+                      className="settings-primary-btn"
+                      disabled={busy}
+                      onClick={() => void handleInstallUpdate()}
+                    >
+                      {t("settings.installUpdate")}
+                    </button>
+                  )}
+                </div>
+              }
+            />
+            {updateState.kind === "available" && updateState.info.notes ? (
+              <SettingsNoteRow
+                title={t("settings.updateNotes")}
+                description={updateState.info.notes}
+              />
+            ) : null}
+            {updateState.kind === "error" ? (
+              <SettingsNoteRow title={t("settings.updateFailed")} description={updateState.message} />
+            ) : null}
+          </>
+        ) : (
+          <SettingsNoteRow
+            title={t("settings.updateTitle")}
+            description={t("settings.updateDesktopOnly")}
+          />
+        )}
       </SettingsGroup>
     </>
   );

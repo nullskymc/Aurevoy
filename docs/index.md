@@ -2,6 +2,11 @@
 layout: home
 title: Aurevoy
 titleTemplate: 本地个人 AI Agent
+description: 本地个人 AI Agent 桌面应用。用自然语言描述目标，在本机规划、调用工具并完成任务。开源、可审批、数据默认留在本地。
+head:
+  - - meta
+    - name: keywords
+      content: Aurevoy,本地 AI Agent,个人 Agent,开源桌面 AI,macOS Agent
 hero:
   name: Aurevoy
   text: 告诉它做什么，不必教它怎么做

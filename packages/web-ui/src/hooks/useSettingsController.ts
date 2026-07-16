@@ -21,7 +21,6 @@ import {
 } from "../api";
 import type { ModelSelectorDraft } from "../components/ModelSelectorDrawer";
 import type { SettingsDraft } from "../components/SettingsPanel";
-import type { AutoModeLevel } from "../app/types";
 import { t } from "../i18n";
 import type { DataStatus } from "./useSettings";
 
@@ -29,7 +28,6 @@ export function useSettingsController({
   health: _health,
   refreshRuntime,
   runtimeSettings,
-  setAutoModeLevel,
   setDataStatus,
   setFetchingModels,
   setHealth,
@@ -43,7 +41,6 @@ export function useSettingsController({
   health: HealthResponse | null;
   refreshRuntime: () => Promise<void>;
   runtimeSettings: RuntimeSettings | null;
-  setAutoModeLevel: Dispatch<SetStateAction<AutoModeLevel>>;
   setDataStatus: Dispatch<SetStateAction<DataStatus | null>>;
   setFetchingModels: Dispatch<SetStateAction<boolean>>;
   setHealth: Dispatch<SetStateAction<HealthResponse | null>>;
@@ -62,7 +59,6 @@ export function useSettingsController({
         getDataStatus(),
       ]);
       setRuntimeSettings(settings);
-      setAutoModeLevel(settings.autoModeLevel);
       setMcpServers(mcp.servers);
       setDataStatus(data);
     } catch (err) {

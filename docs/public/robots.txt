@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://aurevoy.nullskymc.site/sitemap.xml

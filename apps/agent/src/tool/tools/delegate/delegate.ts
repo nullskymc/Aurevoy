@@ -33,14 +33,13 @@ export const delegateTool = make({
     "Use for parallel scouting/research or focused coding/docs work that would bloat your context. " +
     "Issue multiple delegate calls in one turn only for independent parallel work. " +
     "Skip for trivial single-file edits or tightly sequential steps. " +
-    "Inherits parent auto/plan permissions; cannot nest further delegates.",
+    "Inherits parent agent permissions; cannot nest further delegates.",
   input: Input,
   output: Output,
   execute: async (input, ctx) => {
     const { runSubTask } = await import("../../../agent/subagent.js")
     const { approvalConfigFromTask } = await import("../../../agent/approval.js")
     const { isSubagentRole } = await import("../../../agent/subagent-profiles.js")
-    const { config } = await import("../../../config.js")
     const { taskStore } = await import("../../../store/db.js")
     const { completeSubagentRun, recordSubagentProgress } = await import("../../../agent/subagent-state.js")
 
@@ -57,11 +56,10 @@ export const delegateTool = make({
 
     const role = isSubagentRole(input.role) ? input.role : undefined
     const subagentRole = role ?? "general"
-    const level = config.autoMode.level === "plan" ? ("plan" as const) : ("auto" as const)
     const parentTask = ctx.task ?? (ctx.taskID ? taskStore.get(ctx.taskID) : undefined)
     const approvalConfig = parentTask
-      ? approvalConfigFromTask(parentTask, level)
-      : { autoModeLevel: level, autoModePaused: false, planApproved: level === "auto" }
+      ? approvalConfigFromTask(parentTask, "auto")
+      : { autoModeLevel: "auto" as const, autoModePaused: false }
 
     const result = await runSubTask({
       goal,

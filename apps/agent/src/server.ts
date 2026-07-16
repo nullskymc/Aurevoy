@@ -131,7 +131,7 @@ export async function buildServer(externalLogger?: Logger) {
   app.get('/api/health', async (): Promise<HealthResponse> => {
     return {
       status: 'ok',
-      version: '0.6.4',
+      version: '0.6.5',
       uptimeMs: Date.now() - startedAt,
       provider: getPiProviderName(),
       contextCharBudget: config.agent.contextCharBudget,

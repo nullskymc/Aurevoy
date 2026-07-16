@@ -348,10 +348,83 @@ describe("Conversation process presentation (integrated path)", () => {
       />,
     );
 
-    expect(html).toContain("process-live-status");
+    // live 有工具时用活动行，而非可展开 tool-card 时间轴
+    expect(html).toContain("process-activity-list");
+    expect(html).toContain("正在搜索网页");
     expect(html).toContain("data-process-stream");
     expect(html).not.toContain("Thought process");
     expect(html).not.toContain("workflow-drawer");
     expect(html).not.toContain('class="timeline-step"');
+  });
+
+  it("ask_user clarification renders question markdown structure (not plain escaped text)", () => {
+    const task = baseTask({
+      status: "paused",
+      phase: "waiting_clarification",
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "调研美股盘后",
+          createdAt: "2026-07-10T00:00:00.000Z",
+        },
+      ],
+      clarifications: [
+        {
+          id: "c1",
+          callId: "call-ask",
+          status: "pending",
+          createdAt: "2026-07-10T00:00:02.000Z",
+          question: [
+            "## 调研话题：美股盘后",
+            "",
+            "请确认框架是否需要增删。",
+            "",
+            "### Items 列表",
+            "",
+            "1. **三大指数盘后表现**",
+            "2. **股指期货与隔夜定价**",
+            "",
+            "### 请确认",
+            "",
+            "1. Items 是否需要增减？",
+          ].join("\n"),
+          options: ["框架可用，按此推进", "我要自定义增减 items/字段"],
+          context: "背景：**盘后研究**常见维度",
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(
+      <Conversation
+        task={task}
+        status="paused"
+        phase="waiting_clarification"
+        phaseDetail="等待用户补充信息"
+        plan={[]}
+        output=""
+        busy={false}
+        liveToolActivity={[]}
+        hasLiveTail={false}
+        onToolDecision={noop}
+        onClarificationAnswer={noop}
+      />,
+    );
+
+    expect(html).toContain("gate-card");
+    expect(html).toContain("gate-card-markdown");
+    expect(html).toContain("markdown-body");
+    // Headings / bold / list structure from marked, not raw ## ** markers as body text
+    expect(html).toMatch(/<h2[^>]*>调研话题：美股盘后<\/h2>/);
+    expect(html).toMatch(/<h3[^>]*>Items 列表<\/h3>/);
+    expect(html).toContain("<strong>三大指数盘后表现</strong>");
+    expect(html).toContain("<ol>");
+    expect(html).toContain("gate-card-chip");
+    expect(html).toContain("框架可用，按此推进");
+    // context also markdown
+    expect(html).toContain("<strong>盘后研究</strong>");
+    // Must not dump raw markdown markers as the only representation
+    expect(html).not.toContain("## 调研话题");
+    expect(html).not.toContain("**三大指数盘后表现**");
   });
 });

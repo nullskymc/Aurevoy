@@ -453,7 +453,7 @@
   background: transparent;
 }
 
-/* 模式芯片：请求批准 / 自动 — 对齐 Codex 左侧状态 */
+/* 模式芯片：Agent / 暂停恢复 */
 .composer-mode-chip {
   display: inline-flex;
   align-items: center;
@@ -467,17 +467,21 @@
   color: var(--text-secondary);
   font-size: var(--ui-font-base);
   font-weight: 500;
-  cursor: pointer;
+  cursor: default;
   transition: background 0.12s ease, color 0.12s ease;
 }
 
-.composer-mode-chip:hover {
+button.composer-mode-chip {
+  cursor: pointer;
+}
+
+button.composer-mode-chip:hover {
   background: var(--hover);
   color: var(--text);
 }
 
-.composer-mode-chip.is-plan {
-  color: var(--text-secondary);
+.composer-mode-chip.is-agent {
+  color: var(--text-tertiary);
 }
 
 .composer-mode-chip.is-paused {

@@ -1,3 +1,7 @@
+---
+description: Aurevoy 故障排查：引擎离线、模型失败、审批卡住、知识库搜不到等常见问题。
+---
+
 # 故障排查
 
 按症状定位。仍无法解决时，到 [GitHub Issues](https://github.com/nullskymc/Aurevoy/issues) 搜索或提交，并附上：系统版本、应用版本、是否自建、可复现步骤（**不要**贴 API Key）。
@@ -7,6 +11,13 @@
 ### 无法打开 / 未验证开发者
 
 仅从 [官方 Releases](https://github.com/nullskymc/Aurevoy/releases) 下载。在 **系统设置 → 隐私与安全性** 允许，或 **右键 → 打开**。见 [快速开始](./quickstart)。
+
+### 检查更新失败 / 没有新版本
+
+1. 确认本机可访问 `github.com`（代理/防火墙）  
+2. 仅正式版 Release 会出现在 `latest` 通道；带 `-` 的预发布不会被标为 latest  
+3. 设置页手动再点一次 **检查更新**；仍失败时从 Releases 手动下载安装包  
+4. 开发者：确认 CI 已上传 `latest.json` 与对应平台的 `.sig`，见 [自动更新](/dev/auto-update)
 
 ### 引擎一直离线
 

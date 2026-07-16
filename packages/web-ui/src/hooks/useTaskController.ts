@@ -2,7 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import type { AgentEvent, MessageAttachment, PlanStep, RevertMode, Task, TaskPhase, TaskStatus, TaskTraceEntry } from "@aurevoy/shared";
 import {
   answerClarification,
-  approvePlan,
+
   approveToolCall,
   branchTask,
   cancelTask,
@@ -156,17 +156,6 @@ export function useTaskController({
       setNotice(`${t("notice.continueFailed")}${err instanceof Error ? err.message : String(err)}`);
       if (err instanceof TypeError) setOnline(false);
     }
-  }
-
-  function handleUiChoice(payload: { partId: string; actionId: string; selection: unknown }): void {
-    const selection =
-      typeof payload.selection === "string"
-        ? payload.selection
-        : JSON.stringify(payload.selection);
-    const text =
-      `[UI ${payload.actionId}] part=${payload.partId}\n` +
-      `selection=${selection}`;
-    void continueGoal(text);
   }
 
   function handleComposerSubmit(): void {
@@ -342,15 +331,6 @@ export function useTaskController({
     });
   }
 
-  function handlePlanDecision(approved: boolean): void {
-    const taskId = currentTask?.id;
-    if (!taskId) return;
-    setNotice(null);
-    void approvePlan(taskId, approved).catch((err) => {
-      setNotice(`${t("notice.planApprovalFailed")}${err instanceof Error ? err.message : String(err)}`);
-    });
-  }
-
   function handleClarificationAnswer(clarificationId: string, answer: string): void {
     const taskId = currentTask?.id;
     if (!taskId) return;
@@ -364,9 +344,8 @@ export function useTaskController({
     handleBranch,
     handleClarificationAnswer,
     handleComposerSubmit,
-    handleUiChoice,
     handleNewTask,
-    handlePlanDecision,
+
     handleResumeTask,
     handleRevertAndEdit,
     handleSelectTask,

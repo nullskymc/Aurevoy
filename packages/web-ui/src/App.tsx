@@ -37,7 +37,7 @@ import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { ToastNotice, type ToastTone } from "./components/ToastNotice";
 import { SearchPage } from "./pages/SearchPage";
 import { SkillsPage } from "./pages/SkillsPage";
-import { SETTINGS_SECTION_IDS, type AutoModeLevel, type MainView, type SettingsSectionId } from "./app/types";
+import { SETTINGS_SECTION_IDS, type MainView, type SettingsSectionId } from "./app/types";
 import { formatContextK } from "./app/taskUtils";
 import { t } from "./i18n";
 import "./App.css";
@@ -127,11 +127,6 @@ function App() {
     setThemeMode,
     startResize,
   } = useShellLayout();
-  const [autoModeLevel, setAutoModeLevel] = useState<AutoModeLevel>(() => {
-    const stored = localStorage.getItem("aurevoy.autoModeLevel");
-    if (stored === 'plan') return 'plan';
-    return 'auto';
-  });
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingUILevel>(() => {
     const stored = localStorage.getItem("aurevoy.thinkingLevel");
     if (
@@ -158,6 +153,33 @@ function App() {
       ?? (/失败|失敗|failed|error|错误|錯誤|無法|无法|못|에러/i.test(message) ? "error" : "info");
     setNoticeState({ message, tone: inferred });
   };
+
+  // 启动后静默检查更新（仅桌面壳）；有新版本时 toast 提示，不自动安装
+  useEffect(() => {
+    if (!platform.checkForAppUpdate) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void platform
+        .checkForAppUpdate?.()
+        .then((info) => {
+          if (cancelled || !info?.available || !info.version) return;
+          setNotice(
+            t("settings.updateAvailable").replace("{version}", info.version),
+            "info",
+          );
+        })
+        .catch(() => {
+          // 启动检查失败不打扰用户（网络/未配置密钥等）
+        });
+    }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // 仅挂载时检查一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [platform]);
+
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const {
@@ -243,7 +265,6 @@ function App() {
     onModelSaved: () => setModelDrawerOpen(false),
     refreshRuntime,
     runtimeSettings,
-    setAutoModeLevel,
     setDataStatus,
     setFetchingModels,
     setHealth,
@@ -284,13 +305,6 @@ function App() {
     } catch (err) {
       setNotice(`恢复 auto mode 失败: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }
-
-  function cycleAutoModeLevel(): void {
-    const next = autoModeLevel === 'auto' ? 'plan' : 'auto';
-    setAutoModeLevel(next);
-    localStorage.setItem("aurevoy.autoModeLevel", next);
-    void updateSettings({ autoModeLevel: next }).catch(() => {});
   }
 
   function cycleThinkingLevel(): void {
@@ -353,9 +367,8 @@ function App() {
     handleBranch,
     handleClarificationAnswer,
     handleComposerSubmit,
-    handleUiChoice,
     handleNewTask,
-    handlePlanDecision,
+
     handleResumeTask,
     handleRevertAndEdit,
     handleSelectTask,
@@ -645,7 +658,6 @@ function App() {
                   onUnrevert={() => void handleUnrevert()}
                   onBranch={(messageId) => void handleBranch(messageId)}
                   onResume={() => void handleResumeTask()}
-                  onUiChoice={handleUiChoice}
                   onOpenWorkspacePath={(path) => {
                     workbenchTabs.openWorkspaceFile(path);
                     setWorkbenchOpen(true);
@@ -656,10 +668,7 @@ function App() {
                 <ApprovalsDock
                   liveToolActivity={derivedLive}
                   pendingApprovals={currentTask.pendingApprovals}
-                  phase={phase}
-                  plan={plan}
                   onToolDecision={handleToolDecision}
-                  onPlanDecision={handlePlanDecision}
                 />
                 {health?.contextTokenBudget != null && currentTask && currentTask.messages.length > 0 && (
                   <div className="context-hint">
@@ -683,9 +692,7 @@ function App() {
                   onOpenModelSelector={handleOpenModelSelector}
                   modelButtonRef={modelButtonRef}
                   onStop={handleStopStream}
-                  autoModeLevel={autoModeLevel}
                   autoModePaused={!!autoModeState?.paused}
-                  onCycleAutoMode={cycleAutoModeLevel}
                   onResumeAutoMode={handleResumeAutoMode}
                   thinkingLevel={thinkingLevel}
                   onCycleThinkingLevel={cycleThinkingLevel}
@@ -748,9 +755,7 @@ function App() {
                 onOpenModelSelector={handleOpenModelSelector}
                 modelButtonRef={modelButtonRef}
                 onStop={handleStopStream}
-                autoModeLevel={autoModeLevel}
                 autoModePaused={!!autoModeState?.paused}
-                onCycleAutoMode={cycleAutoModeLevel}
                 onResumeAutoMode={handleResumeAutoMode}
                 thinkingLevel={thinkingLevel}
                 onCycleThinkingLevel={cycleThinkingLevel}

@@ -17,7 +17,6 @@ import type {
   SubagentRun,
 } from "@aurevoy/shared";
 import { MarkdownRenderer } from "./MarkdownRenderer";
-import { GenerativeUiBlock } from "./generative-ui/GenerativeUiBlock";
 import { usePlatform } from "../platform/context";
 import { t } from "../i18n";
 import { ContextMenu } from "./ContextMenu";
@@ -108,7 +107,7 @@ export function detectStepKind(toolName: string): StepKind {
 }
 
 function shouldHideToolFromWorkflow(toolName: string): boolean {
-  return toolName === "attach_content" || toolName === "present_ui" || toolName === "delegate";
+  return toolName === "attach_content" || toolName === "delegate";
 }
 
 /** 生成聚合摘要文本 */
@@ -364,19 +363,30 @@ function subagentRunFromLiveActivity(activity: {
 }): SubagentRun {
   const args = isRecord(activity.args) ? activity.args : {};
   const now = new Date().toISOString();
+  const status: SubagentRun["status"] =
+    activity.status === "error"
+      ? "failed"
+      : activity.status === "ok"
+        ? "completed"
+        : activity.status === "running"
+          ? "running"
+          : "queued";
   return {
     id: `pending-${activity.id}`,
     parentCallId: activity.id,
     role: normalizeSubagentRole(args.role),
     goal: typeof args.goal === "string" ? args.goal : "准备委托子任务",
-    status: activity.status === "error" ? "failed" : "queued",
-    currentActivity: activity.progress?.message ?? "正在创建子代理",
+    status,
+    currentActivity:
+      activity.progress?.message
+      ?? (status === "running" ? "子智能体执行中" : status === "completed" ? "已完成" : "正在创建子智能体"),
     activities: [],
     iterations: 0,
     toolCallCount: 0,
     maxIterations: typeof args.maxIterations === "number" ? args.maxIterations : undefined,
     error: activity.status === "error" ? "子代理未能启动" : undefined,
     createdAt: now,
+    startedAt: now,
   };
 }
 
@@ -1048,14 +1058,12 @@ export function PlanStepGroup({
 
 /* ============ 内容块渲染 ============ */
 
-/** Agent 通过 attach_content / present_ui 工具附加的富内容块。 */
+/** Agent 通过 attach_content 工具附加的富内容块。 */
 function ContentBlockView({
   block,
-  onUiChoice,
   onOpenWorkspacePath,
 }: {
   block: ContentBlock;
-  onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
   /** 在侧边工作台打开文件预览（attach_content 默认行为） */
   onOpenWorkspacePath?: (path: string) => void;
 }) {
@@ -1206,183 +1214,20 @@ function ContentBlockView({
         </>
       );
     }
-    case "ui":
-      return <GenerativeUiBlock block={block} onChoiceSubmit={onUiChoice} />;
     default:
       return null;
   }
 }
-/* ============ 子代理工作组 ============ */
+/* ============ 子代理元数据（扁平活动行用） ============ */
 
-const SUBAGENT_ROLE_META: Record<SubagentRole, { label: string; glyph: string }> = {
-  explore: { label: "侦查", glyph: "E" },
-  research: { label: "调研", glyph: "R" },
-  coder: { label: "编码", glyph: "C" },
-  shell: { label: "验证", glyph: "S" },
-  writer: { label: "写作", glyph: "W" },
-  general: { label: "通用", glyph: "A" },
+const SUBAGENT_ROLE_META: Record<SubagentRole, { label: string }> = {
+  explore: { label: "侦查" },
+  research: { label: "调研" },
+  coder: { label: "编码" },
+  shell: { label: "验证" },
+  writer: { label: "写作" },
+  general: { label: "通用" },
 };
-
-/** @deprecated 主对话改为扁平子代理行；保留供详细模式 */
-export function SubagentWorkgroup({ runs }: { runs: SubagentRun[] }) {
-  const runningCount = runs.filter((run) => run.status === "running" || run.status === "queued").length;
-  const failedCount = runs.filter((run) => run.status === "failed" || run.status === "cancelled").length;
-  const completedCount = runs.filter((run) => run.status === "completed").length;
-  const groupStatus = runningCount > 0 ? "running" : failedCount > 0 ? "failed" : "completed";
-  const statusText = runningCount > 0
-    ? `${runningCount} 个执行中`
-    : failedCount > 0
-      ? `${completedCount} 个完成 · ${failedCount} 个异常`
-      : `${completedCount} 个已完成`;
-
-  return (
-    <section className="subagent-workgroup" data-status={groupStatus} aria-label="子代理协作工作组">
-      <div className="subagent-workgroup-head">
-        <span className="subagent-workgroup-mark" aria-hidden="true">
-          <svg viewBox="0 0 20 20" width="16" height="16" fill="none">
-            <circle cx="6" cy="6" r="2.4" stroke="currentColor" strokeWidth="1.4" />
-            <circle cx="14" cy="6" r="2.4" stroke="currentColor" strokeWidth="1.4" />
-            <circle cx="10" cy="14" r="2.4" stroke="currentColor" strokeWidth="1.4" />
-            <path d="M7.8 7.5l1.2 4M12.2 7.5l-1.2 4M8.4 6h3.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-          </svg>
-        </span>
-        <span className="subagent-workgroup-title">协作工作组</span>
-        <span className="subagent-workgroup-count">{runs.length}</span>
-        <span className="subagent-workgroup-status">{statusText}</span>
-      </div>
-      <div className="subagent-workgroup-list">
-        {runs.map((run) => <SubagentRunCard key={run.id} run={run} />)}
-      </div>
-    </section>
-  );
-}
-
-function SubagentRunCard({ run }: { run: SubagentRun }) {
-  const [open, setOpen] = useState(run.status === "running" || run.status === "failed" || run.status === "cancelled");
-  const [now, setNow] = useState(() => Date.now());
-  const previousStatus = useRef(run.status);
-  const role = SUBAGENT_ROLE_META[run.role];
-  const hasDetails = run.activities.length > 0 || Boolean(run.result || run.error || run.currentActivity);
-
-  useEffect(() => {
-    if (run.status !== "running" && run.status !== "queued") return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [run.status]);
-
-  useEffect(() => {
-    const previous = previousStatus.current;
-    previousStatus.current = run.status;
-    if (run.status === "running" || run.status === "failed" || run.status === "cancelled") {
-      setOpen(true);
-    } else if ((previous === "running" || previous === "queued") && run.status === "completed") {
-      const timer = window.setTimeout(() => setOpen(false), 900);
-      return () => window.clearTimeout(timer);
-    }
-  }, [run.status]);
-
-  const durationMs = run.durationMs ?? elapsedFrom(run.startedAt ?? run.createdAt, now);
-  const statusLabel = subagentStatusLabel(run);
-  const iterationLabel = run.maxIterations
-    ? `${run.iterations}/${run.maxIterations} 轮`
-    : `${run.iterations} 轮`;
-
-  return (
-    <article className="subagent-run-card" data-status={run.status}>
-      <button
-        type="button"
-        className="subagent-run-toggle"
-        onClick={() => hasDetails && setOpen((value) => !value)}
-        aria-expanded={hasDetails ? open : undefined}
-      >
-        <span className="subagent-role-glyph" aria-hidden="true">{role.glyph}</span>
-        <span className="subagent-run-main">
-          <span className="subagent-run-identity">
-            <strong>{role.label}</strong>
-            <span>{run.goal}</span>
-          </span>
-          {(run.status === "running" || run.status === "queued") && run.currentActivity && (
-            <span className="subagent-run-current">{run.currentActivity}</span>
-          )}
-        </span>
-        <span className="subagent-run-metrics">
-          <span>{formatDuration(durationMs)}</span>
-          <span>{iterationLabel}</span>
-          <span>{run.toolCallCount} 次工具</span>
-        </span>
-        <span className="subagent-run-status" data-status={run.status}>
-          <span className="subagent-run-status-dot" aria-hidden="true" />
-          {statusLabel}
-        </span>
-        {hasDetails && (
-          <span className="subagent-run-caret" data-open={open} aria-hidden="true">
-            <svg viewBox="0 0 12 12" width="10" height="10" fill="none">
-              <path d="M4 3L8 6L4 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </span>
-        )}
-      </button>
-
-      <AnimatePresence initial={false}>
-        {open && hasDetails && (
-          <motion.div
-            className="subagent-run-details"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ height: { duration: 0.2, ease: "easeOut" }, opacity: { duration: 0.12 } }}
-          >
-            {run.activities.length > 0 && (
-              <div className="subagent-activity-list" aria-label="子代理工具活动">
-                {run.activities.map((activity) => (
-                  <div className="subagent-activity" data-status={activity.status} key={activity.id}>
-                    <span className="subagent-activity-dot" aria-hidden="true" />
-                    <span className="subagent-activity-name">{activity.toolName}</span>
-                    <span className="subagent-activity-state">
-                      {activity.status === "running" ? "执行中" : activity.status === "failed" ? "失败" : "完成"}
-                    </span>
-                    {activity.durationMs != null && <span>{formatDuration(activity.durationMs)}</span>}
-                    {activity.error && <span className="subagent-activity-error">{activity.error}</span>}
-                  </div>
-                ))}
-              </div>
-            )}
-            {run.error && <div className="subagent-run-error">{run.error}</div>}
-            {run.result && (
-              <div className="subagent-run-result">
-                <div className="subagent-run-result-label">
-                  返回给主代理{run.truncated ? " · 已截断" : ""}
-                </div>
-                <MarkdownRenderer content={run.result} />
-              </div>
-            )}
-            {!run.result && !run.error && run.currentActivity && (
-              <div className="subagent-run-progress">
-                <span className="stream-caret" aria-hidden="true" />
-                <span>{run.currentActivity}</span>
-              </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </article>
-  );
-}
-
-function subagentStatusLabel(run: SubagentRun): string {
-  if (run.status === "queued") return "等待中";
-  if (run.status === "running") return "执行中";
-  if (run.status === "completed") return "已完成";
-  if (run.status === "cancelled") return "已取消";
-  if (run.stopReason === "timeout") return "已超时";
-  if (run.stopReason === "max_iterations") return "轮次耗尽";
-  return "失败";
-}
-
-function elapsedFrom(value: string, now: number): number {
-  const startedAt = Date.parse(value);
-  return Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : 0;
-}
 
 function formatDuration(durationMs: number): string {
   if (durationMs < 1000) return "<1s";
@@ -1583,39 +1428,67 @@ function subagentToActivityRow(run: SubagentRun): ProcessActivityRow {
   const role = SUBAGENT_ROLE_META[run.role]?.label ?? run.role;
   const running = run.status === "running" || run.status === "queued";
   const failed = run.status === "failed" || run.status === "cancelled";
-  const label = running
-    ? `创建中 1 个智能体`
-    : failed
-      ? `智能体失败 · ${role}`
-      : `已创建 1 个智能体`;
+  const goalShort = run.goal?.trim()
+    ? run.goal.trim().length > 40
+      ? `${run.goal.trim().slice(0, 40)}…`
+      : run.goal.trim()
+    : "";
+  // 一行一个子代理；live 与完成后抽屉共用同一套文案
+  let label: string;
+  if (running) {
+    if (run.currentActivity?.trim() && !/创建|准备委托|子智能体执行中/i.test(run.currentActivity)) {
+      label = goalShort
+        ? `${role} · ${truncateTitle(run.currentActivity.trim(), 36)}`
+        : run.currentActivity.trim();
+    } else {
+      label = goalShort ? `运行子智能体 · ${role}：${goalShort}` : `运行子智能体 · ${role}`;
+    }
+  } else if (failed) {
+    label = goalShort ? `子智能体失败 · ${role}：${goalShort}` : `子智能体失败 · ${role}`;
+  } else {
+    label = goalShort ? `已创建子智能体 · ${role}：${goalShort}` : `已创建子智能体 · ${role}`;
+  }
   return {
     id: run.id,
     kind: "subagent",
-    label: run.goal ? `${label} · ${role}` : label,
+    label,
     icon: "agent",
     status: failed ? "failed" : running ? "running" : "success",
-    detail: run.goal || run.currentActivity,
+    detail: run.currentActivity || run.goal,
   };
 }
 
 /**
  * live 状态行：一段时间的行为摘要（灰字），不是工具卡标题。
- * 优先级：phaseDetail → 子代理活动 → 工具 progress / 行为文案 → 短流式句 → 正在思考
+ * 优先级：子代理活动 → 工具 progress / 行为文案 → phaseDetail（非 delegate 噪音）→ 正在思考
  */
 export function resolveLiveStatusText(params: {
   phaseDetail?: string;
   data: AgentRoundData;
 }): string {
-  const phase = normalizeLiveStatus(params.phaseDetail);
-  if (phase) return phase;
-
-  const runningSub = (params.data.subagentRuns ?? []).find(
+  const runningSubs = (params.data.subagentRuns ?? []).filter(
     (r) => r.status === "running" || r.status === "queued",
   );
-  if (runningSub?.currentActivity?.trim()) {
-    return normalizeLiveStatus(runningSub.currentActivity) ?? runningSub.currentActivity.trim();
+  if (runningSubs.length > 1) {
+    return `创建中 ${runningSubs.length} 个智能体`;
   }
-  if (runningSub) return "创建中 1 个智能体";
+  const runningSub = runningSubs[0];
+  if (runningSub) {
+    const role = SUBAGENT_ROLE_META[runningSub.role]?.label ?? runningSub.role;
+    if (runningSub.currentActivity?.trim()) {
+      const act = normalizeLiveStatus(runningSub.currentActivity) ?? runningSub.currentActivity.trim();
+      // 仍是创建阶段的文案时，带上角色
+      if (/创建|准备委托|子智能体执行中/i.test(act)) {
+        return runningSub.goal
+          ? `子智能体 · ${role}：${truncateTitle(runningSub.goal, 40)}`
+          : `子智能体 · ${role} 执行中`;
+      }
+      return act;
+    }
+    return runningSub.goal
+      ? `子智能体 · ${role}：${truncateTitle(runningSub.goal, 40)}`
+      : `子智能体 · ${role} 执行中`;
+  }
 
   const runningStep = params.data.planStepGroups
     .flatMap((g) => g.steps)
@@ -1633,8 +1506,17 @@ export function resolveLiveStatusText(params: {
     return label;
   }
 
+  const phase = normalizeLiveStatus(params.phaseDetail);
+  // 忽略「调用工具 delegate」这类泄漏工具名的 phase 文案
+  if (phase && !isBareDelegatePhaseDetail(phase)) return phase;
+
   // 流式 markdown 走打字机正文，不占用灰字状态行（避免与交付重复）
   return "正在思考";
+}
+
+function isBareDelegatePhaseDetail(text: string): boolean {
+  return /^调用工具\s*delegate\b/i.test(text.trim())
+    || /^calling tool\s*delegate\b/i.test(text.trim());
 }
 
 /** 去掉 "Agent " 前缀等产品噪音，保留行为描述 */
@@ -1644,6 +1526,7 @@ export function normalizeLiveStatus(raw?: string | null): string | null {
   if (!text) return null;
   text = text.replace(/^Agent\s+/i, "");
   if (/^(thinking|模型思考|思考中)/i.test(text)) return "正在思考";
+  if (isBareDelegatePhaseDetail(text)) return null;
   return text;
 }
 
@@ -1710,21 +1593,24 @@ function LiveStatusLine({ text }: { text: string }) {
 }
 
 /**
- * Live 过程块（Codex）：
+ * Live 过程块：
  *   已处理 10s
  *   ────────
- *   Planning web search…   ← 仅在无打字机正文时显示灰字摘要
- *   （正文流式时不再叠「正在思考」）
+ *   运行子智能体 · 调研：…   ← 每个子代理一行，SSE 全程保留
+ *   正在搜索网页…            ← 无活动行时的灰字回落
  */
 function LiveProcessBlock({
   statusText,
+  activityRows = [],
   startedAtMs,
-  showStatus = true,
+  showFallbackStatus = true,
 }: {
   statusText: string;
+  /** 子代理/工具活动行；有则全程展示，完成后由抽屉收纳同一套 rows */
+  activityRows?: ProcessActivityRow[];
   startedAtMs?: number | null;
-  /** false：正文已在打字机输出，只保留「已处理」头，不叠灰字 */
-  showStatus?: boolean;
+  /** 无 activityRows 时是否显示灰字状态（有打字机正文时可关） */
+  showFallbackStatus?: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -1738,20 +1624,37 @@ function LiveProcessBlock({
       ? Math.max(0, now - startedAtMs)
       : null;
   const header = formatProcessedSummaryLabel({ durationMs });
+  const hasRows = activityRows.length > 0;
 
   return (
-    <div className="process-live-block" data-process="live" data-status-visible={showStatus ? "true" : "false"}>
+    <div
+      className="process-live-block"
+      data-process="live"
+      data-status-visible={hasRows || showFallbackStatus ? "true" : "false"}
+    >
       <div className="process-summary-static">{header}</div>
       <div className="process-summary-rule is-always" aria-hidden="true" />
-      {showStatus ? <LiveStatusLine text={statusText} /> : null}
+      {hasRows ? <ProcessActivityList rows={activityRows} live /> : null}
+      {!hasRows && showFallbackStatus ? <LiveStatusLine text={statusText} /> : null}
     </div>
   );
 }
 
-function ProcessActivityList({ rows }: { rows: ProcessActivityRow[] }) {
+function ProcessActivityList({
+  rows,
+  live = false,
+}: {
+  rows: ProcessActivityRow[];
+  /** live 列表不折叠，始终展开 */
+  live?: boolean;
+}) {
   if (rows.length === 0) return null;
   return (
-    <ul className="process-activity-list" aria-label="执行过程">
+    <ul
+      className="process-activity-list"
+      data-live={live ? "true" : undefined}
+      aria-label="执行过程"
+    >
       {rows.map((row) => (
         <li
           key={row.id}
@@ -1826,7 +1729,6 @@ export function AgentRound({
   processStartedAtMs,
   /** 完成后的耗时（ms） */
   processDurationMs,
-  onUiChoice,
   onOpenWorkspacePath,
 }: {
   data: AgentRoundData;
@@ -1837,7 +1739,6 @@ export function AgentRound({
   phaseDetail?: string;
   processStartedAtMs?: number | null;
   processDurationMs?: number | null;
-  onUiChoice?: (payload: { partId: string; actionId: string; selection: unknown }) => void;
   onOpenWorkspacePath?: (path: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1872,20 +1773,23 @@ export function AgentRound({
         <ContentBlockView
           key={block.id}
           block={block}
-          onUiChoice={onUiChoice}
           onOpenWorkspacePath={onOpenWorkspacePath}
         />
       ))}
     </div>
   ) : null;
 
+  // 与完成后抽屉同一套扁平行：每个子代理一行，工具行同列；live 全程展开
+  const activityRows = flattenProcessActivityRows(data);
+
   const processNode = showWorkflow ? (
     busy ? (
       <LiveProcessBlock
         statusText={liveStatusText}
+        activityRows={activityRows}
         startedAtMs={processStartedAtMs}
-        // 正文已流式输出时不再叠「正在思考」；工具运行时仍显示灰字行为摘要
-        showStatus={!showDelivery}
+        // 已有活动行时不靠灰字；无行且未在打字机交付时显示「正在思考」等
+        showFallbackStatus={!showDelivery && activityRows.length === 0}
       />
     ) : hasProcess ? (
       <CompletedProcess

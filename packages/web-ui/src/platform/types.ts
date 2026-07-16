@@ -66,4 +66,39 @@ export interface PlatformAdapter {
    * 已最大化或已足够宽时为 no-op；浏览器可忽略。
    */
   ensureWindowMinWidth?(minWidth: number): void | Promise<void>;
+
+  /** 读取桌面应用版本（Tauri package version）。浏览器可返回 null。 */
+  getAppVersion?(): Promise<string | null>;
+
+  /**
+   * 检查是否有可用的应用更新（GitHub Releases + Tauri updater）。
+   * 无更新时 available=false；浏览器环境应返回 available=false。
+   */
+  checkForAppUpdate?(): Promise<AppUpdateInfo>;
+
+  /**
+   * 下载并安装已检查到的更新，完成后可选择 relaunch。
+   * 仅桌面壳实现；onProgress 可选报告下载进度。
+   */
+  installAppUpdate?(options?: {
+    relaunch?: boolean;
+    onProgress?: (progress: AppUpdateProgress) => void;
+  }): Promise<void>;
+}
+
+/** 应用更新检查结果 */
+export interface AppUpdateInfo {
+  available: boolean;
+  currentVersion?: string;
+  version?: string;
+  notes?: string | null;
+  date?: string | null;
+}
+
+/** 下载进度事件 */
+export interface AppUpdateProgress {
+  event: "Started" | "Progress" | "Finished";
+  contentLength?: number | null;
+  chunkLength?: number;
+  downloaded?: number;
 }

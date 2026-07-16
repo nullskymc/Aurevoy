@@ -6,7 +6,7 @@
 
 Aurevoy 是**本地个人 AI Agent 桌面应用**：用户用自然语言给目标，引擎规划、调工具、持续执行直至完成。
 
-- 版本：v0.6.5-dev（下一发布目标；已发布 tag `v0.6.4`）
+- 版本：v0.6.5（tag `v0.6.5`）
 - 形态：macOS 优先，Windows 扩展时主要重打包壳
 - 原则：真实链路、可恢复、可审计；禁止 Mock / 假能力
 
@@ -73,5 +73,6 @@ npm run docs:dev         # 文档站本地预览
 内联编辑重试/分支/压缩、子代理（并发与工作组 UI）、Skill、网页搜索、多模态、项目工作区、  
 双层预算、记忆向量 + KB RAG、设置/数据管理、CI。
 
-**进行中：** macOS 签名公证与自动更新、隐式 KB 召回、评测与发布体验。  
+**进行中：** macOS Apple 签名与公证、隐式 KB 召回、评测与发布体验。  
+**已交付（分发）：** GitHub Releases 自动更新（Tauri updater + `latest.json`）。维护见 [docs/dev/auto-update.md](./docs/dev/auto-update.md)。  
 清单与验收见 [ROADMAP](./docs/ROADMAP.md)。
