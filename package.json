@@ -29,9 +29,9 @@
     "build:web-ui": "npm run build -w @aurevoy/web-ui",
     "dev:web": "npm run dev:web -w @aurevoy/web-ui",
     "dev:watch-web-ui": "npm run dev -w @aurevoy/web-ui",
-    "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:dev": "npm run dev --prefix docs",
+    "docs:build": "npm run build --prefix docs",
+    "docs:preview": "npm run preview --prefix docs"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",
@@ -40,7 +40,6 @@
     "puppeteer": "^25.3.0",
     "rimraf": "^6.0.1",
     "typescript": "^5.7.2",
-    "vitepress": "^1.6.4",
     "vitest": "^4.1.8"
   },
   "engines": {
