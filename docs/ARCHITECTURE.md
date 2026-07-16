@@ -56,7 +56,7 @@ UI 不持有业务真相：状态来自任务快照 + SSE。
 | `agent/harness-controller.ts` | 建任务、恢复、revert/branch/compact、续聊 |
 | `agent/pi-harness.ts` | Pi 适配与事件映射 |
 | `agent/subagent*.ts` | 隔离子代理、并发、进度快照 |
-| `agent/approval.ts` | auto/plan 与工具权限 |
+| `agent/approval.ts` | Agent 自动执行与 paused 工具门禁 |
 | `agent/context.ts` | 上下文压缩、记忆评分注入 |
 | `llm/pi-provider.ts` | Provider / 模型映射 |
 | `tool/` | Effect 工具框架 + 领域工具 + MCP |

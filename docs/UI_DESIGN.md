@@ -24,7 +24,7 @@
 | 侧栏 | 新对话、历史（时间倒序）、设置/记忆/搜索等真入口 | 统计仪表盘、装饰卡片 |
 | 主区空态 | 引导句 + 建议 prompt 卡 + 大 Composer | 教程墙 |
 | 主区对话 | 用户右胶囊、裸 Markdown 交付、过程状态流/扁平列表 | 运行中默认展开工具卡时间轴；常驻「运行详情」侧栏 |
-| Composer | Enter 发送、模型选择、auto/plan、busy 时停止 | 未配置时仍假装可聊 |
+| Composer | Enter 发送、模型选择、Agent 状态、busy 时停止 | 未配置时仍假装可聊 |
 | 工作台 | 固定文件树 + 打开文档/产物预览 | 把树做成页签；叫 inspector |
 | 输出栏 | 右侧 **grid 列**（与工作台同列位、互斥）；卡式视觉，主对话不压在其下 | absolute 叠层挡内容 |
 
@@ -63,7 +63,7 @@
 
 ### 编辑重试（一步）
 
-1. 用户消息铅笔 → 气泡内联改文案（Codex 式：取消 / 发送）。  
+1. 用户消息铅笔 → 气泡内联改文案（取消 / 发送）。  
 2. 「发送」= `revert`（默认 `code_and_conv`）+ 立刻 `messages`（编辑稿 + 原附件）。  
 3. 取消只关编辑态，不截断历史。  
 4. 无 Composer「编辑模式」、不用 `removedContent` 覆盖稿；UI 不暴露恢复范围切换。  
@@ -79,7 +79,7 @@
 ### 多模态
 
 - 拖拽/粘贴图片 → 上传 → 消息 attachments；由当前选择且支持图片输入的模型处理。
-- 气泡内缩略图 + 查看器；`attach_content` / `present_ui` 进对话与工作台。
+- 气泡内缩略图 + 查看器；`attach_content` 进对话与工作台。
 
 ## 组件边界（web-ui）
 
@@ -87,7 +87,7 @@
 |---|---|
 | `App` | 视图切换、全局状态拼装 |
 | `Conversation` / `Timeline` | 轮次、工具、子代理、失败卡 |
-| `Composer` | 输入、附件、模型、auto/plan、斜杠命令 |
+| `Composer` | 输入、附件、模型、Agent 状态、斜杠命令 |
 | `WorkbenchPanel` | 文件树与预览 |
 | `SettingsPanel` | 真设置（LLM 槽位、工具、MCP、KB、搜索…） |
 | hooks | SSE、任务控制、设置、附件 |
@@ -97,7 +97,7 @@ API 只经 `packages/web-ui/src/api/`。
 ## 视觉纪律
 
 - 浅色优先；主列限宽；用户右胶囊、交付左裸排。  
-- **Mist Teal** 默认色板：`--accent` `#3d7a6e`（暗色 `#6fb5a6`）；阴影/气泡/软底带绿相，避免 Codex 纯灰+近黑主按钮。  
+- **Mist Teal** 默认色板：`--accent` `#3d7a6e`（暗色 `#6fb5a6`）；阴影/气泡/软底带绿相，避免纯灰底 + 近黑主按钮。  
 - **主色贯穿**：logo、选中态（`--selection-bg`）、Composer 聚焦环、发送钮、空态建议卡图标（同色系明度差）；侧栏「新对话」与其它入口同款，不做特殊强调。  
 - 字号、间距、圆角用 CSS token（含 `--ui-radius-xl`、`--composer-shadow`、`--user-bubble-*`）。  
 - 动效克制：状态流 fade、流式光标；尊重 `prefers-reduced-motion`。
