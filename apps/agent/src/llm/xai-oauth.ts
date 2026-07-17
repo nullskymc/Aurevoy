@@ -10,6 +10,7 @@ import type {
   OAuthAuth,
   OAuthCredential,
 } from '@earendil-works/pi-ai';
+import { formatFetchError } from '../runtime/outbound-proxy.js';
 
 const XAI_OAUTH_ISSUER = 'https://auth.x.ai';
 const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
@@ -103,18 +104,26 @@ function toOauthCredential(payload: TokenResponse): OAuthCredential {
 }
 
 async function requestDeviceCode(signal?: AbortSignal): Promise<DeviceCodeResponse> {
-  const res = await fetch(XAI_OAUTH_DEVICE_CODE_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json',
-    },
-    body: new URLSearchParams({
-      client_id: XAI_OAUTH_CLIENT_ID,
-      scope: XAI_OAUTH_SCOPE,
-    }),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(XAI_OAUTH_DEVICE_CODE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      },
+      body: new URLSearchParams({
+        client_id: XAI_OAUTH_CLIENT_ID,
+        scope: XAI_OAUTH_SCOPE,
+      }),
+      signal,
+    });
+  } catch (err) {
+    throw new Error(
+      `xAI device-code 网络失败（无法访问 auth.x.ai）。`
+      + `若使用系统代理，请在设置 → 通用 → 出站代理中填写同一代理。详情：${formatFetchError(err)}`,
+    );
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(

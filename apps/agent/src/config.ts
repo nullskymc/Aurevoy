@@ -117,6 +117,16 @@ export const config = {
     httpFetchPrivateHostAllowlist: [] as string[],
   },
 
+  /**
+   * Agent 出站 HTTP(S) 代理（Node fetch / undici）。
+   * 设置页写入；不读系统代理。保存后经 setGlobalDispatcher 立即生效。
+   */
+  proxy: {
+    enabled: false,
+    url: '',
+    noProxy: '127.0.0.1,localhost,::1',
+  },
+
   python: {
     venvDir: resolve(homedir(), '.aurevoy', 'venv'),
     userPath: '',

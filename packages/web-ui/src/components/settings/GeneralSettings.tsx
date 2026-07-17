@@ -3,7 +3,7 @@ import type { DataStatusResponse, RuntimeSettings } from "@aurevoy/shared";
 import type { AppUpdateInfo } from "../../platform/types";
 import { usePlatform } from "../../platform/context";
 import { t } from "../../i18n";
-import { setBaseUrl } from "../../api";
+import { setBaseUrl, testOutboundProxy } from "../../api";
 import type { WorkMode } from "../../app/types";
 import type { SettingsDraft } from "./types";
 import {
@@ -54,6 +54,10 @@ export function GeneralSettings({
   const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [updateState, setUpdateState] = useState<UpdateUiState>({ kind: "idle" });
+  const [proxyTestState, setProxyTestState] = useState<
+    "idle" | "testing" | "ok" | "fail"
+  >("idle");
+  const [proxyTestDetail, setProxyTestDetail] = useState<string | null>(null);
   const canCheckUpdate = typeof platform.checkForAppUpdate === "function";
 
   useEffect(() => {
@@ -81,6 +85,28 @@ export function GeneralSettings({
       }
     } catch {
       setTestState('fail');
+    }
+  }
+
+  async function handleTestProxy() {
+    setProxyTestState("testing");
+    setProxyTestDetail(null);
+    try {
+      const result = await testOutboundProxy();
+      if (result.ok) {
+        setProxyTestState("ok");
+        setProxyTestDetail(
+          t("settings.proxyTestOk")
+            .replace("{ms}", String(result.latencyMs))
+            .replace("{status}", String(result.status ?? "")),
+        );
+      } else {
+        setProxyTestState("fail");
+        setProxyTestDetail(result.error || t("settings.proxyTestFail"));
+      }
+    } catch (err) {
+      setProxyTestState("fail");
+      setProxyTestDetail(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -282,6 +308,74 @@ export function GeneralSettings({
             />
           </div>
         </div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.proxyGroup")}>
+        <SettingsNoteRow
+          title={t("settings.proxyGroup")}
+          description={t("settings.proxyGroupDesc")}
+        />
+        <SettingsSwitchRow
+          title={t("settings.proxyEnabledTitle")}
+          description={t("settings.proxyEnabledDesc")}
+          checked={draft.proxyEnabled}
+          onChange={(checked) => onDraftChange({ ...draft, proxyEnabled: checked })}
+        />
+        <SettingsActionRow
+          title={t("settings.proxyUrlTitle")}
+          description={t("settings.proxyUrlDesc")}
+          control={
+            <input
+              className="settings-inline-input"
+              placeholder="http://127.0.0.1:7890"
+              value={draft.proxyUrl}
+              onChange={(event) =>
+                onDraftChange({ ...draft, proxyUrl: event.currentTarget.value })
+              }
+            />
+          }
+        />
+        <SettingsActionRow
+          title={t("settings.proxyNoProxyTitle")}
+          description={t("settings.proxyNoProxyDesc")}
+          control={
+            <input
+              className="settings-inline-input"
+              placeholder="127.0.0.1,localhost,::1"
+              value={draft.proxyNoProxy}
+              onChange={(event) =>
+                onDraftChange({ ...draft, proxyNoProxy: event.currentTarget.value })
+              }
+            />
+          }
+        />
+        <SettingsActionRow
+          title={t("settings.proxyTestTitle")}
+          description={
+            proxyTestDetail
+              ?? (proxyTestState === "testing"
+                ? t("settings.proxyTestRunning")
+                : t("settings.proxyTestDesc"))
+          }
+          control={
+            <button
+              type="button"
+              className="settings-secondary-btn"
+              disabled={proxyTestState === "testing" || saving}
+              onClick={() => void handleTestProxy()}
+            >
+              {proxyTestState === "testing"
+                ? t("settings.proxyTestRunning")
+                : t("settings.proxyTestButton")}
+            </button>
+          }
+        />
+        {proxyTestState === "ok" && proxyTestDetail && (
+          <SettingsNoteRow title={t("settings.proxyTestSuccessTitle")} description={proxyTestDetail} />
+        )}
+        {proxyTestState === "fail" && proxyTestDetail && (
+          <SettingsNoteRow title={t("settings.proxyTestFailTitle")} description={proxyTestDetail} />
+        )}
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.general")}>

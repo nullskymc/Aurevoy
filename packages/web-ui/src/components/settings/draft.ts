@@ -35,5 +35,8 @@ export function makeDraft(settings: RuntimeSettings | null): SettingsDraft {
     searchBaseUrl: settings?.search?.baseUrl ?? "",
     searchApiKey: "",
     logLevel: settings?.logging?.level ?? "info",
+    proxyEnabled: settings?.proxy?.enabled ?? false,
+    proxyUrl: settings?.proxy?.url ?? "",
+    proxyNoProxy: settings?.proxy?.noProxy ?? "127.0.0.1,localhost,::1",
   };
 }

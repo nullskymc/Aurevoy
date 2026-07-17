@@ -1324,6 +1324,17 @@ export interface RuntimeSettings {
     /** 当前日志文件路径（只读展示） */
     logFile: string;
   };
+  /**
+   * Agent 出站 HTTP(S) 代理（OAuth / LLM / 搜索等 Node fetch）。
+   * 与系统代理无关：须在此填写或设置 HTTP(S)_PROXY 环境变量。
+   */
+  proxy: {
+    enabled: boolean;
+    /** 例如 http://127.0.0.1:7890 */
+    url: string;
+    /** 逗号分隔绕过列表，默认含 localhost */
+    noProxy: string;
+  };
 }
 
 export interface UpdateRuntimeSettingsRequest {
@@ -1414,6 +1425,12 @@ export interface UpdateRuntimeSettingsRequest {
   /** 运维日志；仅 level 可写，路径只读 */
   logging?: Partial<{
     level: LogLevel;
+  }>;
+  /** Agent 出站代理；保存后立即对全局 fetch 生效 */
+  proxy?: Partial<{
+    enabled: boolean;
+    url: string;
+    noProxy: string;
   }>;
 }
 

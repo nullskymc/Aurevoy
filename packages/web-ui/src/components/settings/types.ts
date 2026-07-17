@@ -54,6 +54,10 @@ export interface SettingsDraft {
   searchApiKey: string;
   /** 引擎运维日志等级 */
   logLevel: string;
+  /** Agent 出站 HTTP(S) 代理 */
+  proxyEnabled: boolean;
+  proxyUrl: string;
+  proxyNoProxy: string;
 }
 
 export interface SettingsPanelProps {

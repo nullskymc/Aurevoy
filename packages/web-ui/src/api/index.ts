@@ -435,6 +435,30 @@ export async function updateSettings(
   return res.json();
 }
 
+/** 探测 agent 出站网络（使用当前已保存并生效的代理配置） */
+export async function testOutboundProxy(probeUrl?: string): Promise<{
+  ok: boolean;
+  status?: number;
+  latencyMs: number;
+  error?: string;
+}> {
+  const res = await fetch(`${BASE_URL}/api/settings/proxy/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(probeUrl ? { probeUrl } : {}),
+  });
+  if (!res.ok) {
+    const message = await readErrorMessage(res);
+    return { ok: false, latencyMs: 0, error: message };
+  }
+  return res.json() as Promise<{
+    ok: boolean;
+    status?: number;
+    latencyMs: number;
+    error?: string;
+  }>;
+}
+
 export async function listProviderModels(): Promise<string[]> {
   const res = await fetch(`${BASE_URL}/api/settings/models`);
   if (!res.ok) throw new Error(`list provider models failed: ${await readErrorMessage(res)}`);

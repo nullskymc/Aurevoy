@@ -422,6 +422,23 @@ export async function buildServer(externalLogger?: Logger) {
     }
   });
 
+  /** 探测 agent 出站网络（应用当前代理设置后的全局 fetch） */
+  app.post<{ Body?: { probeUrl?: string } }>(
+    '/api/settings/proxy/test',
+    async (req, reply) => {
+      try {
+        const { testOutboundProxy } = await import('./runtime/outbound-proxy.js');
+        const result = await testOutboundProxy({
+          probeUrl: req.body?.probeUrl,
+        });
+        return reply.send(result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ ok: false, latencyMs: 0, error: message });
+      }
+    },
+  );
+
   // ---- LLM OAuth（订阅登录）----
 
   app.post<{ Body: OauthLoginStartRequest }>(

@@ -161,6 +161,11 @@ export function useSettingsController({
       logging: {
         level: draft.logLevel as "trace" | "debug" | "info" | "warn" | "error" | "fatal",
       },
+      proxy: {
+        enabled: draft.proxyEnabled,
+        url: draft.proxyUrl,
+        noProxy: draft.proxyNoProxy,
+      },
     };
     setSettingsSaving(true);
     void updateSettings(body)
