@@ -295,8 +295,8 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
     const message = err instanceof Error ? err.message : String(err);
     const isConfigError =
       message.includes('未配置 LLM') ||
-      message.includes('未支持的 Provider') ||
-      message.includes('未配置 LLM');
+      message.includes('未选择模型') ||
+      message.includes('未支持的 Provider');
     finishFailed(task, err, isConfigError ? 'configuration' : 'unknown');
   }
 }

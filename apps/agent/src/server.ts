@@ -86,7 +86,7 @@ import { createToolContext, initializeUnifiedToolFramework } from './tool/index.
 import { skillRegistry } from './skills/registry.js';
 import { installFromGit, uninstallSkill } from './skills/installer.js';
 import { reloadSkillsAndTools } from './skills/reload.js';
-import { getPiProviderName, listPiProviderModels } from './llm/pi-provider.js';
+import { getLlmReadiness, getPiProviderName, listPiProviderModels } from './llm/pi-provider.js';
 import {
   cancelOauthSession,
   getOauthSession,
@@ -149,11 +149,13 @@ export async function buildServer(externalLogger?: Logger) {
 
   // 健康检查
   app.get('/api/health', async (): Promise<HealthResponse> => {
+    const llm = getLlmReadiness();
     return {
       status: 'ok',
       version: '0.6.6',
       uptimeMs: Date.now() - startedAt,
       provider: getPiProviderName(),
+      llm,
       contextCharBudget: config.agent.contextCharBudget,
       contextTokenBudget: config.agent.contextTokenBudget,
     };

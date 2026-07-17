@@ -27,6 +27,7 @@ import { useSkills } from "./hooks/useSkills";
 import { useWorkbenchTabs } from "./hooks/useWorkbenchTabs";
 import { useTaskController } from "./hooks/useTaskController";
 import { Composer, nextThinkingLevel, type ThinkingUILevel } from "./components/Composer";
+import { SetupPanel } from "./components/SetupPanel";
 import { ApprovalsDock, Conversation } from "./components/Conversation";
 import { AppTopBar } from "./components/AppTopBar";
 import { ModelSelectorDrawer } from "./components/ModelSelectorDrawer";
@@ -675,6 +676,13 @@ function App() {
                     {t("context.label")} ~{formatContextK(currentTask.contextTokens ?? 0)} / {formatContextK(health.contextTokenBudget)} {t("context.unit")}
                   </div>
                 )}
+                <SetupPanel
+                  variant="dock"
+                  online={online}
+                  llm={health?.llm}
+                  onConnectProvider={() => handleOpenSettings("provider")}
+                  onSelectModel={handleOpenModelSelector}
+                />
                 <Composer
                   value={goal}
                   busy={busy}
@@ -687,6 +695,7 @@ function App() {
                   onPasteFiles={(files) => void handlePasteFiles(files)}
                   onPickAttachments={() => void handlePickAttachments()}
                   provider={health?.provider}
+                  llm={health?.llm}
                   onChange={setGoal}
                   onSubmit={handleComposerSubmit}
                   onOpenModelSelector={handleOpenModelSelector}
@@ -714,30 +723,40 @@ function App() {
           ) : (
             <div className="hero">
               <h1 className="hero-title">{t("hero.title")}</h1>
-              <div className="hero-suggestions" role="list">
-                {(
-                  [
-                    ["hero.suggestion.explore", "hero.suggestion.explorePrompt", "explore"],
-                    ["hero.suggestion.build", "hero.suggestion.buildPrompt", "build"],
-                    ["hero.suggestion.review", "hero.suggestion.reviewPrompt", "review"],
-                    ["hero.suggestion.fix", "hero.suggestion.fixPrompt", "fix"],
-                  ] as const
-                ).map(([labelKey, promptKey, kind]) => (
-                  <button
-                    key={labelKey}
-                    type="button"
-                    role="listitem"
-                    className="hero-suggestion-card"
-                    data-kind={kind}
-                    onClick={() => setGoal(t(promptKey))}
-                  >
-                    <span className="hero-suggestion-icon" aria-hidden="true">
-                      <HeroSuggestionIcon kind={kind} />
-                    </span>
-                    <span className="hero-suggestion-label">{t(labelKey)}</span>
-                  </button>
-                ))}
-              </div>
+              {online === true && health?.llm && !health.llm.ready ? (
+                <SetupPanel
+                  variant="hero"
+                  online={online}
+                  llm={health.llm}
+                  onConnectProvider={() => handleOpenSettings("provider")}
+                  onSelectModel={handleOpenModelSelector}
+                />
+              ) : (
+                <div className="hero-suggestions" role="list">
+                  {(
+                    [
+                      ["hero.suggestion.explore", "hero.suggestion.explorePrompt", "explore"],
+                      ["hero.suggestion.build", "hero.suggestion.buildPrompt", "build"],
+                      ["hero.suggestion.review", "hero.suggestion.reviewPrompt", "review"],
+                      ["hero.suggestion.fix", "hero.suggestion.fixPrompt", "fix"],
+                    ] as const
+                  ).map(([labelKey, promptKey, kind]) => (
+                    <button
+                      key={labelKey}
+                      type="button"
+                      role="listitem"
+                      className="hero-suggestion-card"
+                      data-kind={kind}
+                      onClick={() => setGoal(t(promptKey))}
+                    >
+                      <span className="hero-suggestion-icon" aria-hidden="true">
+                        <HeroSuggestionIcon kind={kind} />
+                      </span>
+                      <span className="hero-suggestion-label">{t(labelKey)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <Composer
                 value={goal}
                 busy={busy}
@@ -750,6 +769,7 @@ function App() {
                 onPasteFiles={(files) => void handlePasteFiles(files)}
                 onPickAttachments={() => void handlePickAttachments()}
                 provider={health?.provider}
+                llm={health?.llm}
                 onChange={setGoal}
                 onSubmit={handleComposerSubmit}
                 onOpenModelSelector={handleOpenModelSelector}

@@ -31,7 +31,7 @@ export function useSettingsController({
   runtimeSettings,
   setDataStatus,
   setFetchingModels,
-  setHealth,
+  setHealth: _setHealth,
   setMcpServers,
   setMemories,
   setNotice,
@@ -75,6 +75,19 @@ export function useSettingsController({
     }
   }
 
+  /**
+   * 写完 LLM 相关设置后必须整份拉 health：
+   * 只改 provider 字符串会留下陈旧的 health.llm（Setup 卡在「连接提供商」）。
+   */
+  async function applyLlmSettingsResult(
+    next: RuntimeSettings,
+    options?: { notice?: string },
+  ): Promise<void> {
+    setRuntimeSettings(next);
+    if (options?.notice) setNotice(options.notice);
+    await Promise.all([refreshSettings(), refreshRuntime()]);
+  }
+
   /** Provider 连接：只写密钥 / Base URL / maxTokens，不改默认模型或启用列表。 */
   function handleSaveProviderConnection(
     draft: SettingsDraft,
@@ -104,16 +117,11 @@ export function useSettingsController({
     };
     setSettingsSaving(true);
     return updateSettings(body)
-      .then((next) => {
-        setRuntimeSettings(next);
-        setHealth((previous) =>
-          previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
-        );
-        if (!options?.silent) {
-          setNotice(t("notice.settingsSaved"));
-        }
-        return refreshSettings();
-      })
+      .then((next) =>
+        applyLlmSettingsResult(next, {
+          notice: options?.silent ? undefined : t("notice.settingsSaved"),
+        }),
+      )
       .catch((err) => {
         setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`);
       })
@@ -187,14 +195,9 @@ export function useSettingsController({
         ) {
           throw new Error(t("notice.proxySaveEmpty"));
         }
-        setRuntimeSettings(next);
-        setHealth((previous) =>
-          previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
-        );
-        if (!options?.silent) {
-          setNotice(t("notice.settingsSaved"));
-        }
-        return refreshSettings();
+        return applyLlmSettingsResult(next, {
+          notice: options?.silent ? undefined : t("notice.settingsSaved"),
+        });
       })
       .then(() => undefined)
       .catch((err) => {
@@ -210,14 +213,9 @@ export function useSettingsController({
     setSettingsSaving(true);
     // 跨 provider 切换：写入 provider + model；后端会激活槽位、持久化，并自动启用该模型
     void updateSettings({ llm: { provider: draft.provider, model: draft.model } })
-      .then((next) => {
-        setRuntimeSettings(next);
-        setHealth((previous) =>
-          previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
-        );
+      .then(async (next) => {
         onModelSaved?.();
-        setNotice(t("notice.modelSwitched"));
-        return Promise.all([refreshSettings(), refreshRuntime()]);
+        await applyLlmSettingsResult(next, { notice: t("notice.modelSwitched") });
       })
       .catch((err) => setNotice(`${t("notice.switchModelFailed")}${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setSettingsSaving(false));
@@ -314,11 +312,9 @@ export function useSettingsController({
     const ensureActive =
       runtimeSettings?.llm.provider === provider
         ? Promise.resolve(runtimeSettings)
-        : updateSettings({ llm: { provider } }).then((next) => {
+        : updateSettings({ llm: { provider } }).then(async (next) => {
             setRuntimeSettings(next);
-            setHealth((previous) =>
-              previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
-            );
+            await refreshRuntime();
             return next;
           });
 
@@ -356,16 +352,7 @@ export function useSettingsController({
   function handleSaveSlotDefaultModel(provider: string, model: string): void {
     setSettingsSaving(true);
     void updateSettings({ llm: { slotModel: { provider, model } } })
-      .then((next) => {
-        setRuntimeSettings(next);
-        if (next.llm.provider === provider) {
-          setHealth((previous) =>
-            previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
-          );
-        }
-        setNotice(t("notice.settingsSaved"));
-        return refreshSettings();
-      })
+      .then((next) => applyLlmSettingsResult(next, { notice: t("notice.settingsSaved") }))
       .catch((err) => setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setSettingsSaving(false));
   }
@@ -378,14 +365,9 @@ export function useSettingsController({
   function handleRemoveProvider(provider: string): void {
     setSettingsSaving(true);
     void updateSettings({ llm: { removeProvider: provider } })
-      .then((next) => {
-        setRuntimeSettings(next);
-        setHealth((previous) =>
-          previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
-        );
-        setNotice(t("notice.providerDisconnected"));
-        return refreshSettings();
-      })
+      .then((next) =>
+        applyLlmSettingsResult(next, { notice: t("notice.providerDisconnected") }),
+      )
       .catch((err) =>
         setNotice(`${t("notice.disconnectProviderFailed")}${err instanceof Error ? err.message : String(err)}`),
       )

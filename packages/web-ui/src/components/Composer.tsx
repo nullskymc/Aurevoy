@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { t, type TranslationKey } from "../i18n";
 import { usePlatform } from "../platform/context";
 import { ImageViewer } from "./ImageViewer";
-import type { MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
+import type { LlmReadiness, LlmReadyState, MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
 import { formatModelEffortChipLabel } from "./ModelSelectorDrawer";
 import "./Composer.css";
 
@@ -26,7 +26,13 @@ interface ComposerProps {
   online: boolean | null;
   /** hero: 居中空状态的大输入框；docked: 对话底部的停靠输入框 */
   variant?: "hero" | "docked";
+  /**
+   * 兼容 health.provider：`provider:model` 或 `unconfigured`。
+   * 细粒度就绪优先用 llm。
+   */
   provider?: string;
+  /** health.llm：按缺项引导（凭证 / 模型） */
+  llm?: LlmReadiness | null;
   projectName?: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
@@ -61,6 +67,7 @@ export function Composer({
   online,
   variant = "hero",
   provider,
+  llm,
   projectName,
   skills,
   attachments,
@@ -83,18 +90,41 @@ export function Composer({
   const [cmdIndex, setCmdIndex] = useState(0);
   const [isDragOver, setIsDragOver] = useState(false);
   const [viewingImage, setViewingImage] = useState<string | null>(null);
-  const providerConfigured = provider !== "unconfigured";
-  const canSend = value.trim().length > 0 && !busy && online !== false && providerConfigured;
+  const llmState: LlmReadyState | "offline" | "unknown" = (() => {
+    if (online === false) return "offline";
+    if (llm?.state) return llm.state;
+    if (provider === "unconfigured") return "no_credential";
+    if (provider && provider !== "unconfigured") return "ready";
+    return "unknown";
+  })();
+  const llmReady = llmState === "ready";
+  const canSend = value.trim().length > 0 && !busy && online !== false && llmReady;
   /** health.provider 形如 "openai:gpt-4o-mini" 或纯 provider id */
-  const providerId = provider && provider !== "unconfigured"
-    ? (provider.includes(":") ? provider.split(":")[0]! : provider)
-    : null;
-  const modelId = provider && provider.includes(":")
-    ? provider.slice(provider.indexOf(":") + 1)
-    : null;
-  const providerChipLabel = !providerId
-    ? (provider === "unconfigured" ? t("composer.providerUnconfigured") : t("composer.providerDisconnected"))
-    : formatModelEffortChipLabel(modelId ?? undefined, thinkingLevel);
+  const providerId = llm?.provider
+    || (provider && provider !== "unconfigured"
+      ? (provider.includes(":") ? provider.split(":")[0]! : provider)
+      : null);
+  const modelId = llm?.model
+    || (provider && provider.includes(":")
+      ? provider.slice(provider.indexOf(":") + 1)
+      : null);
+  const providerChipLabel = (() => {
+    if (llmState === "offline" || online === null) {
+      return online === false ? t("composer.providerDisconnected") : t("composer.engineChecking");
+    }
+    if (llmState === "no_provider" || llmState === "no_credential") {
+      return t("composer.providerUnconfigured");
+    }
+    if (llmState === "no_model") {
+      return t("composer.providerNoModel");
+    }
+    if (!providerId || !modelId) {
+      return provider === "unconfigured"
+        ? t("composer.providerUnconfigured")
+        : t("composer.providerDisconnected");
+    }
+    return formatModelEffortChipLabel(modelId, thinkingLevel);
+  })();
 
   const slashCommands = useMemo<SlashCommand[]>(() => {
     const commands: SlashCommand[] = [
@@ -388,7 +418,11 @@ export function Composer({
                 ref={modelButtonRef}
                 type="button"
                 className="composer-chip composer-model-chip composer-model-effort-chip"
-                title={provider && provider !== "unconfigured" ? `${provider} · ${thinkingLevel}` : providerChipLabel}
+                title={
+                  llmReady && providerId && modelId
+                    ? `${providerId}:${modelId} · ${thinkingLevel}`
+                    : providerChipLabel
+                }
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={onOpenModelSelector}
               >
@@ -408,9 +442,13 @@ export function Composer({
                       ? t("composer.sendHintEmpty")
                       : online === false
                         ? t("composer.sendHintOffline")
-                        : !providerConfigured
-                          ? t("composer.sendHintUnconfigured")
-                          : t("composer.sendHintReady")
+                        : llmState === "no_model"
+                          ? t("composer.sendHintNoModel")
+                          : llmState === "no_credential" || llmState === "no_provider"
+                            ? t("composer.sendHintUnconfigured")
+                            : !llmReady
+                              ? t("composer.sendHintUnconfigured")
+                              : t("composer.sendHintReady")
                 }
               >
                 {busy ? <StopDot /> : <ArrowUpIcon />}
