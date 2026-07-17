@@ -13,9 +13,11 @@ describe('validateProxyUrl', () => {
     );
   });
 
-  it('rejects empty, non-http schemes, and invalid URLs', () => {
+  it('rejects socks5 and other schemes', () => {
+    expect(() => validateProxyUrl('socks5://127.0.0.1:1080')).toThrow(/SOCKS5|HTTP/i);
+    expect(() => validateProxyUrl('socks://127.0.0.1:1080')).toThrow(/SOCKS5|HTTP/i);
+    expect(() => validateProxyUrl('ftp://127.0.0.1:21')).toThrow(/http/i);
     expect(() => validateProxyUrl('')).toThrow(/不能为空|empty/i);
-    expect(() => validateProxyUrl('socks5://127.0.0.1:1080')).toThrow(/http/i);
     expect(() => validateProxyUrl('not-a-url')).toThrow();
   });
 });

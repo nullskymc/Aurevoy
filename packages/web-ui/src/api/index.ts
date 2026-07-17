@@ -441,6 +441,9 @@ export async function testOutboundProxy(probeUrl?: string): Promise<{
   status?: number;
   latencyMs: number;
   error?: string;
+  viaProxy?: string | null;
+  proxyEnabled?: boolean;
+  bodySnippet?: string;
 }> {
   const res = await fetch(`${BASE_URL}/api/settings/proxy/test`, {
     method: 'POST',
@@ -456,6 +459,9 @@ export async function testOutboundProxy(probeUrl?: string): Promise<{
     status?: number;
     latencyMs: number;
     error?: string;
+    viaProxy?: string | null;
+    proxyEnabled?: boolean;
+    bodySnippet?: string;
   }>;
 }
 

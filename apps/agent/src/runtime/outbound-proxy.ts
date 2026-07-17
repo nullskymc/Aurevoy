@@ -1,9 +1,9 @@
 /**
  * Agent 出站 HTTP(S) 代理。
  *
- * Node 内置 fetch（undici）默认不走 Windows「系统代理」。
- * 设置页配置后：写入 HTTP(S)_PROXY + 安装 EnvHttpProxyAgent 全局 dispatcher，
- * 使 OAuth / LLM / 搜索等 fetch 走同一代理。
+ * 仅支持 HTTP 代理（`http://127.0.0.1:7890` 等）。
+ * 通过 undici `EnvHttpProxyAgent` + `setGlobalDispatcher` 作用于 Node 内置 fetch。
+ * 不支持 SOCKS5（undici 实现不稳定，请用 Clash 的 HTTP 入站端口）。
  */
 import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
 import { getLogger } from '../logging/logger.js';
@@ -16,15 +16,24 @@ export type OutboundProxyConfig = {
 
 const DEFAULT_NO_PROXY = '127.0.0.1,localhost,::1';
 
+let proxyActive = false;
+let proxyUrlRedacted: string | null = null;
+
 /** 上次由本模块写入的 env，便于关闭时只清理自己设的值 */
-let appliedEnv: { http?: string; https?: string; noProxy?: string; useEnv?: string } | null =
-  null;
+let appliedEnv: {
+  http?: string;
+  https?: string;
+  noProxy?: string;
+  useEnv?: string;
+} | null = null;
 
 export function defaultNoProxy(): string {
   return DEFAULT_NO_PROXY;
 }
 
-/** 校验代理 URL：仅允许 http(s)://host:port[…] */
+/**
+ * 校验代理 URL：仅允许 http:// 或 https://
+ */
 export function validateProxyUrl(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -36,8 +45,16 @@ export function validateProxyUrl(raw: string): string {
   } catch {
     throw new Error(`代理地址无效：${trimmed}`);
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('代理地址须以 http:// 或 https:// 开头（例如 http://127.0.0.1:7890）');
+  const protocol = parsed.protocol.toLowerCase();
+  if (protocol === 'socks5:' || protocol === 'socks:') {
+    throw new Error(
+      '已不再支持 SOCKS5。请改用 HTTP 代理地址（例如 Clash 的 http://127.0.0.1:7890）',
+    );
+  }
+  if (protocol !== 'http:' && protocol !== 'https:') {
+    throw new Error(
+      '代理地址须以 http:// 或 https:// 开头（例如 http://127.0.0.1:7890）',
+    );
   }
   if (!parsed.hostname) {
     throw new Error('代理地址缺少主机名');
@@ -55,8 +72,9 @@ export function normalizeNoProxy(raw: string | undefined): string {
 }
 
 /**
- * 应用出站代理到全局 fetch。
+ * 应用出站 HTTP 代理到全局 fetch。
  * enabled=false 或 url 空：恢复直连。
+ * 若 URL 为已废弃的 socks5://，记录警告并回落直连（避免启动崩溃）。
  */
 export function applyOutboundProxy(settings: OutboundProxyConfig): void {
   const log = getLogger('outbound-proxy');
@@ -65,14 +83,28 @@ export function applyOutboundProxy(settings: OutboundProxyConfig): void {
   if (!enabled) {
     clearProxyEnv();
     setGlobalDispatcher(new Agent());
+    proxyActive = false;
+    proxyUrlRedacted = null;
     log.info('出站代理已关闭（直连）');
     return;
   }
 
-  const url = validateProxyUrl(settings.url);
-  const noProxy = normalizeNoProxy(settings.noProxy);
+  let url: string;
+  try {
+    url = validateProxyUrl(settings.url);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    clearProxyEnv();
+    setGlobalDispatcher(new Agent());
+    proxyActive = false;
+    proxyUrlRedacted = null;
+    log.warn({ err: message, url: settings.url }, '出站代理配置无效，已回落直连');
+    return;
+  }
 
-  // 同步 env：部分库 / NODE_USE_ENV_PROXY 路径会读这些变量
+  const noProxy = normalizeNoProxy(settings.noProxy);
+  clearProxyEnv();
+
   process.env.HTTP_PROXY = url;
   process.env.HTTPS_PROXY = url;
   process.env.http_proxy = url;
@@ -95,14 +127,13 @@ export function applyOutboundProxy(settings: OutboundProxyConfig): void {
     }),
   );
 
-  log.info({ proxy: redactProxyUrl(url), noProxy }, '出站代理已启用');
+  proxyActive = true;
+  proxyUrlRedacted = redactProxyUrl(url);
+  log.info({ proxy: proxyUrlRedacted, noProxy }, '出站 HTTP 代理已启用');
 }
 
 function clearProxyEnv(): void {
-  if (!appliedEnv) {
-    // 仍重置 dispatcher；不擅自删用户启动时自带的 HTTP_PROXY
-    return;
-  }
+  if (!appliedEnv) return;
   for (const key of [
     'HTTP_PROXY',
     'HTTPS_PROXY',
@@ -130,35 +161,58 @@ function redactProxyUrl(url: string): string {
   }
 }
 
-/**
- * 用当前全局 dispatcher 探测出站是否可达（可选代理）。
- * 默认探测 auth.x.ai discovery，与 xAI OAuth 同路径。
- */
+export type OutboundProbeResult = {
+  ok: boolean;
+  status?: number;
+  latencyMs: number;
+  error?: string;
+  viaProxy: string | null;
+  proxyEnabled: boolean;
+  bodySnippet?: string;
+};
+
+/** 用当前全局 dispatcher 探测出站。 */
 export async function testOutboundProxy(options?: {
   probeUrl?: string;
   signal?: AbortSignal;
-}): Promise<{ ok: boolean; status?: number; latencyMs: number; error?: string }> {
+}): Promise<OutboundProbeResult> {
   const probeUrl =
-    options?.probeUrl?.trim() || 'https://auth.x.ai/.well-known/openid-configuration';
+    options?.probeUrl?.trim() || 'https://www.wikipedia.org/';
   const started = Date.now();
   try {
     const res = await fetch(probeUrl, {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      },
       signal: options?.signal ?? AbortSignal.timeout(12_000),
     });
+    let bodySnippet: string | undefined;
+    if (!res.ok) {
+      try {
+        bodySnippet = (await res.text()).slice(0, 200).replace(/\s+/g, ' ');
+      } catch {
+        bodySnippet = undefined;
+      }
+    }
     return {
       ok: res.ok,
       status: res.status,
       latencyMs: Date.now() - started,
-      error: res.ok ? undefined : `HTTP ${res.status}`,
+      error: res.ok ? undefined : `HTTP ${res.status}${bodySnippet ? `: ${bodySnippet}` : ''}`,
+      viaProxy: proxyUrlRedacted,
+      proxyEnabled: proxyActive,
+      bodySnippet,
     };
   } catch (err) {
-    const message = formatFetchError(err);
     return {
       ok: false,
       latencyMs: Date.now() - started,
-      error: message,
+      error: formatFetchError(err),
+      viaProxy: proxyUrlRedacted,
+      proxyEnabled: proxyActive,
     };
   }
 }
@@ -174,4 +228,21 @@ export function formatFetchError(err: unknown): string {
     depth += 1;
   }
   return parts.filter(Boolean).join(' → ');
+}
+
+export function isOutboundProxyActive(): boolean {
+  return proxyActive;
+}
+
+export function activeOutboundProxySummary(): string | null {
+  return proxyUrlRedacted;
+}
+
+export function withProxyHint(message: string): string {
+  const summary = activeOutboundProxySummary();
+  if (!summary) return message;
+  return (
+    `${message}`
+    + `（Agent 出站代理：${summary}。请确认使用 HTTP 代理端口，例如 http://127.0.0.1:7890；不再支持 socks5://）`
+  );
 }

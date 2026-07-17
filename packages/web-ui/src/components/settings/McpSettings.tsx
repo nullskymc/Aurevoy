@@ -14,7 +14,7 @@ export function McpSettings({
   mcpServers: McpServerStatus[];
   saving: boolean;
   onDraftChange: (draft: SettingsDraft) => void;
-  onSave: (draft: SettingsDraft) => void;
+  onSave: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
 }) {
   return (
     <>
@@ -30,9 +30,9 @@ export function McpSettings({
             type="button"
             className="settings-primary-btn"
             disabled={saving}
-            onClick={() => onSave(draft)}
+            onClick={() => void onSave(draft)}
           >
-            {t("settings.saveMcp")}
+            {saving ? t("settings.saving") : t("settings.saveMcp")}
           </button>
         </div>
       </SettingsGroup>

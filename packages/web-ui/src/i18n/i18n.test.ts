@@ -1,9 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { t, getLocale, setLocale } from "./index";
+import {
+  detectSystemLocale,
+  getLocale,
+  mapLanguageTagToLocale,
+  setLocale,
+  t,
+} from "./index";
 
 describe("i18n", () => {
-  it("defaults to the en locale", () => {
+  it("defaults module locale to en until setLocale is called", () => {
+    // 模块默认 en；应用启动时由 readStoredLocale → setLocale 覆盖为系统或用户选择
+    setLocale("en");
     expect(getLocale()).toBe("en");
+  });
+
+  it("maps system language tags used at first launch", () => {
+    expect(mapLanguageTagToLocale("zh-CN")).toBe("zh");
+    expect(detectSystemLocale(["zh-Hans-CN", "en"])).toBe("zh");
   });
 
   it("resolves known translation keys in zh", () => {

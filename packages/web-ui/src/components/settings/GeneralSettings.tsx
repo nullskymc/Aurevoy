@@ -44,7 +44,7 @@ export function GeneralSettings({
   workMode: WorkMode;
   onDraftChange: (draft: SettingsDraft) => void;
   onWorkModeChange: (mode: WorkMode) => void;
-  onSave: (draft: SettingsDraft) => void;
+  onSave: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
   onConnectionChange?: () => void;
 }) {
   const platform = usePlatform();
@@ -93,16 +93,22 @@ export function GeneralSettings({
     setProxyTestDetail(null);
     try {
       const result = await testOutboundProxy();
+      const via =
+        result.proxyEnabled && result.viaProxy
+          ? ` · via ${result.viaProxy}`
+          : result.proxyEnabled === false
+            ? " · direct"
+            : "";
       if (result.ok) {
         setProxyTestState("ok");
         setProxyTestDetail(
           t("settings.proxyTestOk")
             .replace("{ms}", String(result.latencyMs))
-            .replace("{status}", String(result.status ?? "")),
+            .replace("{status}", String(result.status ?? "")) + via,
         );
       } else {
         setProxyTestState("fail");
-        setProxyTestDetail(result.error || t("settings.proxyTestFail"));
+        setProxyTestDetail((result.error || t("settings.proxyTestFail")) + via);
       }
     } catch (err) {
       setProxyTestState("fail");
@@ -419,7 +425,7 @@ export function GeneralSettings({
               type="button"
               className="settings-primary-btn"
               disabled={saving}
-              onClick={() => onSave(draft)}
+              onClick={() => void onSave(draft)}
             >
               {saving ? t("settings.saving") : t("settings.saveSettings")}
             </button>
