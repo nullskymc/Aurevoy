@@ -744,7 +744,7 @@ export const en = {
   "notice.readMemoryFailed": "Failed to read memories: ",
   "notice.settingsSaved": "Settings saved and applied to Agent runtime",
   "notice.saveSettingsFailed": "Failed to save settings: ",
-  "notice.proxyAgentOutdated": "This Agent build does not support outbound proxy (stale process). Fully quit and restart Aurevoy / the agent, then save again.",
+  "notice.proxyAgentOutdated": "The Agent on this connection has no proxy field (often an old process still on :8787 that the desktop shell reuses). Kill node/agent on 8787, then npm run dev or relaunch Aurevoy. curl http://127.0.0.1:8787/api/settings should include \"proxy\".",
   "notice.proxySaveEmpty": "Proxy URL was not stored. Use http://host:port (socks5 not supported) and retry; restart the Agent if it still fails.",
   "notice.modelSwitched": "Model switched",
   "notice.switchModelFailed": "Failed to switch model: ",

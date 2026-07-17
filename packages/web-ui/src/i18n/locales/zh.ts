@@ -744,7 +744,7 @@ export const zh = {
   "notice.readMemoryFailed": "读取记忆失败：",
   "notice.settingsSaved": "设置已保存，并已应用到 Agent runtime",
   "notice.saveSettingsFailed": "保存设置失败：",
-  "notice.proxyAgentOutdated": "当前 Agent 引擎不支持出站代理（可能是旧进程未重启）。请完全退出并重启 Aurevoy / 重启 agent 后再保存。",
+  "notice.proxyAgentOutdated": "当前连上的 Agent 响应里没有 proxy 字段（多半是 8787 端口上还在跑旧进程，桌面壳会复用它）。请结束占用 8787 的 node/agent 后再 npm run dev 或重启 Aurevoy。curl http://127.0.0.1:8787/api/settings 应含 \"proxy\"。",
   "notice.proxySaveEmpty": "代理地址未能写入引擎。请确认格式为 http://主机:端口（不支持 socks5）并重试；若仍失败请重启 Agent。",
   "notice.modelSwitched": "模型已切换",
   "notice.switchModelFailed": "切换模型失败：",
