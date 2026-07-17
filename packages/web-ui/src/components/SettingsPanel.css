@@ -433,6 +433,13 @@
   letter-spacing: 0;
 }
 
+.settings-title-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  flex-shrink: 0;
+}
+
 .settings-content-group {
   margin-bottom: 32px;
 }

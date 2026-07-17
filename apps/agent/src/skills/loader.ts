@@ -86,7 +86,7 @@ export function discoverSkills(
       if (!fm) continue;
 
       if (namesFromDirs.has(fm.name)) {
-        log.info(
+        log.debug(
           { name: fm.name, flatFile: fullPath },
           'flat .md 文件与标准目录格式同名，优先取目录格式，跳过 flat 文件',
         );

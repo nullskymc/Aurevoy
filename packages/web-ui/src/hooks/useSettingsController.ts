@@ -21,6 +21,7 @@ import {
 } from "../api";
 import type { ModelSelectorDraft } from "../components/ModelSelectorDrawer";
 import type { SettingsDraft } from "../components/SettingsPanel";
+import { settingsSupportsProxy } from "../components/settings/draft";
 import { t } from "../i18n";
 import type { DataStatus } from "./useSettings";
 
@@ -119,7 +120,10 @@ export function useSettingsController({
       .finally(() => setSettingsSaving(false));
   }
 
-  function handleSaveSettings(draft: SettingsDraft): void {
+  function handleSaveSettings(
+    draft: SettingsDraft,
+    options?: { silent?: boolean },
+  ): Promise<void> {
     // 不强制把 model 并入 enabled：启用勾选与「正在使用」解耦
     const body: UpdateRuntimeSettingsRequest = {
       llm: {
@@ -158,18 +162,47 @@ export function useSettingsController({
         baseUrl: draft.searchBaseUrl,
         ...(draft.searchApiKey ? { apiKey: draft.searchApiKey } : {}),
       },
+      logging: {
+        level: draft.logLevel as "trace" | "debug" | "info" | "warn" | "error" | "fatal",
+      },
+      proxy: {
+        enabled: draft.proxyEnabled,
+        url: draft.proxyUrl,
+        noProxy: draft.proxyNoProxy,
+      },
     };
     setSettingsSaving(true);
-    void updateSettings(body)
+    return updateSettings(body)
       .then((next) => {
+        // 发出了 proxy 配置但响应没有 proxy：当前 Agent 进程过旧，未加载出站代理逻辑
+        const sentProxy = Boolean(body.proxy);
+        if (sentProxy && !settingsSupportsProxy(next)) {
+          throw new Error(t("notice.proxyAgentOutdated"));
+        }
+        if (
+          sentProxy
+          && settingsSupportsProxy(next)
+          && (draft.proxyUrl ?? "").trim().length > 0
+          && !(next.proxy?.url ?? "").trim()
+        ) {
+          throw new Error(t("notice.proxySaveEmpty"));
+        }
         setRuntimeSettings(next);
         setHealth((previous) =>
           previous ? { ...previous, provider: `${next.llm.provider}:${next.llm.model}` } : previous,
         );
-        setNotice(t("notice.settingsSaved"));
+        if (!options?.silent) {
+          setNotice(t("notice.settingsSaved"));
+        }
         return refreshSettings();
       })
-      .catch((err) => setNotice(`${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`))
+      .then(() => undefined)
+      .catch((err) => {
+        setNotice(
+          `${t("notice.saveSettingsFailed")}${err instanceof Error ? err.message : String(err)}`,
+        );
+        throw err;
+      })
       .finally(() => setSettingsSaving(false));
   }
 

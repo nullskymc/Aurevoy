@@ -4,6 +4,7 @@ import type {
   AgentToolExecutionMode,
   AutoModeLevel,
   LlmProviderSlot,
+  LogLevel,
   RuntimeSettings,
   TaskBudget,
   UpdateRuntimeSettingsRequest,
@@ -38,7 +39,14 @@ import {
   writeLlmGlobal,
 } from '../llm/llm-store.js';
 import { settingsStore } from '../store/db.js';
+import { setLogLevel } from '../logging/logger.js';
 import { resetPythonCache } from './python-runtime.js';
+import {
+  applyOutboundProxy,
+  defaultNoProxy,
+  normalizeNoProxy,
+  validateProxyUrl,
+} from './outbound-proxy.js';
 
 const SETTING_KEYS = {
   workspaceDir: 'workspaceDir',
@@ -66,7 +74,13 @@ const SETTING_KEYS = {
   searchProvider: 'search.provider',
   searchBaseUrl: 'search.baseUrl',
   searchApiKey: 'search.apiKey',
+  logLevel: 'logging.level',
+  proxyEnabled: 'proxy.enabled',
+  proxyUrl: 'proxy.url',
+  proxyNoProxy: 'proxy.noProxy',
 } as const;
+
+const LOG_LEVELS: readonly LogLevel[] = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'];
 
 const DEFAULT_CLEANUP_POLICY_DAYS = 30;
 
@@ -156,6 +170,24 @@ export function loadPersistedSettings(): void {
   applyBudgetSetting(entries[SETTING_KEYS.budgetLifetimeMaxToolCalls], 'lifetime', 'maxToolCalls');
   applyBudgetSetting(entries[SETTING_KEYS.budgetLifetimeMaxWallTimeMs], 'lifetime', 'maxWallTimeMs');
   applyBudgetSetting(entries[SETTING_KEYS.budgetLifetimeMaxOutputBytes], 'lifetime', 'maxOutputBytes');
+
+  const logLevel = normalizeLogLevel(entries[SETTING_KEYS.logLevel]);
+  if (logLevel) {
+    config.logging.level = logLevel;
+    setLogLevel(logLevel);
+  }
+
+  // 出站代理：启动时恢复并立即应用到全局 fetch
+  loadProxyFromEntries(entries);
+  applyOutboundProxy(config.proxy);
+}
+
+function loadProxyFromEntries(entries: Record<string, string | undefined>): void {
+  config.proxy.enabled = entries[SETTING_KEYS.proxyEnabled] === 'true';
+  config.proxy.url = entries[SETTING_KEYS.proxyUrl] ?? '';
+  config.proxy.noProxy = normalizeNoProxy(
+    entries[SETTING_KEYS.proxyNoProxy] ?? defaultNoProxy(),
+  );
 }
 
 function safeListPiProviderCatalog(): PiProviderCatalogEntry[] {
@@ -212,6 +244,15 @@ export function readRuntimeSettings(): RuntimeSettings {
       provider: config.search.provider,
       baseUrl: config.search.baseUrl,
       apiKeyConfigured: config.search.apiKey.trim().length > 0,
+    },
+    logging: {
+      level: config.logging.level,
+      logFile: config.logging.file,
+    },
+    proxy: {
+      enabled: config.proxy.enabled,
+      url: config.proxy.url,
+      noProxy: config.proxy.noProxy,
     },
   };
 }
@@ -471,8 +512,47 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     }
   }
 
+  if (body.logging?.level !== undefined) {
+    const level = normalizeLogLevel(body.logging.level);
+    if (!level) throw new Error('logging.level 非法');
+    config.logging.level = level;
+    settingsStore.set(SETTING_KEYS.logLevel, level);
+    setLogLevel(level);
+  }
+
+  if (body.proxy !== undefined) {
+    if (body.proxy.enabled !== undefined) {
+      config.proxy.enabled = Boolean(body.proxy.enabled);
+      settingsStore.set(SETTING_KEYS.proxyEnabled, config.proxy.enabled ? 'true' : 'false');
+    }
+    if (body.proxy.url !== undefined) {
+      const raw = String(body.proxy.url).trim();
+      if (raw.length === 0) {
+        config.proxy.url = '';
+        settingsStore.delete(SETTING_KEYS.proxyUrl);
+      } else {
+        config.proxy.url = validateProxyUrl(raw);
+        settingsStore.set(SETTING_KEYS.proxyUrl, config.proxy.url);
+      }
+    }
+    if (body.proxy.noProxy !== undefined) {
+      config.proxy.noProxy = normalizeNoProxy(body.proxy.noProxy);
+      settingsStore.set(SETTING_KEYS.proxyNoProxy, config.proxy.noProxy);
+    }
+    if (config.proxy.enabled && !config.proxy.url.trim()) {
+      throw new Error('启用出站代理时必须填写代理地址（例如 http://127.0.0.1:7890）');
+    }
+    // 立即对全局 fetch 生效（OAuth / LLM 等无需重启 agent）
+    applyOutboundProxy(config.proxy);
+  }
+
   if (providerChanged) resetPiProviderCache();
   return { settings: readRuntimeSettings(), mcpChanged };
+}
+
+function normalizeLogLevel(value: unknown): LogLevel | null {
+  if (typeof value !== 'string') return null;
+  return (LOG_LEVELS as readonly string[]).includes(value) ? (value as LogLevel) : null;
 }
 
 export function readCleanupPolicyDays(): number {

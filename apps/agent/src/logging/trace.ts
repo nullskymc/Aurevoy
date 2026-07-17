@@ -33,7 +33,8 @@ export class TaskLogger {
 
   constructor(taskId: string) {
     this.taskId = taskId;
-    this.logger = log().child({ taskId });
+    // 短 taskId 降低行噪声；完整 id 在 SQLite 轨迹里
+    this.logger = log().child({ taskId: taskId.length > 8 ? taskId.slice(0, 8) : taskId });
   }
 
   get child(): Logger {
@@ -70,25 +71,25 @@ export class TaskLogger {
       data: entry.data,
     };
 
+    // 审计真相源：始终落 SQLite
     traceStore.append(traceEntry);
 
-    const level = entry.ok === false ? 'warn' : 'info';
-    this.logger[level]({
-      kind,
-      phase,
-      iteration: entry.iteration,
-      callId: entry.callId,
-      toolName: entry.toolName,
-      riskLevel: entry.riskLevel,
-      finishReason: entry.finishReason,
-      provider,
-      model,
-      durationMs,
-      ok: entry.ok,
-      errorCategory: entry.errorCategory,
-      errorMessage: entry.errorMessage,
-      summary: entry.summary,
-    }, `trace:${kind}`);
+    // 运维日志：成功细节默认 debug，避免与 HTTP/轮询抢视线；失败/收尾保留 info|warn
+    const failed = entry.ok === false;
+    const level = failed ? 'warn' : isSalientTrace(kind, entry) ? 'info' : 'debug';
+    this.logger[level](
+      {
+        kind,
+        ...(phase ? { phase } : {}),
+        ...(entry.toolName ? { tool: entry.toolName } : {}),
+        ...(failed && entry.errorCategory ? { errCat: entry.errorCategory } : {}),
+        // 不用 err/error 键：pino-pretty 会当 Error 对象多行展开
+        ...(failed && entry.errorMessage ? { errMsg: entry.errorMessage } : {}),
+        ...(durationMs > 0 ? { ms: durationMs } : {}),
+        ...(entry.ok !== undefined ? { ok: entry.ok } : {}),
+      },
+      entry.summary ?? `trace:${kind}`,
+    );
   }
 
   info(msg: string, extra?: Record<string, unknown>): void {
@@ -106,6 +107,13 @@ export class TaskLogger {
   debug(msg: string, extra?: Record<string, unknown>): void {
     this.logger.debug(extra ?? {}, msg);
   }
+}
+
+/** 默认 info 可见的轨迹：收尾、审批结果；常规 llm/tool 成功走 debug */
+function isSalientTrace(kind: TaskTraceKind, entry: TraceEntry): boolean {
+  if (kind === 'done' || kind === 'error' || kind === 'approval') return true;
+  if (kind === 'phase' && entry.errorCategory === 'budget') return true;
+  return false;
 }
 
 export function createTaskLogger(taskId: string): TaskLogger {

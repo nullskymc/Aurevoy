@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { config } from '../config.js';
+import { withProxyHint } from '../runtime/outbound-proxy.js';
 
 const MAX_FETCH_BYTES = 1024 * 1024;
 const FETCH_TIMEOUT_MS = 20_000;
@@ -139,13 +140,31 @@ async function fetchWithPolicy(rawUrl: string): Promise<{ url: URL; res: Respons
   const redirects: string[] = [];
   for (let i = 0; i <= MAX_FETCH_REDIRECTS; i++) {
     await assertPublicHttpTarget(url);
-    const res = await fetch(url, {
-      method: 'GET',
-      redirect: 'manual',
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Aurevoy/1.0)' },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    if (!isRedirectStatus(res.status)) return { url, res, redirects };
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'GET',
+        redirect: 'manual',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(withProxyHint(`抓取失败: ${msg}`));
+    }
+    if (!isRedirectStatus(res.status)) {
+      if (!res.ok && (res.status === 401 || res.status === 403)) {
+        // 让上层拿到可读说明：全站 401 时几乎一定是代理/网络，不是目标站要 API Key
+        throw new Error(
+          withProxyHint(`抓取 ${url.hostname} 失败: HTTP ${res.status}`),
+        );
+      }
+      return { url, res, redirects };
+    }
     const location = res.headers.get('location');
     if (!location) return { url, res, redirects };
     if (i === MAX_FETCH_REDIRECTS) throw new Error(`重定向次数超过上限 ${MAX_FETCH_REDIRECTS}`);
@@ -314,15 +333,43 @@ export function parseDuckDuckGoLiteResults(html: string): WebSearchResult[] {
   return results;
 }
 
+/**
+ * DuckDuckGo Lite：免费 HTML 抓取，不需要 API Key。
+ * 部分网络/代理/机房 IP 会被 WAF 返回 401/403，与「密钥无效」无关。
+ */
 async function searchDuckDuckGoLite(query: string): Promise<WebSearchResult[]> {
   const url = new URL('https://lite.duckduckgo.com/lite/');
   url.searchParams.set('q', query);
   const resp = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Aurevoy/1.0)' },
+    method: 'GET',
+    headers: {
+      // 使用常见浏览器 UA；机器人式 UA 更容易被 DDG/中间代理拒绝
+      'User-Agent':
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+    },
     signal: AbortSignal.timeout(searchTimeoutMs()),
   });
-  if (!resp.ok) throw new Error(`DuckDuckGo Lite 搜索失败: HTTP ${resp.status}`);
-  return parseDuckDuckGoLiteResults(await resp.text());
+  if (!resp.ok) {
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error(
+        withProxyHint(
+          `DuckDuckGo Lite 搜索失败: HTTP ${resp.status}`
+            + `（免费 HTML 接口，无需 API Key；多为站点或出站代理拦截）`,
+        ),
+      );
+    }
+    throw new Error(withProxyHint(`DuckDuckGo Lite 搜索失败: HTTP ${resp.status}`));
+  }
+  const results = parseDuckDuckGoLiteResults(await resp.text());
+  if (results.length === 0) {
+    throw new Error(
+      'DuckDuckGo Lite 返回了页面但未解析到结果（可能被验证码/空页拦截）。'
+        + '可稍后重试，或改用 Tavily / 自建 SearXNG。',
+    );
+  }
+  return results;
 }
 
 async function searchSearxng(query: string): Promise<WebSearchResult[]> {
@@ -333,7 +380,7 @@ async function searchSearxng(query: string): Promise<WebSearchResult[]> {
     headers: searchHeaders(),
     signal: AbortSignal.timeout(searchTimeoutMs()),
   });
-  if (!resp.ok) throw new Error(`SearXNG 搜索失败: HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error(withProxyHint(`SearXNG 搜索失败: HTTP ${resp.status}`));
   return parseSearchJson(await resp.json());
 }
 
@@ -348,7 +395,7 @@ async function searchTavily(query: string): Promise<WebSearchResult[]> {
     body: JSON.stringify({ api_key: config.search.apiKey, query, max_results: 10 }),
     signal: AbortSignal.timeout(searchTimeoutMs()),
   });
-  if (!resp.ok) throw new Error(`Tavily 搜索失败: HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error(withProxyHint(`Tavily 搜索失败: HTTP ${resp.status}`));
   return parseSearchJson(await resp.json());
 }
 
@@ -359,7 +406,7 @@ async function searchCustomJson(query: string): Promise<WebSearchResult[]> {
     headers: searchHeaders(),
     signal: AbortSignal.timeout(searchTimeoutMs()),
   });
-  if (!resp.ok) throw new Error(`自定义搜索失败: HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error(withProxyHint(`自定义搜索失败: HTTP ${resp.status}`));
   return parseSearchJson(await resp.json());
 }
 

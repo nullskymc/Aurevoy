@@ -11,7 +11,7 @@ export function SearchSettings({
   draft: SettingsDraft;
   saving: boolean;
   onDraftChange: (draft: SettingsDraft) => void;
-  onSave: (draft: SettingsDraft) => void;
+  onSave: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
 }) {
   return (
     <>
@@ -69,7 +69,7 @@ export function SearchSettings({
               type="button"
               className="settings-primary-btn"
               disabled={saving}
-              onClick={() => onSave(draft)}
+              onClick={() => void onSave(draft)}
             >
               {saving ? t("settings.saving") : t("action.save")}
             </button>

@@ -53,7 +53,7 @@ class SkillRegistry {
       resolve(config.workspaceDir, config.skills.codexWorkspaceSubDir),
     ];
 
-    log.info({ builtinDir, userDirs, systemDirs, workspaceDirs, workspaceSystemDirs }, '发现 skill 文件...');
+    log.debug({ builtinDir, userDirs, systemDirs, workspaceDirs, workspaceSystemDirs }, '发现 skill 文件...');
 
     // 1) 预装 skill（最低优先级）
     const builtinSkills = discoverSkills(builtinDir, 'builtin');
@@ -67,7 +67,7 @@ class SkillRegistry {
       for (const skill of skills) {
         const existing = this.catalog.get(skill.frontmatter.name);
         if (existing) {
-          log.info(
+          log.debug(
             { name: skill.frontmatter.name, source: skill.location, overridden: existing.location },
             '用户 skill 覆盖已有 skill',
           );
@@ -82,7 +82,7 @@ class SkillRegistry {
       for (const skill of skills) {
         const existing = this.catalog.get(skill.frontmatter.name);
         if (existing) {
-          log.info(
+          log.debug(
             { name: skill.frontmatter.name, source: skill.location, overridden: existing.location },
             '系统 skill 覆盖已有 skill',
           );
@@ -97,7 +97,7 @@ class SkillRegistry {
       for (const skill of skills) {
         const existing = this.catalog.get(skill.frontmatter.name);
         if (existing) {
-          log.info(
+          log.debug(
             { name: skill.frontmatter.name, source: skill.location, overridden: existing.location },
             '工作区 skill 覆盖已有 skill',
           );
@@ -112,7 +112,7 @@ class SkillRegistry {
       for (const skill of skills) {
         const existing = this.catalog.get(skill.frontmatter.name);
         if (existing) {
-          log.info(
+          log.debug(
             { name: skill.frontmatter.name, source: skill.location, overridden: existing.location },
             '工作区系统 skill 覆盖已有 skill',
           );

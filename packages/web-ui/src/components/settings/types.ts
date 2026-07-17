@@ -52,6 +52,12 @@ export interface SettingsDraft {
   searchProvider: string;
   searchBaseUrl: string;
   searchApiKey: string;
+  /** 引擎运维日志等级 */
+  logLevel: string;
+  /** Agent 出站 HTTP(S) 代理 */
+  proxyEnabled: boolean;
+  proxyUrl: string;
+  proxyNoProxy: string;
 }
 
 export interface SettingsPanelProps {
@@ -69,7 +75,8 @@ export interface SettingsPanelProps {
   locale: Locale;
   initialSection?: SettingsSectionId;
   onClose: () => void;
-  onSave: (draft: SettingsDraft) => void;
+  /** 保存运行设置；silent 时不弹成功 toast（自动保存用） */
+  onSave: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
   /** Provider 连接专用：只保存 key / baseUrl / maxTokens；silent 时不弹「已保存」toast（OAuth 成功路径用） */
   onSaveConnection: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
   onCleanup: (olderThanDays: number) => void;

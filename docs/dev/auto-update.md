@@ -107,7 +107,8 @@ CI 里 workflow 会把 Secret 写成临时文件，再把 `TAURI_SIGNING_PRIVATE
 export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/aurevoy.key)"
 # export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='...'
 npm run prepare-desktop-bundle
-cd apps/desktop && npx tauri build --bundles dmg
+# macOS：务必带 app，否则没有 .app.tar.gz 热更新包
+cd apps/desktop && npx tauri build --bundles app,dmg
 ```
 
 未设置私钥时，`createUpdaterArtifacts: true` 会导致 `tauri build` 失败。临时关更新产物：
@@ -119,11 +120,12 @@ npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ## 发布流程
 
 1. 版本号对齐：`package.json` / `apps/desktop` / `src-tauri`（当前 monorepo 惯例）。
-2. 打 tag：`git tag v0.6.5 && git push origin v0.6.5`
+2. 打 tag：`git tag v0.6.6 && git push origin v0.6.6`
 3. `.github/workflows/release.yml`：
    - 多平台 `tauri build`（注入签名密钥）
-   - 上传安装包 + updater 产物 + `.sig`
-   - `scripts/generate-latest-json.mjs` 生成 `latest.json`
+   - **macOS 必须** `tauri build --bundles app,dmg`：仅 `dmg` 时 **不会** 生成 `.app.tar.gz` / `.sig`（Tauri v2 的 `createUpdaterArtifacts` 只在 package types 含 `app` 时打热更新包）
+   - 上传安装包 + updater 产物 + `.sig`；mac job 校验 `.app.tar.gz` 存在
+   - `scripts/generate-latest-json.mjs` 生成 `latest.json`，并要求含 `darwin-aarch64` / `windows-x86_64` / `linux-x86_64`
    - `softprops/action-gh-release` 创建 Release
 
 手动触发 `workflow_dispatch` 时，版本取自 `tauri.conf.json`。

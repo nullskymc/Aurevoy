@@ -83,15 +83,39 @@ jobs:
             fi
           } >> "$GITHUB_ENV"
 
-      - name: Tauri Build (DMG + updater artifacts)
-        run: cd apps/desktop && tauri build --bundles dmg
+      # 必须同时包含 app：createUpdaterArtifacts 在 v2 下仅当 package_types 含 MacOsBundle
+      # 时才生成 .app.tar.gz + .sig。仅 --bundles dmg 时 Tauri 会跳过热更新产物，
+      # 导致 latest.json 没有 darwin-aarch64，Mac 端检查更新报
+      # "None of the fallback platforms … were found"。
+      - name: Tauri Build (app + DMG + updater artifacts)
+        run: cd apps/desktop && tauri build --bundles app,dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify macOS updater artifacts
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          TAR=(apps/desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz)
+          SIG=(apps/desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig)
+          DMG=(apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg)
+          echo "DMG: ${#DMG[@]}  tar.gz: ${#TAR[@]}  sig: ${#SIG[@]}"
+          ls -la apps/desktop/src-tauri/target/release/bundle/dmg 2>/dev/null || true
+          ls -la apps/desktop/src-tauri/target/release/bundle/macos 2>/dev/null || true
+          if [ "${#TAR[@]}" -lt 1 ] || [ "${#SIG[@]}" -lt 1 ]; then
+            echo "::error::Missing macOS updater artifacts (.app.tar.gz / .sig). Auto-update will fail for darwin-aarch64."
+            exit 1
+          fi
+          if [ "${#DMG[@]}" -lt 1 ]; then
+            echo "::error::Missing macOS DMG installer."
+            exit 1
+          fi
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: aurevoy-macos
+          if-no-files-found: error
           path: |
             apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
             apps/desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
@@ -302,6 +326,7 @@ jobs:
 
       - name: Generate latest.json
         run: |
+          set -euo pipefail
           node scripts/generate-latest-json.mjs \
             --artifacts-dir artifacts \
             --version "${{ steps.meta.outputs.version }}" \
@@ -309,6 +334,19 @@ jobs:
             --out latest.json \
             --notes "Aurevoy v${{ steps.meta.outputs.version }}"
           cat latest.json
+          # 三平台 job 均成功时，清单必须含对应 updater key，避免 Mac 再踩空 platforms
+          node -e '
+            const j = require("./latest.json");
+            const p = j.platforms || {};
+            const keys = Object.keys(p);
+            console.log("platforms:", keys.join(", ") || "(none)");
+            const required = ["darwin-aarch64", "windows-x86_64", "linux-x86_64"];
+            const missing = required.filter((k) => !p[k]);
+            if (missing.length) {
+              console.error("latest.json missing platforms:", missing.join(", "));
+              process.exit(1);
+            }
+          '
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

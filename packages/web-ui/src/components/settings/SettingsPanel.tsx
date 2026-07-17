@@ -65,9 +65,11 @@ export function SettingsPanel({
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(safeInitialSection);
   const [draft, setDraft] = useState<SettingsDraft>(() => makeDraft(settings));
   const [cleanupDays, setCleanupDays] = useState(settings?.cleanupPolicyDays ?? 30);
+  const [saveRefreshBusy, setSaveRefreshBusy] = useState(false);
 
   useEffect(() => {
-    setDraft(makeDraft(settings));
+    // 传入 previous，避免旧 Agent 无 proxy 字段时把本地代理地址冲成空
+    setDraft((prev) => makeDraft(settings, prev));
     setCleanupDays(settings?.cleanupPolicyDays ?? 30);
   }, [settings]);
 
@@ -75,10 +77,23 @@ export function SettingsPanel({
     setActiveSection(normalizeSettingsSection(initialSection));
   }, [initialSection]);
 
+  async function handleSaveAndRefresh(): Promise<void> {
+    if (saveRefreshBusy || saving) return;
+    setSaveRefreshBusy(true);
+    try {
+      await Promise.resolve(onSave(draft));
+      onRefresh();
+    } finally {
+      setSaveRefreshBusy(false);
+    }
+  }
+
   const groups = getSettingsGroups();
   const activeTitle = groups.flatMap((group) => group.items).find(
     (item) => item.id === activeSection,
   )?.label;
+
+  const headerBusy = saveRefreshBusy || saving;
 
   return (
     <section className="settings-workspace" aria-label={t("settings.pageLabel")}>
@@ -117,9 +132,16 @@ export function SettingsPanel({
         <div className="settings-detail-inner">
           <header className="settings-title-row">
             <h1>{activeTitle}</h1>
-            <button type="button" className="settings-secondary-btn" onClick={onRefresh}>
-              {t("settings.refresh")}
-            </button>
+            <div className="settings-title-actions">
+              <button
+                type="button"
+                className="settings-primary-btn"
+                disabled={headerBusy}
+                onClick={() => void handleSaveAndRefresh()}
+              >
+                {headerBusy ? t("settings.saving") : t("settings.saveAndRefresh")}
+              </button>
+            </div>
           </header>
 
           {activeSection === "general" && (

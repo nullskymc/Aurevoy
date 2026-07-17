@@ -1,4 +1,4 @@
-import type { Locale } from "../i18n";
+import { detectSystemLocale, type Locale } from "../i18n";
 import type { ThemeMode, WorkMode } from "./types";
 
 export const MIN_SIDEBAR_WIDTH = 260;
@@ -51,8 +51,20 @@ export function readStoredThemeMode(): ThemeMode {
   return readStoredOption(THEME_MODE_KEY, "system", ["system", "light", "dark"] as const);
 }
 
+/**
+ * 读取界面语言：用户已保存的选择优先；否则按系统/浏览器语言识别。
+ * 首次启动无 localStorage 时不会写死 en，而是 map navigator.languages。
+ */
 export function readStoredLocale(): Locale {
-  return readStoredOption(LOCALE_KEY, "en", ["zh", "en", "ko", "ja"] as const);
+  const allowed = ["zh", "en", "ko", "ja"] as const;
+  if (typeof window === "undefined") {
+    return detectSystemLocale();
+  }
+  const stored = window.localStorage.getItem(LOCALE_KEY);
+  if (stored && (allowed as readonly string[]).includes(stored)) {
+    return stored as Locale;
+  }
+  return detectSystemLocale();
 }
 
 export function readStoredWorkMode(defaultToolDetailsOpen: boolean): WorkMode {

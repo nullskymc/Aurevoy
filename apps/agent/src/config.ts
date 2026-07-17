@@ -29,6 +29,8 @@ export const config = {
       | 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal',
     file: process.env.AUREVOY_LOG_FILE ?? resolve(homedir(), '.aurevoy', 'logs', 'aurevoy.log'),
     pretty: process.env.AUREVOY_LOG_PRETTY !== 'false',
+    /** HTTP access log；默认关（health/列表轮询会刷屏）。设 AUREVOY_LOG_HTTP=1 开启 */
+    http: process.env.AUREVOY_LOG_HTTP === '1' || process.env.AUREVOY_LOG_HTTP === 'true',
   },
 
   host: process.env.AUREVOY_HOST ?? AGENT_DEFAULT_HOST,
@@ -113,6 +115,16 @@ export const config = {
 
   network: {
     httpFetchPrivateHostAllowlist: [] as string[],
+  },
+
+  /**
+   * Agent 出站 HTTP(S) 代理（Node fetch / undici）。
+   * 设置页写入；不读系统代理。保存后经 setGlobalDispatcher 立即生效。
+   */
+  proxy: {
+    enabled: false,
+    url: '',
+    noProxy: '127.0.0.1,localhost,::1',
   },
 
   python: {
