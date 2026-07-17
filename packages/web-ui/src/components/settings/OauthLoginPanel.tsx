@@ -9,6 +9,7 @@ import {
   startOauthLogin,
 } from "../../api";
 import { usePlatform } from "../../platform/context";
+import { openOauthAuthUrl } from "./oauthOpenAuthUrl";
 
 export function OauthLoginPanel({
   provider,
@@ -62,13 +63,21 @@ export function OauthLoginPanel({
     }
   }
 
-  function openAuthUrl(url: string): void {
+  async function openAuthUrl(url: string): Promise<void> {
     try {
-      void platform.openExternal?.(url);
-    } catch {
-      // ignore
+      await openOauthAuthUrl(platform.openExternal, url);
+      // 打开成功时清掉上一轮「无法打开浏览器」提示，避免干扰登录中状态
+      setError((prev) =>
+        prev && prev.startsWith(t("settings.oauthOpenFailed")) ? null : prev,
+      );
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      const message = detail
+        ? `${t("settings.oauthOpenFailed")} (${detail})`
+        : t("settings.oauthOpenFailed");
+      setError(message);
+      onNotice?.(message, "error");
     }
-    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   function handleNewEvents(events: OauthAuthEvent[]): void {
@@ -80,7 +89,7 @@ export function OauthLoginPanel({
         setStatusText(event.instructions || t("settings.oauthOpenBrowser"));
         if (!openedUrls.current.has(event.url)) {
           openedUrls.current.add(event.url);
-          openAuthUrl(event.url);
+          void openAuthUrl(event.url);
         }
       }
       if (event.type === "device_code") {
@@ -92,7 +101,7 @@ export function OauthLoginPanel({
         setStatusText(`${t("settings.oauthDeviceCode")}: ${event.userCode}`);
         if (event.verificationUri && !openedUrls.current.has(event.verificationUri)) {
           openedUrls.current.add(event.verificationUri);
-          openAuthUrl(event.verificationUri);
+          void openAuthUrl(event.verificationUri);
         }
       }
       if (event.type === "progress") {
@@ -365,7 +374,7 @@ export function OauthLoginPanel({
             rel="noopener noreferrer"
             onClick={(event) => {
               event.preventDefault();
-              openAuthUrl(authLink.url);
+              void openAuthUrl(authLink.url);
             }}
           >
             {authLink.label}
@@ -373,9 +382,21 @@ export function OauthLoginPanel({
           <button
             type="button"
             className="settings-primary-btn"
-            onClick={() => openAuthUrl(authLink.url)}
+            onClick={() => void openAuthUrl(authLink.url)}
           >
             {t("settings.oauthOpenNow")}
+          </button>
+          <button
+            type="button"
+            className="settings-secondary-btn"
+            onClick={() => {
+              void navigator.clipboard?.writeText(authLink.url).then(
+                () => onNotice?.(t("settings.oauthUrlCopied"), "info"),
+                () => onNotice?.(t("settings.oauthUrlCopyFailed"), "error"),
+              );
+            }}
+          >
+            {t("settings.oauthCopyUrl")}
           </button>
         </div>
       )}
