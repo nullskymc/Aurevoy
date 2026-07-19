@@ -1,4 +1,10 @@
-import type { AppUpdateInfo, AppUpdateProgress, PlatformAdapter } from '@aurevoy/web-ui';
+import type {
+  AppUpdateInfo,
+  AppUpdateProgress,
+  PlatformAdapter,
+  TrayAction,
+  TrayRecentItem,
+} from '@aurevoy/web-ui';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { LogicalSize, currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
 import type { Update } from '@tauri-apps/plugin-updater';
@@ -266,5 +272,40 @@ export const tauriPlatformAdapter: PlatformAdapter = {
       const { relaunch } = await import('@tauri-apps/plugin-process');
       await relaunch();
     }
+  },
+
+  async updateTrayRecent(items: TrayRecentItem[]): Promise<void> {
+    try {
+      await invoke('update_tray_recent', { items });
+    } catch {
+      // 托盘未启用（非 macOS/Windows）或引擎未就绪时忽略
+    }
+  },
+
+  onTrayAction(handler: (action: TrayAction) => void): () => void {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<{ action: string; taskId?: string | null }>('tray-action', (event) => {
+          handler({
+            action: event.payload.action,
+            taskId: event.payload.taskId ?? null,
+          });
+        }),
+      )
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   },
 };

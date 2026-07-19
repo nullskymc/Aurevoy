@@ -24,6 +24,7 @@ import {
   mergeAgentRoundData,
   type AgentRoundData,
 } from "./Timeline";
+import { PlanProgress } from "./PlanProgress";
 import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -39,6 +40,18 @@ import {
   buildConversationViewModel,
   type ConversationTurn,
 } from "./conversationWorkflow";
+import {
+  IconAlertCircle,
+  IconCheck,
+  IconChevron,
+  IconCopy,
+  IconFile,
+  IconFork,
+  IconGauge,
+  IconLoader,
+  IconPencil,
+  IconTerminal,
+} from "../icons";
 import "./Conversation.css";
 
 /** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
@@ -309,6 +322,7 @@ export function Conversation({
     <div className="conversation">
       <div ref={topRef} />
       <div className="conversation-thread">
+        <PlanProgress plan={task.plan ?? plan} />
 
         {viewModel.turns.map((turn, index) => (
           <ConversationTurnView
@@ -1165,63 +1179,27 @@ function IconButton({
 }
 
 function CopyIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
-      <rect x="6.5" y="6.5" width="9" height="9" rx="2" stroke="currentColor" strokeWidth="1.4" fill="none" />
-      <path d="M13 6.5V5a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h1.5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinejoin="round" />
-    </svg>
-  );
+  return <IconCopy size={15} />;
 }
 
 function PencilIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
-      <path d="M4 14.5l-.6 2.6 2.6-.6L16 6.5a1.5 1.5 0 00-2.1-2.1L4 14.5z" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinejoin="round" />
-    </svg>
-  );
+  return <IconPencil size={15} />;
 }
 
 function CheckIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
-      <path d="M4.5 10.5l3.2 3.2L15.5 6" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+  return <IconCheck size={15} />;
 }
 
 function FailureIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.4" fill="none" />
-      <path d="M10 6.5v4.2M10 13.2h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
+  return <IconAlertCircle size={14} />;
 }
 
 function BudgetIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-      <path
-        d="M4 5.5h12v9H4zM7 5.5V4.2a1 1 0 011-1h4a1 1 0 011 1v1.3"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        fill="none"
-        strokeLinejoin="round"
-      />
-      <path d="M4 9.5h12" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
+  return <IconGauge size={14} />;
 }
 
 function ForkIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
-      <circle cx="6" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
-      <circle cx="14" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
-      <circle cx="10" cy="15" r="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
-      <path d="M6 7v2a4 4 0 004 4M14 7v2a4 4 0 01-4 4" stroke="currentColor" strokeWidth="1.3" fill="none" />
-    </svg>
-  );
+  return <IconFork size={15} />;
 }
 
 export function ToolActivityList({
@@ -1300,26 +1278,20 @@ function ToolChip({
 }
 
 function AttachmentFileIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-      <path d="M6 2.75h5.1L15 6.65v10.6H6a2 2 0 01-2-2V4.75a2 2 0 012-2z" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" />
-      <path d="M11 3v4h4" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" />
-      <path d="M7.25 11h5.5M7.25 14h4" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
-    </svg>
-  );
+  return <IconFile size={16} />;
 }
 
-function toolStatusIcon(status: ToolActivity["status"]): string {
+function toolStatusIcon(status: ToolActivity["status"]) {
   switch (status) {
     case "ok":
-      return "·";
+      return <IconCheck size={12} />;
     case "error":
-      return "✕";
+      return <IconAlertCircle size={12} />;
     case "awaiting":
-      return "!";
+      return <IconAlertCircle size={12} />;
     case "running":
     default:
-      return "◌";
+      return <IconLoader size={12} className="tool-status-spin" />;
   }
 }
 
@@ -1394,7 +1366,7 @@ function ToolActivityCard({
         )}
         <span className="tool-card-status">{statusText}</span>
         <span className="tool-card-caret" data-open={open} aria-hidden="true">
-          ⌄
+          <IconChevron size={12} open={open} />
         </span>
       </button>
       {open && (
@@ -1529,7 +1501,7 @@ function ApprovalInline({
     <section className="approval-card gate-card" data-status="awaiting" aria-label={t("tool.approvalHint")}>
       <header className="approval-card-head">
         <span className="approval-card-glyph" aria-hidden="true">
-          {">_"}
+          <IconTerminal size={14} />
         </span>
         <span className="approval-card-title">{kindLabel}</span>
         <span className="approval-card-meta">{t("tool.approvalPending")}</span>

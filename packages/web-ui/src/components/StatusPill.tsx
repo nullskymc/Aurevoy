@@ -1,5 +1,6 @@
 import type { TaskPhase, TaskStatus } from "@aurevoy/shared";
 import { getPhaseLabel, getStatusLabel } from "./status";
+import { IconBan, IconX } from "../icons";
 
 interface StatusPillProps {
   status: TaskStatus | null;
@@ -30,30 +31,7 @@ export function StatusPill({ status, phase = null }: StatusPillProps) {
 }
 
 function StatusGlyph({ status }: { status: TaskStatus | null }) {
-  if (status === "failed") return <CrossIcon />;
-  if (status === "cancelled") return <SlashIcon />;
+  if (status === "failed") return <IconX size={13} strokeWidth={2} />;
+  if (status === "cancelled") return <IconBan size={13} strokeWidth={1.75} />;
   return null;
-}
-
-function CrossIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <path
-        d="M4.5 4.5l7 7M11.5 4.5l-7 7"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        fill="none"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function SlashIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <circle cx="8" cy="8" r="5.2" stroke="currentColor" strokeWidth="1.5" fill="none" />
-      <path d="M4.6 4.6l6.8 6.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
 }

@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { AGENT_DEFAULT_HOST, AGENT_DEFAULT_PORT, type ToolRiskLevel } from '@aurevoy/shared';
 
-export interface McpServerConfig {
+/** MCP 本地进程（stdio）。 */
+export interface McpStdioServerConfig {
   name: string;
   transport: 'stdio';
   command: string;
@@ -14,6 +15,22 @@ export interface McpServerConfig {
   /** MCP 工具缺省风险等级；不填时按 tool annotations 推断，兜底为 caution。 */
   riskLevel?: ToolRiskLevel;
 }
+
+/**
+ * MCP 远程 Streamable HTTP（MCP 规范推荐的 HTTP 传输）。
+ * 兼容配置别名：transport `http` / `streamable-http` / `streamableHttp`。
+ */
+export interface McpStreamableHttpServerConfig {
+  name: string;
+  transport: 'streamable-http';
+  url: string;
+  /** 附加请求头（如 Authorization）；值均为字符串。 */
+  headers?: Record<string, string>;
+  enabled: boolean;
+  riskLevel?: ToolRiskLevel;
+}
+
+export type McpServerConfig = McpStdioServerConfig | McpStreamableHttpServerConfig;
 
 /**
  * 运行时配置。
@@ -331,9 +348,30 @@ function parseMcpServerConfig(
   const name = readOptionalString(value.name) ?? fallbackName;
   if (!name?.trim()) throw new Error('MCP server 缺少 name');
 
-  const transport = readOptionalString(value.transport) ?? 'stdio';
-  if (transport !== 'stdio') {
-    throw new Error(`MCP server "${name}" 暂只支持 stdio transport`);
+  const transportRaw = readOptionalString(value.transport);
+  const url = readOptionalString(value.url);
+  // 有 url 且未写 transport 时默认 streamable-http（Claude/Cursor 远程 MCP 习惯）
+  const transport = normalizeMcpTransport(transportRaw, url);
+
+  if (transport === 'streamable-http') {
+    if (!url) throw new Error(`MCP server "${name}" 缺少 url（streamable-http）`);
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      throw new Error(`MCP server "${name}" 的 url 无效：${url}`);
+    }
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      throw new Error(`MCP server "${name}" 的 url 须为 http:// 或 https://`);
+    }
+    return {
+      name,
+      transport: 'streamable-http',
+      url: parsedUrl.toString(),
+      headers: readStringRecord(value.headers, `${name}.headers`),
+      enabled: value.enabled !== false,
+      riskLevel: readRiskLevel(value.riskLevel, `${name}.riskLevel`),
+    };
   }
 
   const command = readOptionalString(value.command);
@@ -341,7 +379,7 @@ function parseMcpServerConfig(
 
   return {
     name,
-    transport,
+    transport: 'stdio',
     command,
     args: readStringArray(value.args, `${name}.args`),
     cwd: readOptionalString(value.cwd),
@@ -349,6 +387,20 @@ function parseMcpServerConfig(
     enabled: value.enabled !== false,
     riskLevel: readRiskLevel(value.riskLevel, `${name}.riskLevel`),
   };
+}
+
+function normalizeMcpTransport(
+  transport: string | undefined,
+  url: string | undefined,
+): 'stdio' | 'streamable-http' {
+  if (!transport) return url ? 'streamable-http' : 'stdio';
+  const key = transport.trim().toLowerCase();
+  if (key === 'stdio') return 'stdio';
+  if (key === 'streamable-http' || key === 'streamablehttp' || key === 'http' || key === 'sse') {
+    // SSE 旧传输已弃用；统一走 Streamable HTTP（多数远端实现兼容）
+    return 'streamable-http';
+  }
+  throw new Error(`MCP transport 不支持：${transport}（可用 stdio / streamable-http）`);
 }
 
 function readOptionalString(value: unknown): string | undefined {

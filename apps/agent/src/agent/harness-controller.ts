@@ -27,7 +27,8 @@ import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval } from './pi-
 import { createInitialAutoModeState, syncAutoModeState } from './approval.js';
 import { taskStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
-import { resumeIncompletePlan } from './plan-progress.js';
+import { createInitialPlanSteps, resumeIncompletePlan } from './plan-progress.js';
+import { applyQuestionFirstSteering } from './control-policy.js';
 import {
   ensureLifetimeAllowsAnotherRun,
   initialBudgetUsage,
@@ -377,6 +378,9 @@ export function queueRunningUserTurn(
   delivery: 'steering' | 'follow_up' = 'steering',
   attachments?: MessageAttachment[],
 ): { message: Message; delivered: boolean } {
+  // OpenCode proactiveness: status/question asks get a text-first reminder on the wire to the model.
+  // Durable transcript keeps the user's raw content; steering payload may include the prefix.
+  const steeredContent = applyQuestionFirstSteering(content);
   const userMsg: Message = {
     id: randomUUID(),
     role: 'user',
@@ -385,10 +389,15 @@ export function queueRunningUserTurn(
     attachments,
     delivery,
   };
+  // Model-facing message for the queue (may include system-reminder); transcript stores raw `content`.
+  const modelFacingMsg: Message =
+    steeredContent === content
+      ? userMsg
+      : { ...userMsg, content: steeredContent };
 
   const delivered = delivery === 'follow_up'
-    ? followUpPiHarnessTask(task.id, userMsg)
-    : steerPiHarnessTask(task.id, userMsg);
+    ? followUpPiHarnessTask(task.id, modelFacingMsg)
+    : steerPiHarnessTask(task.id, modelFacingMsg);
   if (delivered) {
     task.messages.push(userMsg);
     task.updatedAt = userMsg.createdAt;
@@ -519,7 +528,7 @@ export async function runHarnessTask(task: Task): Promise<void> {
   taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...autoModeState } });
 
   if (task.plan.length === 0) {
-    task.plan = createInitialPlan(task);
+    task.plan = createInitialPlanSteps(task.goal);
   } else {
     task.plan = resumeIncompletePlan(task.plan);
   }
@@ -543,22 +552,6 @@ export async function runHarnessTask(task: Task): Promise<void> {
 
 function currentAutoModeLevel(): AutoModeLevel {
   return 'auto';
-}
-
-function createInitialPlan(task: Task): PlanStep[] {
-  if (!shouldUseMultiStepPlan(task.goal)) {
-    return [{ id: 'exec', description: 'Agent 执行任务', status: 'running' }];
-  }
-  // 三步模板由 plan-progress 在工具/终稿/收尾时推进，避免 discover 永久 running
-  return [
-    { id: 'discover', description: '搜集并确认本地材料', status: 'running' },
-    { id: 'synthesize', description: '整理关键信息并形成结构', status: 'pending' },
-    { id: 'deliver', description: '输出最终结果并检查完整性', status: 'pending' },
-  ];
-}
-
-function shouldUseMultiStepPlan(goal: string): boolean {
-  return /(整理|报告|Markdown|材料|多步|计划|report|markdown|plan|summari[sz]e|organize)/i.test(goal);
 }
 
 function parseSlashCommand(content: string): { planRequested: boolean; text: string } {

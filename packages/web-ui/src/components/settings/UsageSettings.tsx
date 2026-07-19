@@ -7,6 +7,7 @@ import type {
 import { t } from "../../i18n";
 import { getTokenUsageReport } from "../../api";
 import { ProviderIcon, providerLabel } from "../providerIcons";
+import { IconAlertCircle, IconChart } from "../../icons";
 import { SettingsChoiceGroup } from "./layout";
 import {
   avgTokensPerTask,
@@ -574,28 +575,9 @@ function ModelUsageCard({
 }
 
 function UsageChartIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true">
-      <rect x="3.5" y="12" width="3.5" height="7.5" rx="1" fill="currentColor" opacity="0.35" />
-      <rect x="9" y="8" width="3.5" height="11.5" rx="1" fill="currentColor" opacity="0.55" />
-      <rect x="14.5" y="5" width="3.5" height="14.5" rx="1" fill="currentColor" opacity="0.75" />
-      <path
-        d="M4 4.5h16"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        opacity="0.35"
-      />
-    </svg>
-  );
+  return <IconChart size={28} />;
 }
 
 function UsageAlertIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true">
-      <circle cx="12" cy="12" r="8.25" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M12 8v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <circle cx="12" cy="16" r="0.9" fill="currentColor" />
-    </svg>
-  );
+  return <IconAlertCircle size={28} />;
 }

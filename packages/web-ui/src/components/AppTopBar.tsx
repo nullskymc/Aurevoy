@@ -3,27 +3,11 @@ import { t } from "../i18n";
 import { IconWorkbench } from "./workbenchIcons";
 import type { Task, TaskPhase, TaskStatus } from "@aurevoy/shared";
 import { taskDisplayTitle } from "@aurevoy/shared";
+import { IconFile, IconPanelLeftClose, IconPanelLeftOpen } from "../icons";
 
 function SidebarIcon({ collapsed }: { collapsed: boolean }) {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-      <path
-        d="M3.8 4.2h12.4c.9 0 1.6.7 1.6 1.6v8.4c0 .9-.7 1.6-1.6 1.6H3.8c-.9 0-1.6-.7-1.6-1.6V5.8c0-.9.7-1.6 1.6-1.6zM7.4 4.5v11"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        fill="none"
-        strokeLinejoin="round"
-      />
-      {collapsed ? (
-        <path d="M10 7.2l2.8 2.8-2.8 2.8" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" strokeLinecap="round" />
-      ) : (
-        <path d="M13 7.2l-2.8 2.8 2.8 2.8" stroke="currentColor" strokeWidth="1.35" fill="none" strokeLinejoin="round" strokeLinecap="round" />
-      )}
-    </svg>
-  );
+  return collapsed ? <IconPanelLeftOpen size={18} /> : <IconPanelLeftClose size={18} />;
 }
-
-
 
 function getMainViewTitle(view: MainView): string {
   if (view === "search") return t("nav.search");
@@ -34,31 +18,7 @@ function getMainViewTitle(view: MainView): string {
 
 /** 输出栏：文档/产物图标（与工作台「分栏+文件」区分） */
 function OutputRailIcon({ open }: { open: boolean }) {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true">
-      {/* 背后一层：产物堆叠感 */}
-      <path
-        d="M6.2 4.2h6.2a1.4 1.4 0 011.4 1.4v.6"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-        opacity={open ? 0.45 : 0.35}
-      />
-      {/* 主文档 */}
-      <path
-        d="M5 5.8h7.5a1.5 1.5 0 011.5 1.5V15a1.5 1.5 0 01-1.5 1.5H5A1.5 1.5 0 013.5 15V7.3A1.5 1.5 0 015 5.8z"
-        stroke="currentColor"
-        strokeWidth="1.35"
-      />
-      <path
-        d="M6.4 9.2h5.2M6.4 11.6h5.2M6.4 14h3.4"
-        stroke="currentColor"
-        strokeWidth="1.25"
-        strokeLinecap="round"
-        opacity={open ? 1 : 0.85}
-      />
-    </svg>
-  );
+  return <IconFile size={18} strokeWidth={open ? 2 : 1.75} />;
 }
 
 export function AppTopBar({

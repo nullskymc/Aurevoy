@@ -1176,6 +1176,11 @@ export function buildAgentIdentityMessage(): Message {
     '- Stay inside the workspace sandbox unless the user explicitly granted external paths.',
     '- When something fails, report the concrete error and what you already verified; do not invent success.',
     '- Keep final answers concise. Deliver large outputs via files + attach_content, not wall-of-text dumps.',
+    // Universal communication / control (not task-specific recipes)
+    '- Text is for the user; tools are only for actions. Never use tools as a side-channel to talk to the user.',
+    '- Before non-trivial shell commands, explain in user-visible text what you will run and why.',
+    '- If the latest user message is a question or status check, answer in text first this turn before further tool use.',
+    '- When blocked, state the blocker and verified facts, then stop or ask_user — do not loop tools without user-visible progress.',
   ].join('\n');
 
   return {
@@ -1201,6 +1206,14 @@ export function buildToolGuidanceMessage(): Message {
     '2. Use the smallest sufficient tool path; verify results.',
     '3. Deliver to the user with the right channel (text / attach_content).',
     '4. Stop when done or clearly blocked; ask_user only when a decision is truly missing.',
+    '',
+    '## Communication',
+    '- Output text to communicate with the user; use tools only to complete tasks.',
+    '- Never use tools (including bash) as a substitute for talking to the user.',
+    '- For non-trivial `bash` commands, first state in user-visible text what the command does and why.',
+    '- When the user asks a question or for status/progress, answer in text this turn before any further tool calls.',
+    '- After a verification failure or environmental blocker, report verified facts and stop or ask_user; do not silently retry tools in a loop.',
+    '- Prefer brief user-visible progress notes at meaningful milestones so the user can steer.',
     '',
     '## Workspace tools',
     '- Discover: `glob`, `grep`, `list_directory`, then `read` the few files that matter.',

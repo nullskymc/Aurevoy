@@ -27,6 +27,19 @@ import {
   contextMenuPoint,
   type ContextMenuState,
 } from "./contextMenuActions";
+import { getPlanStepStatusLabel, mapPlanStepGroupStatus, type PlanUiStatus } from "./planStatus";
+import {
+  IconAlertCircle,
+  IconBot,
+  IconChevron,
+  IconClock,
+  IconExternal,
+  IconFile,
+  IconGlobe,
+  IconLoader,
+  IconPencil,
+  IconTerminal,
+} from "../icons";
 import "./Timeline.css";
 
 /* ============ 类型定义 ============ */
@@ -60,7 +73,9 @@ export interface TimelineStepData {
 export interface PlanStepGroupData {
   planStepId: string;
   description: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: PlanUiStatus;
+  /** Shown when plan step is blocked/paused */
+  blockedReason?: string;
   steps: TimelineStepData[];
 }
 
@@ -72,7 +87,7 @@ export interface AgentRoundData {
   markdownOutput?: string;
   contentBlocks?: ContentBlock[];
   subagentRuns?: SubagentRun[];
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "blocked";
 }
 
 /* ============ 工具函数 ============ */
@@ -442,12 +457,12 @@ export function buildAgentRoundFromMessage(
       const stepsInGroup = groupsByPlanStepId.get(ps.id) ?? [];
       if (stepsInGroup.length === 0) continue;
       renderedPlanStepIds.add(ps.id);
+      const toolFailed = stepsInGroup.some((step) => step.status === "failed");
       planStepGroups.push({
         planStepId: ps.id,
         description: ps.description,
-        status: ps.status === "completed" ? "completed"
-          : ps.status === "failed" ? "failed"
-          : "completed",
+        status: mapPlanStepGroupStatus(ps.status, toolFailed),
+        blockedReason: ps.blockedReason,
         steps: stepsInGroup,
       });
     }
@@ -555,13 +570,12 @@ export function buildLiveAgentRoundData(params: {
       const stepsInGroup = stepsByPlanStepId.get(ps.id) ?? [];
       if (stepsInGroup.length === 0) continue;
       renderedPlanStepIds.add(ps.id);
+      const toolFailed = stepsInGroup.some((step) => step.status === "failed");
       planStepGroups.push({
         planStepId: ps.id,
         description: ps.description,
-        status: ps.status === "completed" ? "completed"
-          : ps.status === "failed" ? "failed"
-          : isFailed ? "failed"
-          : "running",
+        status: mapPlanStepGroupStatus(ps.status, toolFailed, isFailed),
+        blockedReason: ps.blockedReason,
         steps: stepsInGroup,
       });
     }
@@ -586,7 +600,9 @@ export function buildLiveAgentRoundData(params: {
       });
     }
   } else if (steps.length > 0) {
-    const activeIndex = plan.findIndex((s) => s.status === "running");
+    const activeIndex = plan.findIndex(
+      (s) => s.status === "running" || s.status === "blocked" || s.status === "paused",
+    );
     const activeStepId = activeIndex >= 0 ? plan[activeIndex]?.id : undefined;
     const currentPlanDesc = activeStepId
       ? plan.find((s) => s.id === activeStepId)?.description ?? "执行工具"
@@ -629,31 +645,27 @@ function StepGlyph({ step }: { step: TimelineStepData }) {
   if (step.status === "running") {
     return (
       <span className="timeline-step-glyph is-running" aria-hidden="true">
-        <svg viewBox="0 0 16 16" width="15" height="15">
-          <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeDasharray="18" strokeLinecap="round" />
-        </svg>
+        <IconLoader size={15} />
       </span>
     );
   }
   if (step.kind === "search" || step.kind === "browse") {
     return (
       <span className="timeline-step-glyph" aria-hidden="true">
-        <svg viewBox="0 0 16 16" width="15" height="15" fill="none">
-          <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.25" />
-          <path d="M2.2 8h11.6M8 1.8c1.7 1.8 2.6 3.8 2.6 6.2S9.7 12.4 8 14.2M8 1.8C6.3 3.6 5.4 5.6 5.4 8s.9 4.4 2.6 6.2" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" />
-        </svg>
+        <IconGlobe size={15} />
       </span>
     );
   }
   if (step.status === "failed") {
-    return <span className="timeline-step-glyph is-failed" aria-hidden="true">!</span>;
+    return (
+      <span className="timeline-step-glyph is-failed" aria-hidden="true">
+        <IconAlertCircle size={15} />
+      </span>
+    );
   }
   return (
     <span className="timeline-step-glyph" aria-hidden="true">
-      <svg viewBox="0 0 16 16" width="15" height="15" fill="none">
-        <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.25" />
-        <path d="M8 4.4v4l2.6 1.5" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
+      <IconClock size={15} />
     </span>
   );
 }
@@ -799,9 +811,7 @@ function TimelineStepNode({
             <StepStatus status={step.status} />
           {hasDetails && (
             <span className="timeline-step-caret" data-open={open}>
-              <svg viewBox="0 0 12 12" width="10" height="10" fill="none">
-                <path d="M4 3L8 6L4 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <IconChevron size={10} />
             </span>
           )}
         </button>
@@ -829,10 +839,7 @@ function TimelineStepNode({
             ) : null}
             {step.error && (
               <div className="timeline-step-error">
-                <svg viewBox="0 0 14 14" width="12" height="12" fill="none" aria-hidden="true">
-                  <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
-                  <path d="M7 4.5v3M7 9.5v.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                </svg>
+                <IconAlertCircle size={12} />
                 <span>{step.error}</span>
               </div>
             )}
@@ -1000,6 +1007,17 @@ export function PlanStepGroup({
     show: { transition: { staggerChildren: 0.06 } },
   };
 
+  const statusText =
+    group.status === "blocked"
+      ? getPlanStepStatusLabel("blocked")
+      : runningCount > 0
+        ? `${t("plan.step.running")} ${runningCount}`
+        : failedCount > 0
+          ? `${t("plan.step.failed")} ${failedCount}`
+          : group.status === "pending"
+            ? t("plan.step.pending")
+            : `${t("plan.step.completed")} ${doneCount}`;
+
   return (
     <motion.div
       className="timeline-plan-group"
@@ -1015,20 +1033,25 @@ export function PlanStepGroup({
         {group.description && (
           <span className="timeline-plan-desc">
             {group.description}
-            {group.steps.length > 0 && (
-              <span className="timeline-plan-count">
-                {runningCount > 0 ? (
-                  <span className="timeline-plan-status-text">执行中 {runningCount}</span>
-                ) : failedCount > 0 ? (
-                  <span className="timeline-plan-status-text is-failed">失败 {failedCount}</span>
-                ) : (
-                  <span className="timeline-plan-status-text">完成 {doneCount}</span>
-                )}
+            <span className="timeline-plan-count">
+              <span
+                className={
+                  group.status === "failed" || group.status === "blocked"
+                    ? `timeline-plan-status-text is-${group.status}`
+                    : "timeline-plan-status-text"
+                }
+              >
+                {statusText}
               </span>
-            )}
+            </span>
           </span>
         )}
       </div>
+      {group.blockedReason ? (
+        <p className="timeline-plan-blocked-reason" role="status">
+          {group.blockedReason}
+        </p>
+      ) : null}
 
       {/* 步骤列表 */}
       {group.steps.length > 0 && (
@@ -1136,10 +1159,7 @@ function ContentBlockView({
             onContextMenu={handleFileContextMenu}
             title={block.content}
           >
-            <svg className="content-block-icon" viewBox="0 0 16 16" width="16" height="16" fill="none">
-              <path d="M2 1h7.5L13 4.5V14a1 1 0 01-1 1H2a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.2"/>
-              <path d="M9 1v3.5H12.5" stroke="currentColor" strokeWidth="1.2"/>
-            </svg>
+            <IconFile className="content-block-icon" size={16} />
             <span className="content-block-name">
               {block.name || block.content.split("/").pop() || block.content}
             </span>
@@ -1198,11 +1218,7 @@ function ContentBlockView({
           target="_blank"
           rel="noopener noreferrer"
         >
-          <svg className="content-block-icon" viewBox="0 0 16 16" width="14" height="14" fill="none">
-            <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1V8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-            <path d="M11 1h4v4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-            <path d="M15 1L7 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-          </svg>
+          <IconExternal className="content-block-icon" size={14} />
           <span>{block.name || block.content}</span>
         </a>
           <ContextMenu
@@ -1549,26 +1565,19 @@ export function formatProcessedSummaryLabel(params: {
 
 function ProcessActivityIcon({ icon }: { icon?: ProcessActivityRow["icon"] }) {
   if (icon === "search" || icon === "browse") {
-    return (
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-        <circle cx="8" cy="8" r="5.2" stroke="currentColor" strokeWidth="1.3" />
-        <path d="M2.8 8h10.4M8 2.8a8 8 0 010 10.4M8 2.8a8 8 0 000 10.4" stroke="currentColor" strokeWidth="1.1" />
-      </svg>
-    );
+    return <IconGlobe size={14} />;
   }
   if (icon === "agent") {
-    return <span aria-hidden="true">◎</span>;
+    return <IconBot size={14} />;
   }
   if (icon === "command") {
-    return <span aria-hidden="true">&gt;_</span>;
+    return <IconTerminal size={14} />;
   }
-  if (icon === "file" || icon === "edit") {
-    return (
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-        <path d="M4 2.5h5.2L12 5.3V13.5H4V2.5z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-        <path d="M9.2 2.5V5.3H12" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-      </svg>
-    );
+  if (icon === "file") {
+    return <IconFile size={14} />;
+  }
+  if (icon === "edit") {
+    return <IconPencil size={14} />;
   }
   return <span aria-hidden="true">·</span>;
 }

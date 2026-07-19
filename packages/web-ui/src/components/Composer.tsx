@@ -4,6 +4,15 @@ import { usePlatform } from "../platform/context";
 import { ImageViewer } from "./ImageViewer";
 import type { LlmReadiness, LlmReadyState, MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
 import { formatModelEffortChipLabel } from "./ModelSelectorDrawer";
+import {
+  IconArrowUp,
+  IconFile,
+  IconFolder,
+  IconImage,
+  IconPlus,
+  IconSquare,
+  IconX,
+} from "../icons";
 import "./Composer.css";
 
 interface SlashCommand {
@@ -503,77 +512,29 @@ export function nextThinkingLevel(current: ThinkingUILevel): ThinkingUILevel {
 }
 
 function DocFileIcon() {
-  return (
-    <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none">
-      <rect x="2.5" y="1.5" width="9" height="11" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
-      <path d="M5 5h4M5 7.5h4M5 10h2.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-    </svg>
-  );
+  return <IconFile size={14} />;
 }
 
 function ImageFileIcon() {
-  return (
-    <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none">
-      <rect x="1.5" y="2.5" width="11" height="9" rx="1.2" stroke="currentColor" strokeWidth="1.1" />
-      <circle cx="5" cy="5.5" r="1.2" stroke="currentColor" strokeWidth="0.9" />
-      <path d="M2 9.5l3-3 2.5 2.5L10 6.5l2 3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+  return <IconImage size={14} />;
 }
 
 function XIcon() {
-  return (
-    <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" fill="none">
-      <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
+  return <IconX size={12} />;
 }
 
 function PlusIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none">
-      <path
-        d="M10 4.5v11M4.5 10h11"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
+  return <IconPlus size={18} />;
 }
 
 function ArrowUpIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none">
-      <path
-        d="M10 15.5v-11M5 9.5L10 4.5l5 5"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
+  return <IconArrowUp size={18} strokeWidth={2} />;
 }
 
 function StopDot() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-      <rect x="6" y="6" width="8" height="8" rx="1.5" fill="currentColor" />
-    </svg>
-  );
+  return <IconSquare size={14} fill="currentColor" strokeWidth={0} />;
 }
 
 function FolderIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-      <path
-        d="M3 6.5c0-.8.6-1.4 1.4-1.4h2.8l1.4 1.6h5.6c.8 0 1.4.6 1.4 1.4v5.4c0 .8-.6 1.4-1.4 1.4H4.4c-.8 0-1.4-.6-1.4-1.4V6.5z"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        fill="none"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
+  return <IconFolder size={14} />;
 }

@@ -12,6 +12,7 @@ import json from "highlight.js/lib/languages/json";
 import bash from "highlight.js/lib/languages/bash";
 import xml from "highlight.js/lib/languages/xml";
 import "katex/dist/katex.min.css";
+import { copySvgHtml } from "../icons";
 
 // 按需注册常用语言，避免打包整个 highlight.js。
 hljs.registerLanguage("javascript", javascript);
@@ -221,10 +222,7 @@ function wrapCodeBlocks(html: string): string {
         `<div class="markdown-code-header">` +
         `<span class="markdown-code-lang">${safeLang}</span>` +
         `<button type="button" class="markdown-code-copy" data-copy-code="1" aria-label="Copy code">` +
-        `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">` +
-        `<rect x="5.5" y="5.5" width="7" height="8" rx="1.2" stroke="currentColor" stroke-width="1.2"/>` +
-        `<path d="M3.5 10.5V3.5a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>` +
-        `</svg></button></div>` +
+        `${copySvgHtml(14)}</button></div>` +
         `<pre><code class="hljs language-${safeLang}">${code}</code></pre></div>`
       );
     },
@@ -237,10 +235,7 @@ function wrapCodeBlocks(html: string): string {
         `<div class="markdown-code-header">` +
         `<span class="markdown-code-lang">text</span>` +
         `<button type="button" class="markdown-code-copy" data-copy-code="1" aria-label="Copy code">` +
-        `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">` +
-        `<rect x="5.5" y="5.5" width="7" height="8" rx="1.2" stroke="currentColor" stroke-width="1.2"/>` +
-        `<path d="M3.5 10.5V3.5a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>` +
-        `</svg></button></div>` +
+        `${copySvgHtml(14)}</button></div>` +
         `<pre><code class="hljs">${code}</code></pre></div>`
       );
     },

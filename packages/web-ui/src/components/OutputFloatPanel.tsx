@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ContentBlock, Task, TaskArtifact } from "@aurevoy/shared";
 import { t } from "../i18n";
+import { IconFile, IconFolder, IconPlus, IconX } from "../icons";
 import "./OutputFloatPanel.css";
 
 export type OutputItem =
@@ -131,9 +132,7 @@ export function OutputFloatPanel({
             title={t("output.createHint")}
             aria-label={t("output.createHint")}
           >
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-              <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
+            <IconPlus size={14} />
           </button>
           <button
             type="button"
@@ -142,9 +141,7 @@ export function OutputFloatPanel({
             title={t("output.close")}
             aria-label={t("output.close")}
           >
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
+            <IconX size={14} />
           </button>
         </div>
       </header>
@@ -190,27 +187,9 @@ export function OutputFloatPanel({
 }
 
 function DocIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-      <path
-        d="M4 2.5h5.2L12 5.3V13a1 1 0 01-1 1H4a1 1 0 01-1-1V3.5a1 1 0 011-1z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-      <path d="M9 2.5V5h3" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
+  return <IconFile size={14} />;
 }
 
 function FileIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-      <path
-        d="M3.5 4.5h9v8a1 1 0 01-1 1h-7a1 1 0 01-1-1v-8z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-      <path d="M5.5 2.5h5v2h-5v-2z" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
+  return <IconFolder size={14} />;
 }

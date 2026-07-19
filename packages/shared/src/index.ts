@@ -112,7 +112,16 @@ export interface Message {
 }
 
 /** 计划中的一个步骤 */
-export type PlanStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused' | 'proposed';
+export type PlanStepStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'paused'
+  | 'proposed'
+  /** Blocked on external/user input; remains incomplete until unblocked or cancelled */
+  | 'blocked';
 
 export interface PlanStep {
   id: string;
@@ -126,6 +135,8 @@ export interface PlanStep {
   verifiable?: boolean;
   /** 步骤来源：llm（由 LLM 生成）| heuristic（正则兜底）| resume（从 checkpoint 恢复） */
   source?: 'llm' | 'heuristic' | 'resume';
+  /** Optional blocker detail when status is blocked/paused */
+  blockedReason?: string;
 }
 
 /** 侦查阶段产出：工作区关键信息摘要（P1 重构） */

@@ -84,6 +84,32 @@ export interface PlatformAdapter {
     relaunch?: boolean;
     onProgress?: (progress: AppUpdateProgress) => void;
   }): Promise<void>;
+
+  /**
+   * 同步系统托盘「最近对话」列表（macOS 菜单栏 / Windows 托盘）。
+   * 浏览器环境 no-op。
+   */
+  updateTrayRecent?(items: TrayRecentItem[]): void | Promise<void>;
+
+  /**
+   * 监听托盘菜单动作（new-chat / open / open-task）。
+   * 返回取消监听函数；浏览器环境返回 undefined。
+   */
+  onTrayAction?(handler: (action: TrayAction) => void): (() => void) | void;
+}
+
+/** 托盘最近任务条目 */
+export interface TrayRecentItem {
+  id: string;
+  title: string;
+  /** 副标题，如项目名 */
+  subtitle?: string | null;
+}
+
+/** 托盘菜单动作 */
+export interface TrayAction {
+  action: "new-chat" | "open" | "open-task" | string;
+  taskId?: string | null;
 }
 
 /** 应用更新检查结果 */
