@@ -1,7 +1,10 @@
 mod agent_process;
+mod tray_menu;
 
 use agent_process::{agent_process_status, ensure_agent_process, AgentProcessState};
 use serde::Serialize;
+use tauri::Manager;
+use tray_menu::{setup_tray, update_tray_recent, TrayState};
 
 #[derive(Debug, Clone, Serialize)]
 struct FileMetadata {
@@ -131,23 +134,63 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .manage(AgentProcessState::default())
+        .manage(TrayState::default())
         .setup(|app| {
             #[cfg(desktop)]
             {
                 app.handle()
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
             }
+            // macOS 菜单栏 / Windows 托盘；失败只记日志，不阻断启动。
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if let Err(err) = setup_tray(app.handle()) {
+                eprintln!("[tray] setup failed: {err}");
+            }
             Ok(())
         })
-        .manage(AgentProcessState::default())
+        // macOS / Windows：关窗只隐藏 UI，引擎与托盘继续；退出走菜单 Quit / Cmd+Q。
+        .on_window_event(|window, event| {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            {
+                let _ = (window, event);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             ensure_agent_process,
             agent_process_status,
             file_metadata,
             save_temp_file,
             read_image_data_url,
-            clear_app_quarantine
+            clear_app_quarantine,
+            update_tray_recent
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| match event {
+            // Cmd+Q / Quit Aurevoy / 非托盘平台关最后一窗：在 process::exit 前显式杀托管引擎。
+            // Tauri 用 process::exit 退出，managed state 的 Drop 不会执行。
+            tauri::RunEvent::Exit => {
+                if let Some(state) = app_handle.try_state::<AgentProcessState>() {
+                    state.stop_managed();
+                }
+            }
+            // Dock 点图标：若窗口被隐藏，重新显示。
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows, ..
+            } => {
+                if !has_visible_windows {
+                    tray_menu::show_main_window(app_handle);
+                }
+            }
+            _ => {}
+        });
 }

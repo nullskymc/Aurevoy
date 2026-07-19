@@ -1,0 +1,149 @@
+.plan-progress {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.plan-progress-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.plan-progress-title {
+  font-size: calc(var(--ui-font-size) - 1px);
+  font-weight: 650;
+  color: var(--text-secondary);
+}
+
+.plan-progress-meta {
+  font-size: var(--ui-font-xs);
+  color: var(--text-tertiary);
+}
+
+.plan-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-progress-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.plan-progress-index {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.plan-progress-item[data-status="running"] .plan-progress-index {
+  color: var(--accent-soft-fg);
+  border-color: color-mix(in srgb, var(--accent-soft-fg) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent-soft-bg, var(--surface)) 80%, transparent);
+}
+
+.plan-progress-item[data-status="completed"] .plan-progress-index {
+  color: var(--success-soft-fg, #1a7f4b);
+  border-color: color-mix(in srgb, var(--success-soft-fg, #1a7f4b) 35%, var(--border));
+}
+
+.plan-progress-item[data-status="failed"] .plan-progress-index,
+.plan-progress-item[data-status="blocked"] .plan-progress-index {
+  color: var(--danger-soft-fg);
+  border-color: color-mix(in srgb, var(--danger-soft-fg) 35%, var(--border));
+  background: var(--danger-soft-bg);
+}
+
+.plan-progress-item[data-status="blocked"] .plan-progress-index {
+  color: var(--warning-soft-fg, #a16207);
+  border-color: color-mix(in srgb, var(--warning-soft-fg, #a16207) 40%, var(--border));
+  background: var(--warning-soft-bg, color-mix(in srgb, #f59e0b 12%, var(--surface)));
+}
+
+.plan-progress-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(var(--ui-font-size) - 2px);
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.plan-progress-item[data-status="running"] .plan-progress-desc {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.plan-progress-item[data-status="blocked"] .plan-progress-desc {
+  color: var(--warning-soft-fg, #a16207);
+  font-weight: 550;
+}
+
+.plan-progress-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.plan-progress-badge.is-running {
+  color: var(--accent-soft-fg);
+  border-color: color-mix(in srgb, var(--accent-soft-fg) 35%, var(--border));
+}
+
+.plan-progress-badge.is-completed {
+  color: var(--success-soft-fg, #1a7f4b);
+}
+
+.plan-progress-badge.is-failed {
+  color: var(--danger-soft-fg);
+  background: var(--danger-soft-bg);
+  border-color: transparent;
+}
+
+.plan-progress-badge.is-blocked {
+  color: var(--warning-soft-fg, #a16207);
+  background: var(--warning-soft-bg, color-mix(in srgb, #f59e0b 12%, var(--surface)));
+  border-color: transparent;
+}
+
+.plan-progress-blocker {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: calc(var(--ui-font-size) - 2px);
+  line-height: 1.4;
+  color: var(--warning-soft-fg, #a16207);
+  background: var(--warning-soft-bg, color-mix(in srgb, #f59e0b 10%, var(--surface)));
+}
+
+.plan-progress-blocker-label {
+  display: inline-block;
+  margin-right: 6px;
+  font-weight: 700;
+}

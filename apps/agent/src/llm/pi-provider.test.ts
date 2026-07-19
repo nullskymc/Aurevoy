@@ -1,6 +1,15 @@
 import { describe, expect, it, afterEach } from "vitest"
 import { config } from "../config.js"
-import { createPiModel, resolveModelBaseUrl } from "./pi-provider.js"
+import {
+  assertPiLLMConfigured,
+  createPiModel,
+  getLlmReadiness,
+  getPiProviderName,
+  hasPiLLMCredential,
+  hasPiLLMModel,
+  isPiLLMConfigured,
+  resolveModelBaseUrl,
+} from "./pi-provider.js"
 import {
   ensureLlmSchemaMigrated,
   getLlmProvider,
@@ -40,6 +49,73 @@ function withProviderMap(map: Record<string, { baseUrl: string }>, fn: () => voi
     }
   }
 }
+
+describe("isPiLLMConfigured model guard", () => {
+  it("treats empty model as unconfigured even when api key is set", () => {
+    withLlmConfig({
+      provider: "deepseek",
+      apiKey: "sk-test",
+      model: "",
+    }, () => {
+      expect(hasPiLLMCredential()).toBe(true)
+      expect(hasPiLLMModel()).toBe(false)
+      expect(isPiLLMConfigured()).toBe(false)
+      expect(getPiProviderName()).toBe("unconfigured")
+      expect(getLlmReadiness()).toMatchObject({
+        state: "no_model",
+        ready: false,
+        provider: "deepseek",
+        model: "",
+      })
+      expect(() => assertPiLLMConfigured()).toThrow(/未选择模型/)
+    })
+  })
+
+  it("requires non-whitespace model id", () => {
+    withLlmConfig({
+      provider: "deepseek",
+      apiKey: "sk-test",
+      model: "   ",
+    }, () => {
+      expect(isPiLLMConfigured()).toBe(false)
+      expect(getLlmReadiness().state).toBe("no_model")
+      expect(() => assertPiLLMConfigured()).toThrow(/未选择模型/)
+    })
+  })
+
+  it("distinguishes missing credential from missing model", () => {
+    withLlmConfig({
+      provider: "deepseek",
+      apiKey: "",
+      model: "deepseek-v4-flash",
+    }, () => {
+      // 无内存 key 时仍可能命中本机 CredentialStore；只断言「有 model」时 state 不是 no_model
+      const readiness = getLlmReadiness()
+      if (!hasPiLLMCredential()) {
+        expect(readiness.state).toBe("no_credential")
+        expect(() => assertPiLLMConfigured()).toThrow(/未配置 LLM 凭证/)
+      }
+    })
+  })
+
+  it("is configured when key and model are both set", () => {
+    withLlmConfig({
+      provider: "deepseek",
+      apiKey: "sk-test",
+      model: "deepseek-v4-flash",
+    }, () => {
+      expect(isPiLLMConfigured()).toBe(true)
+      expect(getPiProviderName()).toBe("deepseek:deepseek-v4-flash")
+      expect(getLlmReadiness()).toMatchObject({
+        state: "ready",
+        ready: true,
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+      })
+      expect(() => assertPiLLMConfigured()).not.toThrow()
+    })
+  })
+})
 
 describe("createPiModel", () => {
   it("marks custom Qwen-compatible thinking models as reasoning replay compatible", () => {
@@ -95,10 +171,14 @@ describe("createPiModel", () => {
       baseUrl: "https://gateway.example.test/v1",
       model: "gpt-4o-mini",
     }, () => {
-      const model = createPiModel()
-      expect(model.baseUrl?.replace(/\/+$/, "")).toBe("https://gateway.example.test/v1")
-      // 网关通常只有 chat/completions；不能继续用 catalog 的 responses API
-      expect(model.api).toBe("openai-completions")
+      withProviderMap({
+        openai: { baseUrl: "https://gateway.example.test/v1" },
+      }, () => {
+        const model = createPiModel()
+        expect(model.baseUrl?.replace(/\/+$/, "")).toBe("https://gateway.example.test/v1")
+        // 网关通常只有 chat/completions；不能继续用 catalog 的 responses API
+        expect(model.api).toBe("openai-completions")
+      })
     })
   })
 

@@ -334,7 +334,28 @@
 }
 
 .tool-chip-icon {
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.tool-status-spin {
+  animation: tool-status-spin 1s linear infinite;
+}
+
+@keyframes tool-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-status-spin {
+    animation: none !important;
+  }
 }
 
 .tool-chip[data-status="ok"] .tool-chip-icon {

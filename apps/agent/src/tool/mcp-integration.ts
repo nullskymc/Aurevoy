@@ -6,9 +6,15 @@ import {
   getDefaultEnvironment,
   type StdioServerParameters,
 } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Tool as McpSdkTool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerStatus, ToolRiskLevel } from '@aurevoy/shared';
-import { config, type McpServerConfig } from '../config.js';
+import {
+  config,
+  type McpServerConfig,
+  type McpStdioServerConfig,
+  type McpStreamableHttpServerConfig,
+} from '../config.js';
 import { unifiedToolRegistry } from './unified-registry.js';
 import { getLogger } from '../logging/logger.js';
 import { getPythonBinDir, isPythonInstalled } from '../runtime/python-runtime.js';
@@ -65,7 +71,7 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
 
   for (const server of enabledServers) {
     try {
-      const client = await connectStdioServer(server);
+      const client = await connectMcpServer(server);
       connections.push({ serverName: server.name, client });
       connectedServers += 1;
 
@@ -82,7 +88,10 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
         connected: true,
         registeredTools: tools.length,
       });
-      mcpLog.info({ server: server.name, toolCount: tools.length }, 'MCP server 已连接');
+      mcpLog.info(
+        { server: server.name, transport: server.transport, toolCount: tools.length },
+        'MCP server 已连接',
+      );
     } catch (err) {
       failedServers += 1;
       const error = formatError(err);
@@ -93,7 +102,10 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
         registeredTools: 0,
         error,
       });
-      mcpLog.warn({ server: server.name, err: error }, 'MCP server 连接失败');
+      mcpLog.warn(
+        { server: server.name, transport: server.transport, err: error },
+        'MCP server 连接失败',
+      );
     }
   }
 
@@ -128,25 +140,47 @@ export function getMcpStatuses(): McpServerStatus[] {
   );
 }
 
-async function connectStdioServer(server: McpServerConfig): Promise<Client> {
+async function connectMcpServer(server: McpServerConfig): Promise<Client> {
+  if (server.transport === 'streamable-http') {
+    return connectStreamableHttpServer(server);
+  }
+  return connectStdioServer(server);
+}
+
+function createMcpClient(serverName: string): Client {
   const client = new Client({
     name: 'aurevoy-agent',
     version: '0.1.0',
   });
 
   client.onerror = (error) => {
-    mcpLog.warn({ server: server.name, err: error.message }, 'MCP server 运行时错误');
+    mcpLog.warn({ server: serverName, err: error.message }, 'MCP server 运行时错误');
   };
   client.onclose = () => {
-    mcpLog.info({ server: server.name }, 'MCP server 连接已关闭');
+    mcpLog.info({ server: serverName }, 'MCP server 连接已关闭');
   };
+  return client;
+}
 
+async function connectStdioServer(server: McpStdioServerConfig): Promise<Client> {
+  const client = createMcpClient(server.name);
   const transport = new StdioClientTransport(toStdioParameters(server));
   await client.connect(transport);
   return client;
 }
 
-function toStdioParameters(server: McpServerConfig): StdioServerParameters {
+async function connectStreamableHttpServer(server: McpStreamableHttpServerConfig): Promise<Client> {
+  const client = createMcpClient(server.name);
+  const url = new URL(server.url);
+  const headers = server.headers ? { ...server.headers } : undefined;
+  const transport = new StreamableHTTPClientTransport(url, {
+    requestInit: headers ? { headers } : undefined,
+  });
+  await client.connect(transport);
+  return client;
+}
+
+function toStdioParameters(server: McpStdioServerConfig): StdioServerParameters {
   const params: StdioServerParameters = {
     command: server.command,
     args: server.args,

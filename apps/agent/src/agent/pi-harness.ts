@@ -96,6 +96,13 @@ import {
   completePlanOnSuccess,
   failOpenPlanSteps,
 } from './plan-progress.js';
+import {
+  buildMaxStepsPrompt,
+  buildMaxStepsWrapUpMessage,
+  buildResumeProgressInjection,
+  decideMaxStepsAfterTurn,
+  maxStepsToolsDisabledReason,
+} from './control-policy.js';
 import { assertPiLLMConfigured, createPiModel, resolveModelApi, resolveModelBaseUrl } from '../llm/pi-provider.js';
 import { approvalConfigFromTask, decideToolPermission } from './approval.js';
 import { skillRegistry } from '../skills/registry.js';
@@ -125,6 +132,13 @@ const activePiControllers = new Map<string, ActivePiTaskController>();
 const pendingClarificationResolvers = new Map<string, Map<string, (answer: string) => void>>();
 /** 本 run 因预算触顶而中止时暂存详情；harness.prompt 返回后转 waiting_budget。 */
 const budgetStopByTask = new Map<string, BudgetExceededInfo>();
+/**
+ * OpenCode-style max-steps wrap-up:
+ * - pending: tools disabled; follow-up max-steps prompt in flight
+ * - done: wrap-up turn finished; safe to pause budget
+ */
+const maxStepsWrapUpPending = new Set<string>();
+const maxStepsWrapUpDone = new Set<string>();
 /** 本 run 开始时已累计的寿命墙钟，用于叠加上本 run 墙钟。 */
 const lifetimeWallAtRunStartByTask = new Map<string, number>();
 const invalidPiToolCallErrors = new Map<string, Map<string, string>>();
@@ -231,6 +245,8 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
   const { lifetimeWallAtRunStart } = beginRunBudget(task);
   lifetimeWallAtRunStartByTask.set(task.id, lifetimeWallAtRunStart);
   budgetStopByTask.delete(task.id);
+  maxStepsWrapUpPending.delete(task.id);
+  maxStepsWrapUpDone.delete(task.id);
   setTaskState(task, 'running', 'initializing');
   updateContextSnapshot(task);
   saveTask(task);
@@ -265,6 +281,8 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
       pinnedSystemPromptByTask.delete(task.id);
       lastPrepPhaseAtByTask.delete(task.id);
       lastPrepPhaseDetailByTask.delete(task.id);
+      maxStepsWrapUpPending.delete(task.id);
+      maxStepsWrapUpDone.delete(task.id);
       const wallStart = lifetimeWallAtRunStartByTask.get(task.id) ?? 0;
       finalizeRunWallTime(task, wallStart, options.taskStartedAtMs);
       lifetimeWallAtRunStartByTask.delete(task.id);
@@ -295,8 +313,8 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
     const message = err instanceof Error ? err.message : String(err);
     const isConfigError =
       message.includes('未配置 LLM') ||
-      message.includes('未支持的 Provider') ||
-      message.includes('未配置 LLM');
+      message.includes('未选择模型') ||
+      message.includes('未支持的 Provider');
     finishFailed(task, err, isConfigError ? 'configuration' : 'unknown');
   }
 }
@@ -535,10 +553,15 @@ async function buildHarnessSeedMessages(task: Task, model: PiModel<any>): Promis
 async function buildHarnessRunInput(task: Task, model: PiModel<any>): Promise<{ text: string; images: PiImageContent[] }> {
   const promptIndex = findHarnessPromptMessageIndex(task.messages);
   const promptMessage = promptIndex >= 0 ? task.messages[promptIndex] : undefined;
+  const progress = buildResumeProgressInjection(task);
   if (!promptMessage || promptMessage.role !== 'user') {
-    return { text: 'Continue the task from the existing conversation state.', images: [] };
+    const base = 'Continue the task from the existing conversation state.';
+    return { text: progress ? `${progress}\n\n${base}` : base, images: [] };
   }
-  return await toHarnessPromptInput(promptMessage, model);
+  const input = await toHarnessPromptInput(promptMessage, model);
+  if (!progress) return input;
+  // Volatile injection on the user turn only — does not rewrite stable system prefix (prompt cache).
+  return { text: `${progress}\n\n${input.text}`, images: input.images };
 }
 
 function findHarnessPromptMessageIndex(messages: Message[]): number {
@@ -576,30 +599,105 @@ function createHarnessSkills(): PiHarnessSkill[] {
     });
 }
 
-function shouldStopAfterTurn(task: Task, taskStartedAtMs: number): boolean {
+/**
+ * After a turn, evaluate budget. OpenCode max-steps path:
+ * 1) First hit → tools disabled + enqueue text-only wrap-up follow-up (do not abort yet)
+ * 2) After wrap-up turn → abort and pause on waiting_budget
+ */
+function shouldStopAfterTurn(
+  task: Task,
+  taskStartedAtMs: number,
+  controller: ActivePiTaskController,
+): boolean {
   const lifetimeWallAtRunStart = lifetimeWallAtRunStartByTask.get(task.id) ?? 0;
   const info = evaluateBudgetStop(task, taskStartedAtMs, lifetimeWallAtRunStart);
-  if (!info) return false;
+  const decision = decideMaxStepsAfterTurn({
+    budgetInfo: info,
+    wrapUpPending: maxStepsWrapUpPending.has(task.id),
+    wrapUpDone: maxStepsWrapUpDone.has(task.id),
+  });
 
-  // 仅记录停步意图；budget_exceeded 事件在 finishBudgetPaused 统一发出，避免重复推送
-  budgetStopByTask.set(task.id, info);
-  task.budgetExceeded = info;
+  if (decision.action === 'continue') {
+    return false;
+  }
+
+  if (decision.action === 'finish_after_wrap_up') {
+    maxStepsWrapUpPending.delete(task.id);
+    maxStepsWrapUpDone.add(task.id);
+    const stopInfo = decision.info ?? budgetStopByTask.get(task.id) ?? info;
+    if (stopInfo) {
+      budgetStopByTask.set(task.id, stopInfo);
+      task.budgetExceeded = stopInfo;
+      saveTask(task);
+      publishBudgetUsage(task);
+    }
+    writePiTrace(task, 'phase', {
+      ok: true,
+      phase: task.phase,
+      errorCategory: 'budget',
+      summary: `max-steps wrap-up 完成，准备预算暂停：${stopInfo?.reason ?? 'step limit'}`,
+      data: stopInfo ?? { wrapUp: true },
+    });
+    return true;
+  }
+
+  if (decision.action === 'start_wrap_up') {
+    const stopInfo = decision.info;
+    budgetStopByTask.set(task.id, stopInfo);
+    task.budgetExceeded = stopInfo;
+    maxStepsWrapUpPending.add(task.id);
+    saveTask(task);
+    publishBudgetUsage(task);
+    writePiTrace(task, 'phase', {
+      ok: true,
+      phase: task.phase,
+      errorCategory: 'budget',
+      summary: `步数/预算触顶，进入 text-only wrap-up：${stopInfo.reason}`,
+      data: {
+        scope: stopInfo.scope,
+        limitName: stopInfo.limitName,
+        used: stopInfo.used,
+        limit: stopInfo.limit,
+        wrapUp: true,
+      },
+    });
+    const wrapUpMsg: Message = {
+      id: randomUUID(),
+      role: 'user',
+      content: buildMaxStepsPrompt(task, stopInfo),
+      createdAt: new Date().toISOString(),
+      delivery: 'follow_up',
+    };
+    try {
+      controller.enqueueFollowUp(wrapUpMsg);
+    } catch {
+      maxStepsWrapUpPending.delete(task.id);
+      maxStepsWrapUpDone.add(task.id);
+      return true;
+    }
+    return false;
+  }
+
+  // stop
+  const stopInfo = decision.info;
+  budgetStopByTask.set(task.id, stopInfo);
+  task.budgetExceeded = stopInfo;
   saveTask(task);
   publishBudgetUsage(task);
   writePiTrace(task, 'phase', {
     ok: true,
     phase: task.phase,
     errorCategory: 'budget',
-    summary: `本轮结束后主动停步：${info.reason}`,
+    summary: `本轮结束后主动停步：${stopInfo.reason}`,
     data: {
-      scope: info.scope,
-      limitName: info.limitName,
-      used: info.used,
-      limit: info.limit,
-      runUsage: info.runUsage,
-      lifetimeUsage: info.lifetimeUsage,
-      runBudget: info.runBudget,
-      lifetimeBudget: info.lifetimeBudget,
+      scope: stopInfo.scope,
+      limitName: stopInfo.limitName,
+      used: stopInfo.used,
+      limit: stopInfo.limit,
+      runUsage: stopInfo.runUsage,
+      lifetimeUsage: stopInfo.lifetimeUsage,
+      runBudget: stopInfo.runBudget,
+      lifetimeBudget: stopInfo.lifetimeBudget,
     },
   });
   return true;
@@ -624,9 +722,10 @@ async function publishScoutReport(task: Task, workspaceDir: string): Promise<voi
   const report: ScoutReport = {
     keyFiles,
     techStack,
+    // Generic product constraints only — never monorepo- or product-specific recipes.
     constraints: [
-      '跨进程契约必须以 packages/shared/src 为唯一来源',
-      '外部能力不可用时必须明确失败或降级，不伪造成功',
+      'Prefer verified tool results; do not invent success when external capabilities fail.',
+      'Stay within the task workspace unless the user granted broader access.',
     ],
     summary: keyFiles.length > 0
       ? `已识别 ${keyFiles.length} 个工作区关键文件，Agent 将优先结合这些上下文执行。`
@@ -638,14 +737,17 @@ async function publishScoutReport(task: Task, workspaceDir: string): Promise<voi
 }
 
 async function findScoutKeyFiles(workspaceDir: string): Promise<Array<{ path: string; reason: string }>> {
+  // Generic entry files common across many repos; missing paths are skipped.
   const candidates = [
-    ['AGENTS.md', '协作规则和项目入口说明'],
-    ['README.md', '项目简介和本地运行说明'],
-    ['package.json', 'Node workspace 脚本和依赖'],
-    ['docs/ARCHITECTURE.md', '系统架构与模块职责'],
-    ['docs/API.md', 'HTTP/SSE 契约说明'],
-    ['docs/UI_DESIGN.md', '前端交互与信息架构'],
-    ['packages/shared/src/index.ts', '前后端共享类型契约'],
+    ['AGENTS.md', 'Agent / project collaboration instructions'],
+    ['CLAUDE.md', 'Project agent instructions'],
+    ['README.md', 'Project overview and local setup'],
+    ['package.json', 'Node package scripts and dependencies'],
+    ['pyproject.toml', 'Python project metadata'],
+    ['Cargo.toml', 'Rust project metadata'],
+    ['go.mod', 'Go module definition'],
+    ['docs/ARCHITECTURE.md', 'Architecture documentation'],
+    ['docs/API.md', 'API documentation'],
   ] as const;
   const result: Array<{ path: string; reason: string }> = [];
   for (const [relativePath, reason] of candidates) {
@@ -780,6 +882,9 @@ function createPiTools(task: Task, options: PiHarnessOptions): AgentTool[] {
     return {
       ...agentTool,
       execute: async (toolCallId, params, signal, onUpdate) => {
+        if (maxStepsWrapUpPending.has(task.id)) {
+          throw new Error(maxStepsToolsDisabledReason());
+        }
         const rawValidationError = consumeInvalidPiToolCallError(task.id, toolCallId);
         if (rawValidationError) {
           throw new Error(rawValidationError);
@@ -1037,6 +1142,11 @@ async function gatePiToolCall(
   call: ToolCall,
   signal: AbortSignal,
 ): Promise<{ block?: boolean; reason?: string } | undefined> {
+  // OpenCode max-steps: disable all tools during wrap-up turn
+  if (maxStepsWrapUpPending.has(task.id)) {
+    return { block: true, reason: maxStepsToolsDisabledReason() };
+  }
+
   const validationError = validatePiToolCallInput(call);
   if (validationError) {
     const message = `schema_validation_failed: ${validationError}`;
@@ -1215,7 +1325,7 @@ async function handlePiEvent(
       saveTask(task);
       publishBudgetUsage(task);
       publish({ type: 'context_snapshot', taskId: task.id, tokens: task.contextTokens ?? 0 });
-      if (shouldStopAfterTurn(task, taskStartedAtMs)) {
+      if (shouldStopAfterTurn(task, taskStartedAtMs, controller)) {
         controller.abort();
       }
       break;
@@ -1864,10 +1974,20 @@ function finishCompleted(task: Task): void {
  */
 function finishBudgetPaused(task: Task, info: BudgetExceededInfo): void {
   task.budgetExceeded = info;
+  // Prefer a durable OpenCode-style wrap-up that includes plan progress; if the model already
+  // wrote a long assistant summary after the max-steps follow-up, still append a short continue hint.
+  const lastAssistant = [...task.messages].reverse().find((m) => m.role === 'assistant');
+  const alreadySummarized =
+    typeof lastAssistant?.content === 'string' &&
+    lastAssistant.content.length > 80 &&
+    /(已完成|未完成|阻塞|建议|summary|blocker|remaining|next)/i.test(lastAssistant.content);
+  const wrapUpBody = alreadySummarized
+    ? `${info.reason}。可点击「继续执行」在完整上下文上续跑（本轮用量已清零；寿命预算不足时会自动扩容）。`
+    : buildMaxStepsWrapUpMessage(task, info);
   const message: Message = {
     id: randomUUID(),
     role: 'assistant',
-    content: `${info.reason}。可点击「继续执行」在完整上下文上续跑（本轮用量已清零；寿命预算不足时会自动扩容）。`,
+    content: wrapUpBody,
     createdAt: new Date().toISOString(),
   };
   task.messages.push(message);

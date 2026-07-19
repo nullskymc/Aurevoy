@@ -7,6 +7,7 @@ import {
   createProject,
   deleteProject,
   deleteTask,
+  getTask,
   listTaskTraces,
   resumeAutoMode as resumeAutoModeApi,
   updateSettings,
@@ -27,6 +28,7 @@ import { useSkills } from "./hooks/useSkills";
 import { useWorkbenchTabs } from "./hooks/useWorkbenchTabs";
 import { useTaskController } from "./hooks/useTaskController";
 import { Composer, nextThinkingLevel, type ThinkingUILevel } from "./components/Composer";
+import { SetupPanel } from "./components/SetupPanel";
 import { ApprovalsDock, Conversation } from "./components/Conversation";
 import { AppTopBar } from "./components/AppTopBar";
 import { ModelSelectorDrawer } from "./components/ModelSelectorDrawer";
@@ -41,62 +43,8 @@ import { SETTINGS_SECTION_IDS, type MainView, type SettingsSectionId } from "./a
 import { formatContextK } from "./app/taskUtils";
 import { t } from "./i18n";
 import "./App.css";
+import { HeroSuggestionIcon } from "./icons";
 
-function HeroSuggestionIcon({ kind }: { kind: "explore" | "build" | "review" | "fix" }) {
-  if (kind === "explore") {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M6 14.5c0-2.5 2.2-4.5 5-4.5s5 2 5 4.5M8 10V7.5a4 4 0 018 0V10"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-        />
-        <path
-          d="M7.5 14.5h9l.8 4.2a1.2 1.2 0 01-1.2 1.4H7.9a1.2 1.2 0 01-1.2-1.4L7.5 14.5z"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinejoin="round"
-        />
-        <path d="M10 6.2l1.2-2.4h1.6L14 6.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
-  }
-  if (kind === "build") {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M14.5 5.5l4 4M8 18l-2.2.6c-.5.1-.9-.3-.8-.8L5.6 15.6 13.2 8a2.2 2.2 0 013.1 0l.1.1a2.2 2.2 0 010 3.1L8 18z"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
-  if (kind === "review") {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M7.5 9.5A4.5 4.5 0 0116 8.2M16.5 14.5A4.5 4.5 0 018 15.8"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-        />
-        <path d="M16 5.5v3h3M8 18.5v-3H5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <circle cx="12" cy="13" r="4.2" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M12 8.8V6.2M10.2 6.8h3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M9.2 16.8c-1.4.9-2.7 1.5-3.4 1.3-.4-.1-.6-.6-.4-1 1.1-2.2 2.6-3.4 3.8-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <path d="M14.8 16.8c1.4.9 2.7 1.5 3.4 1.3.4-.1.6-.6.4-1-1.1-2.2-2.6-3.4-3.8-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 function App() {
   const platform = usePlatform();
@@ -404,6 +352,73 @@ function App() {
     updateTaskList,
   });
 
+  // 同步最近任务到系统托盘菜单（macOS 菜单栏 / Windows 托盘）
+  useEffect(() => {
+    if (!platform.updateTrayRecent) return;
+    const projectName = (projectId: string | undefined) =>
+      projectId ? projects.find((p) => p.id === projectId)?.name : undefined;
+    const sorted = [...tasks].sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    );
+    const items = sorted.slice(0, 20).map((task) => ({
+      id: task.id,
+      title: (task.title || task.goal || "Untitled").trim(),
+      subtitle: projectName(task.projectId) ?? null,
+    }));
+    void platform.updateTrayRecent(items);
+  }, [platform, tasks, projects]);
+
+  // 托盘动作回调用 ref，避免每次 render 重绑 listen
+  const trayHandlersRef = useRef({
+    handleNewTask,
+    handleSelectTask,
+    updateTaskList,
+    setActiveView,
+    setNotice,
+    tasks,
+  });
+  trayHandlersRef.current = {
+    handleNewTask,
+    handleSelectTask,
+    updateTaskList,
+    setActiveView,
+    setNotice,
+    tasks,
+  };
+
+  useEffect(() => {
+    if (!platform.onTrayAction) return;
+    return platform.onTrayAction((action) => {
+      const h = trayHandlersRef.current;
+      if (action.action === "new-chat") {
+        h.handleNewTask();
+        return;
+      }
+      if (action.action === "open") {
+        h.setActiveView("chat");
+        return;
+      }
+      if (action.action === "open-task" && action.taskId) {
+        const taskId = action.taskId;
+        const cached = h.tasks.find((t) => t.id === taskId);
+        if (cached) {
+          h.handleSelectTask(cached);
+          return;
+        }
+        void getTask(taskId)
+          .then((task) => {
+            h.handleSelectTask(task);
+            h.updateTaskList(task);
+          })
+          .catch((err) => {
+            h.setNotice(
+              `${t("notice.connectEngineFailed")}${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+      }
+    });
+  }, [platform]);
+
   async function refreshTaskTraces(taskId: string): Promise<void> {
     try {
       setTraces(await listTaskTraces(taskId));
@@ -675,6 +690,13 @@ function App() {
                     {t("context.label")} ~{formatContextK(currentTask.contextTokens ?? 0)} / {formatContextK(health.contextTokenBudget)} {t("context.unit")}
                   </div>
                 )}
+                <SetupPanel
+                  variant="dock"
+                  online={online}
+                  llm={health?.llm}
+                  onConnectProvider={() => handleOpenSettings("provider")}
+                  onSelectModel={handleOpenModelSelector}
+                />
                 <Composer
                   value={goal}
                   busy={busy}
@@ -687,6 +709,7 @@ function App() {
                   onPasteFiles={(files) => void handlePasteFiles(files)}
                   onPickAttachments={() => void handlePickAttachments()}
                   provider={health?.provider}
+                  llm={health?.llm}
                   onChange={setGoal}
                   onSubmit={handleComposerSubmit}
                   onOpenModelSelector={handleOpenModelSelector}
@@ -714,30 +737,40 @@ function App() {
           ) : (
             <div className="hero">
               <h1 className="hero-title">{t("hero.title")}</h1>
-              <div className="hero-suggestions" role="list">
-                {(
-                  [
-                    ["hero.suggestion.explore", "hero.suggestion.explorePrompt", "explore"],
-                    ["hero.suggestion.build", "hero.suggestion.buildPrompt", "build"],
-                    ["hero.suggestion.review", "hero.suggestion.reviewPrompt", "review"],
-                    ["hero.suggestion.fix", "hero.suggestion.fixPrompt", "fix"],
-                  ] as const
-                ).map(([labelKey, promptKey, kind]) => (
-                  <button
-                    key={labelKey}
-                    type="button"
-                    role="listitem"
-                    className="hero-suggestion-card"
-                    data-kind={kind}
-                    onClick={() => setGoal(t(promptKey))}
-                  >
-                    <span className="hero-suggestion-icon" aria-hidden="true">
-                      <HeroSuggestionIcon kind={kind} />
-                    </span>
-                    <span className="hero-suggestion-label">{t(labelKey)}</span>
-                  </button>
-                ))}
-              </div>
+              {online === true && health?.llm && !health.llm.ready ? (
+                <SetupPanel
+                  variant="hero"
+                  online={online}
+                  llm={health.llm}
+                  onConnectProvider={() => handleOpenSettings("provider")}
+                  onSelectModel={handleOpenModelSelector}
+                />
+              ) : (
+                <div className="hero-suggestions" role="list">
+                  {(
+                    [
+                      ["hero.suggestion.explore", "hero.suggestion.explorePrompt", "explore"],
+                      ["hero.suggestion.build", "hero.suggestion.buildPrompt", "build"],
+                      ["hero.suggestion.review", "hero.suggestion.reviewPrompt", "review"],
+                      ["hero.suggestion.fix", "hero.suggestion.fixPrompt", "fix"],
+                    ] as const
+                  ).map(([labelKey, promptKey, kind]) => (
+                    <button
+                      key={labelKey}
+                      type="button"
+                      role="listitem"
+                      className="hero-suggestion-card"
+                      data-kind={kind}
+                      onClick={() => setGoal(t(promptKey))}
+                    >
+                      <span className="hero-suggestion-icon" aria-hidden="true">
+                        <HeroSuggestionIcon kind={kind} />
+                      </span>
+                      <span className="hero-suggestion-label">{t(labelKey)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <Composer
                 value={goal}
                 busy={busy}
@@ -750,6 +783,7 @@ function App() {
                 onPasteFiles={(files) => void handlePasteFiles(files)}
                 onPickAttachments={() => void handlePickAttachments()}
                 provider={health?.provider}
+                llm={health?.llm}
                 onChange={setGoal}
                 onSubmit={handleComposerSubmit}
                 onOpenModelSelector={handleOpenModelSelector}

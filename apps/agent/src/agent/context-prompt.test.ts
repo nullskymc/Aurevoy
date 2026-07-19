@@ -74,6 +74,10 @@ describe('main agent system prompt builders', () => {
     expect(identity.content).not.toContain('open_file');
     expect(identity.content).not.toContain('write_file');
     expect(identity.content).not.toContain('session_open');
+    // Universal communication / control contract (no incident-specific examples)
+    expect(identity.content).toMatch(/Text is for the user/i);
+    expect(identity.content).toMatch(/question or status check/i);
+    expect(identity.content).not.toMatch(/zotero|MCP client|GitHub README/i);
   });
 
   it('operating protocol covers real tools, delivery, and multi-agent', () => {
@@ -102,6 +106,14 @@ describe('main agent system prompt builders', () => {
 
     expect(text).toContain('open_file');
     expect(text).toMatch(/Do not invent obsolete tools/);
+
+    // Universal communication rules — no product/incident-specific recipes
+    expect(text).toContain('## Communication');
+    expect(text).not.toContain('OpenCode-style');
+    expect(text).toMatch(/tools only to complete tasks/i);
+    expect(text).toMatch(/non-trivial `bash`/i);
+    expect(text).toMatch(/answer in text this turn before any further tool calls/i);
+    expect(text).not.toMatch(/装了啥|遇到了什么问题|zotero|MCP client|GitHub README/i);
   });
 
   it('system context keeps workspace facts and minute-precision time', () => {

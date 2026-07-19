@@ -10,7 +10,11 @@ import type {
   UpdateRuntimeSettingsRequest,
 } from '@aurevoy/shared';
 import { config, parseMcpServers, parseNumber } from '../config.js';
-import { listPiProviderCatalog, resetPiProviderCache } from '../llm/pi-provider.js';
+import {
+  listBuiltinModelIds,
+  listPiProviderCatalog,
+  resetPiProviderCache,
+} from '../llm/pi-provider.js';
 import { resetEmbeddingCache } from '../embedding/provider.js';
 import type { PiProviderCatalogEntry } from '@aurevoy/shared';
 import {
@@ -31,6 +35,7 @@ import {
   listLlmProviders,
   readLlmCredential,
   readLlmGlobal,
+  ensureProviderDefaultModel,
   replaceAvailableModels,
   setDefaultModel,
   setEnabledModels,
@@ -346,6 +351,10 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
       void writeApiKeyCredential(active, body.llm.apiKey, {
         force: body.llm.apiKey.trim().length > 0,
       });
+      if (body.llm.apiKey.trim().length > 0) {
+        healProviderModelSelection(active);
+        config.llm.model = getDefaultModelId(active) || config.llm.model || '';
+      }
       providerChanged = true;
     }
 
@@ -358,7 +367,7 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
       const pid = normalizeProvider(body.llm.slotEnabledModels.provider);
       setEnabledModels(pid, body.llm.slotEnabledModels.enabledModels);
       if (pid === config.llm.provider) {
-        // 内存无列表缓存，read 时直接查表
+        config.llm.model = getDefaultModelId(pid) || config.llm.model || '';
       }
       providerChanged = true;
     }
@@ -594,6 +603,31 @@ function activateProviderSlot(provider: string): void {
   }
 
   writeLlmGlobal({ activeProvider: provider });
+  // 有凭证时尽量自愈空 model，避免「能配 Key 却把空 model 打上游」
+  if (config.llm.apiKey || hasOauthCredential(provider) || hasApiKeyCredential(provider)) {
+    healProviderModelSelection(provider);
+    config.llm.model = getDefaultModelId(provider) || config.llm.model || '';
+  }
+}
+
+/**
+ * 配置路径防呆（不替用户「选中」模型，以便 Setup 第三步可见）：
+ * 1. available 空且有 Pi 内置 catalog → 只播种 available（不自动 enable/default）
+ * 2. 已有 enabled 却无 default → 落到第一个已启用项
+ * openai-compatible 无内置目录，不编造模型。
+ */
+function healProviderModelSelection(provider: string): void {
+  if (!isValidPiProviderId(provider)) return;
+  ensureProviderRow(provider);
+
+  if (getAvailableModelIds(provider).length === 0 && provider !== 'openai-compatible') {
+    const builtin = listBuiltinModelIds(provider);
+    if (builtin.length > 0) {
+      replaceAvailableModels(provider, builtin, { source: 'static', enableNew: false });
+    }
+  }
+
+  ensureProviderDefaultModel(provider);
 }
 
 /** 删除 provider 行（级联凭证与模型）；必要时切换激活。 */

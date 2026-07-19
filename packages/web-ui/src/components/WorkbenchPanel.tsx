@@ -6,6 +6,7 @@ import type { WorkbenchTab } from "../hooks/useWorkbenchTabs";
 import { FileTree } from "./FileTree";
 import { FileViewer } from "./FileViewer";
 import { IconClose, IconShowTree } from "./workbenchIcons";
+import { IconFolder } from "../icons";
 import { t } from "../i18n";
 import "./WorkbenchPanel.css";
 
@@ -291,15 +292,5 @@ function tabExt(tab: WorkbenchTab): string {
 }
 
 function EmptyFolderIcon({ small = false }: { small?: boolean }) {
-  const size = small ? 14 : 40;
-  return (
-    <svg viewBox="0 0 48 48" width={size} height={size} fill="none" aria-hidden="true">
-      <path
-        d="M8 14.5h12.2l3 3.2H40a2 2 0 012 2V34a2 2 0 01-2 2H8a2 2 0 01-2-2V16.5a2 2 0 012-2z"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
+  return <IconFolder size={small ? 14 : 40} strokeWidth={1.5} />;
 }

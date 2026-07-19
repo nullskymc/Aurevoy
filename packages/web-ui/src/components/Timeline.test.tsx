@@ -156,6 +156,37 @@ describe("buildAgentRoundFromMessage", () => {
     expect(round.planStepGroups).toEqual([]);
   });
 
+  it("maps blocked plan step status instead of treating it as completed", () => {
+    const message = {
+      id: "assistant-blocked",
+      role: "assistant" as const,
+      content: "",
+      createdAt: "2026-07-19T00:00:00.000Z",
+      toolCalls: [
+        {
+          id: "call-block",
+          type: "function" as const,
+          function: { name: "bash", arguments: "{}", planStepId: "synthesize" },
+        },
+      ],
+    };
+    const resultMap = new Map([["call-block", { ok: true, output: {} }]]);
+    const plan = [
+      { id: "discover", description: "定位", status: "completed" as const },
+      {
+        id: "synthesize",
+        description: "写配置",
+        status: "blocked" as const,
+        blockedReason: "dependency offline",
+      },
+      { id: "deliver", description: "验证", status: "pending" as const },
+    ];
+    const round = buildAgentRoundFromMessage(message, resultMap, plan);
+    const group = round.planStepGroups.find((g) => g.planStepId === "synthesize");
+    expect(group?.status).toBe("blocked");
+    expect(group?.blockedReason).toBe("dependency offline");
+  });
+
   it("keeps historical tools visible when their planStepId is missing from the current plan", () => {
     const message: Message = {
       id: "assistant-with-unmatched-plan-step",

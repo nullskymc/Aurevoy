@@ -1669,6 +1669,408 @@ button.settings-provider-line-main:focus-visible {
   resize: vertical;
 }
 
+.settings-input {
+  display: block;
+  width: 100%;
+  min-height: var(--ui-control-md);
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--ui-font-sm);
+  padding: 0 var(--ui-space-3);
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* —— MCP list / editor (plugin-style) —— */
+.mcp-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.mcp-section-head h2 {
+  margin: 0;
+}
+
+.mcp-add-btn {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.mcp-add-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.mcp-add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mcp-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.mcp-empty {
+  padding: 28px 20px;
+  text-align: center;
+}
+
+.mcp-empty strong {
+  display: block;
+  font-size: var(--ui-font-sm);
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.mcp-empty p {
+  margin: 0;
+  font-size: var(--ui-font-xs);
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.mcp-server-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mcp-server-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 56px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mcp-server-row:last-of-type {
+  border-bottom: none;
+}
+
+.mcp-server-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mcp-server-name {
+  font-size: var(--ui-font-base);
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.mcp-server-sub {
+  font-size: var(--ui-font-sm);
+  color: var(--text-tertiary);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-server-sub.is-error {
+  color: var(--danger-soft-fg);
+}
+
+.mcp-server-sub.is-muted {
+  color: var(--text-tertiary);
+  opacity: 0.85;
+}
+
+.mcp-server-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.mcp-gear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  line-height: 0;
+}
+
+.mcp-gear-btn svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.mcp-gear-btn:hover:not(:disabled) {
+  background: var(--bg);
+  color: var(--text-secondary);
+}
+
+.mcp-gear-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* iOS-like toggle — neutral blue-ish when on to match common plugin UIs;
+   still uses accent so it fits Aurevoy teal skin */
+.mcp-switch {
+  position: relative;
+  display: inline-flex;
+  width: 42px;
+  height: 26px;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.mcp-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.mcp-switch-ui {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: #d1d5db;
+  transition: background 0.18s ease;
+}
+
+.mcp-switch-ui::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: transform 0.18s ease;
+}
+
+.mcp-switch input:checked + .mcp-switch-ui {
+  background: #3b82f6;
+}
+
+.mcp-switch input:checked + .mcp-switch-ui::after {
+  transform: translateX(16px);
+}
+
+.mcp-switch input:disabled + .mcp-switch-ui {
+  opacity: 0.5;
+}
+
+.mcp-hint {
+  margin: 0;
+  font-size: var(--ui-font-sm);
+  line-height: 1.45;
+  color: var(--text-tertiary);
+}
+
+.mcp-hint-block {
+  margin: 0 0 12px;
+}
+
+.mcp-error {
+  margin: 0 12px 12px;
+  padding: 8px 12px;
+  color: var(--danger-soft-fg);
+  background: var(--danger-soft-bg);
+  font-size: var(--ui-font-xs);
+  border-radius: 10px;
+}
+
+.mcp-back-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
+  font-weight: 550;
+  padding: 0 0 8px;
+  cursor: pointer;
+}
+
+.mcp-back-btn:hover {
+  color: var(--text);
+}
+
+.mcp-editor-title {
+  margin: 0 0 4px !important;
+}
+
+.mcp-form-card .mcp-field:last-of-type {
+  border-bottom: none;
+}
+
+.mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mcp-field > span:first-child {
+  font-size: var(--ui-font-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.mcp-switch-field {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mcp-transport-tabs {
+  display: inline-flex;
+  gap: 0;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.mcp-transport-tab {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-size: var(--ui-font-sm);
+  font-weight: 600;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.mcp-transport-tab.is-active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.mcp-transport-tab.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mcp-kv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-kv-row {
+  display: grid;
+  grid-template-columns: 1fr 36px;
+  gap: 8px;
+  align-items: center;
+}
+
+.mcp-env-row {
+  grid-template-columns: 1fr 1fr 36px;
+}
+
+.mcp-row-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.mcp-row-remove:hover {
+  background: var(--danger-soft-bg);
+  color: var(--danger-soft-fg);
+}
+
+.mcp-add-row {
+  align-self: stretch;
+  min-height: 40px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--ui-font-sm);
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.mcp-add-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+.mcp-editor-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px 16px;
+}
+
+.mcp-danger-btn {
+  min-height: var(--ui-control-md);
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--ui-radius-md);
+  background: transparent;
+  color: var(--danger-soft-fg);
+  font-size: var(--ui-font-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mcp-danger-btn:hover:not(:disabled) {
+  background: var(--danger-soft-bg);
+}
+
+.mcp-danger-btn:disabled {
+  opacity: 0.5;
+}
+
 .settings-primary-btn,
 .settings-secondary-btn {
   min-height: var(--ui-control-md);

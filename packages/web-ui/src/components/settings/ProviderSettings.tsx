@@ -51,7 +51,10 @@ export function ProviderSettings({
   const oauthConfigured = isEditingActive
     ? Boolean(settings?.llm.oauthConfigured)
     : Boolean(editingSlot?.oauthConfigured);
-  const configuredProviders = settings?.llm.providers ?? [];
+  // 「已连接」= 真有 Key / OAuth；仅有 llm_providers 空槽不算已连接（删凭证后不应仍占列表）
+  const configuredProviders = (settings?.llm.providers ?? []).filter(
+    (slot) => slot.apiKeyConfigured || slot.oauthConfigured,
+  );
   const connectedIds = new Set(configuredProviders.map((slot) => slot.provider));
   /** 服务端 catalog 优先，缺失时本地回退，保证可连接列表始终可见。 */
   const providerCatalog = resolveProviderCatalog(settings);

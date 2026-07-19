@@ -10,7 +10,11 @@ import {
   type Provider as PiProvider,
 } from '@earendil-works/pi-ai';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
-import { filterChatModelIds, type PiProviderCatalogEntry } from '@aurevoy/shared';
+import {
+  filterChatModelIds,
+  type LlmReadiness,
+  type PiProviderCatalogEntry,
+} from '@aurevoy/shared';
 import { config } from '../config.js';
 import { aurevoyCredentialStore, hasStoredCredential } from './credential-store.js';
 import {
@@ -118,25 +122,70 @@ function toCatalogEntry(provider: PiProvider): PiProviderCatalogEntry {
 }
 
 export function getPiProviderName(): string {
-  return isPiLLMConfigured() ? `${config.llm.provider}:${config.llm.model}` : 'unconfigured';
+  const readiness = getLlmReadiness();
+  return readiness.ready ? `${readiness.provider}:${readiness.model}` : 'unconfigured';
 }
 
-export function isPiLLMConfigured(): boolean {
+/** 当前激活槽是否已有可用凭证（Key 或 OAuth），不含模型是否已选。 */
+export function hasPiLLMCredential(): boolean {
   if (!isValidPiProviderId(config.llm.provider)) return false;
   if (config.llm.apiKey?.trim()) return true;
-  // OAuth / 分槽凭证（CredentialStore）
   return hasStoredCredential(config.llm.provider);
 }
 
-export function assertPiLLMConfigured(): void {
-  if (!isValidPiProviderId(config.llm.provider)) {
-    throw new Error(`未支持的 Provider id: "${config.llm.provider}"。仅允许小写字母、数字和连字符。`);
+/** 主模型 id 是否非空（trim 后）。 */
+export function hasPiLLMModel(): boolean {
+  return Boolean(config.llm.model?.trim());
+}
+
+/**
+ * 全应用统一就绪态：health / Composer / assert / 日志共用同一套判断。
+ */
+export function getLlmReadiness(): LlmReadiness {
+  const provider = (config.llm.provider ?? '').trim();
+  const model = (config.llm.model ?? '').trim();
+  if (!isValidPiProviderId(provider)) {
+    return { state: 'no_provider', ready: false, provider, model };
   }
-  if (!isPiLLMConfigured()) {
+  if (!hasPiLLMCredential()) {
+    return { state: 'no_credential', ready: false, provider, model };
+  }
+  if (!model) {
+    return { state: 'no_model', ready: false, provider, model };
+  }
+  return { state: 'ready', ready: true, provider, model };
+}
+
+/**
+ * 能否发起主对话：有效 Provider + 凭证 + 已选模型。
+ * 仅有 Key 未选模型时返回 false，避免把空 model 打到上游（如 DeepSeek 400）。
+ */
+export function isPiLLMConfigured(): boolean {
+  return getLlmReadiness().ready;
+}
+
+export function assertPiLLMConfigured(): void {
+  const readiness = getLlmReadiness();
+  if (readiness.state === 'no_provider') {
+    throw new Error(
+      `未支持的 Provider id: "${readiness.provider || config.llm.provider}"。仅允许小写字母、数字和连字符。`,
+    );
+  }
+  if (readiness.state === 'no_credential') {
     throw new Error(
       '未配置 LLM 凭证。请在设置中为当前 Provider 配置 API Key，或使用订阅登录。',
     );
   }
+  if (readiness.state === 'no_model') {
+    throw new Error(
+      '未选择模型。请在设置中启用模型，并在对话输入区选择当前 Provider 的可用模型。',
+    );
+  }
+}
+
+/** Pi 内置 catalog 的模型 id（供配置自愈播种 available，不发起网络请求）。 */
+export function listBuiltinModelIds(provider: string): string[] {
+  return listStaticProviderModelIds(normalizePiProvider(provider.trim()));
 }
 
 /**
@@ -191,7 +240,13 @@ export function resolveModelApi(api: string | undefined, baseUrl: string, provid
  */
 export function createPiModel(modelOverride?: string, providerOverride?: string): PiModel<any> {
   const provider = normalizePiProvider(providerOverride?.trim() || config.llm.provider);
-  const modelId = modelOverride?.trim() || config.llm.model;
+  const modelId = modelOverride?.trim() || config.llm.model?.trim() || '';
+  // 防御纵深：无 model id 时拒绝构造，避免 OpenAI 兼容上游收到 model:""
+  if (!modelId) {
+    throw new Error(
+      '未选择模型。请在设置中启用模型，并在对话输入区选择当前 Provider 的可用模型。',
+    );
+  }
   const builtin = (getModel as (provider: string, model: string) => PiModel<any> | undefined)(
     provider,
     modelId,

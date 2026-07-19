@@ -3,6 +3,7 @@ import type { SkillDescriptor, SkillDetail, SkillInstallResponse } from "@aurevo
 import { fetchSkillDetail } from "../api";
 import { MarkdownRenderer } from "../components/MarkdownRenderer";
 import { t } from "../i18n";
+import { IconCheck, IconRefresh, IconSearch, IconX } from "../icons";
 import "./SkillsPage.css";
 
 type SourceTab = "personal" | "system";
@@ -469,56 +470,19 @@ function SkillDetailModal({
 }
 
 function SearchIcon() {
-  return (
-    <svg className="skills-search-icon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-      <circle cx="8.5" cy="8.5" r="5.25" stroke="currentColor" strokeWidth="1.5" fill="none" />
-      <path d="M12.5 12.5L16 16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
+  return <IconSearch size={16} className="skills-search-icon" />;
 }
 
 function CheckIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-      <path
-        d="M4.5 10.5l3.5 3.5 7.5-8"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
+  return <IconCheck size={16} strokeWidth={2} />;
 }
 
 function CloseIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-      <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
+  return <IconX size={16} />;
 }
 
 function ReloadIcon({ spinning }: { spinning?: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 20 20"
-      width="16"
-      height="16"
-      aria-hidden="true"
-      className={spinning ? "skills-spin" : undefined}
-    >
-      <path
-        d="M4.5 8.5a5.5 5.5 0 019.2-3.1M15.5 4.5v3h-3M15.5 11.5a5.5 5.5 0 01-9.2 3.1M4.5 15.5v-3h3"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
+  return <IconRefresh size={16} className={spinning ? "skills-spin" : undefined} />;
 }
 
 

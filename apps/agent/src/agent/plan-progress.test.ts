@@ -4,9 +4,12 @@ import {
   advancePlanAfterFinalAnswer,
   advancePlanAfterTool,
   completePlanOnSuccess,
+  createInitialPlanSteps,
   failOpenPlanSteps,
   isHeuristicTriPlan,
+  markRunningPlanBlocked,
   resumeIncompletePlan,
+  shouldUseMultiStepPlan,
 } from './plan-progress.js';
 
 function triPlan(statuses: [PlanStep['status'], PlanStep['status'], PlanStep['status']]): PlanStep[] {
@@ -88,5 +91,43 @@ describe('plan-progress', () => {
   it('resumeIncompletePlan starts first incomplete step', () => {
     const plan = resumeIncompletePlan(triPlan(['completed', 'pending', 'pending']));
     expect(plan.map((s) => s.status)).toEqual(['completed', 'running', 'pending']);
+  });
+
+  it('createInitialPlanSteps uses configure template for MCP goals', () => {
+    expect(shouldUseMultiStepPlan('配置这个 mcp')).toBe(true);
+    const plan = createInitialPlanSteps('配置这个 mcp');
+    expect(plan).toHaveLength(3);
+    expect(plan[0]?.description).toMatch(/定位|配置/);
+    expect(plan.every((s) => s.status === 'completed')).toBe(false);
+  });
+
+  it('keeps incomplete/blocked statuses until resolved', () => {
+    const task = taskWithPlan(triPlan(['running', 'pending', 'pending']));
+    expect(markRunningPlanBlocked(task, 'need user')).toBe(true);
+    expect(task.plan[0]?.status).toBe('blocked');
+    expect(task.plan[1]?.status).toBe('pending');
+    // blocked is not completed — real multi-step surface
+    expect(task.plan.some((s) => s.status === 'completed')).toBe(false);
+  });
+
+  it('cancel → failOpenPlanSteps → resumeIncompletePlan reopens failed work as running', () => {
+    const task = taskWithPlan(triPlan(['completed', 'running', 'pending']));
+    expect(failOpenPlanSteps(task)).toBe(true);
+    // running → failed, pending → cancelled (cancel / interrupt shape)
+    expect(task.plan.map((s) => s.status)).toEqual(['completed', 'failed', 'cancelled']);
+
+    const resumed = resumeIncompletePlan(task.plan);
+    expect(resumed.map((s) => s.status)).toEqual(['completed', 'running', 'pending']);
+    // advancePlanAfterTool needs a current running step after resume
+    const afterResume = taskWithPlan(resumed);
+    expect(advancePlanAfterTool(afterResume, 'write', true)).toBe(true);
+    expect(afterResume.plan.map((s) => s.status)).toEqual(['completed', 'completed', 'running']);
+  });
+
+  it('crash-recovery shape (all non-completed failed) reopens first incomplete on resume', () => {
+    // markInterruptedTasksAfterRestart maps non-completed → failed
+    const crashed = triPlan(['completed', 'failed', 'failed']);
+    const resumed = resumeIncompletePlan(crashed);
+    expect(resumed.map((s) => s.status)).toEqual(['completed', 'running', 'pending']);
   });
 });

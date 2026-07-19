@@ -13,7 +13,7 @@ import type {
 } from '@aurevoy/shared';
 import { config } from '../config.js';
 import { createTaskLogger, type TaskLogger } from '../logging/trace.js';
-import { createPiModel } from '../llm/pi-provider.js';
+import { assertPiLLMConfigured, createPiModel } from '../llm/pi-provider.js';
 import {
   unifiedToolRegistry,
   validateToolInputSchema,
@@ -166,6 +166,7 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
   });
 
   try {
+    assertPiLLMConfigured();
     const model = createPiModel();
     const session = await new InMemorySessionRepo().create({ id: runId });
     harness = new AgentHarness({

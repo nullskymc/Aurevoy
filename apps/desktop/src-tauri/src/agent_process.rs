@@ -47,14 +47,27 @@ pub enum AgentProcessMode {
     Unavailable,
 }
 
+impl AgentProcessState {
+    /// 停止由桌面壳托管启动的 Agent 子进程。
+    ///
+    /// 注意：Tauri 正常退出走 `process::exit`，**不会**跑 `Drop`。
+    /// 因此真正退出（Cmd+Q 等）必须在 `RunEvent::Exit` 里显式调用本方法。
+    pub fn stop_managed(&self) {
+        let Ok(mut guard) = self.child.lock() else {
+            return;
+        };
+        if let Some(mut managed) = guard.take() {
+            // SIGKILL 直接子进程；agent 内仍存活的孙进程（MCP/bash）可能残留，后续可改为进程组。
+            let _ = managed.child.kill();
+            let _ = managed.child.wait();
+        }
+    }
+}
+
 impl Drop for AgentProcessState {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.child.lock() {
-            if let Some(mut managed) = guard.take() {
-                let _ = managed.child.kill();
-                let _ = managed.child.wait();
-            }
-        }
+        // 兜底：仅在不经 process::exit 的路径（测试/run_return）才会执行。
+        self.stop_managed();
     }
 }
 
@@ -202,15 +215,7 @@ fn current_managed_status(
 }
 
 fn stop_managed_child(state: &tauri::State<'_, AgentProcessState>) -> Result<(), String> {
-    let mut guard = state
-        .child
-        .lock()
-        .map_err(|_| "Agent 进程状态锁已损坏".to_string())?;
-
-    if let Some(mut managed) = guard.take() {
-        let _ = managed.child.kill();
-        let _ = managed.child.wait();
-    }
+    state.stop_managed();
     Ok(())
 }
 

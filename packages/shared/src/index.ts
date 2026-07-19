@@ -112,7 +112,16 @@ export interface Message {
 }
 
 /** 计划中的一个步骤 */
-export type PlanStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused' | 'proposed';
+export type PlanStepStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'paused'
+  | 'proposed'
+  /** Blocked on external/user input; remains incomplete until unblocked or cancelled */
+  | 'blocked';
 
 export interface PlanStep {
   id: string;
@@ -126,6 +135,8 @@ export interface PlanStep {
   verifiable?: boolean;
   /** 步骤来源：llm（由 LLM 生成）| heuristic（正则兜底）| resume（从 checkpoint 恢复） */
   source?: 'llm' | 'heuristic' | 'resume';
+  /** Optional blocker detail when status is blocked/paused */
+  blockedReason?: string;
 }
 
 /** 侦查阶段产出：工作区关键信息摘要（P1 重构） */
@@ -832,13 +843,34 @@ export type WorkspaceReadResponse =
   | WorkspaceTextReadResponse
   | WorkspaceImageReadResponse;
 
+/**
+ * LLM 主对话就绪态（全应用防呆共用）。
+ * - ready: 可发送 / 可跑 harness
+ * - no_provider: provider id 非法或缺失
+ * - no_credential: 缺 API Key / OAuth
+ * - no_model: 有凭证但未选择主模型（空 model 禁止打上游）
+ */
+export type LlmReadyState = 'ready' | 'no_provider' | 'no_credential' | 'no_model';
+
+export interface LlmReadiness {
+  state: LlmReadyState;
+  ready: boolean;
+  provider: string;
+  model: string;
+}
+
 /** GET /api/health */
 export interface HealthResponse {
   status: 'ok';
   version: string;
   uptimeMs: number;
-  /** 当前生效的 LLM Provider 名（如 'openai:gpt-4o-mini'；未配置时为 'unconfigured'） */
+  /**
+   * 兼容字段：ready 时为 `provider:model`；否则 `unconfigured`。
+   * 细粒度原因见 {@link llm}。
+   */
   provider: string;
+  /** 结构化就绪态；UI 按 state 引导，勿再只认 unconfigured。 */
+  llm: LlmReadiness;
   /** Agent 上下文字符预算（用于前端展示当前上下文使用率） */
   contextCharBudget?: number;
   /** Agent 上下文 token 预算（用于前端展示 token 使用率） */

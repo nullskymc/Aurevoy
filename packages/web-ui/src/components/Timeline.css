@@ -260,6 +260,24 @@
   background: transparent;
 }
 
+.timeline-plan-group[data-status="blocked"] .timeline-plan-desc {
+  color: var(--warning-soft-fg, #a16207);
+}
+
+.timeline-plan-status-text.is-blocked {
+  color: var(--warning-soft-fg, #a16207);
+}
+
+.timeline-plan-blocked-reason {
+  margin: 0 0 0 28px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: var(--ui-font-xs);
+  line-height: 1.35;
+  color: var(--warning-soft-fg, #a16207);
+  background: var(--warning-soft-bg, color-mix(in srgb, #f59e0b 10%, var(--surface)));
+}
+
 /* 计划步骤描述行 */
 .timeline-plan-head {
   display: flex;

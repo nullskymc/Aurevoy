@@ -2,6 +2,7 @@ import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import type { TaskArtifact } from "@aurevoy/shared";
 import type { PlatformAdapter } from "../platform/types";
 import type { ContextMenuItem } from "./ContextMenu";
+import { IconAlignLeft, IconCopy, IconExternal, IconFile, IconFolder } from "../icons";
 
 export interface ContextMenuState {
   open: boolean;
@@ -171,41 +172,10 @@ function compactMenu(items: Array<ContextMenuItem | null | false | undefined>): 
 }
 
 function MenuIcon({ name }: { name: "copy" | "external" | "folder" | "open" | "text" }) {
-  if (name === "copy") {
-    return (
-      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <rect x="5" y="4" width="8" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
-        <path d="M3 11V3.5A1.5 1.5 0 014.5 2H10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  if (name === "external") {
-    return (
-      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path d="M6 3H3.5A1.5 1.5 0 002 4.5v8A1.5 1.5 0 003.5 14h8a1.5 1.5 0 001.5-1.5V10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-        <path d="M10 2h4v4M14 2L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
-  }
-  if (name === "folder") {
-    return (
-      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path d="M1.5 5.2h13v7.3A1.5 1.5 0 0113 14H3a1.5 1.5 0 01-1.5-1.5V5.2z" stroke="currentColor" strokeWidth="1.2" />
-        <path d="M1.5 5.2V4A1.5 1.5 0 013 2.5h3l1.5 1.7h5A1.5 1.5 0 0114 5.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  if (name === "open") {
-    return (
-      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path d="M3 2.5h6l4 4v7A1.5 1.5 0 0111.5 15h-7A1.5 1.5 0 013 13.5v-11z" stroke="currentColor" strokeWidth="1.2" />
-        <path d="M9 2.5v4h4" stroke="currentColor" strokeWidth="1.2" />
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M3 4h10M3 8h10M3 12h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-    </svg>
-  );
+  const size = 14;
+  if (name === "copy") return <IconCopy size={size} />;
+  if (name === "external") return <IconExternal size={size} />;
+  if (name === "folder") return <IconFolder size={size} />;
+  if (name === "open") return <IconFile size={size} />;
+  return <IconAlignLeft size={size} />;
 }

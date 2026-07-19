@@ -816,6 +816,24 @@ export function setEnabledModels(providerId: string, enabledModels: string[]): v
     }
   });
   tx();
+  // 防呆：有启用模型却无 default 时，落到第一个启用项
+  ensureProviderDefaultModel(providerId);
+}
+
+/**
+ * 若该槽尚无有效 default：仅从**已启用**列表取首项。
+ * 不因 available 有目录就自动当选中（否则保存 Key 后会跳过 Setup 第三步「选模型」）。
+ * 不编造远程 id、不拉网。返回最终 default（可能仍为空）。
+ */
+export function ensureProviderDefaultModel(providerId: string): string {
+  ensureProviderRow(providerId);
+  const current =
+    (getDefaultModelId(providerId) || getLlmProvider(providerId)?.defaultModel || '').trim();
+  if (current) return current;
+  const pick = getEnabledModelIds(providerId)[0] || '';
+  if (!pick) return '';
+  setDefaultModel(providerId, pick);
+  return pick;
 }
 
 export function setDefaultModel(providerId: string, modelId: string): void {
