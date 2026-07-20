@@ -14,7 +14,7 @@
 ## 仓库结构
 
 ```
-apps/desktop     Tauri 壳、子进程托管、平台适配
+apps/desktop     Tauri 壳、子进程托管、平台适配、系统托盘
 apps/agent       Fastify 引擎（Pi harness、工具、存储）
 packages/web-ui  React UI（对话、设置、工作台）
 packages/shared  共享类型
@@ -44,7 +44,7 @@ docs/            协作文档
 | 路径 | 职责 |
 |---|---|
 | `packages/web-ui` | App、Conversation、Composer、Timeline、Workbench、hooks、api 客户端 |
-| `apps/desktop` | 挂载 UI、Tauri 能力、Agent 进程生命周期 |
+| `apps/desktop` | 挂载 UI、Tauri 能力、Agent 进程生命周期、系统托盘与最近任务 |
 
 UI 不持有业务真相：状态来自任务快照 + SSE。
 
@@ -92,5 +92,10 @@ UI 不持有业务真相：状态来自任务快照 + SSE。
 
 ## 跨平台
 
-后端路径用 `node:path`；系统能力走 Tauri；原生模块（sqlite 等）按平台 rebuild。  
-Windows：壳与权限适配，引擎逻辑尽量不动。
+后端路径用 `node:path`；系统能力走 Tauri；原生模块（sqlite 等）按平台 rebuild。
+
+- macOS：app bundle、菜单栏托盘与 DMG / updater。
+- Windows：WebView2/Tauri 壳、NSIS 当前用户安装、资源与 Node runtime 同级路径、隐藏引擎子进程控制台与通知区托盘。
+- Linux：Deb / AppImage 安装包与 updater 产物。
+
+引擎逻辑保持跨平台；平台差异只能留在 Tauri 壳与打包层。

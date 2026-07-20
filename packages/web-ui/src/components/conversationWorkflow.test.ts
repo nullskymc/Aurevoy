@@ -90,7 +90,7 @@ describe("conversationWorkflow", () => {
     expect(view.liveOutput).toBe("");
   });
 
-  it("keeps live output when the matching assistant message is hidden by active tools", () => {
+  it("keeps a narrated assistant tool message visible while its tool is active", () => {
     const messages = [
       userMessage("user-1"),
       {
@@ -105,7 +105,8 @@ describe("conversationWorkflow", () => {
       hasLiveTail: true,
     });
 
-    expect(view.liveOutput).toBe("好的，我来全权决定！");
+    expect(view.hiddenAssistantIds.has("assistant-running")).toBe(false);
+    expect(view.liveOutput).toBe("");
   });
 
   it("keeps completed live tools visible until the matching tool result message is in history", () => {

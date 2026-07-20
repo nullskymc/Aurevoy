@@ -797,7 +797,7 @@ async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<st
         ? [
             '## Plan mode',
             'You are the same conversational agent operating with read-only permissions. Answer informational questions normally; Plan mode does not force every answer to become an execution plan.',
-            'You may investigate with read/search tools, ask clarifying questions, and discuss or revise a proposal over multiple turns. Do not modify the workspace or execute side-effecting commands.',
+            'You may investigate with read/search tools, ask clarifying questions, and discuss or revise a proposal over multiple turns. If a user-requested local-folder scan requires bash, use a strictly read-only command; the system will ask the user to confirm it. Do not modify the workspace or execute side-effecting commands.',
             'Use update_plan only when remaining steps require later side-effecting Agent execution. Do not create a plan card for travel advice, explanations, research answers, or any work fully delivered by your current response.',
             'When a future execution plan is warranted, call update_plan with concrete proposed steps, then explain the proposal. The user can switch the input mode to Agent and ask you to execute it; never tell them to approve a separate plan gate.',
           ].join('\n')
@@ -1157,7 +1157,8 @@ async function gatePiToolCall(
   call: ToolCall,
   signal: AbortSignal,
 ): Promise<{ block?: boolean; reason?: string } | undefined> {
-  if (task.executionMode === 'plan') {
+  const planMode = task.executionMode === 'plan';
+  if (planMode) {
     const planModeReason = planModeToolBlockReason(call);
     if (planModeReason) return { block: true, reason: planModeReason };
   }
@@ -1174,11 +1175,15 @@ async function gatePiToolCall(
   }
 
   const riskLevel = unifiedToolRegistry.riskLevelOf(call.toolName);
-  const permission = decideToolPermission(
-    approvalConfigFromTask(task, 'auto'),
-    call.toolName,
-    riskLevel,
-  );
+  // Plan 下的 shell 不自动放行：它可能需要读取工作区外的用户目录。
+  // 保留工具调用，由用户在现有审批界面明确确认，而不是把探索直接判死。
+  const permission = planMode && call.toolName === 'bash'
+    ? { allowed: false }
+    : decideToolPermission(
+        approvalConfigFromTask(task, 'auto'),
+        call.toolName,
+        riskLevel,
+      );
   if (permission.allowed) {
     if (permission.autoApproved && task.autoModeState) {
       task.autoModeState.autoApprovedCalls = (task.autoModeState.autoApprovedCalls ?? 0) + 1;
@@ -1222,15 +1227,17 @@ async function gatePiToolCall(
 }
 
 /** 计划阶段必须由运行时硬门禁保证只读，而非仅依赖模型提示。 */
-function planModeToolBlockReason(call: ToolCall): string | undefined {
+export function planModeToolBlockReason(call: ToolCall): string | undefined {
   const readOnlyTools = new Set([
     'read', 'open_file', 'read_file', 'list_directory', 'list_dir', 'glob', 'grep',
     'search_grep', 'search_files', 'web_search', 'web_fetch', 'http_fetch', 'recall',
     'get_current_time', 'load_skill', 'ask_user', 'update_plan',
   ]);
   if (readOnlyTools.has(call.toolName)) return undefined;
+  // Shell 的安全性无法靠名称判断；Plan 不直接执行，而是转入用户审批。
+  if (call.toolName === 'bash') return undefined;
   if (call.toolName !== 'delegate') {
-    return `计划模式仅允许只读侦查、检索、澄清和维护计划；请切换到 Agent 模式后再调用 ${call.toolName}。`;
+    return `计划模式仅允许只读侦查、检索、澄清和维护计划；请切换到 Agent 模式后再调用该工具。`;
   }
 
   const args = call.args;

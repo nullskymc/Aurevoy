@@ -21,8 +21,13 @@ import {
   buildAgentRoundFromMessage,
   buildLiveAgentRoundData,
   dedupeContentBlocks,
+  flattenProcessActivityRows,
+  LiveProcessBlock,
   mergeAgentRoundData,
+  ProcessActivityList,
+  resolveLiveStatusText,
   type AgentRoundData,
+  type ProcessSegmentData,
 } from "./Timeline";
 import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
@@ -327,6 +332,7 @@ export function Conversation({
             key={turn.id}
             turn={turn}
             isLiveTurn={hasLiveTail && index === viewModel.turns.length - 1}
+            liveToolActivity={viewModel.liveToolActivity}
             resultMap={resultMap}
             plan={task.plan}
             subagentRuns={task.subagentRuns ?? []}
@@ -388,6 +394,7 @@ export function Conversation({
 function ConversationTurnView({
   turn,
   isLiveTurn: _isLiveTurn,
+  liveToolActivity,
   resultMap,
   plan,
   subagentRuns,
@@ -403,6 +410,7 @@ function ConversationTurnView({
 }: {
   turn: ConversationTurn;
   isLiveTurn: boolean;
+  liveToolActivity: ToolActivity[];
   resultMap: Map<string, ToolResultInfo>;
   plan: PlanStep[];
   subagentRuns: SubagentRun[];
@@ -470,6 +478,7 @@ function ConversationTurnView({
               presentationMessageIds={deliveryMessageIds}
               standaloneToolMessages={standaloneToolMessages}
               liveRoundData={liveRoundData}
+              liveToolActivity={liveToolActivity}
               phaseDetail={phaseDetail}
               resultMap={resultMap}
               plan={plan}
@@ -686,6 +695,7 @@ function AgentProcessStream({
   presentationMessageIds,
   standaloneToolMessages,
   liveRoundData,
+  liveToolActivity,
   phaseDetail,
   resultMap,
   plan,
@@ -699,6 +709,8 @@ function AgentProcessStream({
   presentationMessageIds: Set<string>;
   standaloneToolMessages: Message[];
   liveRoundData?: AgentRoundData | null;
+  /** 仅包含尚未落入 tool result 历史的活动，用于和过程消息按 callId 绑定。 */
+  liveToolActivity: ToolActivity[];
   phaseDetail?: string;
   resultMap: Map<string, ToolResultInfo>;
   plan: PlanStep[];
@@ -718,9 +730,28 @@ function AgentProcessStream({
     ),
   );
   const mergedHistorical = mergeAgentRoundData(historicalRounds, "turn-process");
-  // live 时只展示实时状态流；完成后只展示合并后的一个「已处理」
+  const completedSegments: ProcessSegmentData[] = assistantMessages
+    .map((message, index) => ({
+      id: message.id,
+      narration: message.content.trim() ? message.content : undefined,
+      // 每条 assistant 消息单独压缩活动，避免跨消息合并命令后失去归属。
+      activityRows: flattenProcessActivityRows(historicalRounds[index]),
+    }))
+    .filter((segment) => segment.narration || segment.activityRows.length > 0);
+  // live 时展示实时状态流，并保留已经收到的过程叙事；完成后只展示合并后的一个「已处理」。
   const showLive = Boolean(liveRoundData);
   const showCompleted = !showLive && mergedHistorical != null;
+  const liveNarrations = assistantMessages.filter(hasProcessNarration);
+  const historicalRoundByMessageId = new Map(
+    assistantMessages.map((message, index) => [message.id, historicalRounds[index]]),
+  );
+  const narrationToolCallIds = new Set(
+    liveNarrations.flatMap((message) => message.toolCalls?.map((call) => call.id) ?? []),
+  );
+  const unboundLiveActivities = liveToolActivity.filter((activity) => !narrationToolCallIds.has(activity.id));
+  const streamingNarration = liveRoundData?.markdownOutput?.trim() ?? "";
+  const hasLiveDetails =
+    liveNarrations.length > 0 || streamingNarration.length > 0 || unboundLiveActivities.length > 0;
 
   const processStartedAtMs = resolveProcessStartMs(turnStartedAt);
   const processDurationMs = (() => {
@@ -748,22 +779,53 @@ function AgentProcessStream({
           showWorkflow
           showOutput={false}
           processDurationMs={processDurationMs}
+          processSegments={completedSegments}
           onOpenWorkspacePath={onOpenWorkspacePath}
         />
       )}
       {showLive && liveRoundData && (
-        <AgentRound
-          key="live-process-round"
-          data={liveRoundData}
-          busy
-          defaultToolDetailsOpen={defaultToolDetailsOpen}
-          showWorkflow
-          // 流式正文：无运行中工具时打字机输出；有工具时仅灰字过程摘要
-          showOutput
-          processStartedAtMs={processStartedAtMs}
-          onOpenWorkspacePath={onOpenWorkspacePath}
-          phaseDetail={phaseDetail}
-        />
+        <>
+          <LiveProcessBlock
+            statusText={resolveLiveStatusText({ phaseDetail, data: liveRoundData })}
+            startedAtMs={processStartedAtMs}
+            showFallbackStatus={!hasLiveDetails}
+          />
+          {liveNarrations.map((message) => (
+            <LiveNarrationSegment
+              key={message.id}
+              message={message}
+              activities={liveToolActivity.filter((activity) =>
+                message.toolCalls?.some((call) => call.id === activity.id),
+              )}
+              plan={plan}
+              phase={phaseDetail}
+              subagentRuns={subagentRuns}
+              historicalRound={historicalRoundByMessageId.get(message.id)}
+              onOpenWorkspacePath={onOpenWorkspacePath}
+            />
+          ))}
+          {(streamingNarration || unboundLiveActivities.length > 0) && (
+            <LiveStreamingSegment
+              narration={streamingNarration}
+              activities={unboundLiveActivities}
+              plan={plan}
+              phase={phaseDetail}
+              subagentRuns={subagentRuns}
+              onOpenWorkspacePath={onOpenWorkspacePath}
+            />
+          )}
+          {(liveRoundData.contentBlocks?.length ?? 0) > 0 && (
+            <AgentRound
+              key="live-content-blocks"
+              data={{ ...liveRoundData, markdownOutput: undefined }}
+              busy
+              defaultToolDetailsOpen={defaultToolDetailsOpen}
+              showWorkflow={false}
+              showOutput
+              onOpenWorkspacePath={onOpenWorkspacePath}
+            />
+          )}
+        </>
       )}
       {standaloneToolMessages.length > 0 && (
         <ToolActivityList
@@ -773,6 +835,83 @@ function AgentProcessStream({
         />
       )}
     </div>
+  );
+}
+
+/** 一条过程说明与它发起的工具活动：以 tool call id 为唯一关联键。 */
+function LiveNarrationSegment({
+  message,
+  activities,
+  plan,
+  phase,
+  subagentRuns,
+  historicalRound,
+  onOpenWorkspacePath,
+}: {
+  message: Message;
+  activities: ToolActivity[];
+  plan: PlanStep[];
+  phase?: string;
+  subagentRuns: SubagentRun[];
+  historicalRound?: AgentRoundData;
+  onOpenWorkspacePath?: (path: string) => void;
+}) {
+  // 工具完成后会从 liveToolActivity 消失，此时回退到同一 message 的历史 round，
+  // 让已完成活动在整个 SSE 周期内继续留在原叙事下方。
+  const activityRows = activities.length > 0
+    ? flattenProcessActivityRows(buildLiveAgentRoundData({
+        plan,
+        liveToolActivity: activities,
+        phase,
+        subagentRuns,
+      }))
+    : historicalRound
+      ? flattenProcessActivityRows(historicalRound)
+      : [];
+
+  return (
+    <section className="process-live-segment" data-message-id={message.id}>
+      <article className="process-live-narration">
+        <MarkdownRenderer content={message.content} onOpenWorkspacePath={onOpenWorkspacePath} />
+      </article>
+      {activityRows.length > 0 && <ProcessActivityList rows={activityRows} live />}
+    </section>
+  );
+}
+
+/** 尚未形成完整 message 的 token 文本，与当前未归属工具组成临时过程段。 */
+function LiveStreamingSegment({
+  narration,
+  activities,
+  plan,
+  phase,
+  subagentRuns,
+  onOpenWorkspacePath,
+}: {
+  narration: string;
+  activities: ToolActivity[];
+  plan: PlanStep[];
+  phase?: string;
+  subagentRuns: SubagentRun[];
+  onOpenWorkspacePath?: (path: string) => void;
+}) {
+  const activityRows = flattenProcessActivityRows(buildLiveAgentRoundData({
+    plan,
+    liveToolActivity: activities,
+    phase,
+    subagentRuns,
+  }));
+
+  return (
+    <section className="process-live-segment is-streaming" data-process-segment="streaming">
+      {narration && (
+        <article className="process-live-narration is-streaming">
+          <MarkdownRenderer content={narration} onOpenWorkspacePath={onOpenWorkspacePath} />
+          <span className="stream-caret" aria-hidden="true" />
+        </article>
+      )}
+      {activityRows.length > 0 && <ProcessActivityList rows={activityRows} live />}
+    </section>
   );
 }
 

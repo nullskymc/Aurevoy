@@ -1,6 +1,6 @@
 {
   "name": "aurevoy",
-  "version": "0.6.8",
+  "version": "0.6.9",
   "private": true,
   "description": "Aurevoy — 让每个人都拥有属于自己的 AI Agent。通用个人 AI Agent 桌面产品。",
   "workspaces": [

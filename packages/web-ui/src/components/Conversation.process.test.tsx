@@ -151,7 +151,7 @@ describe("Conversation process presentation (integrated path)", () => {
     expect(html).not.toContain("workflow-drawer");
     // Single process collapsible — not drawer + completed nested
     expect(html).not.toContain("workflow-drawer-toggle");
-    expect(html.match(/process-completed/g)?.length ?? 0).toBe(1);
+    expect(html.match(/class="process-completed"/g)?.length ?? 0).toBe(1);
     expect((html.match(/已处理/g) ?? []).length).toBeGreaterThanOrEqual(1);
   });
 
@@ -208,6 +208,7 @@ describe("Conversation process presentation (integrated path)", () => {
         busy={false}
         liveToolActivity={[]}
         hasLiveTail={false}
+        defaultToolDetailsOpen
         onToolDecision={noop}
         onClarificationAnswer={noop}
       />,
@@ -216,6 +217,10 @@ describe("Conversation process presentation (integrated path)", () => {
     expect(html).toContain("agent-final-response");
     expect(html).toContain("背景");
     expect(html).toContain("目标");
+    expect(html).toContain("process-completed-narration");
+    const processSegment = (html.split('data-message-id="a-narration"')[1] ?? "").split("</section>")[0] ?? "";
+    expect(processSegment).toContain("我先查看工作区里的项目结构");
+    expect(processSegment).toContain("process-activity-list");
     // 过程旁白不得出现在交付区
     const deliverySlice = html.split('class="agent-final-response"')[1] ?? "";
     expect(deliverySlice).not.toContain("我先查看工作区里的项目结构");
@@ -303,7 +308,7 @@ describe("Conversation process presentation (integrated path)", () => {
       />,
     );
 
-    expect(html.match(/process-completed/g)?.length ?? 0).toBe(1);
+    expect(html.match(/class="process-completed"/g)?.length ?? 0).toBe(1);
     expect((html.match(/已处理/g) ?? []).length).toBeGreaterThanOrEqual(1);
     expect(html).toContain("process-activity-row");
     expect(html).toContain("已搜索网页");
@@ -355,6 +360,92 @@ describe("Conversation process presentation (integrated path)", () => {
     expect(html).not.toContain("Thought process");
     expect(html).not.toContain("workflow-drawer");
     expect(html).not.toContain('class="timeline-step"');
+  });
+
+  it("binds token-stream narration to the current live tool before message persistence", () => {
+    const task = baseTask({
+      status: "running",
+      phase: "calling_tool",
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "检查项目",
+          createdAt: "2026-07-10T00:00:00.000Z",
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(
+      <Conversation
+        task={task}
+        status="running"
+        phase="calling_tool"
+        plan={[]}
+        output="我先读取项目说明，再检查目录结构。"
+        busy
+        liveToolActivity={[
+          { id: "call-read", name: "read", args: { path: "README.md" }, status: "running" },
+        ]}
+        hasLiveTail
+        onToolDecision={noop}
+        onClarificationAnswer={noop}
+      />,
+    );
+
+    const streamingSegment = (html.split('data-process-segment="streaming"')[1] ?? "")
+      .split("</section>")[0] ?? "";
+    expect(streamingSegment).toContain("我先读取项目说明，再检查目录结构。");
+    expect(streamingSegment).toContain("正在读取");
+  });
+
+  it("shows persisted process narration immediately while its tool remains live", () => {
+    const task = baseTask({
+      status: "running",
+      phase: "calling_tool",
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "检查工作区",
+          createdAt: "2026-07-10T00:00:00.000Z",
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "我先查看工作区里的项目结构，再判断下一步。",
+          createdAt: "2026-07-10T00:00:01.000Z",
+          toolCalls: [
+            {
+              id: "call-read",
+              type: "function",
+              function: { name: "read", arguments: JSON.stringify({ path: "README.md" }) },
+            },
+          ],
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(
+      <Conversation
+        task={task}
+        status="running"
+        phase="calling_tool"
+        plan={[]}
+        output=""
+        busy
+        liveToolActivity={[{ id: "call-read", name: "read", args: { path: "README.md" }, status: "running" }]}
+        hasLiveTail
+        onToolDecision={noop}
+        onClarificationAnswer={noop}
+      />,
+    );
+
+    expect(html).toContain("process-live-narration");
+    expect(html).toContain("我先查看工作区里的项目结构，再判断下一步。");
+    expect(html).toContain("正在读取");
+    const segment = html.split('data-message-id="a1"')[1] ?? "";
+    expect(segment).toContain("正在读取");
   });
 
   it("ask_user clarification renders question markdown structure (not plain escaped text)", () => {

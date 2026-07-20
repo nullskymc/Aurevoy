@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { Task, TaskArtifact, WorkspaceReadEntry } from "@aurevoy/shared";
 import { readStoredPaneSize, startPaneResize } from "../app/paneResize";
 import { useFileTree } from "../hooks/useFileTree";
@@ -15,6 +15,17 @@ const EXPLORER_WIDTH_KEY = "aurevoy.workbenchExplorerWidth";
 const MIN_EXPLORER_WIDTH = 160;
 const MAX_EXPLORER_WIDTH = 420;
 const DEFAULT_EXPLORER_WIDTH = 260;
+const WORKBENCH_SPLIT_WIDTH = 5;
+const MIN_EDITOR_WIDTH = 140;
+
+/**
+ * 目录树不能侵占编辑器的最小交互宽度，否则顶部标签和操作会被裁切。
+ */
+function maxExplorerWidth(workbenchWidth: number | null): number {
+  if (workbenchWidth === null) return MAX_EXPLORER_WIDTH;
+  const available = workbenchWidth - WORKBENCH_SPLIT_WIDTH - MIN_EDITOR_WIDTH;
+  return Math.max(MIN_EXPLORER_WIDTH, Math.min(MAX_EXPLORER_WIDTH, available));
+}
 
 function readExplorerOpen(): boolean {
   if (typeof window === "undefined") return true;
@@ -53,6 +64,8 @@ export function WorkbenchPanel({
 }: WorkbenchPanelProps) {
   const tree = useFileTree({ taskId: task?.id, projectId });
   const [explorerOpen, setExplorerOpen] = useState(readExplorerOpen);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [workbenchBodyWidth, setWorkbenchBodyWidth] = useState<number | null>(null);
   const [explorerWidth, setExplorerWidth] = useState(() =>
     readStoredPaneSize(EXPLORER_WIDTH_KEY, DEFAULT_EXPLORER_WIDTH, MIN_EXPLORER_WIDTH, MAX_EXPLORER_WIDTH),
   );
@@ -65,8 +78,23 @@ export function WorkbenchPanel({
     window.localStorage.setItem(EXPLORER_WIDTH_KEY, String(explorerWidth));
   }, [explorerWidth]);
 
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!open || !body) return;
+
+    // 外层工作台被拖拽时，内部目录树上限也要立即随之重算。
+    const observer = new ResizeObserver(([entry]) => {
+      setWorkbenchBodyWidth(entry.contentRect.width);
+    });
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, [open]);
+
+  const explorerMaxWidth = maxExplorerWidth(workbenchBodyWidth);
+  const effectiveExplorerWidth = Math.min(explorerWidth, explorerMaxWidth);
+
   const bodyStyle = {
-    "--workbench-explorer-width": `${explorerWidth}px`,
+    "--workbench-explorer-width": `${effectiveExplorerWidth}px`,
   } as CSSProperties;
 
   const hasTab = activeTab != null;
@@ -81,7 +109,7 @@ export function WorkbenchPanel({
       aria-hidden={!open}
     >
       {open && (
-        <div className="workbench-body" style={bodyStyle}>
+        <div ref={bodyRef} className="workbench-body" style={bodyStyle}>
           <div className="workbench-editor" data-has-tab={hasTab ? "true" : "false"}>
             <div className="workbench-editor-toolbar">
               <EditorTabBar
@@ -145,7 +173,7 @@ export function WorkbenchPanel({
                     axis: "x",
                     startSize: explorerWidth,
                     min: MIN_EXPLORER_WIDTH,
-                    max: MAX_EXPLORER_WIDTH,
+                    max: explorerMaxWidth,
                     invert: true,
                     onSize: setExplorerWidth,
                   })

@@ -6,6 +6,44 @@
   min-width: 0;
 }
 
+/* SSE 已落入会话状态的中间说明：实时展示，完成后由「已处理」统一收纳。 */
+.process-live-narration {
+  min-width: 0;
+  color: var(--text);
+}
+
+.process-live-segment {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.process-live-narration .markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.process-live-narration .markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.process-live-narration.is-streaming {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.process-live-narration.is-streaming .markdown-body {
+  display: inline;
+  min-width: 0;
+}
+
+.process-live-narration.is-streaming .stream-caret {
+  flex: 0 0 auto;
+  margin-bottom: 0.15em;
+}
+
 /* ============ 门禁卡：审批 / 追问共用（紧凑、轻阴影） ============ */
 .process-gates {
   display: flex;

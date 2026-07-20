@@ -45,8 +45,13 @@ function collectLiveAssistantToolMessageIds(messages: Message[], liveToolCallIds
   if (lastUserIndex < 0) return ids;
   const startIndex = messages.length - 1 - lastUserIndex;
   for (const message of messages.slice(startIndex + 1)) {
-    // 只隐藏仍在实时 tail 中展示的工具调用，避免长任务 busy 期间把已落库的历史步骤整轮藏掉。
-    if (message.role === "assistant" && message.toolCalls?.some((call) => liveToolCallIds.has(call.id))) {
+    // 无正文的工具调用由 live tail 代为呈现；带正文的中间 assistant 消息则必须保留，
+    // 让用户在 SSE 执行期间即时看到「为什么做这一步」的过程叙事。
+    if (
+      message.role === "assistant" &&
+      !message.content.trim() &&
+      message.toolCalls?.some((call) => liveToolCallIds.has(call.id))
+    ) {
       ids.add(message.id);
     }
   }

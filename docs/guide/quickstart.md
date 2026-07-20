@@ -1,5 +1,5 @@
 ---
-description: Aurevoy 快速开始：下载 macOS 应用、配置模型 API Key、绑定项目并发出第一个目标。
+description: Aurevoy 快速开始：安装桌面应用、配置模型 API Key、绑定项目并发出第一个目标。
 ---
 
 # 快速开始
@@ -9,18 +9,18 @@ description: Aurevoy 快速开始：下载 macOS 应用、配置模型 API Key�
 ## 1. 安装应用
 
 1. 打开 [GitHub Releases](https://github.com/nullskymc/Aurevoy/releases)  
-2. 下载最新 **macOS DMG**，将 Aurevoy 拖入「应用程序」  
-3. 启动应用  
+2. 按系统下载对应安装包：macOS **DMG**、Windows **NSIS `.exe`**，或 Linux **Deb / AppImage**
+3. 安装并启动应用
 
 若系统提示无法验证开发者：仅从上述官方 Releases 下载，然后在 **系统设置 → 隐私与安全性** 中允许打开，或对应用图标使用 **右键 → 打开**。Apple 开发者签名与公证仍在推进；**应用内自动更新**（基于 GitHub Releases）已接入，可在 **设置 → 关于与更新** 中检查。
 
-启动后，输入区附近应显示引擎状态。**本地引擎在线** 表示本机 Agent 进程可用。若长时间离线，完全退出后重开；仍失败见 [故障排查](./troubleshooting)。
+首次启动时，应用会显示「本地引擎 → 连接提供商 → 选择模型」的设置引导。按卡片 CTA 完成即可；也可以从侧栏 **设置** 手动配置。输入区附近应显示引擎状态；**本地引擎在线** 表示本机 Agent 进程可用。若长时间离线，完全退出后重开；仍失败见 [故障排查](./troubleshooting)。
 
 ## 2. 配置模型
 
 Aurevoy 不内置云端账号。你需要接入自己的 Provider。
 
-1. 打开侧栏 **设置**  
+1. 在首次设置引导中点 **连接提供商**，或打开侧栏 **设置**
 2. 在 **提供商** 中选择类型（如 OpenAI 兼容、Anthropic）  
 3. 填写 **API Key**；使用中转或本地网关时填写 **Base URL**  
 4. 在 **模型** 中启用至少一个模型  

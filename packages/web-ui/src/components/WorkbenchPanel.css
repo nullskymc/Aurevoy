@@ -26,12 +26,13 @@
 }
 
 .workbench[data-explorer-open="true"] .workbench-body {
-  grid-template-columns: minmax(0, 1fr) 5px minmax(0, var(--workbench-explorer-width, 260px));
+  /* 窄工作台优先保留编辑器工具栏；目录树由用户宽度平滑收缩到可用下限。 */
+  grid-template-columns: minmax(140px, 1fr) 5px minmax(160px, var(--workbench-explorer-width, 260px));
 }
 
 /* 无打开文件时：预览区略收，目录树更抢眼（贴近 Codex 空态比例） */
 .workbench[data-explorer-open="true"][data-has-tab="false"] .workbench-body {
-  grid-template-columns: minmax(0, 1.1fr) 5px minmax(200px, 0.95fr);
+  grid-template-columns: minmax(140px, 1.1fr) 5px minmax(160px, 0.95fr);
 }
 
 .workbench-explorer {

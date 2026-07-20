@@ -4,6 +4,7 @@
  */
 import type { PlanStep } from "@aurevoy/shared";
 import { t } from "../i18n";
+import { IconAlertCircle, IconCheck, IconClock, IconLoader } from "../icons";
 import {
   getPlanStepStatusLabel,
   mapPlanStepToUiStatus,
@@ -42,7 +43,13 @@ export function PlanProgress({ plan }: { plan: PlanStep[] }) {
                 {index + 1}
               </span>
               <span className="plan-progress-desc">{step.description}</span>
-              <span className={`plan-progress-badge is-${ui}`}>{statusBadge(ui)}</span>
+              <span
+                className={`plan-progress-status is-${ui}`}
+                aria-label={statusBadge(ui)}
+                title={statusBadge(ui)}
+              >
+                {statusIcon(ui)}
+              </span>
             </li>
           );
         })}
@@ -59,4 +66,19 @@ export function PlanProgress({ plan }: { plan: PlanStep[] }) {
 
 function statusBadge(ui: PlanUiStatus): string {
   return getPlanStepStatusLabel(ui);
+}
+
+/** 用紧凑的视觉状态替代重复的文字胶囊，让步骤描述拥有更多空间。 */
+function statusIcon(ui: PlanUiStatus) {
+  switch (ui) {
+    case "completed":
+      return <IconCheck size={14} />;
+    case "running":
+      return <IconLoader size={14} />;
+    case "blocked":
+    case "failed":
+      return <IconAlertCircle size={14} />;
+    default:
+      return <IconClock size={14} />;
+  }
 }

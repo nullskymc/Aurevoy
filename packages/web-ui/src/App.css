@@ -345,8 +345,9 @@ button:disabled {
 
 .app-shell[data-left-collapsed="true"] .topbar {
   display: grid;
-  grid-template-columns: minmax(40px, 1fr) auto minmax(40px, 1fr);
-  justify-items: center;
+  /* 左侧按钮含 macOS 窗口控制区偏移，必须为其预留完整宽度。 */
+  grid-template-columns: 108px minmax(0, 1fr) max-content;
+  justify-items: stretch;
 }
 
 .app-shell[data-left-collapsed="true"] .topbar-left-tools {
@@ -356,6 +357,11 @@ button:disabled {
 
 .app-shell[data-left-collapsed="true"] .topbar-actions {
   justify-self: end;
+}
+
+.app-shell[data-left-collapsed="true"] .topbar-context {
+  min-width: 0;
+  justify-self: stretch;
 }
 
 .topbar-left-tools {
@@ -399,7 +405,7 @@ button:disabled {
 .topbar-conversation-title {
   margin: 0;
   min-width: 0;
-  max-width: min(100%, 48vw);
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
