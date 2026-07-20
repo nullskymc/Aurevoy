@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AgentExecutionMode,
   HealthResponse,
   MessageAttachment,
 } from "@aurevoy/shared";
@@ -34,6 +35,7 @@ import { AppTopBar } from "./components/AppTopBar";
 import { ModelSelectorDrawer } from "./components/ModelSelectorDrawer";
 import { WorkbenchPanel } from "./components/WorkbenchPanel";
 import { OutputFloatPanel } from "./components/OutputFloatPanel";
+import { PlanFloatPanel } from "./components/PlanFloatPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { ToastNotice, type ToastTone } from "./components/ToastNotice";
@@ -86,6 +88,7 @@ function App() {
     return "medium";
   });
   const [autoModeState, setAutoModeState] = useState<{ paused?: boolean; pausedReason?: string; autoApprovedCalls?: number } | null>(null);
+  const [executionMode, setExecutionMode] = useState<AgentExecutionMode>("auto");
   const [searchQuery, setSearchQuery] = useState("");
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
   const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
@@ -329,6 +332,7 @@ function App() {
     clearLiveState,
     closeStream,
     currentTask,
+    executionMode,
     draftProjectId,
     goal,
     handleEvent,
@@ -717,6 +721,8 @@ function App() {
                   onStop={handleStopStream}
                   autoModePaused={!!autoModeState?.paused}
                   onResumeAutoMode={handleResumeAutoMode}
+                  executionMode={executionMode}
+                  onExecutionModeChange={setExecutionMode}
                   thinkingLevel={thinkingLevel}
                   onCycleThinkingLevel={cycleThinkingLevel}
                 />
@@ -791,6 +797,8 @@ function App() {
                 onStop={handleStopStream}
                 autoModePaused={!!autoModeState?.paused}
                 onResumeAutoMode={handleResumeAutoMode}
+                executionMode={executionMode}
+                onExecutionModeChange={setExecutionMode}
                 thinkingLevel={thinkingLevel}
                 onCycleThinkingLevel={cycleThinkingLevel}
               />
@@ -837,6 +845,7 @@ function App() {
             onOpenWorkbench={() => setWorkbenchOpen(true)}
             onClose={() => setOutputRailOpen(false)}
           />
+          <PlanFloatPanel task={currentTask} />
         </aside>
       ) : null}
 

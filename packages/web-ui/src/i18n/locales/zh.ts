@@ -136,8 +136,10 @@ export const zh = {
   // 输入框
   "composer.placeholder": "随心输入",
   "composer.mode.agent": "Agent",
+  "composer.mode.plan": "Plan",
   "composer.mode.paused": "已暂停 · 恢复",
   "composer.mode.agentHint": "Agent — 工具自动执行",
+  "composer.mode.planHint": "Plan — 先只读调研，批准后再执行",
   "composer.mode.pausedHint": "执行已暂停，点击恢复",
   "composer.thinking.off": "关",
   "composer.thinking.minimal": "最低",

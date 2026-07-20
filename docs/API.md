@@ -43,7 +43,7 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 | POST | `/api/tasks/:id/cancel` | 取消 |
 | DELETE | `/api/tasks/:id` | 删除 |
 | POST | `/api/tasks/:id/approvals` | 工具审批 |
-| POST | `/api/tasks/:id/plan-approval` | 计划审批 |
+| POST | `/api/tasks/:id/plan-approval` | 旧版计划审批兼容接口；当前客户端通过消息请求中的 `executionMode` 切换模式 |
 | POST | `/api/tasks/:id/auto-mode-resume` | 解除 auto 安全暂停 |
 | POST | `/api/tasks/:id/clarifications/:id` | 回答追问 |
 | POST | `/api/tasks/:id/revert` | 编辑重试截断（见下） |

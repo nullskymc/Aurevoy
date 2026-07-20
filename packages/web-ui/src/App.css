@@ -277,8 +277,9 @@ button:disabled {
   min-width: 0;
   height: 100vh;
   padding: 52px 14px 16px 6px;
+  gap: 10px;
   background: transparent;
-  overflow: hidden;
+  overflow-y: auto;
   box-sizing: border-box;
 }
 
@@ -1695,7 +1696,8 @@ textarea:focus-visible,
 
 .user-bubble {
   padding: 8px 14px;
-  border-radius: var(--ui-radius-pill);
+  /* 固定圆角避免多行消息继承胶囊形状后变成椭圆。 */
+  border-radius: var(--ui-radius-xl);
   background: var(--user-bubble-bg);
   color: var(--user-bubble-fg);
   font-size: var(--ui-font-chat);

@@ -100,11 +100,12 @@ export async function createTask(
   goal: string,
   projectId?: string,
   attachments?: MessageAttachment[],
+  executionMode: "auto" | "plan" = "auto",
 ): Promise<CreateTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal, projectId, attachments }),
+    body: JSON.stringify({ goal, projectId, attachments, executionMode }),
   });
   if (!res.ok) await throwApiError(res, "create task failed");
   return res.json();
@@ -197,11 +198,12 @@ export async function continueTask(
   taskId: string,
   message: string,
   attachments?: MessageAttachment[],
+  executionMode: "auto" | "plan" = "auto",
 ): Promise<ContinueTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, attachments }),
+    body: JSON.stringify({ message, attachments, executionMode }),
   });
   if (!res.ok) await throwApiError(res, "continue task failed");
   return res.json();

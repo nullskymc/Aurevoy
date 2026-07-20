@@ -792,7 +792,22 @@ async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<st
       workspaceDir,
       projectInfo: projectInfo ? { name: projectInfo.name, path: projectInfo.path } : undefined,
     }),
-    [buildVolatileTimeContextMessage().content],
+    [
+      task.executionMode === 'plan'
+        ? [
+            '## Plan mode',
+            'You are the same conversational agent operating with read-only permissions. Answer informational questions normally; Plan mode does not force every answer to become an execution plan.',
+            'You may investigate with read/search tools, ask clarifying questions, and discuss or revise a proposal over multiple turns. Do not modify the workspace or execute side-effecting commands.',
+            'Use update_plan only when remaining steps require later side-effecting Agent execution. Do not create a plan card for travel advice, explanations, research answers, or any work fully delivered by your current response.',
+            'When a future execution plan is warranted, call update_plan with concrete proposed steps, then explain the proposal. The user can switch the input mode to Agent and ask you to execute it; never tell them to approve a separate plan gate.',
+          ].join('\n')
+        : [
+            '## Agent mode',
+            'For genuinely multi-step actionable work, use update_plan to create or refresh the visible plan and keep its statuses aligned with actual progress.',
+            'Do not create a plan for simple questions or tasks completed in the current answer.',
+          ].join('\n'),
+      buildVolatileTimeContextMessage().content,
+    ].filter(Boolean),
   );
   pinnedSystemPromptByTask.set(task.id, full);
   return full;
@@ -1142,6 +1157,11 @@ async function gatePiToolCall(
   call: ToolCall,
   signal: AbortSignal,
 ): Promise<{ block?: boolean; reason?: string } | undefined> {
+  if (task.executionMode === 'plan') {
+    const planModeReason = planModeToolBlockReason(call);
+    if (planModeReason) return { block: true, reason: planModeReason };
+  }
+
   // OpenCode max-steps: disable all tools during wrap-up turn
   if (maxStepsWrapUpPending.has(task.id)) {
     return { block: true, reason: maxStepsToolsDisabledReason() };
@@ -1197,6 +1217,31 @@ async function gatePiToolCall(
 
   if (!decision.approved) {
     return { block: true, reason: '用户拒绝或超时未批准该工具调用。请停止假设工具已执行，并向用户说明无法继续。' };
+  }
+  return undefined;
+}
+
+/** 计划阶段必须由运行时硬门禁保证只读，而非仅依赖模型提示。 */
+function planModeToolBlockReason(call: ToolCall): string | undefined {
+  const readOnlyTools = new Set([
+    'read', 'open_file', 'read_file', 'list_directory', 'list_dir', 'glob', 'grep',
+    'search_grep', 'search_files', 'web_search', 'web_fetch', 'http_fetch', 'recall',
+    'get_current_time', 'load_skill', 'ask_user', 'update_plan',
+  ]);
+  if (readOnlyTools.has(call.toolName)) return undefined;
+  if (call.toolName !== 'delegate') {
+    return `计划模式仅允许只读侦查、检索、澄清和维护计划；请切换到 Agent 模式后再调用 ${call.toolName}。`;
+  }
+
+  const args = call.args;
+  const role = typeof args.role === 'string' ? args.role : 'general';
+  const tools = Array.isArray(args.tools) ? args.tools.filter((item): item is string => typeof item === 'string') : [];
+  if (role !== 'explore' && role !== 'research') {
+    return `计划模式仅允许 explore 或 research 子代理，当前角色为 ${role}。`;
+  }
+  const unsafeTool = tools.find((tool) => !readOnlyTools.has(tool));
+  if (unsafeTool) {
+    return `计划模式不允许子代理使用 ${unsafeTool}；请仅委托只读侦查或调研。`;
   }
   return undefined;
 }
@@ -1554,7 +1599,7 @@ function appendPiMessage(task: Task, message: AgentMessage): void {
   task.tokenUsage = aggregatePiUsage(task.tokenUsage, message.usage, message.provider, message.model);
   const hasToolCalls = (mapped.toolCalls?.length ?? 0) > 0;
   // 无工具的助手回复视为终稿推进：跳过未完成中间步，进入 deliver
-  if (!hasToolCalls && !mapped.failure) {
+  if (task.executionMode !== 'plan' && !hasToolCalls && !mapped.failure) {
     advancePlanAfterFinalAnswer(task);
   }
   saveTask(task);
@@ -1958,7 +2003,8 @@ function setTaskState(task: Task, status: TaskStatus, phase: TaskPhase): void {
 
 function finishCompleted(task: Task): void {
   task.budgetExceeded = undefined;
-  completePlanOnSuccess(task);
+  // Plan 结束只是完成本轮只读讨论，不能把尚未执行的 proposed 步骤标为完成。
+  if (task.executionMode !== 'plan') completePlanOnSuccess(task);
   setTaskState(task, 'completed', 'finalizing');
   saveTask(task);
   publishBudgetUsage(task);

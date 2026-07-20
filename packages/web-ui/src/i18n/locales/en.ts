@@ -125,8 +125,10 @@ export const en = {
   // Composer (input area)
   "composer.placeholder": "Message Aurevoy",
   "composer.mode.agent": "Agent",
+  "composer.mode.plan": "Plan",
   "composer.mode.paused": "Paused · Resume",
   "composer.mode.agentHint": "Agent — tools run automatically",
+  "composer.mode.planHint": "Plan — research first, then run after approval",
   "composer.mode.pausedHint": "Execution paused — click to resume",
   "composer.thinking.off": "Off",
   "composer.thinking.minimal": "Minimal",

@@ -24,7 +24,6 @@ import {
   mergeAgentRoundData,
   type AgentRoundData,
 } from "./Timeline";
-import { PlanProgress } from "./PlanProgress";
 import { usePlatform } from "../platform/context";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
@@ -322,8 +321,6 @@ export function Conversation({
     <div className="conversation">
       <div ref={topRef} />
       <div className="conversation-thread">
-        <PlanProgress plan={task.plan ?? plan} />
-
         {viewModel.turns.map((turn, index) => (
           <ConversationTurnView
             onOpenWorkspacePath={onOpenWorkspacePath}

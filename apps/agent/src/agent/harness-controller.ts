@@ -27,7 +27,7 @@ import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval } from './pi-
 import { createInitialAutoModeState, syncAutoModeState } from './approval.js';
 import { taskStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
-import { createInitialPlanSteps, resumeIncompletePlan } from './plan-progress.js';
+import { resumeIncompletePlan } from './plan-progress.js';
 import { applyQuestionFirstSteering } from './control-policy.js';
 import {
   ensureLifetimeAllowsAnotherRun,
@@ -113,6 +113,16 @@ export function prepareTaskForResume(task: Task): Task {
     data: { previousStatus, previousPhase, patchedToolResults, checkpoint: lastCheckpoint },
   });
   return task;
+}
+
+/** 输入框切换模式时更新同一任务；模式是会话运行属性，不是全局设置。 */
+export function setTaskExecutionMode(task: Task, mode: AutoModeLevel): void {
+  if (task.executionMode === mode && task.autoModeState?.level === mode) return;
+  task.executionMode = mode;
+  task.autoModeState = createInitialAutoModeState(mode);
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+  taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...task.autoModeState } });
 }
 
 /**
@@ -459,6 +469,7 @@ export function createTask(
   projectId?: string,
   attachments?: MessageAttachment[],
   lifetimeBudget?: TaskBudget,
+  executionMode?: AutoModeLevel,
 ): Task {
   const now = new Date().toISOString();
   const parsed = parseSlashCommand(goal);
@@ -470,7 +481,7 @@ export function createTask(
     createdAt: now,
     attachments,
   };
-  const autoModeLevel = currentAutoModeLevel();
+  const autoModeLevel = executionMode ?? currentAutoModeLevel();
   const budgets = snapshotTaskBudgets({ budget, lifetimeBudget });
   const task: Task = {
     id: randomUUID(),
@@ -491,6 +502,7 @@ export function createTask(
     lifetimeUsage: initialBudgetUsage(),
     tokenUsage: { available: false, provider: config.llm.provider, model: config.llm.model },
     projectId: projectId ?? undefined,
+    executionMode: autoModeLevel,
     autoModeState: createInitialAutoModeState(autoModeLevel),
     createdAt: now,
     updatedAt: now,
@@ -524,18 +536,18 @@ export async function resolveTaskWorkspace(task: Task): Promise<string> {
 export async function runHarnessTask(task: Task): Promise<void> {
   task.pendingApprovals = [];
   const autoModeLevel = currentAutoModeLevel();
-  const autoModeState = syncAutoModeState(task, autoModeLevel);
+  const taskMode = task.executionMode ?? autoModeLevel;
+  task.executionMode = taskMode;
+  const autoModeState = syncAutoModeState(task, taskMode);
   taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...autoModeState } });
 
-  if (task.plan.length === 0) {
-    task.plan = createInitialPlanSteps(task.goal);
-  } else {
+  // Plan 模式只读讨论时保留 proposed；切回 Agent 后才打开首个未完成步骤。
+  if (task.plan.length > 0 && taskMode === 'auto') {
     task.plan = resumeIncompletePlan(task.plan);
   }
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
-  taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
-  taskEvents.publish({ type: 'plan_generated', taskId: task.id, plan: task.plan, source: 'heuristic' });
+  if (task.plan.length > 0) taskEvents.publish({ type: 'plan', taskId: task.id, plan: task.plan });
 
   const abortController = new AbortController();
   activeAbortControllers.set(task.id, abortController);
@@ -551,6 +563,7 @@ export async function runHarnessTask(task: Task): Promise<void> {
 }
 
 function currentAutoModeLevel(): AutoModeLevel {
+  // 模式是输入框的单次选择；旧客户端未携带时安全回落为自动执行。
   return 'auto';
 }
 

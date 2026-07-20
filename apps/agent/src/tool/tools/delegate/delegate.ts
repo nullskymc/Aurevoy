@@ -3,6 +3,18 @@ import { make, type ContentPart } from "../../framework/definition.js"
 
 const Role = Schema.Literal("explore", "research", "coder", "shell", "writer", "general")
 
+/** 计划阶段传给子代理的最小只读工具集，避免角色默认工具意外扩大权限。 */
+const PLAN_READ_ONLY_TOOLS = [
+  "read",
+  "grep",
+  "glob",
+  "list_directory",
+  "get_current_time",
+  "recall",
+  "web_search",
+  "web_fetch",
+] as const
+
 const Input = Schema.Struct({
   goal: Schema.String.annotations({ description: "Sub-task goal to delegate." }),
   prompt: Schema.optional(Schema.String.annotations({ description: "Detailed instructions for the sub-agent. Defaults to goal." })),
@@ -57,6 +69,15 @@ export const delegateTool = make({
     const role = isSubagentRole(input.role) ? input.role : undefined
     const subagentRole = role ?? "general"
     const parentTask = ctx.task ?? (ctx.taskID ? taskStore.get(ctx.taskID) : undefined)
+    const isPlanMode = parentTask?.executionMode === "plan"
+    if (isPlanMode && subagentRole !== "explore" && subagentRole !== "research") {
+      return {
+        runId: "not-started",
+        completed: false,
+        result: "计划模式仅允许 explore 或 research 子代理",
+        stopReason: "error",
+      }
+    }
     const approvalConfig = parentTask
       ? approvalConfigFromTask(parentTask, "auto")
       : { autoModeLevel: "auto" as const, autoModePaused: false }
@@ -65,7 +86,10 @@ export const delegateTool = make({
       goal,
       prompt,
       role,
-      allowedTools: input.tools ? [...input.tools] : undefined,
+      // 即便模型省略 tools，计划阶段也必须显式降为只读白名单。
+      allowedTools: isPlanMode
+        ? PLAN_READ_ONLY_TOOLS.filter((tool) => !input.tools || input.tools.includes(tool))
+        : input.tools ? [...input.tools] : undefined,
       workspaceDir: ctx.workspaceDir || process.cwd(),
       signal: ctx.abortSignal,
       parentCallId: ctx.toolCallID,
