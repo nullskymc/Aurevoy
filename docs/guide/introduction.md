@@ -39,7 +39,7 @@ Aurevoy 是跑在你电脑上的**个人 AI Agent**。你给出一个目标，�
 
 ## 你需要准备什么
 
-- **macOS 应用**（当前优先支持）  
+- **桌面应用**（支持 macOS、Windows 和 Linux）
 - **自己的模型 API Key**（OpenAI 兼容、Anthropic 等）  
 - 可选：本地 Embedding（知识库语义检索）、搜索后端、MCP 服务器  
 

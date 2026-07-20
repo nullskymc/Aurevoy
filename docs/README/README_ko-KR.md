@@ -9,7 +9,7 @@
 
 ---
 
-Aurevoy는 **로컬 데스크톱 에이전트**입니다(macOS 우선). 목표를 주면 계획·도구 호출·파일 작업·조사·코드 수정까지 진행합니다. 언제든 중단·승인·되돌리기가 가능합니다.
+Aurevoy는 **macOS, Windows, Linux**를 지원하는 로컬 데스크톱 에이전트입니다. 목표를 주면 계획·도구 호출·파일 작업·조사·코드 수정까지 진행합니다. 언제든 중단·승인·되돌리기가 가능합니다.
 
 ## 할 수 있는 일
 
@@ -30,14 +30,14 @@ Aurevoy는 **로컬 데스크톱 에이전트**입니다(macOS 우선). 목표�
 
 ## 시작하기
 
-1. **설치** — [Releases](../../releases) DMG  
+1. **설치** — [Releases](../../releases)에서 macOS DMG, Windows NSIS 또는 Linux Deb / AppImage 다운로드
 2. **설정** — Provider / Base URL / 모델 / Key  
 3. **대화** — 목표 입력; `/` 로 skill 목록
 
 ### 개발
 
 ```bash
-# Node >= 22.19.0, Rust stable, macOS Xcode CLT
+# Node >= 22.19.0, Rust stable; macOS 개발에는 Xcode CLT도 필요
 git clone https://github.com/nullskymc/Aurevoy.git
 cd Aurevoy && npm install
 npm run dev

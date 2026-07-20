@@ -9,7 +9,7 @@
 
 ---
 
-Aurevoy は**ローカルデスクトップエージェント**です（macOS 優先）。目標を伝えると、計画・ツール実行・ファイル操作・調査・コード編集まで進めます。いつでも中断・承認・巻き戻しができます。
+Aurevoy は **macOS、Windows、Linux** に対応するローカルデスクトップエージェントです。目標を伝えると、計画・ツール実行・ファイル操作・調査・コード編集まで進めます。いつでも中断・承認・巻き戻しができます。
 
 ## できること
 
@@ -30,14 +30,14 @@ Aurevoy は**ローカルデスクトップエージェント**です（macOS �
 
 ## はじめ方
 
-1. **インストール** — [Releases](../../releases) の DMG  
+1. **インストール** — [Releases](../../releases) から macOS DMG、Windows NSIS、または Linux Deb / AppImage をダウンロード
 2. **設定** — Provider / Base URL / モデル / Key  
 3. **会話** — 目標を入力；`/` で skill 一覧
 
 ### 開発
 
 ```bash
-# Node >= 22.19.0, Rust stable, macOS Xcode CLT
+# Node >= 22.19.0, Rust stable; macOS 開発には Xcode CLT も必要
 git clone https://github.com/nullskymc/Aurevoy.git
 cd Aurevoy && npm install
 npm run dev

@@ -9,7 +9,7 @@
 
 ---
 
-Aurevoy 是**本地桌面 Agent**（优先 macOS）。你描述目标，它规划、调工具、推进任务：读写文件、检索网页、改代码、整理材料，过程可中断、可审批、可回溯。
+Aurevoy 是支持 **macOS、Windows 和 Linux** 的本地桌面 Agent。你描述目标，它规划、调工具、推进任务：读写文件、检索网页、改代码、整理材料，过程可中断、可审批、可回溯。
 
 ## 能做什么
 
@@ -30,14 +30,14 @@ Aurevoy 是**本地桌面 Agent**（优先 macOS）。你描述目标，它规�
 
 ## 快速开始
 
-1. **安装** — [Releases](../../releases) 下载 DMG  
+1. **安装** — 在 [Releases](../../releases) 下载 macOS DMG、Windows NSIS 安装包或 Linux Deb / AppImage
 2. **配置** — 设置里填 Provider / Base URL / 模型 / Key  
 3. **对话** — 输入目标；`/` 查看 skill（如 web-search、browser、research）
 
 ### 开发
 
 ```bash
-# Node >= 22.19.0，Rust stable，macOS Xcode CLT
+# Node >= 22.19.0、Rust stable；macOS 开发还需 Xcode CLT
 git clone https://github.com/nullskymc/Aurevoy.git
 cd Aurevoy && npm install
 npm run dev

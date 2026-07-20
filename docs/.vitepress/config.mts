@@ -96,15 +96,20 @@ const jsonLd = {
       '@type': 'SoftwareApplication',
       name: 'Aurevoy',
       applicationCategory: 'DesktopApplication',
-      operatingSystem: 'macOS',
+      operatingSystem: 'macOS, Windows, Linux',
       description: siteDescription,
       url: siteUrl + '/',
       downloadUrl: `${repo}/releases`,
-      softwareVersion: '0.6',
+      softwareVersion: '0.6.8',
       offers: {
         '@type': 'Offer',
         price: '0',
         priceCurrency: 'USD',
+      },
+      author: {
+        '@type': 'Person',
+        name: 'nullskymc',
+        url: 'https://github.com/nullskymc',
       },
       license: 'https://opensource.org/licenses/MIT',
       codeRepository: repo,
@@ -136,7 +141,7 @@ export default defineConfig({
     ['link', { rel: 'icon', type: 'image/png', href: `${base}aurevoy.png` }],
     ['link', { rel: 'apple-touch-icon', href: `${base}aurevoy.png` }],
     ['meta', { name: 'theme-color', content: '#3d7a6e' }],
-    ['meta', { name: 'author', content: 'Aurevoy' }],
+    ['meta', { name: 'author', content: 'nullskymc' }],
     [
       'meta',
       {
@@ -208,6 +213,9 @@ export default defineConfig({
     logo: { src: '/aurevoy-wordmark.svg', alt: 'Aurevoy' },
     siteTitle: false,
     nav: [
+      { text: '产品', link: '/#capabilities' },
+      { text: '工作方式', link: '/#workflow' },
+      { text: '安全控制', link: '/#control' },
       { text: '快速开始', link: '/guide/quickstart', activeMatch: '^/guide/quickstart' },
       {
         text: '使用指南',
