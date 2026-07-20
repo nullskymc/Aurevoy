@@ -374,7 +374,7 @@ export function useAgentEventHandler({
         break;
       case "plan_approval_request":
       case "plan_approval_resolved":
-        // 计划审批模式已移除；忽略历史事件
+        // 兼容历史 Plan Agent 事件；当前模式切换不依赖审批状态。
         break;
       case "skill_installed":
       case "skill_deactivated":
@@ -422,10 +422,12 @@ export function useAgentEventHandler({
           .then((full) => {
             setCurrentTask((previous) => (previous?.id === full.id ? full : previous));
             updateTaskList(full);
-            if (full.status === "paused" && full.phase === "waiting_budget") {
+            if (full.status === "paused") {
               setStatus("paused");
-              setPhase("waiting_budget");
-              if (full.budgetExceeded?.reason) setPhaseDetail(full.budgetExceeded.reason);
+              setPhase(full.phase);
+              if (full.phase === "waiting_budget" && full.budgetExceeded?.reason) {
+                setPhaseDetail(full.budgetExceeded.reason);
+              }
             }
           })
           .catch(() => {

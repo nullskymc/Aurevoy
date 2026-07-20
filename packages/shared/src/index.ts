@@ -458,6 +458,8 @@ export interface Task {
   projectId?: string;
   /** 自动模式运行时统计与状态 */
   autoModeState?: AutoModeState;
+  /** 当前会话执行模式；plan 只读，用户可在输入框切换为 auto 后继续同一任务。 */
+  executionMode?: AgentExecutionMode;
   /** 子代理运行历史；通过 parentCallId 关联到触发它的 assistant 消息。 */
   subagentRuns?: SubagentRun[];
   createdAt: string;
@@ -486,10 +488,10 @@ export interface Project {
  */
 export type ToolRiskLevel = 'safe' | 'caution' | 'dangerous';
 
-/**
- * Agent 执行等级。产品仅保留自动执行（agent）；历史 `plan` 值读入时按 auto 处理。
- */
-export type AutoModeLevel = 'auto';
+/** Agent 的任务级执行模式。 */
+export type AgentExecutionMode = 'auto' | 'plan';
+/** @deprecated 使用 AgentExecutionMode；保留别名兼容既有设置与调用方。 */
+export type AutoModeLevel = AgentExecutionMode;
 
 /** Agent 运行时的统计与状态（工具默认自动放行；paused 时拦截非 safe 工具） */
 export interface AutoModeState {
@@ -746,6 +748,8 @@ export type AgentEvent =
 /** POST /api/tasks — 创建并启动一个任务 */
 export interface CreateTaskRequest {
   goal: string;
+  /** 本次任务的执行模式；由输入框选择，未提供时默认自动执行。 */
+  executionMode?: AgentExecutionMode;
   /** 单次执行预算覆盖；未提供字段使用引擎默认。 */
   budget?: TaskBudget;
   /** 任务寿命预算覆盖；未提供字段使用引擎默认。 */
@@ -946,6 +950,8 @@ export interface TaskTraceListResponse {
 export interface ContinueTaskRequest {
   /** 用户的后续追问/补充 */
   message: string;
+  /** 本轮使用的输入框模式；允许在同一任务内从 Plan 切换到 Agent。 */
+  executionMode?: AgentExecutionMode;
   attachments?: MessageAttachment[];
   /** 任务运行中追加消息时的投递方式；默认 steering，等当前工具批次后注入。 */
   delivery?: 'steering' | 'follow_up';

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { t, type TranslationKey } from "../i18n";
 import { usePlatform } from "../platform/context";
 import { ImageViewer } from "./ImageViewer";
-import type { LlmReadiness, LlmReadyState, MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
+import type { AgentExecutionMode, LlmReadiness, LlmReadyState, MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
 import { formatModelEffortChipLabel } from "./ModelSelectorDrawer";
 import {
   IconArrowUp,
@@ -62,6 +62,9 @@ interface ComposerProps {
   autoModePaused?: boolean;
   /** 恢复暂停的自动执行 */
   onResumeAutoMode?: () => void;
+  /** 当前输入将创建的任务模式；属于本次发送而非全局设置。 */
+  executionMode?: AgentExecutionMode;
+  onExecutionModeChange?: (mode: AgentExecutionMode) => void;
   /** 推理深度（与模型能力相关，仅支持推理的模型会生效） */
   thinkingLevel?: ThinkingUILevel;
   /** @deprecated 已合并进模型菜单；保留 prop 以免破坏外部调用 */
@@ -90,6 +93,8 @@ export function Composer({
   onStop,
   autoModePaused,
   onResumeAutoMode,
+  executionMode = "auto",
+  onExecutionModeChange,
   thinkingLevel = "medium",
 }: ComposerProps) {
   const platform = usePlatform();
@@ -415,10 +420,16 @@ export function Composer({
                   <span>{t("composer.mode.paused")}</span>
                 </button>
               ) : (
-                <span className="composer-mode-chip is-agent" title={t("composer.mode.agentHint")}>
-                  <span className="auto-mode-dot" />
-                  <span>{t("composer.mode.agent")}</span>
-                </span>
+                <button
+                  type="button"
+                  className={`composer-mode-chip ${executionMode === "plan" ? "is-plan" : "is-agent"}`}
+                  disabled={busy || !onExecutionModeChange}
+                  onClick={() => onExecutionModeChange?.(executionMode === "auto" ? "plan" : "auto")}
+                  title={executionMode === "plan" ? t("composer.mode.planHint") : t("composer.mode.agentHint")}
+                >
+                  <span className={`auto-mode-dot ${executionMode === "plan" ? "plan" : ""}`} />
+                  <span>{executionMode === "plan" ? t("composer.mode.plan") : t("composer.mode.agent")}</span>
+                </button>
               )}
             </div>
 

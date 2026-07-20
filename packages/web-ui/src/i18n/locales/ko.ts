@@ -124,8 +124,10 @@ export const ko = {
   // Composer (input area)
   "composer.placeholder": "메시지 입력",
   "composer.mode.agent": "Agent",
+  "composer.mode.plan": "Plan",
   "composer.mode.paused": "일시중지 · 재개",
   "composer.mode.agentHint": "Agent — 도구 자동 실행",
+  "composer.mode.planHint": "Plan — 읽기 전용 조사 후 승인하면 실행",
   "composer.mode.pausedHint": "실행이 일시중지됨 — 클릭하여 재개",
   "composer.thinking.off": "끄기",
   "composer.thinking.minimal": "최소",

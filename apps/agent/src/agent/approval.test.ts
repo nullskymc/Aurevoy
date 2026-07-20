@@ -41,7 +41,7 @@ describe("decideToolPermission", () => {
 })
 
 describe("approvalConfigFromTask", () => {
-  it("inherits paused from parent task state and forces auto level", () => {
+  it("inherits paused state and the parent's execution mode", () => {
     const task = {
       autoModeState: {
         level: "auto" as const,
@@ -55,6 +55,12 @@ describe("approvalConfigFromTask", () => {
       autoModeLevel: "auto",
       autoModePaused: true,
     })
+  })
+
+  it("preserves plan mode when creating and syncing state", () => {
+    const task = { autoModeState: undefined } as Task
+    expect(createInitialAutoModeState("plan").level).toBe("plan")
+    expect(syncAutoModeState(task, "plan").level).toBe("plan")
   })
 })
 

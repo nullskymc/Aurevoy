@@ -11,7 +11,7 @@
 
 ---
 
-Aurevoy is a **local desktop agent** (macOS first). You state a goal; it plans, uses tools, and works through the task—files, web research, code edits, and more—while you stay in control.
+Aurevoy is a **local desktop agent** for macOS, Windows, and Linux. You state a goal; it plans, uses tools, and works through the task—files, web research, code edits, and more—while you stay in control.
 
 ## What you can do
 
@@ -32,8 +32,8 @@ Everything runs **on your computer**. You bring your own API keys (OpenAI-compat
 
 ## Quick start
 
-1. **Install** — latest DMG from [Releases](../../releases)  
-2. **Configure** — Settings → provider, base URL, model, API key  
+1. **Install** — download the DMG (macOS), NSIS installer (Windows), or Linux package from [Releases](../../releases)
+2. **Configure** — follow the in-app setup guide to connect a provider and select a model
 3. **Chat** — type a goal; `/` lists skills (e.g. web-search, browser)
 
 ### Develop
@@ -62,12 +62,13 @@ Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Roadmap: [docs/ROA
 
 ## Capabilities (current)
 
-Autonomous agent & tools · multi-provider LLM · multi-turn & resume ·  
+Autonomous agent & tools · multi-provider LLM + OAuth · multi-turn & resume ·
 inline edit-retry / branch / compact · multi-role subagents · skills · web search ·  
-multimodal · projects · dual task budgets · long-term memory + KB RAG · settings & CI  
+multimodal · projects · dual task budgets · long-term memory + KB RAG ·
+stdio + Streamable HTTP MCP · setup guide · tray + recent tasks · settings & CI
 
-**In progress:** Apple code signing / notarization, implicit KB recall, evals, release polish.  
-**Shipped (distribution):** in-app auto-update via GitHub Releases (Tauri updater).
+**In progress:** Apple code signing / notarization, implicit KB recall, evals, MCP presets, data-management polish.
+**Shipped (distribution):** macOS, Windows, and Linux packages plus in-app auto-update via GitHub Releases (Tauri updater).
 
 ---
 

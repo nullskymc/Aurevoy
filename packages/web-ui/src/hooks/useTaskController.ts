@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import type { AgentEvent, MessageAttachment, PlanStep, RevertMode, Task, TaskPhase, TaskStatus, TaskTraceEntry } from "@aurevoy/shared";
+import type { AgentEvent, AgentExecutionMode, MessageAttachment, PlanStep, RevertMode, Task, TaskPhase, TaskStatus, TaskTraceEntry } from "@aurevoy/shared";
 import {
   answerClarification,
 
@@ -22,6 +22,7 @@ export function useTaskController({
   clearLiveState,
   closeStream,
   currentTask,
+  executionMode,
   draftProjectId,
   goal,
   handleEvent,
@@ -49,6 +50,7 @@ export function useTaskController({
   clearLiveState: () => void;
   closeStream: () => void;
   currentTask: Task | null;
+  executionMode: AgentExecutionMode;
   draftProjectId: string | undefined;
   goal: string;
   handleEvent: (event: AgentEvent) => void;
@@ -91,7 +93,7 @@ export function useTaskController({
 
     try {
       const { task } = await runAgentRequest(() =>
-        createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach),
+        createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach, executionMode),
       );
       setCurrentTask(task);
       setPhase(task.phase);
@@ -146,7 +148,7 @@ export function useTaskController({
     closeStream();
 
     try {
-      const { task } = await runAgentRequest(() => continueTask(currentTask.id, trimmed, attach));
+      const { task } = await runAgentRequest(() => continueTask(currentTask.id, trimmed, attach, executionMode));
       setCurrentTask(task);
       setPhase(task.phase);
       updateTaskList(task);
@@ -223,7 +225,7 @@ export function useTaskController({
       setPlan(response.task.plan);
       updateTaskList(response.task);
 
-      const { task } = await runAgentRequest(() => continueTask(taskId, trimmed, attach));
+      const { task } = await runAgentRequest(() => continueTask(taskId, trimmed, attach, executionMode));
       setCurrentTask(task);
       setPhase(task.phase);
       setStatus(task.status);

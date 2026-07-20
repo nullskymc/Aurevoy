@@ -24,9 +24,9 @@
 | POST | `/api/skills/install` | 从 Git 安装 |
 | PATCH | `/api/skills/:name` | `{ enabled }` 启停 |
 | DELETE | `/api/skills/:name` | 卸载用户/系统 skill |
-| GET | `/api/mcp/status` | MCP 连接与工具数 |
+| GET | `/api/mcp/status` | MCP 连接状态、错误与已注册工具数 |
 
-MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel` 优先）。
+MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel` 优先）。配置经 `PATCH /api/settings` 保存后会重载：支持本地 `stdio`（`command`、`args`、可选 `cwd` / `env`）及远程 `streamable-http`（`url`、可选 `headers`）两种传输。单个服务器连接失败只标记该服务器不可用，不会阻断引擎启动。
 
 ### 任务
 
@@ -43,7 +43,7 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 | POST | `/api/tasks/:id/cancel` | 取消 |
 | DELETE | `/api/tasks/:id` | 删除 |
 | POST | `/api/tasks/:id/approvals` | 工具审批 |
-| POST | `/api/tasks/:id/plan-approval` | 计划审批 |
+| POST | `/api/tasks/:id/plan-approval` | 旧版计划审批兼容接口；当前客户端通过消息请求中的 `executionMode` 切换模式 |
 | POST | `/api/tasks/:id/auto-mode-resume` | 解除 auto 安全暂停 |
 | POST | `/api/tasks/:id/clarifications/:id` | 回答追问 |
 | POST | `/api/tasks/:id/revert` | 编辑重试截断（见下） |

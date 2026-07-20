@@ -23,6 +23,22 @@ npm run typecheck && npm run build
 npm run regression:m3   # … m8 见 package.json
 ```
 
+## 当前能力快照（v0.6.9）
+
+除下列未竟项外，桌面端主链路已可用：本地 Agent 引擎、Pi runtime、工具审批与恢复、
+多 Provider / OAuth、Skill、子代理、记忆 / KB、工作台、系统托盘，以及三平台构建、
+安装包和自动更新。
+
+近期已交付：
+
+- [x] 首次设置引导：引擎状态、Provider 凭证与模型选择的分步引导；未就绪时禁止误发送。
+- [x] MCP 完整接入：本地 stdio 与远程 Streamable HTTP、请求头、风险等级、连接/工具状态、
+  增删改启停和运行时重载。
+- [x] Windows 适配：WebView2/Tauri 壳、NSIS 当前用户安装包、资源与 Node runtime 路径、
+  无控制台引擎进程、托盘，以及 Windows CI / Release / updater 产物。
+- [x] 控制与桌面体验：长任务控制策略、可恢复计划进度、系统托盘及最近任务、MCP 设置重构。
+- [x] 网络与可观测性：Agent 出站 HTTP 代理及探测、OAuth 系统浏览器打开、结构化日志与更新诊断。
+
 ## 进行中
 
 ### M5 分发 🚧
@@ -30,7 +46,7 @@ npm run regression:m3   # … m8 见 package.json
 - [x] 设置 / 工具 / 数据 / MCP / 模型槽位 / i18n / 引擎托管 / CI  
 - [x] 自动更新（Tauri updater + GitHub Releases `latest.json`；设置页检查/安装）  
 - [ ] macOS Apple 代码签名与公证（需 Apple Developer）  
-- [ ] Windows 适配（WebView2、原生模块、路径）
+- [x] Windows 适配（WebView2、原生模块、路径、NSIS 安装和 updater）
 
 ### M8 体验深化 🚧
 
@@ -53,7 +69,8 @@ npm run regression:m3   # … m8 见 package.json
 
 **发布**
 
-- [ ] 首次启动向导、健康页、数据导出/清理体验  
+- [x] 首次启动向导（引擎 / 凭证 / 模型的分步引导）
+- [ ] 健康页、数据导出/清理体验
 - [x] GitHub Releases 多平台安装包 + updater 通道（`latest.json`）  
 - [ ] macOS 公证安装体验、Windows 签名安装体验
 

@@ -102,7 +102,6 @@ export function OutputFloatPanel({
     () => collectOutputItems(task, liveContentBlocks),
     [task, liveContentBlocks],
   );
-
   if (!visible) return null;
 
   return (

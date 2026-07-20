@@ -76,6 +76,38 @@
   transform: rotate(0deg);
 }
 
+.process-completed-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding-top: 12px;
+}
+
+.process-completed-segment {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.process-completed-narration {
+  min-width: 0;
+  color: var(--text);
+}
+
+.process-completed-narration .markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.process-completed-narration .markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.process-completed-segment > .process-activity-list {
+  margin-top: 6px;
+}
+
 /* live / 完成后「已处理」下始终有分割线 */
 .process-summary-rule {
   margin-top: 8px;

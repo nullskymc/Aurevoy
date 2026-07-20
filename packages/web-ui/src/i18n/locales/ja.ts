@@ -124,8 +124,10 @@ export const ja = {
   // Composer (input area)
   "composer.placeholder": "メッセージを入力",
   "composer.mode.agent": "Agent",
+  "composer.mode.plan": "Plan",
   "composer.mode.paused": "一時停止 · 再開",
   "composer.mode.agentHint": "Agent — ツールは自動実行",
+  "composer.mode.planHint": "Plan — 読み取り専用で調査し、承認後に実行",
   "composer.mode.pausedHint": "実行が一時停止中 — クリックで再開",
   "composer.thinking.off": "オフ",
   "composer.thinking.minimal": "最低",

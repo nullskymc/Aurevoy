@@ -1267,6 +1267,13 @@ export type ProcessActivityRow = {
   icon?: "search" | "browse" | "command" | "file" | "edit" | "agent" | "other";
 };
 
+/** 完成态中的有序过程段：保留 assistant 说明与其发起的工具活动之间的绑定。 */
+export interface ProcessSegmentData {
+  id: string;
+  narration?: string;
+  activityRows: ProcessActivityRow[];
+}
+
 /**
  * 将同一 conversation turn 内多条 assistant 过程 round 合并为一条，
  * 避免界面叠多个「已处理」。
@@ -1608,7 +1615,7 @@ function LiveStatusLine({ text }: { text: string }) {
  *   运行子智能体 · 调研：…   ← 每个子代理一行，SSE 全程保留
  *   正在搜索网页…            ← 无活动行时的灰字回落
  */
-function LiveProcessBlock({
+export function LiveProcessBlock({
   statusText,
   activityRows = [],
   startedAtMs,
@@ -1649,7 +1656,7 @@ function LiveProcessBlock({
   );
 }
 
-function ProcessActivityList({
+export function ProcessActivityList({
   rows,
   live = false,
 }: {
@@ -1686,10 +1693,14 @@ function CompletedProcess({
   data,
   defaultOpen = false,
   durationMs,
+  segments,
+  onOpenWorkspacePath,
 }: {
   data: AgentRoundData;
   defaultOpen?: boolean;
   durationMs?: number | null;
+  segments?: ProcessSegmentData[];
+  onOpenWorkspacePath?: (path: string) => void;
 }) {
   const rows = flattenProcessActivityRows(data);
   const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
@@ -1718,7 +1729,22 @@ function CompletedProcess({
         </span>
       </button>
       <div className="process-summary-rule is-always" aria-hidden="true" />
-      {open && <ProcessActivityList rows={rows} />}
+      {open && segments && segments.length > 0 ? (
+        <div className="process-completed-segments">
+          {segments.map((segment) => (
+            <section key={segment.id} className="process-completed-segment" data-message-id={segment.id}>
+              {segment.narration && (
+                <article className="process-completed-narration">
+                  <MarkdownRenderer content={segment.narration} onOpenWorkspacePath={onOpenWorkspacePath} />
+                </article>
+              )}
+              {segment.activityRows.length > 0 && <ProcessActivityList rows={segment.activityRows} />}
+            </section>
+          ))}
+        </div>
+      ) : open ? (
+        <ProcessActivityList rows={rows} />
+      ) : null}
     </div>
   );
 }
@@ -1738,6 +1764,8 @@ export function AgentRound({
   processStartedAtMs,
   /** 完成后的耗时（ms） */
   processDurationMs,
+  /** 完成态按 assistant message 保留的叙事—工具有序分段。 */
+  processSegments,
   onOpenWorkspacePath,
 }: {
   data: AgentRoundData;
@@ -1748,6 +1776,7 @@ export function AgentRound({
   phaseDetail?: string;
   processStartedAtMs?: number | null;
   processDurationMs?: number | null;
+  processSegments?: ProcessSegmentData[];
   onOpenWorkspacePath?: (path: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1805,6 +1834,8 @@ export function AgentRound({
         data={data}
         defaultOpen={defaultToolDetailsOpen}
         durationMs={processDurationMs}
+        segments={processSegments}
+        onOpenWorkspacePath={onOpenWorkspacePath}
       />
     ) : null
   ) : null;

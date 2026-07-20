@@ -153,13 +153,10 @@ export function loadPersistedSettings(): void {
     activateProviderSlot(global.activeProvider);
   }
 
-  // 产品仅保留 agent（auto）；历史 plan/off 等一律收敛
+  // 执行模式由输入框逐轮携带；设置存储仅保留 auto 兼容值。
   config.autoMode.level = 'auto';
   if (entries[SETTING_KEYS.autoModeLevel] !== 'auto') {
     settingsStore.set(SETTING_KEYS.autoModeLevel, 'auto');
-  }
-  if (!settingsStore.get('autoMode.migratedV3')) {
-    settingsStore.set('autoMode.migratedV3', 'true');
   }
   const thinkingLevel = normalizeThinkingLevel(entries[SETTING_KEYS.agentThinkingLevel]);
   if (thinkingLevel) config.agent.thinkingLevel = thinkingLevel;

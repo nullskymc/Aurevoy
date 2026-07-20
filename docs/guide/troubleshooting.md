@@ -12,6 +12,12 @@ description: Aurevoy 故障排查：引擎离线、模型失败、审批卡住�
 
 仅从 [官方 Releases](https://github.com/nullskymc/Aurevoy/releases) 下载。在 **系统设置 → 隐私与安全性** 允许，或 **右键 → 打开**。见 [快速开始](./quickstart)。
 
+### Windows 安装后无法启动
+
+1. 从 Releases 下载 **NSIS `.exe`**，不要解压 updater 的 `.sig` 文件后直接运行
+2. 确认系统具备 WebView2 Runtime；通常 Windows 10/11 已预装，企业精简镜像可能需要由管理员安装
+3. 若安全软件拦截首次启动，允许 Aurevoy 拉起本机 Agent 子进程后重试
+
 ### 检查更新失败 / 没有新版本
 
 1. 确认本机可访问 `github.com`（代理/防火墙）  

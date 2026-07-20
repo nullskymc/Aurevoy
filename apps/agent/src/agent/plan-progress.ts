@@ -129,7 +129,9 @@ export function isHeuristicTriPlan(plan: PlanStep[]): boolean {
  * - deliver：保持 running，直到任务收尾
  */
 export function advancePlanAfterTool(task: Task, toolName: string, ok: boolean): boolean {
-  if (!ok || !isHeuristicTriPlan(task.plan)) return false;
+  if (!ok) return false;
+  // 模型计划由 update_plan 显式维护；自动猜测工具与步骤的对应关系会制造虚假进度。
+  if (!isHeuristicTriPlan(task.plan)) return false;
   const running = currentRunningStep(task.plan);
   if (!running) return ensureSomethingRunning(task);
 

@@ -75,6 +75,7 @@ import {
   resumeAutoMode,
   revertTask,
   runHarnessTask,
+  setTaskExecutionMode,
   resolveTaskWorkspace,
   unrevertTask,
 } from './agent/harness-controller.js';
@@ -579,6 +580,7 @@ export async function buildServer(externalLogger?: Logger) {
       projectId,
       attachments,
       req.body?.lifetimeBudget,
+      req.body?.executionMode === 'plan' ? 'plan' : 'auto',
     );
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runHarnessTask(task);
@@ -621,6 +623,7 @@ export async function buildServer(externalLogger?: Logger) {
         return reply.code(202).send(body);
       }
 
+      setTaskExecutionMode(task, req.body?.executionMode === 'plan' ? 'plan' : 'auto');
       addUserTurn(task, message, attachments);
       // 异步带完整历史重跑循环；前端通过同一 SSE 地址订阅这一轮
       void runHarnessTask(task);
@@ -850,7 +853,7 @@ export async function buildServer(externalLogger?: Logger) {
     },
   );
 
-  // 审批 /plan 触发的执行计划。Pi harness 只在批准后进入模型调用。
+  // 批准只读计划并切换到自动执行。保留原路径以兼容旧客户端。
   app.post<{ Params: { id: string }; Body: PlanApprovalRequest }>(
     '/api/tasks/:id/plan-approval',
     async (req, reply) => {
