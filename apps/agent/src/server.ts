@@ -80,7 +80,6 @@ import {
   unrevertTask,
 } from './agent/harness-controller.js';
 import { taskEvents } from './agent/events.js';
-import { createAgentEventCoalescer } from './agent/sse-event-coalescer.js';
 import { buildTokenUsageReport } from './agent/token-usage.js';
 import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore, invalidateMemorySummary } from './store/db.js';
 import { unifiedToolRegistry } from './tool/unified-registry.js';
@@ -1088,7 +1087,7 @@ export async function buildServer(externalLogger?: Logger) {
       'subagent_updated',
     ]);
 
-    const sendEncoded = (event: AgentEvent) => {
+    const send = (event: AgentEvent) => {
       if (streamClosed) return;
       const line = `data: ${JSON.stringify(event)}\n\n`;
 
@@ -1112,12 +1111,6 @@ export async function buildServer(externalLogger?: Logger) {
       } else if (!sseTimer) {
         sseTimer = setImmediate(sseFlush);
       }
-    };
-
-    // socket 合批之外，再把连续 token 合成一个逻辑 SSE 事件，减少 JSON/onmessage 次数。
-    const coalescer = createAgentEventCoalescer(sendEncoded, 24);
-    const send = (event: AgentEvent) => {
-      if (!streamClosed) coalescer.push(event);
     };
 
     const sendSnapshot = (event: AgentEvent) => send(event);
@@ -1164,7 +1157,6 @@ export async function buildServer(externalLogger?: Logger) {
     req.raw.on('close', () => {
       if (heartbeat) clearInterval(heartbeat);
       if (sseTimer) clearImmediate(sseTimer);
-      coalescer.cancel();
       sseBuf = [];
       writeQueue.length = 0;
       unsubscribe();

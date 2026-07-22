@@ -1,43 +1,69 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@aurevoy/shared";
-import { enqueueFrameEvent } from "./useSSEStream";
 
-describe("enqueueFrameEvent", () => {
-  it("合并同一帧内相邻 token，同时保持字符顺序", () => {
-    const queue: AgentEvent[] = [];
-    enqueueFrameEvent(queue, { type: "token", taskId: "task-1", delta: "你" });
-    enqueueFrameEvent(queue, { type: "token", taskId: "task-1", delta: "好" });
+vi.mock("../api", () => ({ getBaseUrl: () => "http://127.0.0.1:8787" }));
 
-    expect(queue).toEqual([{ type: "token", taskId: "task-1", delta: "你好" }]);
-  });
+import { useSSEStream } from "./useSSEStream";
 
-  it("事件屏障两侧的 token 不跨越合并", () => {
-    const queue: AgentEvent[] = [];
-    enqueueFrameEvent(queue, { type: "token", taskId: "task-1", delta: "前" });
-    enqueueFrameEvent(queue, { type: "phase", taskId: "task-1", phase: "thinking" });
-    enqueueFrameEvent(queue, { type: "token", taskId: "task-1", delta: "后" });
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: (() => void) | null = null;
+  readonly close = vi.fn();
 
-    expect(queue.map((event) => event.type)).toEqual(["token", "phase", "token"]);
-  });
+  constructor(readonly url: string) {
+    FakeEventSource.instances.push(this);
+  }
 
-  it("相邻工具进度只保留最新快照", () => {
-    const queue: AgentEvent[] = [];
-    enqueueFrameEvent(queue, {
-      type: "tool_progress",
-      taskId: "task-1",
-      callId: "call-1",
-      message: "10%",
-      percent: 10,
-    });
-    enqueueFrameEvent(queue, {
-      type: "tool_progress",
-      taskId: "task-1",
-      callId: "call-1",
-      message: "80%",
-      percent: 80,
-    });
+  emit(event: AgentEvent): void {
+    this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent);
+  }
+}
 
-    expect(queue).toHaveLength(1);
-    expect(queue[0]).toMatchObject({ type: "tool_progress", message: "80%", percent: 80 });
+let root: ReturnType<typeof createRoot> | undefined;
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+afterEach(() => {
+  if (root) act(() => root?.unmount());
+  root = undefined;
+  FakeEventSource.instances = [];
+  document.body.innerHTML = "";
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("useSSEStream immediate dispatch", () => {
+  it("按到达顺序立即分发 token 和每一条工具进度，不经过 RAF 合并", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const requestFrame = vi.spyOn(globalThis, "requestAnimationFrame");
+    const received: AgentEvent[] = [];
+    let openStream: ReturnType<typeof useSSEStream>["openStream"] | undefined;
+
+    function Harness() {
+      const stream = useSSEStream();
+      stream.syncEventHandler((event) => received.push(event));
+      openStream = stream.openStream;
+      return null;
+    }
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(createElement(Harness)));
+    act(() => openStream?.("task-1", (event) => received.push(event), () => {}));
+
+    const source = FakeEventSource.instances[0];
+    expect(source).toBeDefined();
+    source!.emit({ type: "token", taskId: "task-1", delta: "你" });
+    source!.emit({ type: "token", taskId: "task-1", delta: "好" });
+    source!.emit({ type: "tool_progress", taskId: "task-1", callId: "call-1", message: "10%", percent: 10 });
+    source!.emit({ type: "tool_progress", taskId: "task-1", callId: "call-1", message: "80%", percent: 80 });
+
+    expect(received.map((event) => event.type)).toEqual(["token", "token", "tool_progress", "tool_progress"]);
+    expect(received.slice(0, 2).map((event) => event.type === "token" ? event.delta : "")).toEqual(["你", "好"]);
+    expect(requestFrame).not.toHaveBeenCalled();
   });
 });
