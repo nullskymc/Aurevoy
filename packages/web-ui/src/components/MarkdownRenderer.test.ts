@@ -10,11 +10,12 @@ vi.mock("dompurify", () => ({
 }));
 
 vi.mock("streamdown", () => ({
-  Streamdown: ({ children, mode, isAnimating, controls }: {
+  Streamdown: ({ children, mode, isAnimating, controls, parseIncompleteMarkdown }: {
     children: string;
     mode?: string;
     isAnimating?: boolean;
     controls?: boolean;
+    parseIncompleteMarkdown?: boolean;
   }) =>
     createElement(
       "div",
@@ -22,6 +23,7 @@ vi.mock("streamdown", () => ({
         "data-streamdown-mode": mode,
         "data-is-animating": String(isAnimating),
         "data-streamdown-controls": String(controls),
+        "data-streamdown-parse-incomplete": String(parseIncompleteMarkdown),
       },
       children,
     ),
@@ -41,6 +43,7 @@ describe("StreamingMarkdownRenderer", () => {
     expect(html).toContain('data-streamdown-mode="streaming"');
     expect(html).toContain('data-is-animating="true"');
     expect(html).toContain('data-streamdown-controls="false"');
+    expect(html).toContain('data-streamdown-parse-incomplete="false"');
     expect(html).toContain("**正在生成**");
   });
 });
@@ -63,6 +66,18 @@ describe("MarkdownRenderer math (KaTeX)", () => {
   it("normalizes \\[ \\] and \\( \\) to dollar delimiters", () => {
     expect(normalizeMarkdownMath(String.raw`\[\frac{a}{b}\]`)).toContain("$$");
     expect(normalizeMarkdownMath(String.raw`inline \(x^2\) here`)).toContain("$x^2$");
+  });
+
+  it("removes orphaned sizing commands while preserving valid delimiters", () => {
+    const malformed = String.raw`$$\mathcal{L} = \Big \mathrm{CE}(x) \Big$$`;
+    const valid = String.raw`$$\Big[\mathrm{CE}(x)\Big]$$`;
+
+    expect(normalizeMarkdownMath(malformed)).not.toContain("\\Big");
+    expect(normalizeMarkdownMath(valid)).toContain(String.raw`\Big[`);
+
+    const html = renderMarkdownToSafeHtml(malformed);
+    expect(html).toContain("katex");
+    expect(html).not.toContain("katex-error");
   });
 
   it("renders bare [ latex ] blocks models often emit (screenshot case)", () => {

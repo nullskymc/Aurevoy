@@ -76,7 +76,7 @@ export function normalizeMarkdownMath(source: string): string {
 
   // 裸 [ latex ]：排除 ![img]( 与 [link](
   s = s.replace(
-    /(^|[^!\\])\[(?!\s*[^\n\]]{0,240}\]\()((?:[^\[\]\\]|\\[\s\S])+?)\](?!\()/g,
+    /(^|[^!\\\w])\[(?!\s*[^\n\]]{0,240}\]\()((?:[^\[\]\\]|\\[\s\S])+?)\](?!\()/g,
     (full, prefix: string, body: string) => {
       if (!looksLikeLatexMath(body)) return full;
       const trimmed = body.trim();
@@ -89,7 +89,21 @@ export function normalizeMarkdownMath(source: string): string {
     },
   );
 
+  // 模型偶尔会输出 `\Big \mathrm{...}` 或行尾 `\Big`。
+  // 尺寸命令必须紧跟括号/竖线等定界符；无效时移除该命令，保留公式其余可解析部分。
+  s = repairMalformedLatexSizingCommands(s);
+
   return restore(s);
+}
+
+function repairMalformedLatexSizingCommands(source: string): string {
+  const sizingCommand = String.raw`\\(?:Bigg|bigg|Big|big)(?:l|m|r)?`;
+  const delimiter = String.raw`[()[\]{}|]|\\(?:\||vert|Vert|lvert|rvert|lVert|rVert|langle|rangle|lbrace|rbrace|lfloor|rfloor|lceil|rceil)`;
+  const invalidSizingCommand = new RegExp(
+    `(${sizingCommand})(?!\\s*${delimiter})`,
+    "g",
+  );
+  return source.replace(invalidSizingCommand, "");
 }
 
 function looksLikeLatexMath(body: string): boolean {
@@ -342,6 +356,8 @@ export function StreamingMarkdownRenderer({ content, onOpenWorkspacePath }: Mark
         animated={false}
         // 使用消息卡片自己的操作区，避免 Streamdown 为表格/代码额外插入控件。
         controls={false}
+        // 未闭合的公式交由下一次完整内容再解析，避免 SSE 分片触发 KaTeX 错误闪烁。
+        parseIncompleteMarkdown={false}
         plugins={{ math: streamdownMath }}
         // 由桌面端统一处理链接打开策略，避免流式正文弹出网页安全确认框。
         linkSafety={{ enabled: false }}
