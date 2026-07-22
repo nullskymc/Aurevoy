@@ -1,11 +1,16 @@
 import type { SetStateAction } from "react";
 
+/** Markdown、测高和滚动修正不需要跟随每个 token；30 FPS 足以保持连续阅读感。 */
+const STREAM_FRAME_MS = 32;
+
 /**
- * 高频流式正文使用独立外部 store，避免每个 token 都让 App、侧边栏和输入区重渲染。
- * React 只在真正消费正文的 Conversation 子树中订阅它。
+ * 高频流式正文使用独立外部 store：App 与历史消息不重渲染，live tail 也只按显示帧更新。
+ * 事件协议本身不延迟，工具/审批/状态仍由 SSE 层立即处理。
  */
 export class LiveOutputStore {
   private value = "";
+  private pending = "";
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly listeners = new Set<() => void>();
 
   readonly getSnapshot = (): string => this.value;
@@ -15,23 +20,38 @@ export class LiveOutputStore {
     return () => this.listeners.delete(listener);
   };
 
+  private notify(): void {
+    for (const listener of this.listeners) listener();
+  }
+
+  /** 立即发布尚未显示的 token；消息持久化、清空或任务切换前调用，保证尾部不丢字。 */
+  readonly flush = (): void => {
+    if (this.flushTimer !== null) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (!this.pending) return;
+    this.value += this.pending;
+    this.pending = "";
+    this.notify();
+  };
+
   readonly set = (next: SetStateAction<string>): void => {
+    this.flush();
     const value = typeof next === "function"
       ? (next as (previous: string) => string)(this.value)
       : next;
     if (value === this.value) return;
     this.value = value;
-    for (const listener of this.listeners) listener();
+    this.notify();
   };
 
-  /**
-   * SSE 层已经按浏览器帧合批，这里直接追加完整增量。
-   * 不再人为逐字延迟，避免“纯文本打字完成后再切换 Markdown”的视觉跳变。
-   */
+  /** token 在本地合帧，最多每 32ms 触发一次 React、Markdown 与虚拟列表测高。 */
   readonly append = (delta: string): void => {
     if (!delta) return;
-    this.value += delta;
-    for (const listener of this.listeners) listener();
+    this.pending += delta;
+    if (this.flushTimer !== null) return;
+    this.flushTimer = setTimeout(this.flush, STREAM_FRAME_MS);
   };
 }
 

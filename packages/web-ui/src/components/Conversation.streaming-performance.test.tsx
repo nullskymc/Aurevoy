@@ -32,6 +32,7 @@ afterEach(() => {
   if (root) act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
+  vi.useRealTimers();
   vi.restoreAllMocks();
   renderCounts.historical = 0;
   renderCounts.streaming = 0;
@@ -125,6 +126,7 @@ describe("Conversation streaming render boundary", () => {
   });
 
   it("追加 token 只重渲染 live Markdown，不重渲染历史 Markdown", () => {
+    vi.useFakeTimers();
     const outputStore = createLiveOutputStore();
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -154,12 +156,14 @@ describe("Conversation streaming render boundary", () => {
     expect(historicalAfterMount).toBeGreaterThan(0);
 
     act(() => outputStore.append("新的流式正文"));
+    act(() => vi.advanceTimersByTime(32));
 
     expect(renderCounts.streaming).toBeGreaterThan(0);
     expect(container.textContent).toContain("新的流式正文");
     expect(renderCounts.historical).toBe(historicalAfterMount);
 
     act(() => outputStore.append("，继续追加"));
+    act(() => vi.advanceTimersByTime(32));
 
     expect(container.textContent).toContain("新的流式正文，继续追加");
     expect(renderCounts.historical).toBe(historicalAfterMount);

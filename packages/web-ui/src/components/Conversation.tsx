@@ -1075,7 +1075,8 @@ function LiveOutputFrame({
   const rawOutput = outputStore ? storedOutput : fallbackOutput;
   const narration = shouldSuppressLiveOutput(messages, hiddenAssistantIds, rawOutput)
     ? ""
-    : rawOutput.trim();
+    // 流式 Markdown 的尾部空白可能是换行、代码缩进或两空格换行，不能每帧 trim 掉。
+    : rawOutput.trimStart();
   const collectProcess = canCollectProcess && (narration.length > 0 || forceCollected);
 
   return (
