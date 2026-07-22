@@ -10,8 +10,21 @@ vi.mock("dompurify", () => ({
 }));
 
 vi.mock("streamdown", () => ({
-  Streamdown: ({ children, mode, isAnimating }: { children: string; mode?: string; isAnimating?: boolean }) =>
-    createElement("div", { "data-streamdown-mode": mode, "data-is-animating": String(isAnimating) }, children),
+  Streamdown: ({ children, mode, isAnimating, controls }: {
+    children: string;
+    mode?: string;
+    isAnimating?: boolean;
+    controls?: boolean;
+  }) =>
+    createElement(
+      "div",
+      {
+        "data-streamdown-mode": mode,
+        "data-is-animating": String(isAnimating),
+        "data-streamdown-controls": String(controls),
+      },
+      children,
+    ),
 }));
 
 import {
@@ -27,6 +40,7 @@ describe("StreamingMarkdownRenderer", () => {
     );
     expect(html).toContain('data-streamdown-mode="streaming"');
     expect(html).toContain('data-is-animating="true"');
+    expect(html).toContain('data-streamdown-controls="false"');
     expect(html).toContain("**正在生成**");
   });
 });

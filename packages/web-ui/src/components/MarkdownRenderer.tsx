@@ -340,6 +340,8 @@ export function StreamingMarkdownRenderer({ content, onOpenWorkspacePath }: Mark
         mode="streaming"
         isAnimating
         animated={false}
+        // 使用消息卡片自己的操作区，避免 Streamdown 为表格/代码额外插入控件。
+        controls={false}
         plugins={{ math: streamdownMath }}
         // 由桌面端统一处理链接打开策略，避免流式正文弹出网页安全确认框。
         linkSafety={{ enabled: false }}
