@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Task, Project } from "@aurevoy/shared";
+import type { TaskSummary, Project } from "@aurevoy/shared";
 import { taskDisplayTitle } from "@aurevoy/shared";
 import { getRelativeTime, getStatusLabel } from "./status";
 import { t } from "../i18n";
@@ -29,11 +29,11 @@ type MainView = "chat" | "search" | "skills" | "settings";
 interface TaskHistorySidebarProps {
   activeTaskId?: string;
   activeView: MainView;
-  tasks: Task[];
+  tasks: TaskSummary[];
   projects: Project[];
   selectedProjectId?: string;
   onNewTask: (projectId?: string) => void;
-  onSelectTask: (task: Task) => void;
+  onSelectTask: (task: TaskSummary) => void;
   onSelectProject: (projectId: string) => void;
   onOpenSearch: () => void;
   onOpenSkills: () => void;
@@ -94,8 +94,8 @@ export function TaskHistorySidebar({
   }, [projectIds, projects]);
 
   const tasksByProject = useMemo(() => {
-    const map = new Map<string, Task[]>();
-    const standalone: Task[] = [];
+    const map = new Map<string, TaskSummary[]>();
+    const standalone: TaskSummary[] = [];
     for (const task of tasks) {
       if (task.projectId) {
         const list = map.get(task.projectId) ?? [];
@@ -163,7 +163,7 @@ export function TaskHistorySidebar({
     setCtxMenu({ open: true, point: contextMenuPoint(e), items });
   }
 
-  function handleTaskContextMenu(e: React.MouseEvent, task: Task) {
+  function handleTaskContextMenu(e: React.MouseEvent, task: TaskSummary) {
     e.preventDefault();
     e.stopPropagation();
     const items: ContextMenuItem[] = [
@@ -370,11 +370,11 @@ function TaskList({
   onContextMenuTask,
   nested = false,
 }: {
-  tasks: Task[];
+  tasks: TaskSummary[];
   activeTaskId?: string;
-  onSelectTask: (task: Task) => void;
+  onSelectTask: (task: TaskSummary) => void;
   onDeleteTask: (taskId: string) => void;
-  onContextMenuTask?: (e: React.MouseEvent, task: Task) => void;
+  onContextMenuTask?: (e: React.MouseEvent, task: TaskSummary) => void;
   nested?: boolean;
 }) {
   if (tasks.length === 0) {

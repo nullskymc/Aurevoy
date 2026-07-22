@@ -614,6 +614,7 @@ function ConversationTurnView({
           messageId={turn.user.id}
           createdAt={turn.user.createdAt}
           attachments={turn.user.attachments}
+          imageParts={turn.user.imageParts}
           delivery={turn.user.delivery}
           onEdit={onUserMessageEdit}
           editDisabled={editDisabled}
@@ -1293,6 +1294,7 @@ function UserBubble({
   messageId,
   createdAt,
   attachments,
+  imageParts,
   delivery,
   onEdit,
   editDisabled,
@@ -1302,6 +1304,7 @@ function UserBubble({
   messageId: string;
   createdAt: string;
   attachments?: MessageAttachment[];
+  imageParts?: Message["imageParts"];
   delivery?: Message["delivery"];
   onEdit?: (
     messageId: string,
@@ -1438,6 +1441,7 @@ function UserBubble({
   }
 
   const visibleAttachments = attachments ?? [];
+  const visibleImages = imageParts ?? [];
 
   return (
     <div className="user-bubble-row" onContextMenu={handleUserBubbleContextMenu}>
@@ -1448,45 +1452,26 @@ function UserBubble({
           </span>
         )}
         <div className="user-bubble">{content}</div>
-        {visibleAttachments.length > 0 && (
+        {(visibleImages.length > 0 || visibleAttachments.length > 0) && (
           <div className="user-bubble-attachments">
+            {visibleImages.map((image) => (
+              <button
+                key={image.id}
+                type="button"
+                className="user-bubble-attachment is-image"
+                onClick={() => setViewingImage(image.dataUrl)}
+                title={image.name}
+              >
+                <img className="user-bubble-image" src={image.dataUrl} alt={image.name} loading="lazy" />
+                <span className="user-bubble-attachment-name">{image.name}</span>
+              </button>
+            ))}
             {visibleAttachments.map((att) => {
               const src = (() => {
                 try { return att.dataUrl ?? platform.filePathToUrl(att.path); } catch { return null; }
               })();
-              if (att.type === 'image') {
-                return src ? (
-                  <button
-                    key={att.id}
-                    type="button"
-                    className="user-bubble-attachment is-image"
-                    onClick={() => setViewingImage(att.dataUrl ?? att.path)}
-                    onContextMenu={(event) => handleAttachmentContextMenu(event, att)}
-                    title={att.path}
-                  >
-                    <img
-                      className="user-bubble-image"
-                      src={src}
-                      alt={att.name}
-                      loading="lazy"
-                    />
-                    <span className="user-bubble-attachment-name">{att.name}</span>
-                  </button>
-                ) : (
-                  <span
-                    key={att.id}
-                    className="user-bubble-attachment"
-                    title={att.path}
-                    onContextMenu={(event) => handleAttachmentContextMenu(event, att)}
-                  >
-                    <AttachmentFileIcon />
-                    <span className="user-bubble-attachment-copy">
-                      <span className="user-bubble-attachment-name">{att.name}</span>
-                      <span className="user-bubble-attachment-meta">{formatFileSize(att.size)}</span>
-                    </span>
-                  </span>
-                );
-              }
+              // 图片已迁移为 message.imageParts；保留此分支仅兼容尚未迁移的历史记录。
+              if (att.type === 'image' && src) return <img key={att.id} className="user-bubble-image" src={src} alt={att.name} />;
               return (
                 <span
                   key={att.id}

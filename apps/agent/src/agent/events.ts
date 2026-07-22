@@ -16,8 +16,8 @@ import type { AgentEvent } from '@aurevoy/shared';
 /**
  * 节流配置：每种事件类型的最小发送间隔（毫秒），缺省 0 = 不节流。
  *
- * token / reasoning 不在节流列表中 —— SSE send() 的 setImmediate coalescing
- * + cork/uncork 已提供 socket 级无损批处理，事件总线层不需要丢弃数据。
+ * token 不在事件总线层丢弃；SSE 连接层会在短时间窗内无损拼接 delta，
+ * 同时前端按动画帧提交，既保留完整正文又控制逻辑事件/渲染频率。
  * 仅 tool_progress 保留节流（每秒最多 4 次），避免前端工具进度渲染过于频繁。
  */
 const THROTTLE_MS: Record<string, number> = {

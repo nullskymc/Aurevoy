@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import type { HealthResponse, Project, Task } from "@aurevoy/shared";
+import type { HealthResponse, Project, TaskSummary } from "@aurevoy/shared";
 import { checkHealth, listProjects, listTasks, setBaseUrl } from "../api";
 import { t } from "../i18n";
 import type { PlatformAdapter } from "../platform/types";
@@ -17,7 +17,7 @@ export function useRuntimeController({
   setNotice: (message: string | null) => void;
   setOnline: Dispatch<SetStateAction<boolean | null>>;
   setProjects: Dispatch<SetStateAction<Project[]>>;
-  setTasks: Dispatch<SetStateAction<Task[]>>;
+  setTasks: Dispatch<SetStateAction<TaskSummary[]>>;
 }) {
   async function refreshRuntime(): Promise<void> {
     try {

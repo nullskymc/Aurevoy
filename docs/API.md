@@ -32,7 +32,7 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/tasks` | 列表；`?projectId=` / `standalone` |
+| GET | `/api/tasks` | 轻量 `TaskSummary[]` 列表（不含消息/计划）；`?projectId=` / `standalone` |
 | GET | `/api/tasks/:id` | 详情 |
 | GET | `/api/tasks/:id/traces` | 轨迹 |
 | GET | `/api/tasks/:id/stream` | **SSE** |
@@ -104,7 +104,8 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 
 ## SSE：`GET /api/tasks/:id/stream`
 
-- 先可补发任务快照，再推实时 `AgentEvent`。  
+- 首事件 `task_created` 携带一份完整持久快照；快照内消息/产物不再逐条重复发送。
+- 连续 `token` 会在短时间窗内无损合并，非 token 事件到来前强制排空以保持顺序。
 - 客户端在 `done` / 卸载时关闭连接。
 
 ### 事件类型（摘要）

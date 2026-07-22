@@ -1,6 +1,8 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
-import type { PlanStep, Task, TaskPhase, TaskStatus, TaskTraceEntry } from "@aurevoy/shared";
+import { useRef, useState, type Dispatch, type SetStateAction } from "react";
+import type { PlanStep, Task, TaskPhase, TaskStatus, TaskSummary, TaskTraceEntry } from "@aurevoy/shared";
 import { formatTaskTitle } from "@aurevoy/shared";
+import { createLiveOutputStore } from "../app/liveOutputStore";
+import { normalizeTaskSummary, patchTaskSummaryList, upsertTaskSummary } from "../app/taskSummary";
 
 function sanitizeTaskForDisplay(task: Task): Task {
   const messages = task.messages.filter((message) => message.role !== "system");
@@ -22,68 +24,56 @@ function sanitizeNullableTaskForDisplay(task: Task | null): Task | null {
 export function useTaskState() {
   const [busy, setBusy] = useState(false);
   const [currentTask, setCurrentTaskState] = useState<Task | null>(null);
-  const [output, setOutput] = useState("");
+  const currentTaskIdRef = useRef<string | null>(null);
+  const [outputStore] = useState(createLiveOutputStore);
   const [phase, setPhase] = useState<TaskPhase | null>(null);
   const [plan, setPlan] = useState<PlanStep[]>([]);
   const [status, setStatus] = useState<TaskStatus | null>(null);
-  const [tasks, setTasksState] = useState<Task[]>([]);
+  const [tasks, setTasksState] = useState<TaskSummary[]>([]);
   const [traces, setTraces] = useState<TaskTraceEntry[]>([]);
 
   const setCurrentTask: Dispatch<SetStateAction<Task | null>> = (value) => {
     if (typeof value === "function") {
-      setCurrentTaskState((previous) =>
-        sanitizeNullableTaskForDisplay((value as (previous: Task | null) => Task | null)(previous)),
+      setCurrentTaskState((previous) => {
+        const next = sanitizeNullableTaskForDisplay((value as (previous: Task | null) => Task | null)(previous));
+        currentTaskIdRef.current = next?.id ?? null;
+        return next;
+      });
+      return;
+    }
+    const next = sanitizeNullableTaskForDisplay(value);
+    currentTaskIdRef.current = next?.id ?? null;
+    setCurrentTaskState(next);
+  };
+
+  const setTasks: Dispatch<SetStateAction<TaskSummary[]>> = (value) => {
+    if (typeof value === "function") {
+      setTasksState((previous) =>
+        (value as (previous: TaskSummary[]) => TaskSummary[])(previous).map(normalizeTaskSummary),
       );
       return;
     }
-    setCurrentTaskState(sanitizeNullableTaskForDisplay(value));
-  };
-
-  const setTasks: Dispatch<SetStateAction<Task[]>> = (value) => {
-    if (typeof value === "function") {
-      setTasksState((previous) => (value as (previous: Task[]) => Task[])(previous).map(sanitizeTaskForDisplay));
-      return;
-    }
-    setTasksState(value.map(sanitizeTaskForDisplay));
+    setTasksState(value.map(normalizeTaskSummary));
   };
 
   function updateTaskList(task: Task): void {
-    const displayTask = sanitizeTaskForDisplay(task);
-    setTasksState((previous) => {
-      const withoutTask = previous.filter((item) => item.id !== displayTask.id);
-      return [displayTask, ...withoutTask].sort(
-        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-      );
-    });
+    setTasksState((previous) => upsertTaskSummary(previous, sanitizeTaskForDisplay(task)));
   }
 
-  /** 会影响 sidebar 排序/展示的关键字段 */
-  const REORDER_TASK_KEYS: (keyof Task)[] = [
-    'status',
-    'phase',
-    'plan',
-    'messages',
-    'updatedAt',
-    'goal',
-    'title',
-  ];
-
   function patchCurrentTask(patch: Partial<Task>): void {
-    setCurrentTaskState((previous) => {
-      if (!previous) return previous;
-      const nextTask = sanitizeTaskForDisplay({ ...previous, ...patch });
-      const shouldReorder = REORDER_TASK_KEYS.some((key) => key in patch);
-      if (shouldReorder) {
-        updateTaskList(nextTask);
-      }
-      return nextTask;
-    });
+    const taskId = currentTaskIdRef.current;
+    setCurrentTaskState((previous) =>
+      previous ? sanitizeTaskForDisplay({ ...previous, ...patch }) : previous,
+    );
+
+    if (!taskId) return;
+    setTasksState((previous) => patchTaskSummaryList(previous, taskId, patch));
   }
 
   return {
     busy,
     currentTask,
-    output,
+    outputStore,
     phase,
     plan,
     status,
@@ -91,7 +81,8 @@ export function useTaskState() {
     traces,
     setBusy,
     setCurrentTask,
-    setOutput,
+    setOutput: outputStore.set,
+    appendOutput: outputStore.append,
     setPhase,
     setPlan,
     setStatus,

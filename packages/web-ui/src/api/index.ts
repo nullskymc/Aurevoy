@@ -29,6 +29,7 @@ import {
   type UnrevertTaskResponse,
   type RuntimeSettings,
   type Task,
+  type TaskSummary,
   type TaskArtifact,
   type TaskArtifactContentResponse,
   type TokenUsageReport,
@@ -111,7 +112,7 @@ export async function createTask(
   return res.json();
 }
 
-export async function listTasks(): Promise<Task[]> {
+export async function listTasks(): Promise<TaskSummary[]> {
   const res = await fetch(`${BASE_URL}/api/tasks`);
   if (!res.ok) throw new Error(`list tasks failed: ${res.status}`);
   return res.json();

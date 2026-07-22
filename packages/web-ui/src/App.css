@@ -720,12 +720,61 @@ button:disabled {
   line-height: 1.45;
 }
 
-.context-hint {
-  text-align: right;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  padding-bottom: 4px;
-  font-variant-numeric: tabular-nums;
+.context-usage-ring {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  height: 24px;
+  padding: 0 4px 4px 0;
+}
+
+.context-usage-ring svg {
+  width: 20px;
+  height: 20px;
+  overflow: visible;
+  transform: rotate(-90deg);
+}
+
+.context-usage-ring circle {
+  fill: none;
+  stroke-width: 2.25;
+}
+
+.context-usage-ring__track {
+  stroke: var(--border-strong);
+}
+
+.context-usage-ring__value {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 180ms ease;
+}
+
+.context-usage-ring__tooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 5px);
+  z-index: 4;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--card-bg);
+  box-shadow: var(--ui-shadow-popover);
+  color: var(--text-secondary);
+  font-size: var(--ui-font-xs);
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  white-space: nowrap;
+}
+
+.context-usage-ring:hover .context-usage-ring__tooltip {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .doc-block {
@@ -1744,12 +1793,16 @@ textarea:focus-visible,
 
 /* 用户消息中的附件 */
 .user-bubble-attachments {
+  /* 与右侧用户气泡共用尾部对齐基线，不能因图片宽度撑成整列。 */
+  align-self: flex-end;
   display: flex;
   flex-wrap: nowrap;
   gap: 6px;
   margin-top: 6px;
   overflow-x: auto;
+  width: fit-content;
   max-width: 100%;
+  justify-content: flex-end;
 }
 
 .user-bubble-attachment {
@@ -1779,9 +1832,11 @@ button.user-bubble-attachment {
 
 .user-bubble-attachment.is-image {
   align-items: stretch;
+  flex-direction: column;
   gap: 0;
-  width: 120px;
-  height: 112px;
+  /* 图片是消息内容：卡片随容器收缩，不裁切原始画面。 */
+  width: min(280px, 100%);
+  height: auto;
   overflow: hidden;
   padding: 0;
 }
@@ -1803,10 +1858,13 @@ button.user-bubble-attachment {
 }
 
 .user-bubble-image {
-  flex-shrink: 0;
+  display: block;
+  flex-shrink: 1;
   width: 100%;
-  height: 82px;
-  object-fit: cover;
+  height: auto;
+  max-height: min(320px, 45vh);
+  object-fit: contain;
+  background: var(--surface-muted, var(--surface-subtle));
   border-bottom: 1px solid var(--border-subtle, var(--border));
 }
 

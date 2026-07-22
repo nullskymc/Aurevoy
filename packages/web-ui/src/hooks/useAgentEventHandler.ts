@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { AgentEvent, ContentBlock, PlanStep, Task, TaskArtifact, TaskPhase, TaskStatus, TaskTraceEntry } from "@aurevoy/shared";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import type { AgentEvent, ContentBlock, PlanStep, Task, TaskArtifact, TaskPhase, TaskStatus, TaskSummary, TaskTraceEntry } from "@aurevoy/shared";
 import { getTask } from "../api";
 import { createLiveActivityStore } from "../app/liveActivityStore";
 import { createFailureMessage, fetchWithRetry, mergeById } from "../app/taskUtils";
@@ -17,6 +17,7 @@ export function useAgentEventHandler({
   setBusy,
   setCurrentTask,
   setOutput,
+  appendOutput,
   setPhase,
   setPlan,
   setStatus,
@@ -36,10 +37,11 @@ export function useAgentEventHandler({
   setBusy: Dispatch<SetStateAction<boolean>>;
   setCurrentTask: Dispatch<SetStateAction<Task | null>>;
   setOutput: Dispatch<SetStateAction<string>>;
+  appendOutput: (delta: string) => void;
   setPhase: Dispatch<SetStateAction<TaskPhase | null>>;
   setPlan: Dispatch<SetStateAction<PlanStep[]>>;
   setStatus: Dispatch<SetStateAction<TaskStatus | null>>;
-  setTasks: Dispatch<SetStateAction<Task[]>>;
+  setTasks: Dispatch<SetStateAction<TaskSummary[]>>;
   setTraces: Dispatch<SetStateAction<TaskTraceEntry[]>>;
   updateTaskList: (task: Task) => void;
   /** attach_content 的可预览文件：默认在侧边工作台打开 */
@@ -93,19 +95,14 @@ export function useAgentEventHandler({
       case "task_created":
         setCurrentTask(event.task);
         setPlan(event.task.plan);
+        setStatus(event.task.status);
+        setPhase(event.task.phase);
         setOutput("");
         setTraces([]);
         updateTaskList(event.task);
         break;
       case "task_title":
         patchCurrentTask({ title: event.title, titleSource: event.source });
-        setTasks((prev) =>
-          prev.map((task) =>
-            task.id === event.taskId
-              ? { ...task, title: event.title, titleSource: event.source }
-              : task,
-          ),
-        );
         break;
       case "agent_start":
         setStatus("running");
@@ -145,19 +142,23 @@ export function useAgentEventHandler({
         patchCurrentTask({ plan: event.plan });
         break;
       case "step_update":
-        setPlan((previous) => {
-          const nextPlan = previous.map((step) => (step.id === event.step.id ? event.step : step));
-          patchCurrentTask({ plan: nextPlan });
-          return nextPlan;
-        });
+        setPlan((previous) =>
+          previous.map((step) => (step.id === event.step.id ? event.step : step)),
+        );
+        setCurrentTask((previous) => previous
+          ? {
+              ...previous,
+              plan: previous.plan.map((step) => (step.id === event.step.id ? event.step : step)),
+            }
+          : previous,
+        );
         break;
       case "token":
         if (nextOutputFreshRef.current) {
-          setOutput(event.delta);
+          setOutput("");
           nextOutputFreshRef.current = false;
-        } else {
-          setOutput((previous) => previous + event.delta);
         }
+        appendOutput(event.delta);
         break;
       case "message_start":
         if (event.role === "assistant") {
@@ -181,7 +182,6 @@ export function useAgentEventHandler({
             ? previousMessages.map((message) => (message.id === event.message.id ? { ...message, ...event.message } : message))
             : [...previousMessages, event.message];
           const nextTask = { ...previous, messages };
-          updateTaskList(nextTask);
           return nextTask;
         });
         if (event.message.contentBlocks?.length) {
@@ -221,7 +221,6 @@ export function useAgentEventHandler({
             ...previous,
             subagentRuns: mergeById(previous.subagentRuns ?? [], event.run),
           };
-          updateTaskList(nextTask);
           return nextTask;
         });
         break;
@@ -266,7 +265,6 @@ export function useAgentEventHandler({
           const nextApprovals = (previous.pendingApprovals ?? []).filter((item) => item.call.id !== event.result.callId);
           if (nextApprovals.length === (previous.pendingApprovals ?? []).length) return previous;
           const nextTask = { ...previous, pendingApprovals: nextApprovals };
-          updateTaskList(nextTask);
           return nextTask;
         });
         break;
@@ -278,7 +276,6 @@ export function useAgentEventHandler({
             ...previous,
             clarifications: mergeById(previous.clarifications ?? [], event.clarification),
           };
-          updateTaskList(nextTask);
           return nextTask;
         });
         break;
@@ -312,7 +309,6 @@ export function useAgentEventHandler({
             }
           }
           const nextTask = { ...previous, messages };
-          updateTaskList(nextTask);
           return nextTask;
         });
         // 历史消息已承载这些块时，立刻从 live tail 移除，防止「所有消息底部都挂同一文件卡」
@@ -335,7 +331,6 @@ export function useAgentEventHandler({
             ...previous,
             checkpoints: mergeById(previous.checkpoints ?? [], event.checkpoint),
           };
-          updateTaskList(nextTask);
           return nextTask;
         });
         break;
@@ -467,17 +462,19 @@ export function useAgentEventHandler({
     }
   }
 
-  const livePendingIds = new Set((currentTask?.pendingApprovals ?? []).map((pa) => pa.call.id));
-  const derivedLive = liveToolActivity.map((item) => {
-    if (livePendingIds.has(item.id) && item.status !== "awaiting") {
-      return { ...item, status: "awaiting" as const };
-    }
-    return item;
-  });
-
-  for (const pa of currentTask?.pendingApprovals ?? []) {
-    if (!liveActivityRef.current.has(pa.call.id)) {
-      derivedLive.push({
+  const derivedLive = useMemo(() => {
+    const pending = currentTask?.pendingApprovals ?? [];
+    const livePendingIds = new Set(pending.map((pa) => pa.call.id));
+    const next = liveToolActivity.map((item) => {
+      if (livePendingIds.has(item.id) && item.status !== "awaiting") {
+        return { ...item, status: "awaiting" as const };
+      }
+      return item;
+    });
+    const knownIds = new Set(next.map((item) => item.id));
+    for (const pa of pending) {
+      if (knownIds.has(pa.call.id)) continue;
+      next.push({
         id: pa.call.id,
         name: pa.call.toolName,
         args: pa.call.args,
@@ -486,7 +483,8 @@ export function useAgentEventHandler({
         planStepId: pa.call.planStepId,
       });
     }
-  }
+    return next;
+  }, [currentTask?.pendingApprovals, liveToolActivity]);
 
   return {
     clearLiveState,

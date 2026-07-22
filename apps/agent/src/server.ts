@@ -80,6 +80,7 @@ import {
   unrevertTask,
 } from './agent/harness-controller.js';
 import { taskEvents } from './agent/events.js';
+import { createAgentEventCoalescer } from './agent/sse-event-coalescer.js';
 import { buildTokenUsageReport } from './agent/token-usage.js';
 import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore, invalidateMemorySummary } from './store/db.js';
 import { unifiedToolRegistry } from './tool/unified-registry.js';
@@ -96,7 +97,7 @@ import {
   startOauthLogin,
 } from './llm/oauth-login.js';
 import { getMcpStatuses, reloadMcpTools } from './tool/mcp-integration.js';
-import { AttachmentUploadError, materializeUploadedAttachments, MAX_UPLOADED_IMAGE_BYTES } from './agent/attachment-upload.js';
+import { AttachmentUploadError, splitIncomingAttachments, MAX_UPLOADED_IMAGE_BYTES } from './agent/attachment-upload.js';
 import {
   readCleanupPolicyDays,
   readRuntimeSettings,
@@ -105,7 +106,6 @@ import {
 
 const startedAt = Date.now();
 const IMAGE_UPLOAD_BODY_LIMIT = Math.ceil(MAX_UPLOADED_IMAGE_BYTES * 4 / 3) + 1024 * 1024;
-const IMAGE_UPLOAD_DIR = resolve(config.workspaceDir, '.aurevoy-uploads');
 
 export async function buildServer(externalLogger?: Logger) {
   const log = externalLogger ?? pino({ level: 'info' }, pino.destination(1));
@@ -532,9 +532,9 @@ export async function buildServer(externalLogger?: Logger) {
   // 任务列表（支持按项目过滤）
   app.get<{ Querystring: { projectId?: string } }>('/api/tasks', async (req) => {
     const projectId = req.query?.projectId;
-    if (projectId === 'standalone') return taskStore.listByProject(null);
-    if (projectId) return taskStore.listByProject(projectId);
-    return taskStore.list();
+    if (projectId === 'standalone') return taskStore.listSummaries(null);
+    if (projectId) return taskStore.listSummaries(projectId);
+    return taskStore.listSummaries();
   });
 
   // 单个任务详情
@@ -566,9 +566,9 @@ export async function buildServer(externalLogger?: Logger) {
       if (!project) return reply.code(404).send({ error: 'project not found' });
     }
 
-    let attachments;
+    let messageInput;
     try {
-      attachments = await materializeUploadedAttachments(req.body?.attachments, IMAGE_UPLOAD_DIR);
+      messageInput = splitIncomingAttachments(req.body?.attachments);
     } catch (err) {
       const message = err instanceof AttachmentUploadError ? err.message : `图片上传失败：${err instanceof Error ? err.message : String(err)}`;
       return reply.code(400).send({ error: message });
@@ -578,9 +578,10 @@ export async function buildServer(externalLogger?: Logger) {
       goal,
       req.body?.budget,
       projectId,
-      attachments,
+      messageInput.attachments,
       req.body?.lifetimeBudget,
       req.body?.executionMode === 'plan' ? 'plan' : 'auto',
+      messageInput.imageParts,
     );
     // 异步执行，立即返回；前端通过 SSE 订阅进度
     void runHarnessTask(task);
@@ -603,16 +604,16 @@ export async function buildServer(externalLogger?: Logger) {
       if (!task) return reply.code(404).send({ error: 'task not found' });
       const message = req.body?.message?.trim();
       if (!message) return reply.code(400).send({ error: 'message is required' });
-      let attachments;
+      let messageInput;
       try {
-        attachments = await materializeUploadedAttachments(req.body?.attachments, IMAGE_UPLOAD_DIR);
+        messageInput = splitIncomingAttachments(req.body?.attachments);
       } catch (err) {
         const error = err instanceof AttachmentUploadError ? err.message : `图片上传失败：${err instanceof Error ? err.message : String(err)}`;
         return reply.code(400).send({ error });
       }
       if (isTaskRunning(req.params.id)) {
         const delivery = req.body?.delivery === 'follow_up' ? 'follow_up' : 'steering';
-        const queued = queueRunningUserTurn(task, message, delivery, attachments);
+        const queued = queueRunningUserTurn(task, message, delivery, messageInput.attachments, messageInput.imageParts);
         if (!queued.delivered) {
           return reply.code(409).send({ error: '任务正在运行，但 Pi harness 队列不可用，请等待当前轮结束后再追问' });
         }
@@ -624,7 +625,7 @@ export async function buildServer(externalLogger?: Logger) {
       }
 
       setTaskExecutionMode(task, req.body?.executionMode === 'plan' ? 'plan' : 'auto');
-      addUserTurn(task, message, attachments);
+      addUserTurn(task, message, messageInput.attachments, messageInput.imageParts);
       // 异步带完整历史重跑循环；前端通过同一 SSE 地址订阅这一轮
       void runHarnessTask(task);
 
@@ -1037,20 +1038,42 @@ export async function buildServer(externalLogger?: Logger) {
     let replayingSnapshot = true;
     let streamClosed = false;
     const bufferedLiveEvents: AgentEvent[] = [];
-    const snapshotMessageIds = new Set<string>();
+    const snapshotMessageIds = new Set(task.messages.map((message) => message.id));
 
-    // ---- SSE 批量写入（cork + coalescing） ----
+    // ---- SSE 批量写入 + TCP 背压 ----
     let sseBuf: string[] = [];
     let sseTimer: ReturnType<typeof setImmediate> | null = null;
+    const writeQueue: string[] = [];
+    let writePaused = false;
+    let endRequested = false;
+
+    const drainWriteQueue = () => {
+      if (writePaused || reply.raw.writableEnded) return;
+      while (writeQueue.length > 0) {
+        const chunk = writeQueue.shift()!;
+        if (!reply.raw.write(chunk)) {
+          writePaused = true;
+          reply.raw.once('drain', () => {
+            writePaused = false;
+            drainWriteQueue();
+          });
+          return;
+        }
+      }
+      if (endRequested && !reply.raw.writableEnded) reply.raw.end();
+    };
+
+    const enqueueWrite = (chunk: string) => {
+      writeQueue.push(chunk);
+      drainWriteQueue();
+    };
 
     const sseFlush = () => {
       sseTimer = null;
       if (sseBuf.length === 0) return;
-      const batch = sseBuf;
+      const batch = sseBuf.join('');
       sseBuf = [];
-      reply.raw.cork();
-      for (const line of batch) reply.raw.write(line);
-      reply.raw.uncork();
+      enqueueWrite(batch);
     };
 
     /** 需要立即刷入的事件类型 */
@@ -1065,18 +1088,19 @@ export async function buildServer(externalLogger?: Logger) {
       'subagent_updated',
     ]);
 
-    const send = (event: AgentEvent) => {
+    const sendEncoded = (event: AgentEvent) => {
       if (streamClosed) return;
       const line = `data: ${JSON.stringify(event)}\n\n`;
 
       if (event.type === 'done' || event.type === 'task_deleted') {
-        streamClosed = true;
         if (sseBuf.length > 0) sseFlush();
-        reply.raw.write(line);
+        enqueueWrite(line);
+        streamClosed = true;
         if (heartbeat) clearInterval(heartbeat);
         unsubscribe();
         taskEvents.cleanup(id);
-        reply.raw.end();
+        endRequested = true;
+        drainWriteQueue();
         return;
       }
 
@@ -1090,10 +1114,13 @@ export async function buildServer(externalLogger?: Logger) {
       }
     };
 
-    const sendSnapshot = (event: AgentEvent) => {
-      if (event.type === 'message') snapshotMessageIds.add(event.message.id);
-      send(event);
+    // socket 合批之外，再把连续 token 合成一个逻辑 SSE 事件，减少 JSON/onmessage 次数。
+    const coalescer = createAgentEventCoalescer(sendEncoded, 24);
+    const send = (event: AgentEvent) => {
+      if (!streamClosed) coalescer.push(event);
     };
+
+    const sendSnapshot = (event: AgentEvent) => send(event);
 
     const sendLive = (event: AgentEvent) => {
       if (replayingSnapshot) {
@@ -1108,52 +1135,8 @@ export async function buildServer(externalLogger?: Logger) {
     // 快照发送期间的实时事件先缓冲，等快照完整发完后再按原顺序补发。
     unsubscribe = taskEvents.subscribe(id, sendLive);
 
+    // task_created 已携带完整持久快照；不再逐条重放其中的消息和子结构。
     sendSnapshot({ type: 'task_created', taskId: task.id, task });
-    sendSnapshot({ type: 'status', taskId: task.id, status: task.status });
-    if (task.phase) {
-      sendSnapshot({ type: 'phase', taskId: task.id, phase: task.phase });
-    }
-    if (task.plan.length > 0) {
-      sendSnapshot({ type: 'plan', taskId: task.id, plan: task.plan });
-    }
-    if (task.budgetUsage || task.lifetimeUsage || task.budget || task.lifetimeBudget) {
-      sendSnapshot({
-        type: 'budget_usage',
-        taskId: task.id,
-        usage: task.budgetUsage ?? { iterations: 0, toolCalls: 0, wallTimeMs: 0, outputBytes: 0 },
-        budget: task.budget,
-        lifetimeUsage: task.lifetimeUsage,
-        lifetimeBudget: task.lifetimeBudget,
-      });
-    }
-    if (task.budgetExceeded) {
-      sendSnapshot({ type: 'budget_exceeded', taskId: task.id, info: task.budgetExceeded });
-    }
-    if (task.tokenUsage) {
-      sendSnapshot({ type: 'token_usage', taskId: task.id, usage: task.tokenUsage });
-    }
-    if (task.contextTokens !== undefined) {
-      sendSnapshot({ type: 'context_snapshot', taskId: task.id, tokens: task.contextTokens });
-    }
-    for (const message of task.messages) {
-      sendSnapshot({ type: 'message', taskId: task.id, message });
-    }
-    for (const artifact of task.artifacts ?? []) {
-      sendSnapshot({ type: 'artifact_updated', taskId: task.id, artifact });
-    }
-    for (const checkpoint of task.checkpoints ?? []) {
-      sendSnapshot({ type: 'checkpoint_created', taskId: task.id, checkpoint });
-    }
-    for (const clarification of task.clarifications ?? []) {
-      sendSnapshot(
-        clarification.status === 'pending'
-          ? { type: 'clarification_request', taskId: task.id, clarification }
-          : { type: 'clarification_resolved', taskId: task.id, clarification },
-      );
-    }
-    for (const approval of task.pendingApprovals ?? []) {
-      sendSnapshot({ type: 'approval_request', taskId: task.id, call: approval.call, riskLevel: approval.riskLevel });
-    }
     // 终态，或预算触顶暂停（本 run 已结束，前端应解除 busy）
     if (
       ['completed', 'failed', 'cancelled'].includes(task.status) ||
@@ -1175,15 +1158,15 @@ export async function buildServer(externalLogger?: Logger) {
 
     // 心跳，避免连接被中间层断开
     heartbeat = setInterval(() => {
-      reply.raw.cork();
-      reply.raw.write(': ping\n\n');
-      reply.raw.uncork();
+      enqueueWrite(': ping\n\n');
     }, 15000);
 
     req.raw.on('close', () => {
       if (heartbeat) clearInterval(heartbeat);
       if (sseTimer) clearImmediate(sseTimer);
+      coalescer.cancel();
       sseBuf = [];
+      writeQueue.length = 0;
       unsubscribe();
     });
   });

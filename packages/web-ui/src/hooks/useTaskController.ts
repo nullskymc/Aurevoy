@@ -1,5 +1,5 @@
-import type { Dispatch, SetStateAction } from "react";
-import type { AgentEvent, AgentExecutionMode, MessageAttachment, PlanStep, RevertMode, Task, TaskPhase, TaskStatus, TaskTraceEntry } from "@aurevoy/shared";
+import { useRef, type Dispatch, type SetStateAction } from "react";
+import type { AgentEvent, AgentExecutionMode, MessageAttachment, PlanStep, RevertMode, Task, TaskPhase, TaskStatus, TaskSummary, TaskTraceEntry } from "@aurevoy/shared";
 import {
   answerClarification,
 
@@ -9,6 +9,7 @@ import {
   compactTask,
   continueTask,
   createTask,
+  getTask,
   resumeTask,
   revertTask,
   unrevertTask,
@@ -73,6 +74,8 @@ export function useTaskController({
   setTraces: Dispatch<SetStateAction<TaskTraceEntry[]>>;
   updateTaskList: (task: Task) => void;
 }) {
+  const selectRequestRef = useRef(0);
+
   function resetComposer(): void {
     setGoal("");
     setAttachments([]);
@@ -81,6 +84,7 @@ export function useTaskController({
   async function startGoal(rawGoal: string, attach?: MessageAttachment[]): Promise<void> {
     const trimmed = rawGoal.trim();
     if (!trimmed || busy) return;
+    selectRequestRef.current += 1;
 
     setBusy(true);
     clearLiveState();
@@ -108,30 +112,36 @@ export function useTaskController({
     }
   }
 
-  function handleSelectTask(task: Task): void {
+  function handleSelectTask(summary: TaskSummary): void {
+    const requestId = ++selectRequestRef.current;
     closeStream();
     setModelDrawerOpen(false);
     setActiveView("chat");
-    setCurrentTask(task);
-    setStatus(task.status);
-    setPhase(task.phase);
-    setPlan(task.plan);
     setGoal("");
     clearLiveState();
-    void refreshTaskTraces(task.id);
+    setBusy(true);
+    void refreshTaskTraces(summary.id);
 
-    const isLive =
-      task.status === "pending" ||
-      task.status === "planning" ||
-      task.status === "running" ||
-      task.status === "paused";
-
-    if (isLive) {
-      setBusy(true);
-      openStream(task.id, handleEvent, () => setBusy(false));
-    } else {
-      setBusy(false);
-    }
+    void getTask(summary.id)
+      .then((task) => {
+        if (selectRequestRef.current !== requestId) return;
+        setCurrentTask(task);
+        setStatus(task.status);
+        setPhase(task.phase);
+        setPlan(task.plan);
+        const isLive =
+          task.status === "pending" ||
+          task.status === "planning" ||
+          task.status === "running" ||
+          task.status === "paused";
+        if (isLive) openStream(task.id, handleEvent, () => setBusy(false));
+        else setBusy(false);
+      })
+      .catch((err) => {
+        if (selectRequestRef.current !== requestId) return;
+        setBusy(false);
+        setNotice(`加载任务失败：${err instanceof Error ? err.message : String(err)}`);
+      });
   }
 
   async function continueGoal(rawMessage: string, attach?: MessageAttachment[]): Promise<void> {
@@ -176,6 +186,7 @@ export function useTaskController({
   }
 
   function handleNewTask(projectId?: string): void {
+    selectRequestRef.current += 1;
     closeStream();
     setBusy(false);
     setModelDrawerOpen(false);

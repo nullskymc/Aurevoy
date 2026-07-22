@@ -1,4 +1,4 @@
-import type { Task } from "@aurevoy/shared";
+import type { TaskSummary } from "@aurevoy/shared";
 import { taskDisplayTitle } from "@aurevoy/shared";
 import { t } from "../i18n";
 import { getStatusLabel } from "../components/status";
@@ -10,9 +10,9 @@ export function SearchPage({
   onSelectTask,
 }: {
   query: string;
-  tasks: Task[];
+  tasks: TaskSummary[];
   onQueryChange: (query: string) => void;
-  onSelectTask: (task: Task) => void;
+  onSelectTask: (task: TaskSummary) => void;
 }) {
   const normalizedQuery = query.trim().toLowerCase();
   const filteredTasks = normalizedQuery

@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import { formatTaskTitle, type MemoryEntry, type Project, type Task, type TaskTraceEntry } from '@aurevoy/shared';
+import { formatTaskTitle, type MemoryEntry, type Message, type MessageImagePart, type Project, type Task, type TaskSummary, type TaskTraceEntry } from '@aurevoy/shared';
 import { config } from '../config.js';
 
 /**
@@ -78,6 +78,17 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_task_traces_task_started
     ON task_traces(task_id, started_at);
+
+  -- 图片消息内容独立于 tasks.messages，避免每次保存任务都重写 base64 载荷。
+  CREATE TABLE IF NOT EXISTS message_parts (
+    id         TEXT PRIMARY KEY,
+    task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL,
+    type       TEXT NOT NULL CHECK (type = 'image'),
+    data       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_parts_task_message ON message_parts(task_id, message_id);
 
   CREATE TABLE IF NOT EXISTS memories (
     id            TEXT PRIMARY KEY,
@@ -329,10 +340,36 @@ interface TaskTraceRow {
   data: string | null;
 }
 
+interface TaskSummaryRow {
+  id: string;
+  goal: string;
+  title: string;
+  title_source: string | null;
+  status: string;
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToTaskSummary(row: TaskSummaryRow): TaskSummary {
+  return {
+    id: row.id,
+    goal: row.goal,
+    title: row.title?.trim() || formatTaskTitle(row.goal),
+    titleSource: row.title_source === 'llm' ? 'llm' : 'truncated',
+    status: row.status as Task['status'],
+    projectId: row.project_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function rowToTask(row: TaskRow): Task {
   const goal = row.goal;
   const titleFromDb = row.title?.trim();
   const titleSource = row.title_source === 'llm' ? 'llm' : 'truncated';
+  const messages = hydrateMessageParts(row.id, JSON.parse(row.messages) as Message[]);
+  const archivedMessages = hydrateMessageParts(row.id, (parseJsonColumn(row.archived_messages) as Message[]) ?? []);
   return {
     id: row.id,
     goal,
@@ -341,7 +378,7 @@ function rowToTask(row: TaskRow): Task {
     status: row.status as Task['status'],
     phase: (row.phase as Task['phase']) ?? null,
     plan: JSON.parse(row.plan),
-    messages: JSON.parse(row.messages),
+    messages,
     artifacts: (parseJsonColumn(row.artifacts) as Task['artifacts']) ?? [],
     clarifications: (parseJsonColumn(row.clarifications) as Task['clarifications']) ?? [],
     pendingApprovals: (parseJsonColumn(row.pending_approvals) as Task['pendingApprovals']) ?? [],
@@ -352,7 +389,7 @@ function rowToTask(row: TaskRow): Task {
     lifetimeUsage: (parseJsonColumn(row.lifetime_usage) as Task['lifetimeUsage']) ?? undefined,
     budgetExceeded: (parseJsonColumn(row.budget_exceeded) as Task['budgetExceeded']) ?? undefined,
     tokenUsage: (parseJsonColumn(row.token_usage) as Task['tokenUsage']) ?? undefined,
-    archivedMessages: (parseJsonColumn(row.archived_messages) as Task['archivedMessages']) ?? [],
+    archivedMessages,
     parentTaskId: row.parent_task_id ?? undefined,
     projectId: row.project_id ?? undefined,
     executionMode: row.plan_mode === 'plan' ? 'plan' : 'auto',
@@ -361,6 +398,53 @@ function rowToTask(row: TaskRow): Task {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/** 将图片载荷从消息 JSON 注入内存消息；UI 和模型始终只读取 imageParts。 */
+function hydrateMessageParts(taskId: string, messages: Message[]): Message[] {
+  if (!messages.length) return messages;
+  const rows = db.prepare('SELECT message_id, data FROM message_parts WHERE task_id = ? ORDER BY created_at').all(taskId) as Array<{ message_id: string; data: string }>;
+  if (!rows.length) return messages;
+  const byMessage = new Map<string, MessageImagePart[]>();
+  for (const row of rows) {
+    const part = parseJsonColumn(row.data) as MessageImagePart | undefined;
+    if (!part) continue;
+    byMessage.set(row.message_id, [...(byMessage.get(row.message_id) ?? []), part]);
+  }
+  return messages.map((message) => {
+    const imageParts = byMessage.get(message.id);
+    return imageParts?.length ? { ...message, imageParts } : message;
+  });
+}
+
+/** 增量同步图片分片；保留未变化 base64，避免每次任务保存都删除重写。 */
+function syncMessageParts(task: Task): void {
+  const upsert = db.prepare(`
+    INSERT INTO message_parts (id, task_id, message_id, type, data, created_at)
+    VALUES (?, ?, ?, 'image', ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `);
+  const allMessages = [...task.messages, ...(task.archivedMessages ?? [])];
+  const images = allMessages.flatMap((message) =>
+    (message.imageParts ?? []).map((image) => ({ image, messageId: message.id, createdAt: message.createdAt })),
+  );
+  const write = db.transaction(() => {
+    for (const { image, messageId, createdAt } of images) {
+      upsert.run(image.id, task.id, messageId, JSON.stringify(image), createdAt);
+    }
+    if (images.length === 0) {
+      db.prepare('DELETE FROM message_parts WHERE task_id = ?').run(task.id);
+    } else {
+      const placeholders = images.map(() => '?').join(', ');
+      db.prepare(`DELETE FROM message_parts WHERE task_id = ? AND id NOT IN (${placeholders})`)
+        .run(task.id, ...images.map(({ image }) => image.id));
+    }
+  });
+  write();
+}
+
+function serializeMessages(messages: Message[]): string {
+  return JSON.stringify(messages.map(({ imageParts: _imageParts, ...message }) => message));
 }
 
 function parseJsonColumn(value: string | null): unknown {
@@ -439,7 +523,7 @@ export const taskStore = {
       status: task.status,
       phase: task.phase,
       plan: JSON.stringify(task.plan),
-      messages: JSON.stringify(task.messages),
+      messages: serializeMessages(task.messages),
       artifacts: JSON.stringify(task.artifacts ?? []),
       clarifications: JSON.stringify(task.clarifications ?? []),
       pendingApprovals: JSON.stringify(task.pendingApprovals ?? []),
@@ -450,7 +534,7 @@ export const taskStore = {
       lifetimeUsage: task.lifetimeUsage === undefined ? null : JSON.stringify(task.lifetimeUsage),
       budgetExceeded: task.budgetExceeded === undefined ? null : JSON.stringify(task.budgetExceeded),
       tokenUsage: task.tokenUsage === undefined ? null : JSON.stringify(task.tokenUsage),
-      archivedMessages: JSON.stringify(task.archivedMessages ?? []),
+      archivedMessages: serializeMessages(task.archivedMessages ?? []),
       parentTaskId: task.parentTaskId ?? null,
       projectId: task.projectId ?? null,
       planMode: task.executionMode ?? 'auto',
@@ -459,6 +543,28 @@ export const taskStore = {
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });
+    syncMessageParts(task);
+  },
+
+  /** 消息/计划推进专用增量保存，避免重写与本次变化无关的任务 JSON 列。 */
+  saveMessages(task: Task): void {
+    db.prepare(
+      `UPDATE tasks SET
+         messages = ?, plan = ?, checkpoints = ?, token_usage = ?,
+         budget_usage = ?, lifetime_usage = ?, context_tokens = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(
+      serializeMessages(task.messages),
+      JSON.stringify(task.plan),
+      JSON.stringify(task.checkpoints ?? []),
+      task.tokenUsage === undefined ? null : JSON.stringify(task.tokenUsage),
+      task.budgetUsage === undefined ? null : JSON.stringify(task.budgetUsage),
+      task.lifetimeUsage === undefined ? null : JSON.stringify(task.lifetimeUsage),
+      task.contextTokens ?? null,
+      task.updatedAt,
+      task.id,
+    );
+    syncMessageParts(task);
   },
 
   /**
@@ -509,6 +615,16 @@ export const taskStore = {
       .prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at DESC')
       .all(projectId) as TaskRow[];
     return rows.map(rowToTask);
+  },
+
+  listSummaries(projectId?: string | null): TaskSummary[] {
+    const columns = 'id, goal, title, title_source, status, project_id, created_at, updated_at';
+    const rows = projectId === undefined
+      ? db.prepare(`SELECT ${columns} FROM tasks ORDER BY updated_at DESC`).all()
+      : projectId === null
+        ? db.prepare(`SELECT ${columns} FROM tasks WHERE project_id IS NULL ORDER BY updated_at DESC`).all()
+        : db.prepare(`SELECT ${columns} FROM tasks WHERE project_id = ? ORDER BY updated_at DESC`).all(projectId);
+    return (rows as TaskSummaryRow[]).map(rowToTaskSummary);
   },
 
   count(): number {

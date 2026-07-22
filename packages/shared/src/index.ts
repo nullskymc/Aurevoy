@@ -73,6 +73,16 @@ export interface MessageAttachment {
   dataUrl?: string;
 }
 
+/** 对话消息内联图片。它是消息内容，不是工作区文件，也不会授予工具读取路径。 */
+export interface MessageImagePart {
+  id: string;
+  name: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  size: number;
+  /** 已校验的 data URL；对话渲染与模型视觉输入共享这一份内容。 */
+  dataUrl: string;
+}
+
 /** Agent 主动发送到对话框的富内容块类型 */
 export type ContentBlockType = 'file_reference' | 'image' | 'link';
 
@@ -105,6 +115,8 @@ export interface Message {
   toolCallId?: string;
   /** 用户消息携带的文件附件（路径引用）；Agent 据此注入文件上下文 */
   attachments?: MessageAttachment[];
+  /** 用户消息中的图片内容块；不可作为文件工具的输入路径。 */
+  imageParts?: MessageImagePart[];
   /** 运行中追加用户消息时的 Pi 队列投递方式。首轮/非运行中消息为空。 */
   delivery?: 'steering' | 'follow_up';
   /** Agent 主动附加的富内容块（文件/图片/链接），由 attach_content 生成 */
@@ -464,6 +476,31 @@ export interface Task {
   subagentRuns?: SubagentRun[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** 列表、搜索和托盘使用的轻量任务摘要，不携带消息、计划或运行细节。 */
+export interface TaskSummary {
+  id: string;
+  goal: string;
+  title: string;
+  titleSource?: TaskTitleSource;
+  status: TaskStatus;
+  projectId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function taskSummaryFromTask(task: Task): TaskSummary {
+  return {
+    id: task.id,
+    goal: task.goal,
+    title: task.title,
+    titleSource: task.titleSource,
+    status: task.status,
+    projectId: task.projectId,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  };
 }
 
 /** 一个项目（导入的文件夹） */

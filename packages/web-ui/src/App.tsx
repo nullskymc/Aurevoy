@@ -29,6 +29,7 @@ import { useSkills } from "./hooks/useSkills";
 import { useWorkbenchTabs } from "./hooks/useWorkbenchTabs";
 import { useTaskController } from "./hooks/useTaskController";
 import { Composer, nextThinkingLevel, type ThinkingUILevel } from "./components/Composer";
+import { ContextUsageRing } from "./components/ContextUsageRing";
 import { SetupPanel } from "./components/SetupPanel";
 import { ApprovalsDock, Conversation } from "./components/Conversation";
 import { AppTopBar } from "./components/AppTopBar";
@@ -43,6 +44,7 @@ import { SearchPage } from "./pages/SearchPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { SETTINGS_SECTION_IDS, type MainView, type SettingsSectionId } from "./app/types";
 import { formatContextK } from "./app/taskUtils";
+import { buildTrayRecentItems, createTrayRecentSignature } from "./app/trayRecent";
 import { t } from "./i18n";
 import "./App.css";
 import { HeroSuggestionIcon } from "./icons";
@@ -136,7 +138,7 @@ function App() {
   const {
     busy,
     currentTask,
-    output,
+    outputStore,
     phase,
     plan,
     status,
@@ -144,6 +146,7 @@ function App() {
     setBusy,
     setCurrentTask,
     setOutput,
+    appendOutput,
     setPhase,
     setPlan,
     setStatus,
@@ -152,7 +155,7 @@ function App() {
     patchCurrentTask,
     updateTaskList,
   } = useTaskState();
-  const { closeStream, openStream } = useSSEStream();
+  const { closeStream, openStream, syncEventHandler } = useSSEStream();
   const {
     runtimeSettings,
     mcpServers,
@@ -298,6 +301,7 @@ function App() {
     setBusy,
     setCurrentTask,
     setOutput,
+    appendOutput,
     setPhase,
     setPlan,
     setStatus,
@@ -314,6 +318,7 @@ function App() {
       setWorkbenchOpen(true);
     },
   });
+  syncEventHandler(handleEvent);
   const {
     handleBranch,
     handleClarificationAnswer,
@@ -356,21 +361,22 @@ function App() {
     updateTaskList,
   });
 
+  // 托盘只消费标题、项目副标题和最近顺序；隔离 plan/messages/phase 等 SSE 高频状态。
+  const trayRecentSnapshot = useMemo(() => {
+    const items = buildTrayRecentItems(tasks, projects);
+    return { items, signature: createTrayRecentSignature(items) };
+  }, [tasks, projects]);
+  const stableTrayRecentRef = useRef(trayRecentSnapshot);
+  if (stableTrayRecentRef.current.signature !== trayRecentSnapshot.signature) {
+    stableTrayRecentRef.current = trayRecentSnapshot;
+  }
+  const trayRecentItems = stableTrayRecentRef.current.items;
+
   // 同步最近任务到系统托盘菜单（macOS 菜单栏 / Windows 托盘）
   useEffect(() => {
     if (!platform.updateTrayRecent) return;
-    const projectName = (projectId: string | undefined) =>
-      projectId ? projects.find((p) => p.id === projectId)?.name : undefined;
-    const sorted = [...tasks].sort(
-      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-    );
-    const items = sorted.slice(0, 20).map((task) => ({
-      id: task.id,
-      title: (task.title || task.goal || "Untitled").trim(),
-      subtitle: projectName(task.projectId) ?? null,
-    }));
-    void platform.updateTrayRecent(items);
-  }, [platform, tasks, projects]);
+    void platform.updateTrayRecent(trayRecentItems);
+  }, [platform, trayRecentItems]);
 
   // 托盘动作回调用 ref，避免每次 render 重绑 listen
   const trayHandlersRef = useRef({
@@ -530,8 +536,7 @@ function App() {
   const hasLiveTail =
     busy ||
     derivedLive.length > 0 ||
-    phase === "waiting_approval" ||
-    output.trim().length > 0;
+    phase === "waiting_approval";
 
   const [outputRailOpen, setOutputRailOpen] = useState(true);
 
@@ -660,7 +665,7 @@ function App() {
                   phase={phase}
                   phaseDetail={phaseDetail}
                   plan={plan}
-                  output={output}
+                  outputStore={outputStore}
                   busy={busy}
                   liveToolActivity={derivedLive}
                   liveContentBlocks={liveContentBlocks}
@@ -690,9 +695,13 @@ function App() {
                   onToolDecision={handleToolDecision}
                 />
                 {health?.contextTokenBudget != null && currentTask && currentTask.messages.length > 0 && (
-                  <div className="context-hint">
-                    {t("context.label")} ~{formatContextK(currentTask.contextTokens ?? 0)} / {formatContextK(health.contextTokenBudget)} {t("context.unit")}
-                  </div>
+                  <ContextUsageRing
+                    usedTokens={currentTask.contextTokens ?? 0}
+                    tokenBudget={health.contextTokenBudget}
+                    label={t("context.label")}
+                    unit={t("context.unit")}
+                    formatTokens={formatContextK}
+                  />
                 )}
                 <SetupPanel
                   variant="dock"

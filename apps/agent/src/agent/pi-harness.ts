@@ -572,13 +572,12 @@ function findHarnessPromptMessageIndex(messages: Message[]): number {
 }
 
 async function toHarnessPromptInput(message: Message, model: PiModel<any>): Promise<{ text: string; images: PiImageContent[] }> {
-  const imageAttachments = (message.attachments ?? []).filter((attachment) => attachment.type === 'image');
   const images: PiImageContent[] = [];
-  for (const attachment of imageAttachments) {
+  for (const image of message.imageParts ?? []) {
     if (!model.input?.includes('image')) {
-      throw new Error(`模型 ${model.provider}:${model.id} 不支持图片附件：${attachment.name}`);
+      throw new Error(`模型 ${model.provider}:${model.id} 不支持图片消息：${image.name}`);
     }
-    images.push(await imageAttachmentToPiContent(attachment));
+    images.push(imagePartToPiContent(image));
   }
   return { text: await buildUserMessageTextWithAttachments(message), images };
 }
@@ -819,9 +818,7 @@ function selectPiModelForTask(): PiModel<any> {
 }
 
 function assertPiModelSupportsAttachments(task: Task, model: PiModel<any>): void {
-  const hasImageAttachment = task.messages.some((message) =>
-    message.attachments?.some((attachment) => attachment.type === 'image'),
-  );
+  const hasImageAttachment = task.messages.some((message) => (message.imageParts?.length ?? 0) > 0);
   if (!hasImageAttachment) return;
   if (!model.input?.includes('image')) {
     throw new Error(
@@ -831,20 +828,20 @@ function assertPiModelSupportsAttachments(task: Task, model: PiModel<any>): void
 }
 
 async function userMessageContentToPi(message: Message, model: PiModel<any>): Promise<string | Array<PiTextContent | PiImageContent>> {
-  const imageAttachments = (message.attachments ?? []).filter((attachment) => attachment.type === 'image');
+  const imageAttachments = message.imageParts ?? [];
   const text = await buildUserMessageTextWithAttachments(message);
   if (imageAttachments.length === 0) return text;
 
   const content: Array<PiTextContent | PiImageContent> = [{ type: 'text', text }];
   for (const attachment of imageAttachments) {
     if (!model.input?.includes('image')) {
-      throw new Error(`模型 ${model.provider}:${model.id} 不支持图片附件：${attachment.name}`);
+      throw new Error(`模型 ${model.provider}:${model.id} 不支持图片消息：${attachment.name}`);
     }
     content.push({
       type: 'text',
       text: `[Attached image: ${attachment.name}, mime: ${attachment.mimeType}]`,
     });
-    content.push(await imageAttachmentToPiContent(attachment));
+    content.push(imagePartToPiContent(attachment));
   }
   return content;
 }
@@ -855,14 +852,14 @@ async function userMessageContentToPi(message: Message, model: PiModel<any>): Pr
  */
 async function buildUserMessageTextWithAttachments(message: Message): Promise<string> {
   let text = message.content;
-  const imageAttachments = (message.attachments ?? []).filter((attachment) => attachment.type === 'image');
+  const imageAttachments = message.imageParts ?? [];
   if (imageAttachments.length > 0) {
     const names = imageAttachments.map((a) => a.name).join(', ');
     text =
       `${message.content}\n\n[System: ${imageAttachments.length} image(s) attached inline: ${names}. ` +
-      'Vision input is already provided — do not call read on memory:// or attachment paths.]';
+      'Vision input is already provided — do not call read on image message content.]';
   }
-  const fileAttachments = (message.attachments ?? []).filter((attachment) => attachment.type !== 'image');
+  const fileAttachments = message.attachments ?? [];
   if (fileAttachments.length === 0) return text;
 
   const lines = ['', '[Attached Files]', ''];
@@ -872,18 +869,12 @@ async function buildUserMessageTextWithAttachments(message: Message): Promise<st
   return `${text}\n${lines.join('\n')}`;
 }
 
-async function imageAttachmentToPiContent(attachment: MessageAttachment): Promise<PiImageContent> {
-  try {
-    const raw = await fs.readFile(attachment.path);
-    return {
-      type: 'image',
-      data: raw.toString('base64'),
-      mimeType: attachment.mimeType,
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`无法读取图片附件 ${attachment.name} (${attachment.path})：${message}`);
-  }
+function imagePartToPiContent(image: NonNullable<Message['imageParts']>[number]): PiImageContent {
+  return {
+    type: 'image',
+    data: image.dataUrl.slice(image.dataUrl.indexOf(',') + 1),
+    mimeType: image.mimeType,
+  };
 }
 
 function createPiTools(task: Task, options: PiHarnessOptions): AgentTool[] {
@@ -1300,7 +1291,7 @@ async function handlePiEvent(
     case 'turn_start':
       setTaskState(task, 'running', 'thinking');
       updateContextSnapshot(task);
-      saveTask(task);
+      saveRuntimeState(task);
       publish({ type: 'phase', taskId: task.id, phase: 'thinking', detail: 'Agent 正在思考' });
       publish({ type: 'context_snapshot', taskId: task.id, tokens: task.contextTokens ?? 0 });
       break;
@@ -1316,7 +1307,7 @@ async function handlePiEvent(
     case 'tool_execution_start':
       setTaskState(task, 'running', 'calling_tool');
       recordToolCall(task);
-      saveTask(task);
+      saveRuntimeState(task);
       {
         const rawCall = toAurevoyToolCall(task, event.toolCallId, event.toolName, event.args);
         const validationError = validatePiToolCallInput(rawCall);
@@ -1374,7 +1365,7 @@ async function handlePiEvent(
       recordIteration(task);
       updateWallTime(task, taskStartedAtMs);
       updateContextSnapshot(task);
-      saveTask(task);
+      saveRuntimeState(task);
       publishBudgetUsage(task);
       publish({ type: 'context_snapshot', taskId: task.id, tokens: task.contextTokens ?? 0 });
       if (shouldStopAfterTurn(task, taskStartedAtMs, controller)) {
@@ -1609,7 +1600,7 @@ function appendPiMessage(task: Task, message: AgentMessage): void {
   if (task.executionMode !== 'plan' && !hasToolCalls && !mapped.failure) {
     advancePlanAfterFinalAnswer(task);
   }
-  saveTask(task);
+  taskStore.saveMessages(task);
   publish({ type: 'message', taskId: task.id, message: mapped });
   publish({ type: 'token_usage', taskId: task.id, usage: task.tokenUsage });
 
@@ -1645,7 +1636,7 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
     maybeCreateToolCheckpoint(task, callId, toolName);
     advancePlanAfterTool(task, toolName, true);
   }
-  saveTask(task);
+  taskStore.saveMessages(task);
   publish({ type: 'tool_result', taskId: task.id, result: toolResult });
   publish({ type: 'message', taskId: task.id, message });
   writePiTrace(task, 'tool_result', {
@@ -1979,9 +1970,7 @@ function isTextFile(attachment: MessageAttachment): boolean {
 
 function collectExternalPaths(task: Task): string[] {
   const paths = task.messages.flatMap((message) => message.attachments?.map((attachment) => attachment.path) ?? []);
-  // 引擎上传目录：落盘后的图片附件可读（read 工具 externalPaths）
-  const uploadDir = join(config.workspaceDir, '.aurevoy-uploads');
-  return [...new Set([...paths, uploadDir].filter((p) => p && !p.startsWith('memory://')))];
+  return [...new Set(paths.filter((p) => p && !p.startsWith('memory://')))];
 }
 
 function parseToolArguments(raw: string): Record<string, unknown> {
@@ -2106,6 +2095,19 @@ function finishFailed(task: Task, err: unknown, errorCategory: TaskErrorCategory
 
 function saveTask(task: Task): void {
   taskStore.save(task);
+}
+
+/** 高频轮次/工具状态只更新运行时列，避免反复序列化完整消息与产物。 */
+function saveRuntimeState(task: Task): void {
+  taskStore.patch(task.id, {
+    status: task.status,
+    phase: task.phase,
+    budgetUsage: task.budgetUsage,
+    lifetimeUsage: task.lifetimeUsage,
+    tokenUsage: task.tokenUsage,
+    contextTokens: task.contextTokens,
+    pendingApprovals: task.pendingApprovals ?? [],
+  });
 }
 
 function publish(event: AgentEvent): void {

@@ -6,6 +6,7 @@ import type {
   ContinueBudgetRequest,
   Message,
   MessageAttachment,
+  MessageImagePart,
   PlanStep,
   RevertMode,
   Task,
@@ -348,6 +349,7 @@ export function addUserTurn(
   task: Task,
   content: string,
   attachments?: MessageAttachment[],
+  imageParts?: MessageImagePart[],
 ): Message {
   const patchedToolResults = patchDanglingToolResults(task.messages);
   for (const patched of patchedToolResults) {
@@ -363,6 +365,7 @@ export function addUserTurn(
     content: messageContent,
     createdAt: new Date().toISOString(),
     attachments,
+    imageParts,
   };
   task.messages.push(userMsg);
   // continue 一旦写入新用户消息，上一次 revert 的归档不再可撤销
@@ -387,6 +390,7 @@ export function queueRunningUserTurn(
   content: string,
   delivery: 'steering' | 'follow_up' = 'steering',
   attachments?: MessageAttachment[],
+  imageParts?: MessageImagePart[],
 ): { message: Message; delivered: boolean } {
   // OpenCode proactiveness: status/question asks get a text-first reminder on the wire to the model.
   // Durable transcript keeps the user's raw content; steering payload may include the prefix.
@@ -397,6 +401,7 @@ export function queueRunningUserTurn(
     content,
     createdAt: new Date().toISOString(),
     attachments,
+    imageParts,
     delivery,
   };
   // Model-facing message for the queue (may include system-reminder); transcript stores raw `content`.
@@ -470,6 +475,7 @@ export function createTask(
   attachments?: MessageAttachment[],
   lifetimeBudget?: TaskBudget,
   executionMode?: AutoModeLevel,
+  imageParts?: MessageImagePart[],
 ): Task {
   const now = new Date().toISOString();
   const parsed = parseSlashCommand(goal);
@@ -480,6 +486,7 @@ export function createTask(
     content: taskGoal,
     createdAt: now,
     attachments,
+    imageParts,
   };
   const autoModeLevel = executionMode ?? currentAutoModeLevel();
   const budgets = snapshotTaskBudgets({ budget, lifetimeBudget });
