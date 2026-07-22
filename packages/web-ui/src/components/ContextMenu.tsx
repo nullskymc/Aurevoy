@@ -1,17 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from "react";
-import { createPortal } from "react-dom";
-
-/* ------------------------------------------------------------------ */
-/*  Types                                                             */
-/* ------------------------------------------------------------------ */
+import * as RadixMenu from "@radix-ui/react-dropdown-menu";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 export type ContextMenuItem =
   | {
@@ -24,9 +12,7 @@ export type ContextMenuItem =
       danger?: boolean;
       action: () => void;
     }
-  | {
-      type: "separator";
-    }
+  | { type: "separator" }
   | {
       type: "submenu";
       id: string;
@@ -46,74 +32,29 @@ export interface ContextMenuProps {
   margin?: number;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Position helpers                                                  */
-/* ------------------------------------------------------------------ */
-
 interface MenuPosition {
   left: number;
   top: number;
 }
 
-const GAP = 4;
-
-function computePosition(
-  anchorRect: DOMRect | undefined,
-  anchorPoint: { x: number; y: number } | undefined,
-  menuWidth: number,
-  menuHeight: number,
-  viewportWidth: number,
-  viewportHeight: number,
+/** 以鼠标坐标为首选位置；空间不足时翻转并限制在可视区域内。 */
+function calculatePosition(
+  point: { x: number; y: number },
+  menu: DOMRect,
   margin: number,
 ): MenuPosition {
-  let anchorLeft: number;
-  let anchorTop: number;
-  let anchorRight: number;
-  let anchorBottom: number;
-
-  if (anchorRect) {
-    anchorLeft = anchorRect.left;
-    anchorTop = anchorRect.top;
-    anchorRight = anchorRect.right;
-    anchorBottom = anchorRect.bottom;
-  } else if (anchorPoint) {
-    anchorLeft = anchorPoint.x;
-    anchorTop = anchorPoint.y;
-    anchorRight = anchorPoint.x;
-    anchorBottom = anchorPoint.y;
-  } else {
-    // Fallback: center of viewport
-    anchorLeft = viewportWidth / 2;
-    anchorTop = viewportHeight / 2;
-    anchorRight = anchorLeft;
-    anchorBottom = anchorTop;
-  }
-
-  // Preferred: open below, aligned to anchor left edge
-  let left = anchorLeft;
-  let top = anchorBottom + GAP;
-
-  // Flip vertically if not enough room below
-  if (top + menuHeight > viewportHeight - margin) {
-    top = anchorTop - menuHeight - GAP;
-  }
-
-  // Flip horizontally if not enough room to the right
-  if (left + menuWidth > viewportWidth - margin) {
-    left = anchorRight - menuWidth;
-  }
-
-  // Clamp within viewport
-  left = Math.max(margin, Math.min(left, viewportWidth - menuWidth - margin));
-  top = Math.max(margin, Math.min(top, viewportHeight - menuHeight - margin));
-
+  const preferredTop = point.y + 4;
+  const left = Math.max(margin, Math.min(point.x, window.innerWidth - menu.width - margin));
+  const top = preferredTop + menu.height <= window.innerHeight - margin
+    ? preferredTop
+    : Math.max(margin, point.y - menu.height - 4);
   return { left, top };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Component                                                         */
-/* ------------------------------------------------------------------ */
-
+/**
+ * 以虚拟触发点承接历史的「右键后再打开」调用方式。
+ * Radix 负责焦点陷阱、键盘导航、子菜单和视口避让，调用方无需绑定真实 Trigger。
+ */
 export function ContextMenu({
   items,
   open,
@@ -123,210 +64,103 @@ export function ContextMenu({
   label,
   margin = 8,
 }: ContextMenuProps) {
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<MenuPosition | null>(null);
-  const [measured, setMeasured] = useState(false);
+  const point = anchorPoint ?? (anchorRect
+    ? { x: anchorRect.left, y: anchorRect.bottom }
+    : { x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const [anchor, setAnchor] = useState(point);
+  const [positionReady, setPositionReady] = useState(false);
+  const [position, setPosition] = useState<MenuPosition | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
-  /* ---- Measure & position ---- */
+  // 先提交虚拟锚点的新坐标，再打开浮层。否则 Radix 可能读取到上一轮的锚点，
+  // 在 attach_content 等快速更新的内容块上表现为菜单偏移。
   useLayoutEffect(() => {
-    if (!open || !menuRef.current) {
-      setMeasured(false);
-      setPos(null);
+    if (!open) {
+      setPositionReady(false);
       return;
     }
+    setPositionReady(false);
+    setAnchor(point);
+  }, [open, point.x, point.y]);
 
-    const menu = menuRef.current;
-    // Force layout so we measure the real size
-    const rect = menu.getBoundingClientRect();
-    const computed = computePosition(
-      anchorRect,
-      anchorPoint,
-      rect.width,
-      rect.height,
-      window.innerWidth,
-      window.innerHeight,
-      margin,
-    );
-    setPos(computed);
-    setMeasured(true);
-  }, [open, anchorRect, anchorPoint, margin]);
+  useLayoutEffect(() => {
+    if (open) setPositionReady(true);
+  }, [anchor.x, anchor.y, open]);
 
-  /* ---- Dismissal events ---- */
-  useEffect(() => {
-    if (!open) return;
-
-    function handlePointerDown(event: PointerEvent): void {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (menuRef.current?.contains(target)) return;
-      onClose();
+  // DropdownMenu 的浮层参考点来自 Trigger；右键菜单没有真实的点击 Trigger。
+  // 因此用实际内容尺寸计算最终坐标，并覆盖外层 Popper 包装器的位置。
+  useLayoutEffect(() => {
+    if (!open || !positionReady || !contentRef.current) {
+      setPosition(null);
+      return;
     }
+    setPosition(calculatePosition(point, contentRef.current.getBoundingClientRect(), margin));
+  }, [margin, open, point.x, point.y, positionReady]);
 
-    function handleKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") {
-        onClose();
-        return;
-      }
-    }
+  useLayoutEffect(() => {
+    if (!position || !contentRef.current) return;
+    const wrapper = contentRef.current.closest("[data-radix-popper-content-wrapper]");
+    if (!(wrapper instanceof HTMLElement)) return;
+    wrapper.style.setProperty("--ctx-menu-left", `${position.left}px`);
+    wrapper.style.setProperty("--ctx-menu-top", `${position.top}px`);
+  }, [position]);
 
-    function handleScroll(): void {
-      onClose();
-    }
-
-    function handleResize(): void {
-      // Re-measure on next render
-      setMeasured(false);
-    }
-
-    // Suppress native context menu while ours is open
-    function handleContextMenu(e: Event): void {
-      e.preventDefault();
-    }
-
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("scroll", handleScroll, { capture: true });
-    window.addEventListener("resize", handleResize);
-    window.addEventListener("contextmenu", handleContextMenu);
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("scroll", handleScroll, { capture: true });
-      window.removeEventListener("resize", handleResize);
-      window.removeEventListener("contextmenu", handleContextMenu);
-    };
-  }, [open, onClose]);
-
-  /* ---- Focus first item on open ---- */
-  useEffect(() => {
-    if (!open || !menuRef.current) return;
-    // Small delay so the menu is rendered and visible
-    const raf = requestAnimationFrame(() => {
-      const first = menuRef.current?.querySelector(
-        '[data-ctx-item]:not([disabled])',
-      ) as HTMLElement | null;
-      first?.focus();
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [open]);
-
-  /* ---- Keyboard navigation ---- */
-  const handleMenuKeyDown = useCallback(
-    (e: ReactKeyboardEvent<HTMLDivElement>) => {
-      const container = menuRef.current;
-      if (!container) return;
-
-      const focusable = Array.from(
-        container.querySelectorAll('[data-ctx-item]:not([disabled])'),
-      ) as HTMLElement[];
-
-      if (focusable.length === 0) return;
-
-      const currentIdx = focusable.indexOf(document.activeElement as HTMLElement);
-
-      switch (e.key) {
-        case "ArrowDown": {
-          e.preventDefault();
-          const next = currentIdx < 0 ? 0 : (currentIdx + 1) % focusable.length;
-          focusable[next]?.focus();
-          break;
-        }
-        case "ArrowUp": {
-          e.preventDefault();
-          const prev =
-            currentIdx < 0
-              ? focusable.length - 1
-              : (currentIdx - 1 + focusable.length) % focusable.length;
-          focusable[prev]?.focus();
-          break;
-        }
-        case "Enter":
-        case " ": {
-          e.preventDefault();
-          if (currentIdx >= 0) {
-            (focusable[currentIdx] as HTMLButtonElement).click();
-          }
-          break;
-        }
-        case "Escape": {
-          e.preventDefault();
-          onClose();
-          break;
-        }
-        // ArrowRight / ArrowLeft reserved for submenu navigation (future)
-      }
-    },
-    [onClose],
+  return (
+    <RadixMenu.Root open={open && positionReady} onOpenChange={(nextOpen) => !nextOpen && onClose()} modal={false}>
+      <RadixMenu.Trigger asChild>
+        <span
+          key={`${anchor.x}-${anchor.y}`}
+          aria-hidden="true"
+          style={{ position: "fixed", left: anchor.x, top: anchor.y, width: 1, height: 1, pointerEvents: "none" }}
+        />
+      </RadixMenu.Trigger>
+      <RadixMenu.Portal>
+        <RadixMenu.Content
+          ref={contentRef}
+          className="ctx-menu ctx-menu-root"
+          data-manual-position={position ? "true" : undefined}
+          aria-label={label}
+          sideOffset={4}
+          collisionPadding={margin}
+        >
+          {items.map((item, index) => <MenuEntry key={item.type === "separator" ? `separator-${index}` : item.id} item={item} />)}
+        </RadixMenu.Content>
+      </RadixMenu.Portal>
+    </RadixMenu.Root>
   );
+}
 
-  /* ---- Render ---- */
-  if (!open) return null;
+/** 递归渲染菜单项，业务菜单仍仅需传递声明式数据。 */
+function MenuEntry({ item }: { item: ContextMenuItem }) {
+  if (item.type === "separator") return <RadixMenu.Separator className="ctx-separator" />;
 
-  return createPortal(
-    <div
-      ref={menuRef}
-      className="ctx-menu"
-      data-open={String(measured)}
-      role="menu"
-      aria-label={label}
-      style={
-        pos
-          ? { left: pos.left, top: pos.top }
-          : { left: -9999, top: -9999 }
-      }
-      onKeyDown={handleMenuKeyDown}
+  if (item.type === "submenu") {
+    return (
+      <RadixMenu.Sub>
+        <RadixMenu.SubTrigger className="ctx-item" disabled={item.disabled}>
+          {item.icon && <span className="ctx-item-icon">{item.icon}</span>}
+          <span className="ctx-item-label">{item.label}</span>
+          <span className="ctx-submenu-arrow" aria-hidden="true">▶</span>
+        </RadixMenu.SubTrigger>
+        <RadixMenu.Portal>
+          <RadixMenu.SubContent className="ctx-menu" sideOffset={4} collisionPadding={8}>
+            {item.items.map((entry, index) => <MenuEntry key={entry.type === "separator" ? `separator-${index}` : entry.id} item={entry} />)}
+          </RadixMenu.SubContent>
+        </RadixMenu.Portal>
+      </RadixMenu.Sub>
+    );
+  }
+
+  return (
+    <RadixMenu.Item
+      className="ctx-item"
+      data-ctx-danger={String(item.danger ?? false)}
+      disabled={item.disabled}
+      onSelect={item.action}
     >
-      {items.map((item, idx) => {
-        if (item.type === "separator") {
-          return <div key={`sep-${idx}`} className="ctx-separator" role="separator" />;
-        }
-
-        if (item.type === "submenu") {
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className="ctx-item"
-              data-ctx-item
-              data-ctx-submenu
-              role="menuitem"
-              disabled={item.disabled}
-              tabIndex={-1}
-            >
-              {item.icon && <span className="ctx-item-icon">{item.icon}</span>}
-              <span className="ctx-item-label">{item.label}</span>
-              <span className="ctx-submenu-arrow" aria-hidden="true">
-                ▶
-              </span>
-            </button>
-          );
-        }
-
-        // type === "item"
-        return (
-          <button
-            key={item.id}
-            type="button"
-            className="ctx-item"
-            data-ctx-item
-            data-ctx-danger={String(item.danger ?? false)}
-            role="menuitem"
-            disabled={item.disabled}
-            tabIndex={-1}
-            onClick={() => {
-              item.action();
-              onClose();
-            }}
-          >
-            {item.icon && <span className="ctx-item-icon">{item.icon}</span>}
-            <span className="ctx-item-label">{item.label}</span>
-            {item.shortcut && (
-              <span className="ctx-shortcut">{item.shortcut}</span>
-            )}
-          </button>
-        );
-      })}
-    </div>,
-    document.body,
+      {item.icon && <span className="ctx-item-icon">{item.icon}</span>}
+      <span className="ctx-item-label">{item.label}</span>
+      {item.shortcut && <span className="ctx-shortcut">{item.shortcut}</span>}
+    </RadixMenu.Item>
   );
 }

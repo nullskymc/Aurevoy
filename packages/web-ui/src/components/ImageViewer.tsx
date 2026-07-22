@@ -1,5 +1,4 @@
-import { useEffect, useCallback } from "react";
-import { createPortal } from "react-dom";
+import * as Dialog from "@radix-ui/react-dialog";
 import { usePlatform } from "../platform/context";
 import { IconX } from "../icons";
 
@@ -14,17 +13,6 @@ interface ImageViewerProps {
 
 export function ImageViewer({ src, alt, onClose }: ImageViewerProps) {
   const platform = usePlatform();
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    },
-    [onClose],
-  );
-
-  useEffect(() => {
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [handleKeyDown]);
 
   const imgSrc = src.startsWith('data:image/') ? src : (() => {
     try {
@@ -34,31 +22,31 @@ export function ImageViewer({ src, alt, onClose }: ImageViewerProps) {
     }
   })();
 
-  return createPortal(
-    <div className="image-viewer-backdrop" onClick={onClose}>
-      <button
-        type="button"
-        className="image-viewer-close"
-        aria-label="Close image viewer"
-        onClick={onClose}
-      >
-        <CloseIcon />
-      </button>
-      {imgSrc ? (
-        <img
-          className="image-viewer-img"
-          src={imgSrc}
-          alt={alt ?? ""}
-          onClick={(e) => e.stopPropagation()}
-          draggable={false}
-        />
-      ) : (
-        <span className="image-viewer-placeholder">
-          📷 {alt ?? "无法加载图片"}
-        </span>
-      )}
-    </div>,
-    document.body,
+  return (
+    <Dialog.Root open onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="image-viewer-backdrop" />
+        <Dialog.Content className="image-viewer-content" aria-label={alt ?? "Image viewer"}>
+          <Dialog.Close asChild>
+            <button type="button" className="image-viewer-close" aria-label="Close image viewer">
+              <CloseIcon />
+            </button>
+          </Dialog.Close>
+          {imgSrc ? (
+            <img
+              className="image-viewer-img"
+              src={imgSrc}
+              alt={alt ?? ""}
+              draggable={false}
+            />
+          ) : (
+            <span className="image-viewer-placeholder">
+              📷 {alt ?? "无法加载图片"}
+            </span>
+          )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

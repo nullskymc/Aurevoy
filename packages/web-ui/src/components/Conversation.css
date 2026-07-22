@@ -494,10 +494,6 @@
 }
 
 .toast-bubble {
-  position: fixed;
-  top: 18px;
-  right: 18px;
-  z-index: 80;
   display: flex;
   align-items: center;
   gap: var(--ui-space-3);
@@ -510,6 +506,18 @@
   line-height: 1.45;
   padding: var(--ui-space-2) var(--ui-space-3);
   box-shadow: 0 14px 34px rgba(31, 35, 40, 0.12);
+}
+
+.toast-viewport {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 80;
+  width: min(420px, calc(100vw - 36px));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  outline: none;
 }
 
 .toast-bubble[data-tone="error"] {

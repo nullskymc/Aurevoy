@@ -1,5 +1,4 @@
-import { useEffect } from "react";
-import { createPortal } from "react-dom";
+import * as Toast from "@radix-ui/react-toast";
 import { t } from "../i18n";
 
 export type ToastTone = "info" | "success" | "error";
@@ -9,6 +8,7 @@ export interface ToastNoticePayload {
   tone?: ToastTone;
 }
 
+/** 统一由 Radix 管理自动关闭、可访问播报和键盘交互。 */
 export function ToastNotice({
   message,
   tone = "info",
@@ -20,19 +20,20 @@ export function ToastNotice({
   onClose: () => void;
   durationMs?: number;
 }) {
-  useEffect(() => {
-    if (durationMs <= 0) return;
-    const timer = window.setTimeout(onClose, durationMs);
-    return () => window.clearTimeout(timer);
-  }, [message, tone, durationMs, onClose]);
-
-  return createPortal(
-    <div className="toast-bubble" data-tone={tone} role="status" aria-live="polite">
-      <span>{message}</span>
-      <button type="button" className="toast-close" onClick={onClose} aria-label={t("a11y.closeNotice")}>
-        ×
-      </button>
-    </div>,
-    document.body,
+  return (
+    <Toast.Provider duration={durationMs} swipeDirection="right">
+      <Toast.Root
+        className="toast-bubble"
+        data-tone={tone}
+        open
+        onOpenChange={(nextOpen) => !nextOpen && onClose()}
+      >
+        <Toast.Description>{message}</Toast.Description>
+        <Toast.Close asChild>
+          <button type="button" className="toast-close" aria-label={t("a11y.closeNotice")}>×</button>
+        </Toast.Close>
+      </Toast.Root>
+      <Toast.Viewport className="toast-viewport" />
+    </Toast.Provider>
   );
 }

@@ -1,3 +1,5 @@
+import * as Dialog from "@radix-ui/react-dialog";
+import * as Tabs from "@radix-ui/react-tabs";
 import { useEffect, useMemo, useState } from "react";
 import type { SkillDescriptor, SkillDetail, SkillInstallResponse } from "@aurevoy/shared";
 import { fetchSkillDetail } from "../api";
@@ -186,29 +188,27 @@ export function SkillsPage({
             <SkillsSectionList skills={installed} onOpen={(name) => setSelectedName(name)} />
           </section>
 
-          <section className="skills-section">
-            <div className="skills-source-tabs" role="tablist" aria-label={t("skillsPage.sourceTabs")}>
-              <button
-                type="button"
-                role="tab"
+          <Tabs.Root
+            className="skills-section"
+            value={sourceTab}
+            onValueChange={(value) => setSourceTab(value as SourceTab)}
+          >
+            <Tabs.List className="skills-source-tabs" aria-label={t("skillsPage.sourceTabs")}>
+              <Tabs.Trigger
+                value="personal"
                 className="skills-source-tab"
-                aria-selected={sourceTab === "personal"}
                 data-active={sourceTab === "personal"}
-                onClick={() => setSourceTab("personal")}
               >
                 {t("skillsPage.tabPersonal")}
-              </button>
-              <button
-                type="button"
-                role="tab"
+              </Tabs.Trigger>
+              <Tabs.Trigger
+                value="system"
                 className="skills-source-tab"
-                aria-selected={sourceTab === "system"}
                 data-active={sourceTab === "system"}
-                onClick={() => setSourceTab("system")}
               >
                 {t("skillsPage.tabSystem")}
-              </button>
-            </div>
+              </Tabs.Trigger>
+            </Tabs.List>
             {tabSkills.length === 0 ? (
               <p className="skills-empty is-inline">{t("skillsPage.emptyTab")}</p>
             ) : (
@@ -218,7 +218,7 @@ export function SkillsPage({
                 onOpen={(name) => setSelectedName(name)}
               />
             )}
-          </section>
+          </Tabs.Root>
         </>
       )}
 
@@ -344,14 +344,6 @@ function SkillDetailModal({
     };
   }, [name]);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const display = detail ?? skill;
   const uninstallable = skill ? canUninstall(skill) : false;
 
@@ -382,15 +374,14 @@ function SkillDetailModal({
   }
 
   return (
-    <div className="skills-modal-backdrop" role="presentation" onClick={onClose}>
-      <div
-        className="skills-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={display?.name ?? name}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="skills-modal-toolbar">
+    <Dialog.Root open onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="skills-modal-backdrop" />
+        <Dialog.Content
+          className="skills-modal"
+          aria-label={display?.name ?? name}
+        >
+          <div className="skills-modal-toolbar">
           <label className="skills-switch" title={enabled ? t("memory.disable") : t("memory.enable")}>
             <input
               type="checkbox"
@@ -400,12 +391,14 @@ function SkillDetailModal({
             />
             <span className="skills-switch-track" aria-hidden="true" />
           </label>
-          <button type="button" className="skills-modal-close" onClick={onClose} aria-label={t("action.cancel")}>
-            <CloseIcon />
-          </button>
-        </div>
+            <Dialog.Close asChild>
+              <button type="button" className="skills-modal-close" aria-label={t("action.cancel")}>
+                <CloseIcon />
+              </button>
+            </Dialog.Close>
+          </div>
 
-        <header className="skills-modal-head">
+          <header className="skills-modal-head">
           <h2>
             {display?.name ?? name}
             <span className="skills-modal-head-suffix"> Skill</span>
@@ -424,9 +417,9 @@ function SkillDetailModal({
               )}
             </div>
           )}
-        </header>
+          </header>
 
-        <div className="skills-modal-body">
+          <div className="skills-modal-body">
           {loading && <p className="skills-modal-status">{t("skillsPage.loadingDetail")}</p>}
           {error && <p className="skills-modal-status is-error">{error}</p>}
           {!loading && !error && detail && (
@@ -438,9 +431,9 @@ function SkillDetailModal({
               <p className="skills-modal-status">{t("skillsPage.noBody")}</p>
             )
           )}
-        </div>
+          </div>
 
-        <footer className="skills-modal-footer">
+          <footer className="skills-modal-footer">
           {uninstallable ? (
             <button
               type="button"
@@ -463,9 +456,10 @@ function SkillDetailModal({
               {t("skillsPage.tryNow")}
             </button>
           )}
-        </footer>
-      </div>
-    </div>
+          </footer>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -484,5 +478,3 @@ function CloseIcon() {
 function ReloadIcon({ spinning }: { spinning?: boolean }) {
   return <IconRefresh size={16} className={spinning ? "skills-spin" : undefined} />;
 }
-
-
