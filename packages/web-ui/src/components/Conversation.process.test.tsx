@@ -224,6 +224,10 @@ describe("Conversation process presentation (integrated path)", () => {
     // 过程旁白不得出现在交付区
     const deliverySlice = html.split('class="agent-final-response"')[1] ?? "";
     expect(deliverySlice).not.toContain("我先查看工作区里的项目结构");
+    expect(deliverySlice).toContain("agent-message-actions");
+    expect(deliverySlice).toContain('aria-label="Copy"');
+    expect(deliverySlice).toContain('dateTime="2026-07-10T00:00:03.000Z"');
+    expect(html).toContain('dateTime="2026-07-10T00:00:00.000Z"');
   });
 
   it("merges multiple tool-calling assistant messages into one 已处理", () => {
@@ -446,6 +450,63 @@ describe("Conversation process presentation (integrated path)", () => {
     expect(html).toContain("正在读取");
     const segment = html.split('data-message-id="a1"')[1] ?? "";
     expect(segment).toContain("正在读取");
+  });
+
+  it("collects completed tool process before streaming the final response", () => {
+    const task = baseTask({
+      status: "running",
+      phase: "thinking",
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "检查工作区",
+          createdAt: "2026-07-10T00:00:00.000Z",
+        },
+        {
+          id: "a-process",
+          role: "assistant",
+          content: "我先读取项目说明。",
+          createdAt: "2026-07-10T00:00:01.000Z",
+          toolCalls: [
+            {
+              id: "call-read",
+              type: "function",
+              function: { name: "read", arguments: JSON.stringify({ path: "README.md" }) },
+            },
+          ],
+        },
+        {
+          id: "tool-read",
+          role: "tool",
+          content: JSON.stringify({ ok: true, output: "项目说明" }),
+          toolCallId: "call-read",
+          createdAt: "2026-07-10T00:00:02.000Z",
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(
+      <Conversation
+        task={task}
+        status="running"
+        phase="thinking"
+        phaseDetail="Agent 正在思考"
+        plan={[]}
+        output="最终结论正在流式生成"
+        busy
+        liveToolActivity={[]}
+        hasLiveTail
+        onToolDecision={noop}
+        onClarificationAnswer={noop}
+      />,
+    );
+
+    const completedIndex = html.indexOf("process-completed");
+    const finalStreamIndex = html.indexOf("最终结论正在流式生成");
+    expect(completedIndex).toBeGreaterThanOrEqual(0);
+    expect(finalStreamIndex).toBeGreaterThan(completedIndex);
+    expect(html).not.toContain("process-live-narration");
   });
 
   it("ask_user clarification renders question markdown structure (not plain escaped text)", () => {

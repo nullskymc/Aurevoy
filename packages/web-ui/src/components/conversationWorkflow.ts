@@ -58,7 +58,11 @@ function collectLiveAssistantToolMessageIds(messages: Message[], liveToolCallIds
   return ids;
 }
 
-function shouldSuppressLiveOutput(
+/**
+ * SSE 的 message 事件可能先于本地流式缓存清空落入历史区。
+ * 渲染 live tail 前复用同一判定，避免正文在历史区和实时区短暂重复。
+ */
+export function shouldSuppressLiveOutput(
   messages: Message[],
   hiddenAssistantIds: Set<string>,
   output: string,

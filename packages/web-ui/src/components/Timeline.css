@@ -187,20 +187,11 @@
 }
 
 .process-delivery.is-streaming .process-delivery-body {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 2px;
+  display: block;
 }
 
 .process-delivery.is-streaming .markdown-body {
-  display: inline;
   min-width: 0;
-}
-
-.process-delivery.is-streaming .stream-caret {
-  flex: 0 0 auto;
-  margin-bottom: 0.15em;
 }
 
 .process-delivery .doc-meta {

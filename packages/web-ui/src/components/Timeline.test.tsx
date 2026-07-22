@@ -18,6 +18,22 @@ vi.mock("dompurify", () => ({
 }));
 
 describe("buildLiveAgentRoundData", () => {
+  it("hides internal update_plan activity because the plan strip already represents it", () => {
+    const round = buildLiveAgentRoundData({
+      plan: [{ id: "step-1", description: "检查代码", status: "running" }],
+      phase: "calling_tool",
+      liveToolActivity: [{
+        id: "call-update-plan",
+        name: "update_plan",
+        args: { steps: [{ description: "检查代码", status: "running" }] },
+        status: "ok",
+      }],
+    });
+
+    expect(round.planStepGroups).toEqual([]);
+    expect(flattenProcessActivityRows(round)).toEqual([]);
+  });
+
   it("projects parallel delegate calls into a dedicated subagent workgroup", () => {
     const runs: SubagentRun[] = [
       makeSubagentRun({ id: "run-explore", parentCallId: "call-explore", role: "explore" }),
@@ -475,7 +491,7 @@ describe("AgentRound", () => {
     ).toMatch(/子智能体|勘察|列出/);
   });
 
-  it("streams typewriter delivery while thinking without stacking 正在思考", () => {
+  it("streams formatted markdown while thinking without stacking 正在思考", () => {
     const html = renderToStaticMarkup(
       <AgentRound
         busy
@@ -485,15 +501,15 @@ describe("AgentRound", () => {
           id: "live-tail",
           planStepGroups: [],
           summary: "",
-          markdownOutput: "streaming answer appears as typewriter",
+          markdownOutput: "streaming **answer** keeps markdown layout",
           status: "running",
         }}
       />,
     );
 
     expect(html).toContain("已处理");
-    expect(html).toContain("streaming answer appears as typewriter");
-    expect(html).toContain("stream-caret");
+    expect(html).toContain("<strong>answer</strong>");
+    expect(html).not.toContain("stream-caret");
     expect(html).toContain("is-streaming");
     // 正文已出时不叠灰字「正在思考」
     expect(html).not.toContain("正在思考");

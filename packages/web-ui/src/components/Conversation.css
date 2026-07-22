@@ -28,20 +28,24 @@
 }
 
 .process-live-narration.is-streaming {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 2px;
+  display: block;
 }
 
 .process-live-narration.is-streaming .markdown-body {
-  display: inline;
   min-width: 0;
 }
 
-.process-live-narration.is-streaming .stream-caret {
-  flex: 0 0 auto;
-  margin-bottom: 0.15em;
+.agent-final-streaming .markdown-body {
+  min-width: 0;
+}
+
+.markdown-body--streaming {
+  overflow-wrap: anywhere;
+}
+
+/* 动态高度和流式尾部由虚拟器独占滚动补偿，禁止浏览器再选择第二个锚点。 */
+.conversation-thread > * {
+  overflow-anchor: none;
 }
 
 /* ============ 门禁卡：审批 / 追问共用（紧凑、轻阴影） ============ */
@@ -464,10 +468,6 @@
 
 .tool-card[data-status="error"] .tool-card-icon {
   color: var(--offline);
-}
-
-.tool-card[data-status="running"] .tool-card-icon {
-  animation: pulse 1.2s ease-in-out infinite;
 }
 
 .tool-card-kind {

@@ -1,5 +1,6 @@
-import { useMemo, useCallback, useState, type MouseEvent } from "react";
-import { marked } from "marked";
+import { memo, useMemo, useCallback, useRef, useState, type MouseEvent } from "react";
+import { marked, type Tokens } from "marked";
+import remend from "remend";
 import { markedHighlight } from "marked-highlight";
 import markedKatex from "marked-katex-extension";
 import DOMPurify from "dompurify";
@@ -126,6 +127,101 @@ const PATH_CHIP_RE =
 interface MarkdownRendererProps {
   content: string;
   onOpenWorkspacePath?: (path: string) => void;
+}
+
+export interface StreamingMarkdownBlock {
+  raw: string;
+  source: string;
+  mode: "stable" | "live" | "code";
+  language?: string;
+}
+
+export interface StreamingMarkdownProjection {
+  /** 公式规范化后的文本；用于判断本次更新是否为纯追加。 */
+  text: string;
+  blocks: StreamingMarkdownBlock[];
+}
+
+function hasReferenceDefinitions(text: string): boolean {
+  if (!text.includes("]:")) return false;
+  return /^[ \t]{0,3}\[[^\]]+\]:[ \t]*(?:\S+|\r?\n[ \t]+\S+)/m.test(text);
+}
+
+function isOpenCodeFence(raw: string): boolean {
+  const match = raw.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+  if (!match?.[1]) return false;
+  const marker = match[1];
+  const lastLine = raw.trimEnd().split("\n").at(-1)?.trim() ?? "";
+  return !new RegExp(`^[\\t ]{0,3}${marker[0]}{${marker.length},}[\\t ]*$`).test(lastLine);
+}
+
+/**
+ * 参考 OpenCode：完成的 Markdown 块保持稳定，只修补并重绘最后一个未完成块。
+ * 这样流式阶段已经是最终排版，不会在消息结束时从纯文本突然重排。
+ */
+function splitStreamingMarkdown(text: string): StreamingMarkdownBlock[] {
+  if (!text) return [];
+  if (hasReferenceDefinitions(text)) {
+    return [{ raw: text, source: remend(text, { linkMode: "text-only" }), mode: "live" }];
+  }
+
+  const tokens = marked.lexer(text);
+  let tail = tokens.length - 1;
+  while (tail >= 0 && tokens[tail]?.type === "space") tail -= 1;
+  if (tail < 0) return [{ raw: text, source: text, mode: "live" }];
+  const blocks: StreamingMarkdownBlock[] = [];
+
+  for (let index = 0; index < tail; index += 1) {
+    const token = tokens[index];
+    if (!token || token.type === "space") continue;
+    let raw = token.raw;
+    while (tokens[index + 1]?.type === "space" && index + 1 < tail) {
+      raw += tokens[++index]!.raw;
+    }
+    blocks.push({ raw, source: raw, mode: "stable" });
+  }
+
+  const last = tokens[tail]!;
+  const raw = tokens.slice(tail).map((token) => token.raw).join("");
+  if (last.type === "code" && isOpenCodeFence(last.raw)) {
+    const code = last as Tokens.Code;
+    return [...blocks, {
+      raw,
+      source: code.text,
+      mode: "code",
+      language: code.lang?.trim().split(/\s+/, 1)[0] || "text",
+    }];
+  }
+  return [...blocks, { raw, source: remend(raw, { linkMode: "text-only" }), mode: "live" }];
+}
+
+/** 完整投影入口，保留给历史渲染和单元测试。 */
+export function projectStreamingMarkdown(content: string): StreamingMarkdownBlock[] {
+  return splitStreamingMarkdown(normalizeMarkdownMath(content));
+}
+
+/**
+ * 对纯追加流复用已经稳定的块，只重新解析上一次尾块与新增后缀。
+ * Markdown 引用定义会反向影响前文链接；遇到它或非追加更新时必须回退全量投影。
+ */
+export function updateStreamingMarkdownProjection(
+  content: string,
+  previous?: StreamingMarkdownProjection,
+): StreamingMarkdownProjection {
+  const text = normalizeMarkdownMath(content);
+  if (!previous || !text.startsWith(previous.text) || hasReferenceDefinitions(text)) {
+    return { text, blocks: splitStreamingMarkdown(text) };
+  }
+  if (text === previous.text) return previous;
+
+  const previousTail = previous.blocks.at(-1);
+  if (!previousTail) return { text, blocks: splitStreamingMarkdown(text) };
+  const suffix = text.slice(previous.text.length);
+  const nextTail = splitStreamingMarkdown(previousTail.raw + suffix);
+  return {
+    text,
+    blocks: [...previous.blocks.slice(0, -1), ...nextTail],
+  };
 }
 
 function enhancePathChips(html: string): string {
@@ -290,19 +386,9 @@ export function renderMarkdownToSafeHtml(content: string): string {
   });
 }
 
-export function MarkdownRenderer({ content, onOpenWorkspacePath }: MarkdownRendererProps) {
+function useMarkdownClickHandler(onOpenWorkspacePath?: (path: string) => void) {
   const [, setCopied] = useState(false);
-  // marked 输出来自 LLM/工具的不可信内容，渲染前必须经 DOMPurify 净化，防 XSS。
-  const html = useMemo(() => {
-    try {
-      return renderMarkdownToSafeHtml(content);
-    } catch {
-      // 解析失败时退化为纯文本（已转义），不抛 HTML。
-      return DOMPurify.sanitize(content);
-    }
-  }, [content]);
-
-  const handleClick = useCallback(
+  return useCallback(
     (event: MouseEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
@@ -333,6 +419,78 @@ export function MarkdownRenderer({ content, onOpenWorkspacePath }: MarkdownRende
     },
     [onOpenWorkspacePath],
   );
+}
+
+function renderStreamingCodeToHtml(block: StreamingMarkdownBlock): string {
+  const language = escapeHtmlText(block.language || "text");
+  const code = escapeHtmlText(block.source);
+  return (
+    `<div class="markdown-code-block" data-lang="${language}">` +
+    `<div class="markdown-code-header">` +
+    `<span class="markdown-code-lang">${language}</span>` +
+    `<button type="button" class="markdown-code-copy" data-copy-code="1" aria-label="Copy code">` +
+    `${copySvgHtml(14)}</button></div>` +
+    `<pre><code class="hljs language-${language}">${code}</code></pre></div>`
+  );
+}
+
+const StreamingMarkdownBlockView = memo(function StreamingMarkdownBlockView({
+  block,
+}: {
+  block: StreamingMarkdownBlock;
+}) {
+  const html = useMemo(() => {
+    if (block.mode === "code") return renderStreamingCodeToHtml(block);
+    try {
+      return renderMarkdownToSafeHtml(block.source);
+    } catch {
+      return DOMPurify.sanitize(block.source);
+    }
+  }, [block]);
+
+  return (
+    <div
+      data-markdown-stream-block={block.mode}
+      style={{ display: "contents" }}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}, (previous, next) => (
+  previous.block.raw === next.block.raw
+  && previous.block.mode === next.block.mode
+  && previous.block.language === next.block.language
+));
+
+/** 流式期间直接呈现稳定 Markdown 块，避免结束时从纯文本切换造成布局闪动。 */
+export function StreamingMarkdownRenderer({ content, onOpenWorkspacePath }: MarkdownRendererProps) {
+  const projectionRef = useRef<StreamingMarkdownProjection | undefined>(undefined);
+  const blocks = useMemo(() => {
+    const projection = updateStreamingMarkdownProjection(content, projectionRef.current);
+    projectionRef.current = projection;
+    return projection.blocks;
+  }, [content]);
+  const handleClick = useMarkdownClickHandler(onOpenWorkspacePath);
+  return (
+    <div className="markdown-body markdown-body--streaming" onClick={handleClick}>
+      {blocks.map((block, index) => (
+        <StreamingMarkdownBlockView key={index} block={block} />
+      ))}
+    </div>
+  );
+}
+
+export function MarkdownRenderer({ content, onOpenWorkspacePath }: MarkdownRendererProps) {
+  // marked 输出来自 LLM/工具的不可信内容，渲染前必须经 DOMPurify 净化，防 XSS。
+  const html = useMemo(() => {
+    try {
+      return renderMarkdownToSafeHtml(content);
+    } catch {
+      // 解析失败时退化为纯文本（已转义），不抛 HTML。
+      return DOMPurify.sanitize(content);
+    }
+  }, [content]);
+
+  const handleClick = useMarkdownClickHandler(onOpenWorkspacePath);
 
   return (
     <div

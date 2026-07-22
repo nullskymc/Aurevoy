@@ -6,7 +6,7 @@
  *
  * 支持历史回看与实时执行两种模式。
  */
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, MotionConfig } from "framer-motion";
 import type {
   ContentBlock,
@@ -16,7 +16,7 @@ import type {
   SubagentRole,
   SubagentRun,
 } from "@aurevoy/shared";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { MarkdownRenderer, StreamingMarkdownRenderer } from "./MarkdownRenderer";
 import { usePlatform } from "../platform/context";
 import { t } from "../i18n";
 import { ContextMenu } from "./ContextMenu";
@@ -122,7 +122,9 @@ export function detectStepKind(toolName: string): StepKind {
 }
 
 function shouldHideToolFromWorkflow(toolName: string): boolean {
-  return toolName === "attach_content" || toolName === "delegate";
+  // 计划更新已有独立的计划进度条承载；再作为工具活动展示只会产生
+  // 无上下文的「已完成一步」卡片，干扰真正的执行过程。
+  return toolName === "attach_content" || toolName === "delegate" || toolName === "update_plan";
 }
 
 /** 生成聚合摘要文本 */
@@ -1590,22 +1592,8 @@ function ProcessActivityIcon({ icon }: { icon?: ProcessActivityRow["icon"] }) {
 }
 
 function LiveStatusLine({ text }: { text: string }) {
-  return (
-    <AnimatePresence mode="wait" initial={false}>
-      <motion.div
-        key={text}
-        className="process-live-status"
-        role="status"
-        aria-live="polite"
-        initial={{ opacity: 0, y: 4 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -4 }}
-        transition={{ duration: 0.22, ease: "easeOut" }}
-      >
-        {text}
-      </motion.div>
-    </AnimatePresence>
-  );
+  // 工具 progress 可能每秒更新数十次；为每条文案启动进出场动画会持续打断动画。
+  return <div className="process-live-status" role="status" aria-live="polite">{text}</div>;
 }
 
 /**
@@ -1656,7 +1644,7 @@ export function LiveProcessBlock({
   );
 }
 
-export function ProcessActivityList({
+export const ProcessActivityList = memo(function ProcessActivityList({
   rows,
   live = false,
 }: {
@@ -1687,7 +1675,19 @@ export function ProcessActivityList({
       ))}
     </ul>
   );
-}
+}, (previous, next) => {
+  if (previous.live !== next.live || previous.rows.length !== next.rows.length) return false;
+  return previous.rows.every((row, index) => {
+    const candidate = next.rows[index];
+    return candidate != null
+      && row.id === candidate.id
+      && row.status === candidate.status
+      && row.label === candidate.label
+      && row.detail === candidate.detail
+      && row.icon === candidate.icon
+      && row.kind === candidate.kind;
+  });
+});
 
 function CompletedProcess({
   data,
@@ -1798,8 +1798,9 @@ export function AgentRound({
   const outputNode = showDelivery ? (
     <article className={`timeline-output process-delivery${busy ? " is-streaming" : ""}`}>
       <div className="doc-body process-delivery-body">
-        <MarkdownRenderer content={data.markdownOutput!} onOpenWorkspacePath={onOpenWorkspacePath} />
-        {busy ? <span className="stream-caret" aria-hidden="true" /> : null}
+        {busy
+          ? <StreamingMarkdownRenderer content={data.markdownOutput!} onOpenWorkspacePath={onOpenWorkspacePath} />
+          : <MarkdownRenderer content={data.markdownOutput!} onOpenWorkspacePath={onOpenWorkspacePath} />}
       </div>
     </article>
   ) : null;

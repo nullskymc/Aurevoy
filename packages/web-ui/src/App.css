@@ -603,6 +603,20 @@ button:disabled {
   gap: 24px;
 }
 
+.conversation-virtual-canvas {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.conversation-virtual-item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  min-width: 0;
+}
+
 .conversation-turn {
   display: grid;
   gap: 14px;
@@ -1193,7 +1207,8 @@ button.markdown-file-chip:hover {
 .progress-bar-fill {
   height: 100%;
   background: var(--accent);
-  transition: width 0.3s ease;
+  /* 高频工具进度使用短线性插值，避免 300ms ease 在下一次更新前反复被重启。 */
+  transition: width 120ms linear;
 }
 
 .progress-bar.is-indeterminate .progress-bar-fill {
@@ -1974,7 +1989,15 @@ button.user-bubble-attachment {
   gap: 2px;
 }
 
-/* Agent 消息：操作行随正文缩进，常态淡显，悬停消息块时增强 */
+.message-time {
+  padding: 0 6px;
+  color: var(--text-tertiary);
+  font-size: var(--ui-font-xs);
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+/* 旧文档块继续跟随正文缩进。 */
 .doc-block-agent .msg-actions {
   padding-left: 28px;
   margin-top: 2px;
@@ -1982,9 +2005,23 @@ button.user-bubble-attachment {
   transition: opacity 0.15s;
 }
 
+/* Agent 最终回复操作行贴齐左边界，并与正文留出呼吸空间。 */
+.agent-final-response > .agent-message-actions {
+  margin-top: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
 .doc-block-agent:hover .msg-actions,
 .doc-block-agent:focus-within .msg-actions {
   opacity: 1;
+}
+
+.agent-final-response:hover > .agent-message-actions,
+.agent-final-response:focus-within > .agent-message-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .msg-action-btn {

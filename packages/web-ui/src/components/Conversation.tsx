@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { defaultRangeExtractor, useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import type {
   ClarificationRequest,
   ContentBlock,
@@ -14,7 +15,8 @@ import type {
   ToolRiskLevel,
 } from "@aurevoy/shared";
 import { ImageViewer } from "./ImageViewer";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { MarkdownRenderer, StreamingMarkdownRenderer } from "./MarkdownRenderer";
+import type { LiveOutputStore } from "../app/liveOutputStore";
 import { t } from "../i18n";
 import {
   AgentRound,
@@ -42,8 +44,10 @@ import {
 } from "./contextMenuActions";
 import {
   buildConversationViewModel,
+  shouldSuppressLiveOutput,
   type ConversationTurn,
 } from "./conversationWorkflow";
+import { getRelativeTime } from "./status";
 import {
   IconAlertCircle,
   IconCheck,
@@ -85,7 +89,9 @@ interface ConversationProps {
   phaseDetail?: string;
   plan: PlanStep[];
   /** 当前正在生成的这一轮的流式文本尾巴（仅运行中有值） */
-  output: string;
+  output?: string;
+  /** 高频流式正文 store；提供时仅当前 live tail 的最小子树订阅 token 更新。 */
+  outputStore?: LiveOutputStore;
   busy: boolean;
   /** 当前运行轮次的实时工具活动（来自事件流） */
   liveToolActivity: ToolActivity[];
@@ -157,6 +163,14 @@ function buildToolResultMap(messages: Message[]): Map<string, ToolResultInfo> {
   return map;
 }
 
+/** live 正文去重只需要当前用户轮次，避免每批 token 扫描整段历史。 */
+function currentTurnMessages(messages: Message[]): Message[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") return messages.slice(index);
+  }
+  return messages;
+}
+
 function standaloneToolActivityFromMessage(message: Message): ToolActivity {
   const result = parseToolResultContent(message.content);
   const shortId = (message.toolCallId ?? message.id).slice(0, 8);
@@ -221,12 +235,31 @@ function collectApprovalItems(
   return [...byId.values()];
 }
 
+const EMPTY_LIVE_OUTPUT_SUBSCRIBE = () => () => {};
+const EMPTY_LIVE_OUTPUT_SNAPSHOT = () => "";
+
+const CONVERSATION_TURN_ESTIMATE = 240;
+const CONVERSATION_TURN_GAP = 24;
+const CONVERSATION_OVERSCAN = 6;
+const conversationMeasurementCache = new Map<string, VirtualItem[]>();
+
+/** 虚拟 turn 重新测高时的唯一补偿规则，防止当前可见工具卡完成后把整段历史推移。 */
+export function shouldAdjustConversationScrollPosition(params: {
+  itemIndex: number;
+  firstVisibleIndex?: number;
+  atEnd: boolean;
+}): boolean {
+  if (params.atEnd || params.firstVisibleIndex === undefined) return false;
+  return params.itemIndex < params.firstVisibleIndex;
+}
+
 export function Conversation({
   task,
   phase,
   phaseDetail,
   plan,
-  output,
+  output = "",
+  outputStore,
   busy,
   liveToolActivity,
   hasLiveTail,
@@ -245,9 +278,6 @@ export function Conversation({
 }: ConversationProps) {
   const messageEditDisabled = editDisabled ?? busy;
   const platform = usePlatform();
-  const topRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const previousTaskIdRef = useRef<string | null>(null);
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
@@ -270,41 +300,16 @@ export function Conversation({
     });
   }
 
-  const liveScrollSignature = liveToolActivity
-    .map((item) => `${item.id}:${item.status}:${item.progress?.message ?? ""}:${item.progress?.percent ?? ""}`)
-    .join("|");
-
-  // SSE 流式过程中统一滚动到底部
-  useEffect(() => {
-    if (!hasLiveTail && phase !== "waiting_approval") return;
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [hasLiveTail, output, phase, liveScrollSignature, task.messages.length, liveContentBlocks.length]);
-
-  // 切换到历史任务：滚动到最后一条消息开头；SSE 激活时不干预（由流式效果接棒）
-  useEffect(() => {
-    if (hasLiveTail || phase === "waiting_approval") return;
-    if (previousTaskIdRef.current === task.id) return;
-    previousTaskIdRef.current = task.id;
-
-    requestAnimationFrame(() => {
-      const thread = document.querySelector(".conversation .conversation-thread");
-      if (!thread) return;
-      const turns = thread.querySelectorAll(":scope > .conversation-turn");
-      const lastTurn = turns[turns.length - 1];
-      if (lastTurn) {
-        lastTurn.scrollIntoView({ behavior: "auto", block: "start" });
-      }
-    });
-  }, [task.id, hasLiveTail, phase]);
-
   const messages = task.messages;
   const resultMap = buildToolResultMap(messages);
   const viewModel = buildConversationViewModel({
     messages,
     liveToolActivity,
-    output,
+    // 高频 outputStore 由 live turn 的最小子树订阅；这里只兼容直接传 output 的调用方。
+    output: outputStore ? "" : output,
     hasLiveTail,
   });
+  const liveOutputMessages = currentTurnMessages(messages);
   // 已落到历史消息上的 contentBlocks 不再塞进 live tail，避免「每条消息底部都挂同一文件卡」
   const historicalContentBlockIds = new Set(
     messages.flatMap((message) => dedupeContentBlocks(message.contentBlocks).map((block) => block.id)),
@@ -324,28 +329,36 @@ export function Conversation({
     : null;
   return (
     <div className="conversation">
-      <div ref={topRef} />
       <div className="conversation-thread">
-        {viewModel.turns.map((turn, index) => (
-          <ConversationTurnView
-            onOpenWorkspacePath={onOpenWorkspacePath}
-            key={turn.id}
-            turn={turn}
-            isLiveTurn={hasLiveTail && index === viewModel.turns.length - 1}
-            liveToolActivity={viewModel.liveToolActivity}
-            resultMap={resultMap}
-            plan={task.plan}
-            subagentRuns={task.subagentRuns ?? []}
-            defaultToolDetailsOpen={defaultToolDetailsOpen}
-            onToolDecision={onToolDecision}
-            onAgentContextMenu={handleAgentContextMenu}
-            onUserMessageEdit={onUserMessageEdit}
-            editDisabled={messageEditDisabled}
-            onBranch={onBranch}
-            liveRoundData={hasLiveTail && index === viewModel.turns.length - 1 ? liveRoundData : null}
-            phaseDetail={hasLiveTail && index === viewModel.turns.length - 1 ? phaseDetail : undefined}
-          />
-        ))}
+        <VirtualConversationTurns
+          key={task.id}
+          taskId={task.id}
+          turns={viewModel.turns}
+          pinLastTurn={hasLiveTail || phase === "waiting_approval"}
+          renderTurn={(turn, index) => (
+            <ConversationTurnView
+              onOpenWorkspacePath={onOpenWorkspacePath}
+              turn={turn}
+              isLiveTurn={hasLiveTail && index === viewModel.turns.length - 1}
+              liveToolActivity={viewModel.liveToolActivity}
+              resultMap={resultMap}
+              plan={task.plan}
+              subagentRuns={task.subagentRuns ?? []}
+              defaultToolDetailsOpen={defaultToolDetailsOpen}
+              onToolDecision={onToolDecision}
+              onAgentContextMenu={handleAgentContextMenu}
+              onUserMessageEdit={onUserMessageEdit}
+              editDisabled={messageEditDisabled}
+              onBranch={onBranch}
+              liveRoundData={hasLiveTail && index === viewModel.turns.length - 1 ? liveRoundData : null}
+              liveOutputStore={hasLiveTail && index === viewModel.turns.length - 1 ? outputStore : undefined}
+              liveOutputFallback={hasLiveTail && index === viewModel.turns.length - 1 ? viewModel.liveOutput : ""}
+              liveOutputMessages={liveOutputMessages}
+              liveOutputHiddenAssistantIds={viewModel.hiddenAssistantIds}
+              phaseDetail={hasLiveTail && index === viewModel.turns.length - 1 ? phaseDetail : undefined}
+            />
+          )}
+        />
 
         {/* ask-user 追问：留在对话流内 */}
         {(() => {
@@ -377,8 +390,6 @@ export function Conversation({
             )}
           </div>
         )}
-
-        <div ref={bottomRef} />
       </div>
 
       <ContextMenu
@@ -387,6 +398,137 @@ export function Conversation({
         anchorPoint={ctxMenu.point}
         onClose={closeCtxMenu}
       />
+    </div>
+  );
+}
+
+/**
+ * 对话历史使用动态高度虚拟列表：滚动容器仍由主界面持有，这里只维护总高度和可见 turn。
+ * 实时最后一轮固定加入 range，用户上滑查看历史时也不会卸载正在接收 SSE 的尾部。
+ */
+function VirtualConversationTurns({
+  taskId,
+  turns,
+  pinLastTurn,
+  renderTurn,
+}: {
+  taskId: string;
+  turns: ConversationTurn[];
+  pinLastTurn: boolean;
+  renderTurn: (turn: ConversationTurn, index: number) => ReactNode;
+}) {
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const initialScrollHandledRef = useRef(false);
+  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  const rangeExtractor = useCallback(
+    (range: Parameters<typeof defaultRangeExtractor>[0]) => {
+      const indexes = defaultRangeExtractor(range);
+      if (!pinLastTurn || turns.length === 0) return indexes;
+      const lastIndex = turns.length - 1;
+      return indexes.includes(lastIndex) ? indexes : [...indexes, lastIndex].sort((a, b) => a - b);
+    },
+    [pinLastTurn, turns.length],
+  );
+
+  const virtualizer = useVirtualizer({
+    count: turns.length,
+    getScrollElement: () => scrollElement,
+    getItemKey: (index) => turns[index]?.id ?? `removed:${index}`,
+    estimateSize: () => CONVERSATION_TURN_ESTIMATE,
+    initialMeasurementsCache: conversationMeasurementCache.get(taskId),
+    initialRect: { width: 800, height: 900 },
+    gap: CONVERSATION_TURN_GAP,
+    overscan: CONVERSATION_OVERSCAN,
+    scrollMargin,
+    rangeExtractor,
+    // 动态高度、追加 turn 与流式尾部统一由虚拟器维护底部锚点，避免与浏览器 anchoring/手动滚底竞争。
+    anchorTo: "end",
+    followOnAppend: "auto",
+    scrollEndThreshold: 96,
+    useAnimationFrameWithResizeObserver: true,
+  });
+
+  // 位于底部时 anchorTo 会保持末尾；用户上滑后只补偿视口之前的 turn，当前可见 turn 自身变高不挪动视口。
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+    return shouldAdjustConversationScrollPosition({
+      itemIndex: item.index,
+      firstVisibleIndex: instance.range?.startIndex,
+      atEnd: instance.isAtEnd(96),
+    });
+  };
+
+  const bindCanvas = useCallback((node: HTMLDivElement | null) => {
+    canvasRef.current = node;
+    const container = node?.closest<HTMLElement>(".main-scroll") ?? null;
+    setScrollElement(container);
+    if (!node || !container) return;
+    const containerRect = container.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    setScrollMargin(nodeRect.top - containerRect.top + container.scrollTop);
+  }, []);
+
+  // 会话布局宽度变化会改变 Markdown 高度；重新计算列表相对滚动容器的起点。
+  useEffect(() => {
+    const node = canvasRef.current;
+    if (!node || !scrollElement || typeof ResizeObserver === "undefined") return;
+    const updateMargin = () => {
+      const containerRect = scrollElement.getBoundingClientRect();
+      const nodeRect = node.getBoundingClientRect();
+      setScrollMargin(nodeRect.top - containerRect.top + scrollElement.scrollTop);
+    };
+    const observer = new ResizeObserver(updateMargin);
+    observer.observe(node);
+    observer.observe(scrollElement);
+    return () => observer.disconnect();
+  }, [scrollElement]);
+
+  // 历史任务首次打开时定位到最后一轮开头；实时任务由虚拟器的末尾锚点接管。
+  useEffect(() => {
+    if (!scrollElement || initialScrollHandledRef.current) return;
+    initialScrollHandledRef.current = true;
+    if (pinLastTurn || turns.length === 0) return;
+    const frame = requestAnimationFrame(() => {
+      virtualizer.scrollToIndex(turns.length - 1, { align: "start", behavior: "auto" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pinLastTurn, scrollElement, turns.length, virtualizer]);
+
+  // 任务切换时保存已测量高度，新实例可直接恢复，避免历史消息先按估算高度跳动。
+  useEffect(() => () => {
+    const snapshot = virtualizer.takeSnapshot();
+    if (snapshot.length > 0) conversationMeasurementCache.set(taskId, snapshot);
+    while (conversationMeasurementCache.size > 16) {
+      const oldest = conversationMeasurementCache.keys().next().value;
+      if (oldest === undefined) break;
+      conversationMeasurementCache.delete(oldest);
+    }
+  }, [taskId, virtualizer]);
+
+  return (
+    <div
+      ref={bindCanvas}
+      className="conversation-virtual-canvas"
+      data-virtualized="true"
+      style={{ height: `${virtualizer.getTotalSize()}px` }}
+    >
+      {virtualizer.getVirtualItems().map((virtualTurn) => {
+        const turn = turns[virtualTurn.index];
+        if (!turn) return null;
+        return (
+          <div
+            key={virtualTurn.key}
+            ref={virtualizer.measureElement}
+            className="conversation-virtual-item"
+            data-index={virtualTurn.index}
+            data-turn-id={turn.id}
+            style={{ transform: `translateY(${virtualTurn.start - scrollMargin}px)` }}
+          >
+            {renderTurn(turn, virtualTurn.index)}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -405,6 +547,10 @@ function ConversationTurnView({
   editDisabled,
   onBranch,
   liveRoundData,
+  liveOutputStore,
+  liveOutputFallback,
+  liveOutputMessages,
+  liveOutputHiddenAssistantIds,
   phaseDetail,
   onOpenWorkspacePath,
 }: {
@@ -426,6 +572,10 @@ function ConversationTurnView({
   editDisabled?: boolean;
   onBranch?: (messageId: string) => void;
   liveRoundData?: AgentRoundData | null;
+  liveOutputStore?: LiveOutputStore;
+  liveOutputFallback: string;
+  liveOutputMessages: Message[];
+  liveOutputHiddenAssistantIds: Set<string>;
   phaseDetail?: string;
   onOpenWorkspacePath?: (path: string) => void;
 }) {
@@ -462,6 +612,7 @@ function ConversationTurnView({
         <UserBubble
           content={turn.user.content}
           messageId={turn.user.id}
+          createdAt={turn.user.createdAt}
           attachments={turn.user.attachments}
           delivery={turn.user.delivery}
           onEdit={onUserMessageEdit}
@@ -478,6 +629,10 @@ function ConversationTurnView({
               presentationMessageIds={deliveryMessageIds}
               standaloneToolMessages={standaloneToolMessages}
               liveRoundData={liveRoundData}
+              liveOutputStore={liveOutputStore}
+              liveOutputFallback={liveOutputFallback}
+              liveOutputMessages={liveOutputMessages}
+              liveOutputHiddenAssistantIds={liveOutputHiddenAssistantIds}
               liveToolActivity={liveToolActivity}
               phaseDetail={phaseDetail}
               resultMap={resultMap}
@@ -487,6 +642,7 @@ function ConversationTurnView({
               onToolDecision={onToolDecision}
               onOpenWorkspacePath={onOpenWorkspacePath}
               turnStartedAt={turn.user?.createdAt}
+              hasLiveDelivery={deliveryMessages.length > 0}
             />
           )}
 
@@ -512,6 +668,9 @@ function ConversationTurnView({
                   showWorkflow={false}
                   onOpenWorkspacePath={onOpenWorkspacePath}
                 />
+              )}
+              {message.content.trim().length > 0 && (
+                <AgentMessageActions content={message.content} createdAt={message.createdAt} />
               )}
             </div>
           ))}
@@ -695,6 +854,10 @@ function AgentProcessStream({
   presentationMessageIds,
   standaloneToolMessages,
   liveRoundData,
+  liveOutputStore,
+  liveOutputFallback,
+  liveOutputMessages,
+  liveOutputHiddenAssistantIds,
   liveToolActivity,
   phaseDetail,
   resultMap,
@@ -704,11 +867,16 @@ function AgentProcessStream({
   onToolDecision,
   onOpenWorkspacePath,
   turnStartedAt,
+  hasLiveDelivery,
 }: {
   assistantMessages: Message[];
   presentationMessageIds: Set<string>;
   standaloneToolMessages: Message[];
   liveRoundData?: AgentRoundData | null;
+  liveOutputStore?: LiveOutputStore;
+  liveOutputFallback: string;
+  liveOutputMessages: Message[];
+  liveOutputHiddenAssistantIds: Set<string>;
   /** 仅包含尚未落入 tool result 历史的活动，用于和过程消息按 callId 绑定。 */
   liveToolActivity: ToolActivity[];
   phaseDetail?: string;
@@ -720,6 +888,8 @@ function AgentProcessStream({
   onOpenWorkspacePath?: (path: string) => void;
   /** 本轮用户消息时间，用于「已处理 Xs」计时 */
   turnStartedAt?: string;
+  /** 最终消息已落库但任务尚未收到 done 时，过程仍应保持收纳。 */
+  hasLiveDelivery: boolean;
 }) {
   const historicalRounds = assistantMessages.map((message) =>
     buildAgentRoundFromMessage(
@@ -749,9 +919,10 @@ function AgentProcessStream({
     liveNarrations.flatMap((message) => message.toolCalls?.map((call) => call.id) ?? []),
   );
   const unboundLiveActivities = liveToolActivity.filter((activity) => !narrationToolCallIds.has(activity.id));
-  const streamingNarration = liveRoundData?.markdownOutput?.trim() ?? "";
-  const hasLiveDetails =
-    liveNarrations.length > 0 || streamingNarration.length > 0 || unboundLiveActivities.length > 0;
+  const hasStaticLiveDetails = liveNarrations.length > 0 || unboundLiveActivities.length > 0;
+  const hasActiveProcess = liveToolActivity.some((activity) =>
+    activity.status === "running" || activity.status === "awaiting",
+  ) || subagentRuns.some((run) => run.status === "running" || run.status === "queued");
 
   const processStartedAtMs = resolveProcessStartMs(turnStartedAt);
   const processDurationMs = (() => {
@@ -785,35 +956,50 @@ function AgentProcessStream({
       )}
       {showLive && liveRoundData && (
         <>
-          <LiveProcessBlock
+          <LiveOutputFrame
+            outputStore={liveOutputStore}
+            fallbackOutput={liveOutputFallback}
+            messages={liveOutputMessages}
+            hiddenAssistantIds={liveOutputHiddenAssistantIds}
             statusText={resolveLiveStatusText({ phaseDetail, data: liveRoundData })}
             startedAtMs={processStartedAtMs}
-            showFallbackStatus={!hasLiveDetails}
-          />
-          {liveNarrations.map((message) => (
-            <LiveNarrationSegment
-              key={message.id}
-              message={message}
-              activities={liveToolActivity.filter((activity) =>
-                message.toolCalls?.some((call) => call.id === activity.id),
-              )}
-              plan={plan}
-              phase={phaseDetail}
-              subagentRuns={subagentRuns}
-              historicalRound={historicalRoundByMessageId.get(message.id)}
-              onOpenWorkspacePath={onOpenWorkspacePath}
-            />
-          ))}
-          {(streamingNarration || unboundLiveActivities.length > 0) && (
-            <LiveStreamingSegment
-              narration={streamingNarration}
-              activities={unboundLiveActivities}
-              plan={plan}
-              phase={phaseDetail}
-              subagentRuns={subagentRuns}
-              onOpenWorkspacePath={onOpenWorkspacePath}
-            />
-          )}
+            hasStaticLiveDetails={hasStaticLiveDetails}
+            activities={unboundLiveActivities}
+            plan={plan}
+            phase={phaseDetail}
+            subagentRuns={subagentRuns}
+            onOpenWorkspacePath={onOpenWorkspacePath}
+            completedProcess={mergedHistorical ? (
+              <AgentRound
+                key={`${mergedHistorical.id}:live-collected`}
+                data={mergedHistorical}
+                busy={false}
+                defaultToolDetailsOpen={defaultToolDetailsOpen}
+                showWorkflow
+                showOutput={false}
+                processDurationMs={processDurationMs}
+                processSegments={completedSegments}
+                onOpenWorkspacePath={onOpenWorkspacePath}
+              />
+            ) : null}
+            canCollectProcess={mergedHistorical != null && !hasActiveProcess}
+            forceCollected={hasLiveDelivery}
+          >
+            {liveNarrations.map((message) => (
+              <LiveNarrationSegment
+                key={message.id}
+                message={message}
+                activities={liveToolActivity.filter((activity) =>
+                  message.toolCalls?.some((call) => call.id === activity.id),
+                )}
+                plan={plan}
+                phase={phaseDetail}
+                subagentRuns={subagentRuns}
+                historicalRound={historicalRoundByMessageId.get(message.id)}
+                onOpenWorkspacePath={onOpenWorkspacePath}
+              />
+            ))}
+          </LiveOutputFrame>
           {(liveRoundData.contentBlocks?.length ?? 0) > 0 && (
             <AgentRound
               key="live-content-blocks"
@@ -838,6 +1024,86 @@ function AgentProcessStream({
   );
 }
 
+/**
+ * 高频正文的最小订阅边界。
+ * children 由父级在阶段/工具事件时生成；纯 token 更新时保持同一 ReactNode 引用，
+ * React 因而只协调状态标题和最后一个流式段，不重跑历史 turn。
+ */
+function LiveOutputFrame({
+  outputStore,
+  fallbackOutput,
+  messages,
+  hiddenAssistantIds,
+  statusText,
+  startedAtMs,
+  hasStaticLiveDetails,
+  activities,
+  plan,
+  phase,
+  subagentRuns,
+  onOpenWorkspacePath,
+  completedProcess,
+  canCollectProcess,
+  forceCollected,
+  children,
+}: {
+  outputStore?: LiveOutputStore;
+  fallbackOutput: string;
+  messages: Message[];
+  hiddenAssistantIds: Set<string>;
+  statusText: string;
+  startedAtMs: number;
+  hasStaticLiveDetails: boolean;
+  activities: ToolActivity[];
+  plan: PlanStep[];
+  phase?: string;
+  subagentRuns: SubagentRun[];
+  onOpenWorkspacePath?: (path: string) => void;
+  completedProcess?: ReactNode;
+  /** 已有历史工具过程且当前没有继续运行的工具时，最终正文可先收纳过程再展示。 */
+  canCollectProcess: boolean;
+  /** 最终消息已持久化时，即使 live store 已去重清空，也保持过程收纳。 */
+  forceCollected: boolean;
+  children?: ReactNode;
+}) {
+  const storedOutput = useSyncExternalStore(
+    outputStore?.subscribe ?? EMPTY_LIVE_OUTPUT_SUBSCRIBE,
+    outputStore?.getSnapshot ?? EMPTY_LIVE_OUTPUT_SNAPSHOT,
+    outputStore?.getSnapshot ?? EMPTY_LIVE_OUTPUT_SNAPSHOT,
+  );
+  const rawOutput = outputStore ? storedOutput : fallbackOutput;
+  const narration = shouldSuppressLiveOutput(messages, hiddenAssistantIds, rawOutput)
+    ? ""
+    : rawOutput.trim();
+  const collectProcess = canCollectProcess && (narration.length > 0 || forceCollected);
+
+  return (
+    <>
+      {collectProcess ? completedProcess : (
+        <>
+          <LiveProcessBlock
+            statusText={statusText}
+            startedAtMs={startedAtMs}
+            showFallbackStatus={!hasStaticLiveDetails && !narration}
+          />
+          {children}
+        </>
+      )}
+      {(narration || activities.length > 0) && (
+        <LiveStreamingSegment
+          narration={narration}
+          activities={activities}
+          plan={plan}
+          phase={phase}
+          subagentRuns={subagentRuns}
+          onOpenWorkspacePath={onOpenWorkspacePath}
+          finalResponse={collectProcess}
+        />
+      )}
+    </>
+  );
+}
+
 /** 一条过程说明与它发起的工具活动：以 tool call id 为唯一关联键。 */
 function LiveNarrationSegment({
   message,
@@ -845,16 +1111,16 @@ function LiveNarrationSegment({
   plan,
   phase,
   subagentRuns,
-  historicalRound,
   onOpenWorkspacePath,
+  historicalRound,
 }: {
   message: Message;
   activities: ToolActivity[];
   plan: PlanStep[];
   phase?: string;
   subagentRuns: SubagentRun[];
-  historicalRound?: AgentRoundData;
   onOpenWorkspacePath?: (path: string) => void;
+  historicalRound?: AgentRoundData;
 }) {
   // 工具完成后会从 liveToolActivity 消失，此时回退到同一 message 的历史 round，
   // 让已完成活动在整个 SSE 周期内继续留在原叙事下方。
@@ -887,6 +1153,7 @@ function LiveStreamingSegment({
   phase,
   subagentRuns,
   onOpenWorkspacePath,
+  finalResponse = false,
 }: {
   narration: string;
   activities: ToolActivity[];
@@ -894,20 +1161,28 @@ function LiveStreamingSegment({
   phase?: string;
   subagentRuns: SubagentRun[];
   onOpenWorkspacePath?: (path: string) => void;
+  /** 工具过程已收纳后，流式正文属于交付区而非过程旁白。 */
+  finalResponse?: boolean;
 }) {
-  const activityRows = flattenProcessActivityRows(buildLiveAgentRoundData({
-    plan,
-    liveToolActivity: activities,
-    phase,
-    subagentRuns,
-  }));
+  const activityRows = useMemo(
+    () => flattenProcessActivityRows(buildLiveAgentRoundData({
+      plan,
+      liveToolActivity: activities,
+      phase,
+      subagentRuns,
+    })),
+    [activities, phase, plan, subagentRuns],
+  );
 
   return (
-    <section className="process-live-segment is-streaming" data-process-segment="streaming">
+    <section
+      className={finalResponse ? "agent-final-response is-streaming" : "process-live-segment is-streaming"}
+      data-process-segment={finalResponse ? undefined : "streaming"}
+      data-final-stream={finalResponse ? "true" : undefined}
+    >
       {narration && (
-        <article className="process-live-narration is-streaming">
-          <MarkdownRenderer content={narration} onOpenWorkspacePath={onOpenWorkspacePath} />
-          <span className="stream-caret" aria-hidden="true" />
+        <article className={finalResponse ? "agent-final-streaming" : "process-live-narration is-streaming"}>
+          <StreamingMarkdownRenderer content={narration} onOpenWorkspacePath={onOpenWorkspacePath} />
         </article>
       )}
       {activityRows.length > 0 && <ProcessActivityList rows={activityRows} live />}
@@ -1016,6 +1291,7 @@ function formatFileSize(size: number): string {
 function UserBubble({
   content,
   messageId,
+  createdAt,
   attachments,
   delivery,
   onEdit,
@@ -1024,6 +1300,7 @@ function UserBubble({
 }: {
   content: string;
   messageId: string;
+  createdAt: string;
   attachments?: MessageAttachment[];
   delivery?: Message["delivery"];
   onEdit?: (
@@ -1235,6 +1512,7 @@ function UserBubble({
         )}
       </div>
       <div className="msg-actions">
+        <MessageTime createdAt={createdAt} />
         <CopyButton content={content} />
         {onEdit && (
           <IconButton
@@ -1266,7 +1544,24 @@ function UserBubble({
   );
 }
 
-/** Agent 消息底部的纯 icon 操作行（当前：复制）。 */
+/** Agent 完成交付底部的操作行；与用户消息复用时间和复制反馈。 */
+function AgentMessageActions({ content, createdAt }: { content: string; createdAt: string }) {
+  return (
+    <div className="msg-actions agent-message-actions">
+      <MessageTime createdAt={createdAt} />
+      <CopyButton content={content} />
+    </div>
+  );
+}
+
+/** 消息时间统一使用相对时间；无效历史时间不渲染空占位。 */
+function MessageTime({ createdAt }: { createdAt: string }) {
+  const label = getRelativeTime(createdAt);
+  if (!label) return null;
+  return <time className="message-time" dateTime={createdAt}>{label}</time>;
+}
+
+/** 消息级复制按钮，复制成功后短暂切换为勾选图标。 */
 function CopyButton({ content }: { content: string }) {
   const [copied, setCopied] = useState(false);
   return (
