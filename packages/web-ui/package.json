@@ -28,6 +28,8 @@
   "dependencies": {
     "@aurevoy/shared": "*",
     "@lobehub/icons-static-svg": "^1.91.0",
+    "@microsoft/fetch-event-source": "^2.0.1",
+    "@streamdown/math": "^1.0.2",
     "@tanstack/react-virtual": "^3.14.7",
     "dompurify": "3.4.8",
     "framer-motion": "^11.18.2",
@@ -38,7 +40,7 @@
     "marked-katex-extension": "^5.1.10",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "remend": "^1.3.0"
+    "streamdown": "^2.5.0"
   },
   "devDependencies": {
     "@types/katex": "^0.16.8",

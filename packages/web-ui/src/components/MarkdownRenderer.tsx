@@ -1,9 +1,10 @@
-import { memo, useMemo, useCallback, useRef, useState, type MouseEvent } from "react";
-import { marked, type Tokens } from "marked";
-import remend from "remend";
+import { useMemo, useCallback, useState, type MouseEvent } from "react";
+import { marked } from "marked";
 import { markedHighlight } from "marked-highlight";
 import markedKatex from "marked-katex-extension";
 import DOMPurify from "dompurify";
+import { Streamdown } from "streamdown";
+import { createMathPlugin } from "@streamdown/math";
 import hljs from "highlight.js/lib/core";
 import javascript from "highlight.js/lib/languages/javascript";
 import typescript from "highlight.js/lib/languages/typescript";
@@ -13,6 +14,7 @@ import json from "highlight.js/lib/languages/json";
 import bash from "highlight.js/lib/languages/bash";
 import xml from "highlight.js/lib/languages/xml";
 import "katex/dist/katex.min.css";
+import "streamdown/styles.css";
 import { copySvgHtml } from "../icons";
 
 // 按需注册常用语言，避免打包整个 highlight.js。
@@ -129,100 +131,8 @@ interface MarkdownRendererProps {
   onOpenWorkspacePath?: (path: string) => void;
 }
 
-export interface StreamingMarkdownBlock {
-  raw: string;
-  source: string;
-  mode: "stable" | "live" | "code";
-  language?: string;
-}
-
-export interface StreamingMarkdownProjection {
-  /** 公式规范化后的文本；用于判断本次更新是否为纯追加。 */
-  text: string;
-  blocks: StreamingMarkdownBlock[];
-}
-
-function hasReferenceDefinitions(text: string): boolean {
-  if (!text.includes("]:")) return false;
-  return /^[ \t]{0,3}\[[^\]]+\]:[ \t]*(?:\S+|\r?\n[ \t]+\S+)/m.test(text);
-}
-
-function isOpenCodeFence(raw: string): boolean {
-  const match = raw.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
-  if (!match?.[1]) return false;
-  const marker = match[1];
-  const lastLine = raw.trimEnd().split("\n").at(-1)?.trim() ?? "";
-  return !new RegExp(`^[\\t ]{0,3}${marker[0]}{${marker.length},}[\\t ]*$`).test(lastLine);
-}
-
-/**
- * 参考 OpenCode：完成的 Markdown 块保持稳定，只修补并重绘最后一个未完成块。
- * 这样流式阶段已经是最终排版，不会在消息结束时从纯文本突然重排。
- */
-function splitStreamingMarkdown(text: string): StreamingMarkdownBlock[] {
-  if (!text) return [];
-  if (hasReferenceDefinitions(text)) {
-    return [{ raw: text, source: remend(text, { linkMode: "text-only" }), mode: "live" }];
-  }
-
-  const tokens = marked.lexer(text);
-  let tail = tokens.length - 1;
-  while (tail >= 0 && tokens[tail]?.type === "space") tail -= 1;
-  if (tail < 0) return [{ raw: text, source: text, mode: "live" }];
-  const blocks: StreamingMarkdownBlock[] = [];
-
-  for (let index = 0; index < tail; index += 1) {
-    const token = tokens[index];
-    if (!token || token.type === "space") continue;
-    let raw = token.raw;
-    while (tokens[index + 1]?.type === "space" && index + 1 < tail) {
-      raw += tokens[++index]!.raw;
-    }
-    blocks.push({ raw, source: raw, mode: "stable" });
-  }
-
-  const last = tokens[tail]!;
-  const raw = tokens.slice(tail).map((token) => token.raw).join("");
-  if (last.type === "code" && isOpenCodeFence(last.raw)) {
-    const code = last as Tokens.Code;
-    return [...blocks, {
-      raw,
-      source: code.text,
-      mode: "code",
-      language: code.lang?.trim().split(/\s+/, 1)[0] || "text",
-    }];
-  }
-  return [...blocks, { raw, source: remend(raw, { linkMode: "text-only" }), mode: "live" }];
-}
-
-/** 完整投影入口，保留给历史渲染和单元测试。 */
-export function projectStreamingMarkdown(content: string): StreamingMarkdownBlock[] {
-  return splitStreamingMarkdown(normalizeMarkdownMath(content));
-}
-
-/**
- * 对纯追加流复用已经稳定的块，只重新解析上一次尾块与新增后缀。
- * Markdown 引用定义会反向影响前文链接；遇到它或非追加更新时必须回退全量投影。
- */
-export function updateStreamingMarkdownProjection(
-  content: string,
-  previous?: StreamingMarkdownProjection,
-): StreamingMarkdownProjection {
-  const text = normalizeMarkdownMath(content);
-  if (!previous || !text.startsWith(previous.text) || hasReferenceDefinitions(text)) {
-    return { text, blocks: splitStreamingMarkdown(text) };
-  }
-  if (text === previous.text) return previous;
-
-  const previousTail = previous.blocks.at(-1);
-  if (!previousTail) return { text, blocks: splitStreamingMarkdown(text) };
-  const suffix = text.slice(previous.text.length);
-  const nextTail = splitStreamingMarkdown(previousTail.raw + suffix);
-  return {
-    text,
-    blocks: [...previous.blocks.slice(0, -1), ...nextTail],
-  };
-}
+// Streamdown 的数学插件不默认将单美元符识别为公式；此处保持 Aurevoy 既有 $...$ 行内公式兼容。
+const streamdownMath = createMathPlugin({ singleDollarTextMath: true });
 
 function enhancePathChips(html: string): string {
   // 跳过 code/pre/katex 内文本，避免路径 chip 拆开公式或代码。
@@ -421,60 +331,21 @@ function useMarkdownClickHandler(onOpenWorkspacePath?: (path: string) => void) {
   );
 }
 
-function renderStreamingCodeToHtml(block: StreamingMarkdownBlock): string {
-  const language = escapeHtmlText(block.language || "text");
-  const code = escapeHtmlText(block.source);
-  return (
-    `<div class="markdown-code-block" data-lang="${language}">` +
-    `<div class="markdown-code-header">` +
-    `<span class="markdown-code-lang">${language}</span>` +
-    `<button type="button" class="markdown-code-copy" data-copy-code="1" aria-label="Copy code">` +
-    `${copySvgHtml(14)}</button></div>` +
-    `<pre><code class="hljs language-${language}">${code}</code></pre></div>`
-  );
-}
-
-const StreamingMarkdownBlockView = memo(function StreamingMarkdownBlockView({
-  block,
-}: {
-  block: StreamingMarkdownBlock;
-}) {
-  const html = useMemo(() => {
-    if (block.mode === "code") return renderStreamingCodeToHtml(block);
-    try {
-      return renderMarkdownToSafeHtml(block.source);
-    } catch {
-      return DOMPurify.sanitize(block.source);
-    }
-  }, [block]);
-
-  return (
-    <div
-      data-markdown-stream-block={block.mode}
-      style={{ display: "contents" }}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  );
-}, (previous, next) => (
-  previous.block.raw === next.block.raw
-  && previous.block.mode === next.block.mode
-  && previous.block.language === next.block.language
-));
-
-/** 流式期间直接呈现稳定 Markdown 块，避免结束时从纯文本切换造成布局闪动。 */
+/** Streamdown 负责不完整 Markdown 的安全解析、分块及增量渲染。 */
 export function StreamingMarkdownRenderer({ content, onOpenWorkspacePath }: MarkdownRendererProps) {
-  const projectionRef = useRef<StreamingMarkdownProjection | undefined>(undefined);
-  const blocks = useMemo(() => {
-    const projection = updateStreamingMarkdownProjection(content, projectionRef.current);
-    projectionRef.current = projection;
-    return projection.blocks;
-  }, [content]);
   const handleClick = useMarkdownClickHandler(onOpenWorkspacePath);
   return (
     <div className="markdown-body markdown-body--streaming" onClick={handleClick}>
-      {blocks.map((block, index) => (
-        <StreamingMarkdownBlockView key={index} block={block} />
-      ))}
+      <Streamdown
+        mode="streaming"
+        isAnimating
+        animated={false}
+        plugins={{ math: streamdownMath }}
+        // 由桌面端统一处理链接打开策略，避免流式正文弹出网页安全确认框。
+        linkSafety={{ enabled: false }}
+      >
+        {normalizeMarkdownMath(content)}
+      </Streamdown>
     </div>
   );
 }

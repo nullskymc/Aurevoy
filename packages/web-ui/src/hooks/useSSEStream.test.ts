@@ -6,22 +6,16 @@ import type { AgentEvent } from "@aurevoy/shared";
 
 vi.mock("../api", () => ({ getBaseUrl: () => "http://127.0.0.1:8787" }));
 
+const { fetchEventSourceMock } = vi.hoisted(() => ({
+  fetchEventSourceMock: vi.fn(),
+}));
+
+vi.mock("@microsoft/fetch-event-source", () => ({
+  EventStreamContentType: "text/event-stream",
+  fetchEventSource: fetchEventSourceMock,
+}));
+
 import { useSSEStream } from "./useSSEStream";
-
-class FakeEventSource {
-  static instances: FakeEventSource[] = [];
-  onmessage: ((event: MessageEvent) => void) | null = null;
-  onerror: (() => void) | null = null;
-  readonly close = vi.fn();
-
-  constructor(readonly url: string) {
-    FakeEventSource.instances.push(this);
-  }
-
-  emit(event: AgentEvent): void {
-    this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent);
-  }
-}
 
 let root: ReturnType<typeof createRoot> | undefined;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -29,7 +23,7 @@ let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => {
   if (root) act(() => root?.unmount());
   root = undefined;
-  FakeEventSource.instances = [];
+  fetchEventSourceMock.mockReset();
   document.body.innerHTML = "";
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -37,7 +31,7 @@ afterEach(() => {
 
 describe("useSSEStream immediate dispatch", () => {
   it("按到达顺序立即分发 token 和每一条工具进度，不经过 RAF 合并", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
+    fetchEventSourceMock.mockResolvedValue(undefined);
     const requestFrame = vi.spyOn(globalThis, "requestAnimationFrame");
     const received: AgentEvent[] = [];
     let openStream: ReturnType<typeof useSSEStream>["openStream"] | undefined;
@@ -55,12 +49,14 @@ describe("useSSEStream immediate dispatch", () => {
     act(() => root?.render(createElement(Harness)));
     act(() => openStream?.("task-1", (event) => received.push(event), () => {}));
 
-    const source = FakeEventSource.instances[0];
-    expect(source).toBeDefined();
-    source!.emit({ type: "token", taskId: "task-1", delta: "你" });
-    source!.emit({ type: "token", taskId: "task-1", delta: "好" });
-    source!.emit({ type: "tool_progress", taskId: "task-1", callId: "call-1", message: "10%", percent: 10 });
-    source!.emit({ type: "tool_progress", taskId: "task-1", callId: "call-1", message: "80%", percent: 80 });
+    expect(fetchEventSourceMock).toHaveBeenCalledOnce();
+    const [, options] = fetchEventSourceMock.mock.calls[0] ?? [];
+    expect(options.openWhenHidden).toBe(true);
+    expect(options.headers).toEqual({ Accept: "text/event-stream" });
+    options.onmessage({ data: JSON.stringify({ type: "token", taskId: "task-1", delta: "你" }) });
+    options.onmessage({ data: JSON.stringify({ type: "token", taskId: "task-1", delta: "好" }) });
+    options.onmessage({ data: JSON.stringify({ type: "tool_progress", taskId: "task-1", callId: "call-1", message: "10%", percent: 10 }) });
+    options.onmessage({ data: JSON.stringify({ type: "tool_progress", taskId: "task-1", callId: "call-1", message: "80%", percent: 80 }) });
 
     expect(received.map((event) => event.type)).toEqual(["token", "token", "tool_progress", "tool_progress"]);
     expect(received.slice(0, 2).map((event) => event.type === "token" ? event.delta : "")).toEqual(["你", "好"]);

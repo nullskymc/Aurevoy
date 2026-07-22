@@ -9,59 +9,25 @@ vi.mock("dompurify", () => ({
   },
 }));
 
+vi.mock("streamdown", () => ({
+  Streamdown: ({ children, mode, isAnimating }: { children: string; mode?: string; isAnimating?: boolean }) =>
+    createElement("div", { "data-streamdown-mode": mode, "data-is-animating": String(isAnimating) }, children),
+}));
+
 import {
   normalizeMarkdownMath,
-  projectStreamingMarkdown,
   renderMarkdownToSafeHtml,
   StreamingMarkdownRenderer,
-  updateStreamingMarkdownProjection,
 } from "./MarkdownRenderer";
 
 describe("StreamingMarkdownRenderer", () => {
-  it("流式阶段直接保持 Markdown 排版，不再先显示裸语法", () => {
+  it("委托 Streamdown 的 streaming 模式解析不完整 Markdown", () => {
     const html = renderToStaticMarkup(
       createElement(StreamingMarkdownRenderer, { content: "**正在生成**" }),
     );
-    expect(html).toContain("<strong>正在生成</strong>");
-    expect(html).not.toContain("**正在生成**");
-  });
-
-  it("冻结已完成块，只把最后一个未完成段落标记为 live", () => {
-    const blocks = projectStreamingMarkdown("# 标题\n\n第一段。\n\n**未完成");
-    expect(blocks.map((block) => block.mode)).toEqual(["stable", "stable", "live"]);
-    expect(blocks[0]?.source).toContain("# 标题");
-    expect(blocks[2]?.source).toContain("未完成");
-  });
-
-  it("未闭合代码围栏使用轻量 code 块，避免每帧执行语法高亮", () => {
-    const blocks = projectStreamingMarkdown("前文\n\n```ts\nconst value = 1");
-    expect(blocks.at(-1)).toMatchObject({
-      mode: "code",
-      language: "ts",
-      source: "const value = 1",
-    });
-  });
-
-  it("纯追加时保留稳定前缀对象，只重新投影尾块", () => {
-    const first = updateStreamingMarkdownProjection("# 标题\n\n第一段。\n\n第二");
-    const second = updateStreamingMarkdownProjection("# 标题\n\n第一段。\n\n第二段。", first);
-
-    expect(second.blocks[0]).toBe(first.blocks[0]);
-    expect(second.blocks[1]).toBe(first.blocks[1]);
-    expect(second.blocks.at(-1)?.source).toContain("第二段");
-  });
-
-  it("非追加修改与引用定义回退全量投影", () => {
-    const first = updateStreamingMarkdownProjection("旧标题\n\n[文档][ref]");
-    const replaced = updateStreamingMarkdownProjection("新标题\n\n正文", first);
-    const withReference = updateStreamingMarkdownProjection(
-      "旧标题\n\n[文档][ref]\n\n[ref]: https://example.com",
-      first,
-    );
-
-    expect(replaced.blocks[0]).not.toBe(first.blocks[0]);
-    expect(withReference.blocks).toHaveLength(1);
-    expect(withReference.blocks[0]?.mode).toBe("live");
+    expect(html).toContain('data-streamdown-mode="streaming"');
+    expect(html).toContain('data-is-animating="true"');
+    expect(html).toContain("**正在生成**");
   });
 });
 
