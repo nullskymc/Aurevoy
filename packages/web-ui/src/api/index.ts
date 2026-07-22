@@ -1,6 +1,5 @@
 import {
   AGENT_DEFAULT_BASE_URL,
-  type AgentEvent,
   type BranchTaskResponse,
   type ClarificationAnswerResponse,
   type CleanupDataResponse,
@@ -691,27 +690,4 @@ export async function approvePlan(
     body: JSON.stringify({ approved, reason }),
   });
   if (!res.ok) await throwApiError(res, "plan approval failed");
-}
-
-/**
- * 订阅某个任务的 SSE 事件流。
- * 返回一个 EventSource，调用方可在不需要时 close()。
- */
-export function streamTask(
-  taskId: string,
-  onEvent: (event: AgentEvent) => void,
-  onError?: (err: Event) => void,
-): EventSource {
-  const es = new EventSource(`${BASE_URL}/api/tasks/${taskId}/stream`);
-  es.onmessage = (e) => {
-    try {
-      onEvent(JSON.parse(e.data) as AgentEvent);
-    } catch {
-      // 忽略心跳/非 JSON 行
-    }
-  };
-  es.onerror = (e) => {
-    onError?.(e);
-  };
-  return es;
 }

@@ -54,7 +54,6 @@ export {
   updateProject,
   deleteProject,
   approvePlan,
-  streamTask,
 } from './api';
 
 // Hooks
