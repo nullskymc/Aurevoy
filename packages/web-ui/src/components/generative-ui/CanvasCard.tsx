@@ -103,12 +103,15 @@ function buildCanvasDocument(props: UiCanvasProps): string {
   const script = escapeInlineScript(props.script ?? "");
   const canvasCss = props.css ?? "";
   const theme = {
-    background: token("--color-bg-primary", "#ffffff"),
-    surface: token("--color-bg-secondary", "#f6f7f9"),
-    text: token("--color-text-primary", "#17191c"),
-    muted: token("--color-text-secondary", "#667085"),
-    border: token("--color-border", "#dfe3e8"),
-    accent: token("--color-accent", "#5b5bd6"),
+    background: token("--bg", "#f4f6f5"),
+    surface: token("--card-bg", "#ffffff"),
+    text: token("--text", "#171c1a"),
+    muted: token("--text-secondary", "#57615d"),
+    border: token("--border", "#d5ddd9"),
+    accent: token("--accent", "#3d7a6e"),
+    accentContrast: token("--accent-contrast", "#ffffff"),
+    accentSoftBackground: token("--accent-soft-bg", "#d8ebe5"),
+    accentSoftForeground: token("--accent-soft-fg", "#2d5f55"),
   };
 
   return `<!doctype html>
@@ -126,6 +129,9 @@ function buildCanvasDocument(props: UiCanvasProps): string {
       --av-muted: ${theme.muted};
       --av-border: ${theme.border};
       --av-accent: ${theme.accent};
+      --av-accent-contrast: ${theme.accentContrast};
+      --av-accent-soft-bg: ${theme.accentSoftBackground};
+      --av-accent-soft-fg: ${theme.accentSoftForeground};
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     * { box-sizing: border-box; }

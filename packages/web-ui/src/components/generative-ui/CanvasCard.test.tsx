@@ -26,6 +26,9 @@ describe("CanvasCard", () => {
     expect(html).toContain("default-src &#x27;none&#x27;");
     expect(html).toContain("数据探索器");
     expect(html).toContain("window.aurevoy");
+    expect(html).toContain("--av-bg: #f4f6f5");
+    expect(html).toContain("--av-accent: #3d7a6e");
+    expect(html).toContain("--av-accent-soft-bg: #d8ebe5");
   });
 
   it("shows fallback text when the canvas props are malformed", () => {
