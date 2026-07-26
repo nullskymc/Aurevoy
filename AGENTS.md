@@ -43,12 +43,12 @@ packages/shared  ← 跨进程类型唯一来源
 
 ## 硬性规则
 
-1. 跨进程数据结构只定义在 `packages/shared`；改完必 `npm run build:shared`。
+1. 跨进程数据结构只定义在 `packages/shared`；涉及 shared 改动的单个任务完成时必执行 `npm run build:shared`。
 2. 新工具放 `apps/agent/src/tool/tools/`，经 `framework/registry` 注册；不写进 Agent loop。
 3. 新 Provider 扩展 Pi 映射，不恢复第二套 ReAct 后端。
 4. 后端不绑 macOS 路径/命令；前端不假设非 Tauri 环境。
 5. 外部能力缺失时明确失败/降级，不假成功。
-6. 改动后至少 `npm run typecheck`；行为/安全/存储改动补回归或可复现轨迹。
+6. 单个任务完成时至少 `npm run typecheck`；行为/安全/存储改动补回归或可复现轨迹。完整回归测试仅在准备提交时统一执行。
 7. 密钥只走环境变量 / 设置存储，禁止提交。
 8. 新能力同步考虑：日志、审批、权限、失败恢复、用户可解释性。
 

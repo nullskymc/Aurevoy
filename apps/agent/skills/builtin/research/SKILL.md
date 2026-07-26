@@ -2,7 +2,6 @@
 name: research
 description: 调研与报告。快速报告（检索后直接写）或深度报告（outline→并行深挖→合成）。默认 Markdown；用户要单页/组件版式时用 HTML。用于调研、简报、评估、计划、纪要。
 user-invocable: true
-allowed-tools: web_search web_fetch read write edit grep glob list_directory bash delegate ask_user attach_content bundle_report create_artifact apply_artifact get_current_time
 metadata:
   version: "2.0"
 ---

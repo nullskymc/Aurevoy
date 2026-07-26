@@ -55,13 +55,13 @@ scripts/               回归
 
 ## 扩展速查
 
-**新工具：** `tool/tools/<name>/` 定义 Schema → registry → 必要时 shared 事件/描述 → 回归。  
+**新工具：** `tool/tools/<name>/` 定义 Schema → registry → 必要时 shared 事件/描述；相关回归在准备提交时执行。
 
 **新 Provider：** 扩展 `llm/pi-provider` 映射与设置槽位（不新增产品向 env）。  
 
-**改契约：** 改 shared → `npm run build:shared` → 修 agent/web-ui 编译。  
+**改契约：** 改 shared；在涉及 shared 改动的单个任务完成时执行 `npm run build:shared`，再修 agent/web-ui 编译。
 
-**回归：** 行为相关改动优先补 `scripts/m*-regression.mjs` 或现有 vitest。
+**回归：** 行为相关改动优先补 `scripts/m*-regression.mjs` 或现有 vitest；仅在准备提交时执行相关回归。
 
 ## 提交前
 
