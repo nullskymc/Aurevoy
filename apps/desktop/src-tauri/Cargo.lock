@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "base64 0.22.1",
  "mime_guess",

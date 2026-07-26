@@ -960,22 +960,25 @@ function withPiCompatibilityAliases(tools: AgentTool[]): AgentTool[] {
       description: `${webFetch.description}\nCompatibility alias for web_fetch.`,
     });
   }
-  if (tools.some((tool) => tool.name === 'open_file') && !tools.some((tool) => tool.name === 'read_file')) {
-    const openFile = tools.find((tool) => tool.name === 'open_file')!;
-    result.push({
-      ...openFile,
-      name: 'read_file',
-      label: 'read_file',
-      description: `${openFile.description}\nCompatibility alias for open_file.`,
-    });
+  const read = tools.find((tool) => tool.name === 'read');
+  if (read) {
+    for (const alias of ['open_file', 'read_file']) {
+      if (tools.some((tool) => tool.name === alias)) continue;
+      result.push({
+        ...read,
+        name: alias,
+        label: alias,
+        description: `${read.description}\nCompatibility alias for read.`,
+      });
+    }
   }
-  if (tools.some((tool) => tool.name === 'search_grep') && !tools.some((tool) => tool.name === 'search_files')) {
-    const searchGrep = tools.find((tool) => tool.name === 'search_grep')!;
+  const grep = tools.find((tool) => tool.name === 'grep');
+  if (grep && !tools.some((tool) => tool.name === 'search_files')) {
     result.push({
-      ...searchGrep,
+      ...grep,
       name: 'search_files',
       label: 'search_files',
-      description: `${searchGrep.description}\nCompatibility alias for search_grep.`,
+      description: `${grep.description}\nCompatibility alias for grep.`,
       parameters: Type.Object({
         query: Type.String({ description: '要搜索的关键词或 grep 正则表达式' }),
         glob: Type.Optional(Type.String({ description: '文件名 glob 过滤，例如 **/*.md' })),
@@ -989,8 +992,8 @@ function withPiCompatibilityAliases(tools: AgentTool[]): AgentTool[] {
 
 function executionToolNameForPiTool(toolName: string): string {
   if (toolName === 'http_fetch') return 'web_fetch';
-  if (toolName === 'read_file') return 'open_file';
-  if (toolName === 'search_files') return 'search_grep';
+  if (toolName === 'open_file' || toolName === 'read_file') return 'read';
+  if (toolName === 'search_files') return 'grep';
   return toolName;
 }
 
@@ -1001,8 +1004,13 @@ function inputSchemaForPiTool(toolName: string, schema: unknown): unknown {
 
 function paramsForPiTool(toolName: string, params: unknown): unknown {
   if (toolName !== 'search_files' || !isRecord(params)) return params;
-  const { query, ...rest } = params;
-  return { ...rest, pattern: query };
+  const { query, glob, maxResults, ...rest } = params;
+  return {
+    ...rest,
+    pattern: query,
+    ...(typeof glob === 'string' ? { include: glob } : {}),
+    ...(typeof maxResults === 'number' ? { limit: maxResults } : {}),
+  };
 }
 
 async function executeCreateArtifactTool(
