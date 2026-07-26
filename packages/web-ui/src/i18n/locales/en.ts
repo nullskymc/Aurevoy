@@ -18,6 +18,7 @@ export const en = {
   "phase.waiting_approval": "Awaiting Approval",
   "phase.waiting_clarification": "Awaiting Clarification",
   "phase.waiting_budget": "Budget exhausted — resume to continue",
+  "phase.waiting_completion": "Completion not confirmed — resume to continue",
   "phase.finalizing": "Finalizing",
   "phase.failed": "Failed",
   "phase.cancelled": "Cancelled",

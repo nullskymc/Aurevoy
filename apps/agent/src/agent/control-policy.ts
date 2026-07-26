@@ -9,6 +9,59 @@ import type { BudgetExceededInfo, PlanStep, Task } from '@aurevoy/shared';
 
 /** OpenCode-style max-steps instruction body (tools must stay disabled). */
 export const MAX_STEPS_CRITICAL_HEADER = 'CRITICAL - MAXIMUM STEPS REACHED';
+export const COMPLETION_GATE_COMPLETE_MARKER = '<!-- aurevoy:completion=complete -->';
+export const COMPLETION_GATE_NEEDS_ATTENTION_MARKER = '<!-- aurevoy:completion=needs_attention -->';
+
+export type CompletionGateVerdict = 'complete' | 'needs_attention';
+
+/**
+ * Cache-friendly completion audit.
+ *
+ * This is deliberately a short follow-up instead of a rebuilt system prompt:
+ * the provider can reuse the complete cached conversation prefix and only pay
+ * for this small suffix plus the audit output.
+ */
+export function buildCompletionGatePrompt(): string {
+  return [
+    '<completion_gate>',
+    'Audit the original user goal against the work and verified evidence in this conversation.',
+    'Do not summarize the conversation and do not mention this audit.',
+    '',
+    'Choose exactly one path:',
+    `1. COMPLETE: if the full goal is satisfied and verified, reply with only ${COMPLETION_GATE_COMPLETE_MARKER}`,
+    '2. CONTINUE: if useful work remains and you are not blocked, continue now with the necessary tools. Do not stop at a promise about what you will do next.',
+    `3. NEEDS ATTENTION: if blocked or unable to verify completion, explain the concrete blocker and remaining work, then append ${COMPLETION_GATE_NEEDS_ATTENTION_MARKER}`,
+    '',
+    'Never claim completion merely because a tool call succeeded or an intermediate answer was produced.',
+    '</completion_gate>',
+  ].join('\n');
+}
+
+/** Only substantive Agent runs pay for an audit; simple text answers and Plan mode stay one-turn. */
+export function shouldStartCompletionGate(args: {
+  executionMode?: Task['executionMode'];
+  toolCallsThisRun: number;
+  currentTurnHadToolCall: boolean;
+  alreadyRequested: boolean;
+}): boolean {
+  if (args.executionMode === 'plan') return false;
+  if (args.alreadyRequested || args.currentTurnHadToolCall) return false;
+  return args.toolCallsThisRun > 0;
+}
+
+export function extractCompletionGateVerdict(content: string): CompletionGateVerdict | null {
+  if (content.includes(COMPLETION_GATE_COMPLETE_MARKER)) return 'complete';
+  if (content.includes(COMPLETION_GATE_NEEDS_ATTENTION_MARKER)) return 'needs_attention';
+  return null;
+}
+
+/** Internal verdict markers are protocol metadata and must not remain in persisted/user-visible text. */
+export function stripCompletionGateMarker(content: string): string {
+  return content
+    .replaceAll(COMPLETION_GATE_COMPLETE_MARKER, '')
+    .replaceAll(COMPLETION_GATE_NEEDS_ATTENTION_MARKER, '')
+    .trim();
+}
 
 /**
  * Build the follow-up instruction injected when a run hits its step/iteration limit.

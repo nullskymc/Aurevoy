@@ -237,8 +237,18 @@ async function startLlmFixture() {
       return;
     }
     const body = JSON.parse(await readRequestBody(req));
-    const userText = messageText(body.messages.find((message) => message.role === 'user')?.content);
+    const userMessages = body.messages.filter((message) => message.role === 'user');
+    const userText = messageText(userMessages[0]?.content);
+    const latestUserText = messageText(userMessages.at(-1)?.content);
     const toolMessages = body.messages.filter((message) => message.role === 'tool');
+    // 新完成门禁是追加 user follow-up；fixture 明确模拟“原目标已验收完成”。
+    if (latestUserText.includes('<completion_gate>')) {
+      return sendFinal(
+        res,
+        '<!-- aurevoy:completion=complete -->',
+        { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+      );
+    }
     if (userText.includes('M7_PLAN') || userText.includes('M7_RESUME')) {
       if (toolMessages.length === 0) return sendToolCall(res, multiStepPlanCall());
       if (userText.includes('M7_PLAN') && toolMessages.length === 1) {

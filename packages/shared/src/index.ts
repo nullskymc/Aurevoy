@@ -29,6 +29,8 @@ export type TaskPhase =
   | 'waiting_clarification'
   /** 本轮或任务寿命预算触顶，等待用户续跑 / 扩容。 */
   | 'waiting_budget'
+  /** Agent 已停止，但完成门禁未确认原始目标已经满足；允许用户续跑。 */
+  | 'waiting_completion'
   | 'finalizing'
   | 'failed'
   | 'cancelled';
@@ -47,6 +49,8 @@ export interface MessageToolCall {
   function: {
     /** 该工具调用关联的计划步骤 ID；前端 timeline 按此分组 */
     planStepId?: string;
+    /** 后端生成的人类可读调用摘要；前端优先展示，避免按参数结构猜测 */
+    summary?: string;
     name: string;
     /** 入参，原始 JSON 字符串（累积完成后再 JSON.parse） */
     arguments: string;
@@ -665,6 +669,8 @@ export interface ToolCall {
   id: string;
   toolName: string;
   args: Record<string, unknown>;
+  /** 后端生成的人类可读调用摘要，不包含密钥、正文等敏感或大字段 */
+  summary?: string;
   /** 该工具调用关联的计划步骤 ID；前端按 group 重新渲染 timeline */
   planStepId?: string;
 }

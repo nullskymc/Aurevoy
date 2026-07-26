@@ -18,6 +18,7 @@ export const zh = {
   "phase.waiting_approval": "等待确认",
   "phase.waiting_clarification": "等待补充信息",
   "phase.waiting_budget": "预算已用尽，可继续执行",
+  "phase.waiting_completion": "尚未确认完成，可继续执行",
   "phase.finalizing": "整理结果",
   "phase.failed": "失败",
   "phase.cancelled": "已取消",

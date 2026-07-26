@@ -203,6 +203,7 @@ export function useAgentEventHandler({
         liveActivityRef.current.upsert(event.call.id, {
           name: event.call.toolName,
           args: event.call.args,
+          summary: event.call.summary,
           status: "running",
           planStepId: event.call.planStepId,
         });
@@ -228,6 +229,7 @@ export function useAgentEventHandler({
         liveActivityRef.current.upsert(event.call.id, {
           name: event.call.toolName,
           args: event.call.args,
+          summary: event.call.summary,
           status: "awaiting",
           riskLevel: event.riskLevel,
           planStepId: event.call.planStepId,
@@ -400,7 +402,9 @@ export function useAgentEventHandler({
             : event.status === "failed"
               ? "failed"
               : event.status === "paused"
-                ? "waiting_budget"
+                ? previousPhaseRef.current === "waiting_completion"
+                  ? "waiting_completion"
+                  : "waiting_budget"
                 : "finalizing";
         setPhase(donePhase);
         if (event.status !== "paused") setPhaseDetail("");
@@ -478,6 +482,7 @@ export function useAgentEventHandler({
         id: pa.call.id,
         name: pa.call.toolName,
         args: pa.call.args,
+        summary: pa.call.summary,
         status: "awaiting" as const,
         riskLevel: pa.riskLevel,
         planStepId: pa.call.planStepId,

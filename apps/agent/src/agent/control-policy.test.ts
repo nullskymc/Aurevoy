@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { BudgetExceededInfo, PlanStep, Task } from '@aurevoy/shared';
 import {
+  COMPLETION_GATE_COMPLETE_MARKER,
+  COMPLETION_GATE_NEEDS_ATTENTION_MARKER,
   MAX_STEPS_CRITICAL_HEADER,
   applyQuestionFirstSteering,
+  buildCompletionGatePrompt,
   buildMaxStepsPrompt,
   buildMaxStepsWrapUpMessage,
   buildResumeProgressInjection,
   decideMaxStepsAfterTurn,
+  extractCompletionGateVerdict,
   isQuestionOrStatusAsk,
   maxStepsToolsDisabledReason,
+  shouldStartCompletionGate,
+  stripCompletionGateMarker,
 } from './control-policy.js';
 import {
   createInitialPlanSteps,
@@ -164,6 +170,55 @@ describe('control-policy question-first', () => {
 
     const plain = applyQuestionFirstSteering('请继续完成当前任务');
     expect(plain).toBe('请继续完成当前任务');
+  });
+});
+
+describe('control-policy completion gate', () => {
+  it('only audits substantive Agent runs after a text-only candidate final turn', () => {
+    expect(shouldStartCompletionGate({
+      executionMode: 'auto',
+      toolCallsThisRun: 2,
+      currentTurnHadToolCall: false,
+      alreadyRequested: false,
+    })).toBe(true);
+    expect(shouldStartCompletionGate({
+      executionMode: 'plan',
+      toolCallsThisRun: 2,
+      currentTurnHadToolCall: false,
+      alreadyRequested: false,
+    })).toBe(false);
+    expect(shouldStartCompletionGate({
+      executionMode: 'auto',
+      toolCallsThisRun: 0,
+      currentTurnHadToolCall: false,
+      alreadyRequested: false,
+    })).toBe(false);
+    expect(shouldStartCompletionGate({
+      executionMode: 'auto',
+      toolCallsThisRun: 2,
+      currentTurnHadToolCall: true,
+      alreadyRequested: false,
+    })).toBe(false);
+    expect(shouldStartCompletionGate({
+      executionMode: 'auto',
+      toolCallsThisRun: 2,
+      currentTurnHadToolCall: false,
+      alreadyRequested: true,
+    })).toBe(false);
+  });
+
+  it('uses a short follow-up and strips internal verdict markers', () => {
+    const prompt = buildCompletionGatePrompt();
+    expect(prompt).toContain('CONTINUE');
+    expect(prompt).toContain(COMPLETION_GATE_COMPLETE_MARKER);
+    expect(prompt).toContain(COMPLETION_GATE_NEEDS_ATTENTION_MARKER);
+    expect(prompt.length).toBeLessThan(1_200);
+
+    expect(extractCompletionGateVerdict(COMPLETION_GATE_COMPLETE_MARKER)).toBe('complete');
+    expect(extractCompletionGateVerdict(`blocked\n${COMPLETION_GATE_NEEDS_ATTENTION_MARKER}`))
+      .toBe('needs_attention');
+    expect(extractCompletionGateVerdict('continue working')).toBeNull();
+    expect(stripCompletionGateMarker(`blocked\n${COMPLETION_GATE_NEEDS_ATTENTION_MARKER}`)).toBe('blocked');
   });
 });
 

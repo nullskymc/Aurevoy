@@ -18,6 +18,7 @@ export const ja = {
   "phase.waiting_approval": "承認待ち",
   "phase.waiting_clarification": "追加情報待ち",
   "phase.waiting_budget": "予算上限に到達 — 再開して続行",
+  "phase.waiting_completion": "完了未確認 — 再開して続行",
   "phase.finalizing": "結果整理中",
   "phase.failed": "失敗",
   "phase.cancelled": "キャンセル済み",

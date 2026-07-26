@@ -67,6 +67,8 @@ export interface ToolActivity {
   id: string;
   name: string;
   args: unknown;
+  /** 后端生成的状态无关动作摘要，例如“调用 zotero · search items · 关键词” */
+  summary?: string;
   status: "awaiting" | "running" | "ok" | "error";
   riskLevel?: ToolRiskLevel;
   planStepId?: string;
@@ -203,6 +205,7 @@ function toolActivitiesFromAssistant(
       id: tc.id,
       name: tc.function.name,
       args,
+      summary: tc.function.summary,
       status: result ? (result.ok ? "ok" : "error") : "running",
       planStepId: tc.function.planStepId,
       output: result?.output,
@@ -226,6 +229,7 @@ function collectApprovalItems(
       id: approval.call.id,
       name: approval.call.toolName,
       args: approval.call.args,
+      summary: approval.call.summary,
       status: "awaiting",
       riskLevel: approval.riskLevel,
       planStepId: approval.call.planStepId,

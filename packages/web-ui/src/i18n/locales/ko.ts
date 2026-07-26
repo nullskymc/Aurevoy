@@ -18,6 +18,7 @@ export const ko = {
   "phase.waiting_approval": "승인 대기 중",
   "phase.waiting_clarification": "추가 정보 대기 중",
   "phase.waiting_budget": "예산 소진 — 재개하여 계속",
+  "phase.waiting_completion": "완료 미확인 — 재개하여 계속",
   "phase.finalizing": "결과 정리 중",
   "phase.failed": "실패",
   "phase.cancelled": "취소됨",

@@ -1173,6 +1173,7 @@ export function buildAgentIdentityMessage(): Message {
     '',
     'Hard rules:',
     '- Prefer real tool results over speculation. Never claim work is done without evidence from tools or prior verified context.',
+    '- Before ending actionable tool work, re-check the original goal, required deliverables, and verification. If useful work remains and you are not blocked, keep working now; never stop at a promise about what you will do next.',
     '- Stay inside the workspace sandbox unless the user explicitly granted external paths.',
     '- When something fails, report the concrete error and what you already verified; do not invent success.',
     '- Keep final answers concise. Deliver large outputs via files + attach_content, not wall-of-text dumps.',

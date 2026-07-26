@@ -1133,7 +1133,8 @@ export async function buildServer(externalLogger?: Logger) {
     // 终态，或预算触顶暂停（本 run 已结束，前端应解除 busy）
     if (
       ['completed', 'failed', 'cancelled'].includes(task.status) ||
-      (task.status === 'paused' && task.phase === 'waiting_budget')
+      (task.status === 'paused' &&
+        (task.phase === 'waiting_budget' || task.phase === 'waiting_completion'))
     ) {
       replayingSnapshot = false;
       sendSnapshot({ type: 'done', taskId: task.id, status: task.status });

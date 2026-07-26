@@ -71,6 +71,7 @@ import {
   TOOLS_KEEP_VERBATIM,
   compactToolResult,
 } from './context.js';
+import { buildToolCallSummary } from './tool-call-summary.js';
 import {
   beginRunBudget,
   createArtifact,
@@ -96,11 +97,16 @@ import {
   failOpenPlanSteps,
 } from './plan-progress.js';
 import {
+  buildCompletionGatePrompt,
   buildMaxStepsPrompt,
   buildMaxStepsWrapUpMessage,
   buildResumeProgressInjection,
   decideMaxStepsAfterTurn,
+  extractCompletionGateVerdict,
   maxStepsToolsDisabledReason,
+  shouldStartCompletionGate,
+  stripCompletionGateMarker,
+  type CompletionGateVerdict,
 } from './control-policy.js';
 import { assertPiLLMConfigured, createPiModel, resolveModelApi, resolveModelBaseUrl } from '../llm/pi-provider.js';
 import { approvalConfigFromTask, decideToolPermission } from './approval.js';
@@ -138,6 +144,12 @@ const budgetStopByTask = new Map<string, BudgetExceededInfo>();
  */
 const maxStepsWrapUpPending = new Set<string>();
 const maxStepsWrapUpDone = new Set<string>();
+/** 本 run 已追加过一次完成审计；禁止递归验收。 */
+const completionGateRequested = new Set<string>();
+/** 当前 provider turn 是否实际执行过工具，用于识别候选终稿。 */
+const completionGateTurnHadToolCall = new Set<string>();
+/** 从内部完成标记解析出的审计结论；结束 run 前消费。 */
+const completionGateVerdictByTask = new Map<string, CompletionGateVerdict>();
 /** 本 run 开始时已累计的寿命墙钟，用于叠加上本 run 墙钟。 */
 const lifetimeWallAtRunStartByTask = new Map<string, number>();
 const invalidPiToolCallErrors = new Map<string, Map<string, string>>();
@@ -246,6 +258,9 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
   budgetStopByTask.delete(task.id);
   maxStepsWrapUpPending.delete(task.id);
   maxStepsWrapUpDone.delete(task.id);
+  completionGateRequested.delete(task.id);
+  completionGateTurnHadToolCall.delete(task.id);
+  completionGateVerdictByTask.delete(task.id);
   setTaskState(task, 'running', 'initializing');
   updateContextSnapshot(task);
   saveTask(task);
@@ -266,6 +281,8 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
     activePiControllers.set(task.id, controller);
     const onAbort = () => controller.abort();
     options.signal.addEventListener('abort', onAbort, { once: true });
+    let completionGateWasRequested = false;
+    let completionGateVerdict: CompletionGateVerdict | undefined;
     try {
       if (options.signal.aborted) throw new Error('cancelled');
       const promptInput = await buildHarnessRunInput(task, selectedModel);
@@ -282,6 +299,11 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
       lastPrepPhaseDetailByTask.delete(task.id);
       maxStepsWrapUpPending.delete(task.id);
       maxStepsWrapUpDone.delete(task.id);
+      completionGateWasRequested = completionGateRequested.has(task.id);
+      completionGateVerdict = completionGateVerdictByTask.get(task.id);
+      completionGateRequested.delete(task.id);
+      completionGateTurnHadToolCall.delete(task.id);
+      completionGateVerdictByTask.delete(task.id);
       const wallStart = lifetimeWallAtRunStartByTask.get(task.id) ?? 0;
       finalizeRunWallTime(task, wallStart, options.taskStartedAtMs);
       lifetimeWallAtRunStartByTask.delete(task.id);
@@ -295,6 +317,10 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
     if (budgetStop) {
       budgetStopByTask.delete(task.id);
       finishBudgetPaused(task, budgetStop);
+      return;
+    }
+    if (completionGateWasRequested && completionGateVerdict !== 'complete') {
+      finishCompletionPaused(task, completionGateVerdict ?? null);
       return;
     }
     finishCompleted(task);
@@ -614,6 +640,32 @@ function shouldStopAfterTurn(
   });
 
   if (decision.action === 'continue') {
+    const shouldAudit = shouldStartCompletionGate({
+      executionMode: task.executionMode,
+      toolCallsThisRun: task.budgetUsage?.toolCalls ?? 0,
+      currentTurnHadToolCall: completionGateTurnHadToolCall.has(task.id),
+      alreadyRequested: completionGateRequested.has(task.id),
+    });
+    if (shouldAudit) {
+      completionGateRequested.add(task.id);
+      const auditMessage: Message = {
+        id: randomUUID(),
+        role: 'user',
+        content: buildCompletionGatePrompt(),
+        createdAt: new Date().toISOString(),
+        delivery: 'follow_up',
+      };
+      writePiTrace(task, 'phase', {
+        ok: true,
+        phase: task.phase,
+        summary: '候选终稿进入一次性完成门禁',
+        data: {
+          cacheStrategy: 'stable_system_prefix_plus_short_follow_up',
+          toolCallsThisRun: task.budgetUsage?.toolCalls ?? 0,
+        },
+      });
+      controller.enqueueFollowUp(auditMessage);
+    }
     return false;
   }
 
@@ -1294,6 +1346,7 @@ async function handlePiEvent(
       });
       break;
     case 'turn_start':
+      completionGateTurnHadToolCall.delete(task.id);
       setTaskState(task, 'running', 'thinking');
       updateContextSnapshot(task);
       saveRuntimeState(task);
@@ -1310,6 +1363,7 @@ async function handlePiEvent(
       appendPiMessage(task, event.message);
       break;
     case 'tool_execution_start':
+      completionGateTurnHadToolCall.add(task.id);
       setTaskState(task, 'running', 'calling_tool');
       recordToolCall(task);
       saveRuntimeState(task);
@@ -1598,15 +1652,26 @@ function writePiTrace(
 function appendPiMessage(task: Task, message: AgentMessage): void {
   if (message.role !== 'assistant') return;
   const mapped = assistantMessageToAurevoy(task, message);
-  task.messages.push(mapped);
+  const completionVerdict = extractCompletionGateVerdict(mapped.content);
+  if (completionVerdict) {
+    completionGateVerdictByTask.set(task.id, completionVerdict);
+    mapped.content = stripCompletionGateMarker(mapped.content);
+  }
   task.tokenUsage = aggregatePiUsage(task.tokenUsage, message.usage, message.provider, message.model);
   const hasToolCalls = (mapped.toolCalls?.length ?? 0) > 0;
+  // COMPLETE 审计通常只返回内部标记；剥离后不制造一条空白助手消息。
+  const shouldPersistMessage = mapped.content.length > 0 || hasToolCalls || !!mapped.failure;
+  if (shouldPersistMessage) {
+    task.messages.push(mapped);
+  }
   // 无工具的助手回复视为终稿推进：跳过未完成中间步，进入 deliver
   if (task.executionMode !== 'plan' && !hasToolCalls && !mapped.failure) {
     advancePlanAfterFinalAnswer(task);
   }
   taskStore.saveMessages(task);
-  publish({ type: 'message', taskId: task.id, message: mapped });
+  if (shouldPersistMessage) {
+    publish({ type: 'message', taskId: task.id, message: mapped });
+  }
   publish({ type: 'token_usage', taskId: task.id, usage: task.tokenUsage });
 
   writePiTrace(task, 'llm', {
@@ -1615,8 +1680,14 @@ function appendPiMessage(task: Task, message: AgentMessage): void {
     tokenUsage: task.tokenUsage,
     summary: hasToolCalls
       ? `LLM 请求 ${mapped.toolCalls!.length} 个工具`
-      : `LLM 生成 ${mapped.content.length} 字符回复`,
-    data: { contentLength: mapped.content.length, toolCallCount: mapped.toolCalls?.length ?? 0 },
+      : completionVerdict === 'complete' && mapped.content.length === 0
+        ? '完成门禁确认原始目标已满足'
+        : `LLM 生成 ${mapped.content.length} 字符回复`,
+    data: {
+      contentLength: mapped.content.length,
+      toolCallCount: mapped.toolCalls?.length ?? 0,
+      completionVerdict,
+    },
   });
 }
 
@@ -1790,6 +1861,7 @@ function assistantMessageToAurevoy(task: Task, message: PiAssistantMessage): Mes
         name: block.name,
         arguments: JSON.stringify(block.arguments ?? {}),
         planStepId: planStepIdForToolCall(task, block.id),
+        summary: buildToolCallSummary(block.name, block.arguments),
       },
     }));
   return {
@@ -1866,6 +1938,7 @@ function toAurevoyToolCall(task: Task, id: string, toolName: string, args: unkno
     id,
     toolName,
     args: isRecord(args) ? args : {},
+    summary: buildToolCallSummary(toolName, args),
     planStepId: currentPlanStepId(task),
   };
 }
@@ -2062,6 +2135,48 @@ function finishCompleted(task: Task): void {
   publish({ type: 'phase', taskId: task.id, phase: 'finalizing', detail: '任务完成' });
   publish({ type: 'done', taskId: task.id, status: 'completed' });
   writePiTrace(task, 'done', { ok: true, summary: '任务完成' });
+}
+
+/**
+ * 模型在一次性完成审计后仍未确认目标满足。
+ * 保留 paused + 可续跑语义，避免把 provider 停止错误翻译成产品级 completed。
+ */
+function finishCompletionPaused(
+  task: Task,
+  verdict: CompletionGateVerdict | null,
+): void {
+  task.budgetExceeded = undefined;
+  if (verdict === null) {
+    const message: Message = {
+      id: randomUUID(),
+      role: 'assistant',
+      content: 'Agent 已停止，但完成门禁没有确认原始目标已经满足。任务保持为可继续执行状态。',
+      createdAt: new Date().toISOString(),
+    };
+    task.messages.push(message);
+    publish({ type: 'message', taskId: task.id, message });
+  }
+  setTaskState(task, 'paused', 'waiting_completion');
+  saveTask(task);
+  publishBudgetUsage(task);
+  publish({ type: 'status', taskId: task.id, status: 'paused' });
+  publish({
+    type: 'phase',
+    taskId: task.id,
+    phase: 'waiting_completion',
+    detail: verdict === 'needs_attention'
+      ? '原始目标尚未完成，需要处理阻塞项'
+      : '完成门禁未获得明确结论，可继续执行',
+  });
+  publish({ type: 'done', taskId: task.id, status: 'paused' });
+  writePiTrace(task, 'done', {
+    ok: false,
+    phase: 'waiting_completion',
+    summary: verdict === 'needs_attention'
+      ? '完成门禁判定需要用户处理'
+      : '完成门禁缺少明确结论',
+    data: { completionVerdict: verdict },
+  });
 }
 
 /**

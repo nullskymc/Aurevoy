@@ -530,8 +530,10 @@ function App() {
     currentTask.status !== "completed" &&
     currentTask.status !== "running" &&
     currentTask.status !== "planning" &&
-    // 普通 paused（审批/追问）由对应 UI 处理；预算触顶 paused 可 resume 续跑
-    (currentTask.status !== "paused" || currentTask.phase === "waiting_budget");
+    // 审批/追问由对应 UI 处理；预算触顶或完成门禁未通过时可直接续跑
+    (currentTask.status !== "paused" ||
+      currentTask.phase === "waiting_budget" ||
+      currentTask.phase === "waiting_completion");
 
   const hasLiveTail =
     busy ||
