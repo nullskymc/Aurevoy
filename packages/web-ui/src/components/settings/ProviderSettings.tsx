@@ -1,4 +1,5 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { useState, type MouseEvent } from "react";
 import type { RuntimeSettings } from "@aurevoy/shared";
 import { t } from "../../i18n";
 import { isPopularProvider, ProviderIcon, providerLabel } from "../providerIcons";
@@ -32,15 +33,6 @@ export function ProviderSettings({
 }) {
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [showApiKeyAlt, setShowApiKeyAlt] = useState(false);
-
-  useEffect(() => {
-    if (!connectionOpen) return;
-    function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") setConnectionOpen(false);
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [connectionOpen]);
 
   // 编辑中的 draft.provider 可能与当前激活不同
   const editingSlot = settings?.llm.providers?.find((slot) => slot.provider === draft.provider);
@@ -287,19 +279,13 @@ export function ProviderSettings({
       </SettingsChoiceGroup>
     )}
 
-    {connectionOpen && (
-      <div
-        className="settings-modal-backdrop"
-        role="presentation"
-        onClick={closeConnection}
-      >
-        <div
+    <Dialog.Root open={connectionOpen} onOpenChange={(nextOpen) => !nextOpen && closeConnection()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="settings-modal-backdrop" />
+        <Dialog.Content
           className="settings-modal"
-          role="dialog"
-          aria-modal="true"
           aria-labelledby="settings-connection-dialog-title"
           data-auth={oauthOnly ? "oauth" : hybridAuth ? "hybrid" : "apikey"}
-          onClick={(event) => event.stopPropagation()}
         >
           <header className="settings-modal-head">
             <div className="settings-modal-title-row">
@@ -317,14 +303,9 @@ export function ProviderSettings({
                 </p>
               </div>
             </div>
-            <button
-              type="button"
-              className="settings-modal-close"
-              onClick={closeConnection}
-              aria-label={t("action.close")}
-            >
-              ×
-            </button>
+            <Dialog.Close asChild>
+              <button type="button" className="settings-modal-close" aria-label={t("action.close")}>×</button>
+            </Dialog.Close>
           </header>
 
           <div className="settings-modal-body">
@@ -447,9 +428,9 @@ export function ProviderSettings({
               </button>
             )}
           </footer>
-        </div>
-      </div>
-    )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
     </>
   );
 }

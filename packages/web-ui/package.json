@@ -1,6 +1,6 @@
 {
   "name": "@aurevoy/web-ui",
-  "version": "0.6.9",
+  "version": "0.6.10",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -29,6 +29,10 @@
     "@aurevoy/shared": "*",
     "@lobehub/icons-static-svg": "^1.91.0",
     "@microsoft/fetch-event-source": "^2.0.1",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-tabs": "^1.1.12",
+    "@radix-ui/react-toast": "^1.2.15",
     "@streamdown/math": "^1.0.2",
     "@tanstack/react-virtual": "^3.14.7",
     "dompurify": "3.4.8",

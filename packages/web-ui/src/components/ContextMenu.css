@@ -13,19 +13,38 @@
   border-radius: var(--ui-radius-lg);
   background: var(--card-bg);
   box-shadow: var(--ui-shadow-popover);
-  opacity: 0;
   transform: scale(0.96);
   transform-origin: top left;
-  transition: opacity 120ms ease, transform 120ms ease;
-  visibility: hidden;
+  animation: ctx-menu-in 120ms ease-out;
   /* Prevent the menu itself from receiving the contextmenu event */
   overscroll-behavior: contain;
 }
 
-.ctx-menu[data-open="true"] {
-  opacity: 1;
-  transform: scale(1);
-  visibility: visible;
+.ctx-menu[data-state="closed"] {
+  animation: ctx-menu-out 90ms ease-in;
+}
+
+.ctx-menu-root:not([data-manual-position="true"]) {
+  visibility: hidden;
+}
+
+/* Radix 的 wrapper 默认根据 Trigger 定位。右键菜单使用虚拟 Trigger，
+   所以由 ContextMenu.tsx 写入的坐标覆盖它，保证 attach_content 等内容块贴合鼠标。 */
+[data-radix-popper-content-wrapper]:has(.ctx-menu-root[data-manual-position="true"]) {
+  position: fixed !important;
+  left: var(--ctx-menu-left) !important;
+  top: var(--ctx-menu-top) !important;
+  transform: none !important;
+}
+
+@keyframes ctx-menu-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes ctx-menu-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.96); }
 }
 
 /* ---- Separator ---- */
@@ -62,7 +81,8 @@
   transition: background 80ms ease;
 }
 
-.ctx-item:focus-visible {
+.ctx-item:focus-visible,
+.ctx-item[data-highlighted] {
   background: var(--hover);
 }
 
