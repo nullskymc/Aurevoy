@@ -3,8 +3,9 @@
  *
  * 本文件负责：
  * 1. 注册 load_skill 工具到统一注册表
- * 2. 管理 Skill 的 allowed-tools 白名单
- * 3. 提供基于 Skill 上下文的工具过滤
+ * 2. 按 skill 启用状态门控归属工具（SKILL_OWNED_TOOLS）
+ *
+ * 不负责 allowed-tools 沙箱降权——见 skills/types.ts 中该字段的说明。
  */
 
 import { skillRegistry } from '../skills/registry.js';
@@ -112,63 +113,33 @@ export function registerLoadSkillTool(): void {
 }
 
 /**
- * 获取 Skill 的 allowed-tools 白名单。
+ * 归属某个 skill 的工具：只有该 skill 处于启用状态时才暴露给模型。
  *
- * @param skillName Skill 名称
- * @returns 工具名称数组，如果 Skill 不存在或没有白名单则返回 undefined
+ * 这类工具的调用规则完全写在 SKILL.md 里（沙箱约束、验收清单等），
+ * 工具 description 只能承载浓缩版。若 skill 被用户在设置里关掉，
+ * 说明书就不再进入上下文，此时继续暴露工具会让模型盲调并被校验拒绝——
+ * 因此按 skill 启用状态一并收起，保证「关掉 skill = 关掉这项能力」。
+ *
+ * 注意这是「skill 启用与否」的静态门控，与标准里的 allowed-tools 沙箱降权无关：
+ * 本项目的 skill 是上下文注入，不是受限执行环境，详见 SkillFrontmatter 的字段说明。
  */
-export function getSkillAllowedTools(skillName: string): string[] | undefined {
-  const entry = skillRegistry.get(skillName);
-  if (!entry) return undefined;
-  return entry.frontmatter['allowed-tools'];
-}
+export const SKILL_OWNED_TOOLS: Readonly<Record<string, string>> = Object.freeze({
+  present_ui: 'visualize',
+});
 
 /**
- * 获取所有已启用 Skill 的合并白名单。
+ * 过滤掉所属 skill 已被禁用的工具。
  *
- * @returns 工具名称数组（去重），如果没有 Skill 有白名单则返回 undefined
+ * 只对 SKILL_OWNED_TOOLS 中登记的工具生效；其余工具原样保留。
+ * skill 不存在（例如打包遗漏 builtin 目录）时同样收起对应工具，
+ * 避免暴露一个没有任何使用说明的工具。
  */
-export function getAllSkillAllowedTools(): string[] | undefined {
-  const allDescriptors = skillRegistry.listAll();
-  const enabledDescriptors = allDescriptors.filter((s) => s.enabled);
-
-  const allowedTools = new Set<string>();
-  let hasAnyAllowedTools = false;
-
-  for (const descriptor of enabledDescriptors) {
-    const tools = descriptor.allowedTools;
-    if (tools && tools.length > 0) {
-      hasAnyAllowedTools = true;
-      for (const tool of tools) {
-        allowedTools.add(tool);
-      }
-    }
-  }
-
-  return hasAnyAllowedTools ? [...allowedTools] : undefined;
-}
-
-/**
- * 根据当前激活的 Skill 过滤工具列表。
- *
- * @param allToolNames 所有可用工具名称
- * @param activeSkill 当前激活的 Skill 名称（可选）
- * @returns 过滤后的工具名称数组
- */
-export function filterToolsBySkill(allToolNames: string[], activeSkill?: string): string[] {
-  if (!activeSkill) {
-    // 没有激活的 Skill，返回所有工具
-    return allToolNames;
-  }
-
-  const allowedTools = getSkillAllowedTools(activeSkill);
-  if (!allowedTools || allowedTools.length === 0) {
-    // Skill 没有白名单限制，返回所有工具
-    return allToolNames;
-  }
-
-  // 过滤出白名单中的工具
-  return allToolNames.filter(name => allowedTools.includes(name));
+export function filterToolsByOwningSkill(toolNames: string[]): string[] {
+  return toolNames.filter((name) => {
+    const owningSkill = SKILL_OWNED_TOOLS[name];
+    if (!owningSkill) return true;
+    return skillRegistry.get(owningSkill) !== undefined && skillRegistry.isEnabled(owningSkill);
+  });
 }
 
 /**

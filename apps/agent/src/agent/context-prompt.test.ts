@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Message } from '@aurevoy/shared';
 import {
   applyZeroCostCompaction,
@@ -12,6 +12,7 @@ import {
   compactToolResult,
   joinSystemPromptParts,
 } from './context.js';
+import { skillRegistry } from '../skills/registry.js';
 import { compactPiMessagesCacheAware } from './pi-harness.js';
 import type { Message as PiMessage } from '@earendil-works/pi-ai/compat';
 
@@ -81,6 +82,7 @@ describe('main agent system prompt builders', () => {
   });
 
   it('operating protocol covers real tools, delivery, and multi-agent', () => {
+    skillRegistry.load();
     const guidance = buildToolGuidanceMessage();
     const text = guidance.content;
 
@@ -94,8 +96,10 @@ describe('main agent system prompt builders', () => {
     for (const name of ['attach_content', 'bundle_report', 'research']) {
       expect(text).toContain(name);
     }
-    expect(text).not.toContain('present_ui');
-    expect(text).toContain('Inline conversation UI is temporarily unavailable');
+    expect(text).toContain('present_ui');
+    expect(text).toContain('visualize');
+    expect(text).toContain('renders directly in the chat');
+    expect(text).not.toContain('temporarily unavailable');
     expect(text).not.toContain('data_table');
     expect(text).toContain('research` is for research and file reports');
 
@@ -114,6 +118,21 @@ describe('main agent system prompt builders', () => {
     expect(text).toMatch(/non-trivial `bash`/i);
     expect(text).toMatch(/answer in text this turn before any further tool calls/i);
     expect(text).not.toMatch(/装了啥|遇到了什么问题|zotero|MCP client|GitHub README/i);
+  });
+
+  it('drops the inline UI protocol when the visualize skill is disabled', () => {
+    skillRegistry.load();
+    const isEnabled = vi.spyOn(skillRegistry, 'isEnabled').mockImplementation((name) => name !== 'visualize');
+    try {
+      const text = buildToolGuidanceMessage().content;
+      expect(text).not.toContain('present_ui');
+      expect(text).not.toContain('visualize');
+      expect(text).toContain('Inline conversation UI is unavailable');
+      // 降级路径仍然要给出可用的交付方式
+      expect(text).toContain('attach_content');
+    } finally {
+      isEnabled.mockRestore();
+    }
   });
 
   it('system context keeps workspace facts and minute-precision time', () => {

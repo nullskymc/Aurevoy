@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import type {
   AuthEvent,
-  AuthLoginCallbacks,
+  AuthInteraction,
   AuthPrompt,
   OAuthAuth,
   OAuthCredential,
@@ -95,7 +95,7 @@ export function startOauthLogin(providerId: string): OauthSessionSnapshot {
   };
   sessions.set(id, session);
 
-  const callbacks: AuthLoginCallbacks = {
+  const callbacks: AuthInteraction = {
     signal: abort.signal,
     notify(event) {
       session.events.push(event);

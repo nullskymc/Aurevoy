@@ -576,6 +576,21 @@ export function readLlmCredential(providerId: string): Credential | undefined {
   return undefined;
 }
 
+/**
+ * 返回凭证状态所需的非敏感元数据；绝不读取 key、access token 或 refresh token。
+ * Pi 0.82 起用此接口枚举已配置 provider，因此保持为独立查询而非复用 read。
+ */
+export function listLlmCredentialInfo(): ReadonlyArray<{ providerId: string; type: Credential['type'] }> {
+  ensureLlmSchemaMigrated();
+  const rows = db.prepare(
+    `SELECT provider_id, auth_type
+     FROM llm_credentials
+     WHERE auth_type IN ('api_key', 'oauth')
+     ORDER BY provider_id ASC`,
+  ).all() as Array<{ provider_id: string; auth_type: Credential['type'] }>;
+  return rows.map((row) => ({ providerId: row.provider_id, type: row.auth_type }));
+}
+
 export function writeLlmCredential(providerId: string, credential: Credential): void {
   ensureProviderRow(providerId);
   const ts = nowIso();

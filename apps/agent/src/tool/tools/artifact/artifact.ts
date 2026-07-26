@@ -23,6 +23,7 @@ const Output = Schema.Struct({
 
 export const createArtifactTool = make({
   name: "create_artifact",
+  riskLevel: "dangerous",
   description:
     "Create a persistent artifact (file) with content. Provide optional path to write it into the workspace immediately.",
   input: Input,
@@ -51,6 +52,7 @@ export const createArtifactTool = make({
 
 export const applyArtifactTool = make({
   name: "apply_artifact",
+  riskLevel: "dangerous",
   description: "Apply a created artifact to the workspace.",
   input: Schema.Struct({
     artifactId: Schema.String.annotations({ description: "ID of the artifact to apply." }),

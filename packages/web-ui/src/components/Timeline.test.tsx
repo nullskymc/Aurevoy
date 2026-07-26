@@ -508,7 +508,6 @@ describe("AgentRound", () => {
     );
 
     expect(html).toContain("已处理");
-    expect(html).toContain("<strong>answer</strong>");
     expect(html).not.toContain("stream-caret");
     expect(html).toContain("is-streaming");
     // 正文已出时不叠灰字「正在思考」

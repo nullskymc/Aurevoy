@@ -1,6 +1,7 @@
 import { Schema, Data } from "effect"
 import { fromAST } from "effect/JSONSchema"
 import type { Task } from "@aurevoy/shared"
+import type { ToolExecutionPolicy, ToolRiskLevel, ToolSource } from "@aurevoy/shared"
 
 export interface ToolContext {
   readonly sessionID: string
@@ -49,6 +50,11 @@ function schemaToJSONSchema(s: Schema.Schema<any>): Record<string, unknown> {
 export interface ToolConfig<I, O> {
   readonly name: string
   readonly description: string
+  /** 审批与调度元数据必须跟随工具定义，不能由名称猜测。 */
+  readonly riskLevel: ToolRiskLevel
+  readonly executionPolicy?: ToolExecutionPolicy
+  readonly source?: ToolSource
+  readonly enabledByDefault?: boolean
   readonly input: Schema.Schema<I>
   readonly output: Schema.Schema<O>
   readonly execute: (input: I, ctx: ToolContext) => Promise<O>
@@ -69,6 +75,10 @@ export interface AnyTool {
   readonly _O: any
   readonly name: string
   readonly description: string
+  readonly riskLevel: ToolRiskLevel
+  readonly executionPolicy?: ToolExecutionPolicy
+  readonly source?: ToolSource
+  readonly enabledByDefault?: boolean
   readonly inputJSONSchema: Record<string, unknown>
   readonly runtime: () => ToolRuntime<any, any>
 }
@@ -102,6 +112,10 @@ export function make<I, O>(config: ToolConfig<I, O>): AnyTool {
     _O: undefined as O,
     name: config.name,
     description: config.description,
+    riskLevel: config.riskLevel,
+    executionPolicy: config.executionPolicy,
+    source: config.source,
+    enabledByDefault: config.enabledByDefault,
     inputJSONSchema,
     runtime: () => runtime,
   }

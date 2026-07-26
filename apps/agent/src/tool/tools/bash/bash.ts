@@ -31,6 +31,7 @@ const Output = Schema.Struct({
 
 export const bashTool = make({
   name: "bash",
+  riskLevel: "dangerous",
   description:
     `Execute a shell command with the host user's filesystem, process, and network authority. ` +
     `The workspace root is the default working directory. Shell: ${defaultShell()}. ` +

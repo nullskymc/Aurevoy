@@ -28,6 +28,8 @@ const Output = Schema.Struct({
 
 export const writeTool = make({
   name: "write",
+  riskLevel: "dangerous",
+  executionPolicy: { parallelizable: false },
   description:
     "Create a new file or intentionally rewrite/append an entire file. " +
     "For local revisions to an existing file, prefer `edit` (exact oldString → newString) instead of rewriting the whole document. " +

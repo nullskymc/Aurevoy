@@ -20,6 +20,7 @@ import { MarkdownRenderer, StreamingMarkdownRenderer } from "./MarkdownRenderer"
 import { usePlatform } from "../platform/context";
 import { t } from "../i18n";
 import { ContextMenu } from "./ContextMenu";
+import { CanvasCard } from "./generative-ui/CanvasCard";
 import type { ContextMenuItem } from "./ContextMenu";
 import {
   buildFileMenuItems,
@@ -124,7 +125,10 @@ export function detectStepKind(toolName: string): StepKind {
 function shouldHideToolFromWorkflow(toolName: string): boolean {
   // 计划更新已有独立的计划进度条承载；再作为工具活动展示只会产生
   // 无上下文的「已完成一步」卡片，干扰真正的执行过程。
-  return toolName === "attach_content" || toolName === "delegate" || toolName === "update_plan";
+  return toolName === "attach_content"
+    || toolName === "present_ui"
+    || toolName === "delegate"
+    || toolName === "update_plan";
 }
 
 /** 生成聚合摘要文本 */
@@ -1083,7 +1087,7 @@ export function PlanStepGroup({
 
 /* ============ 内容块渲染 ============ */
 
-/** Agent 通过 attach_content 工具附加的富内容块。 */
+/** Agent 通过 attach_content / present_ui 工具附加的富内容块。 */
 function ContentBlockView({
   block,
   onOpenWorkspacePath,
@@ -1132,6 +1136,8 @@ function ContentBlockView({
   }
 
   switch (block.type) {
+    case "ui":
+      return block.kind === "canvas" ? <CanvasCard block={block} /> : null;
     case "file_reference": {
       const handleFileClick = async () => {
         if (onOpenWorkspacePath) {

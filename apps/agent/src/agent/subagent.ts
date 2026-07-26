@@ -5,7 +5,6 @@ import {
   type AgentEvent,
   type AgentTool,
 } from '@earendil-works/pi-agent-core';
-import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node';
 import type {
   SubagentStopReason,
   Task,
@@ -170,7 +169,6 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
     const model = createPiModel();
     const session = await new InMemorySessionRepo().create({ id: runId });
     harness = new AgentHarness({
-      env: new NodeExecutionEnv({ cwd: subTask.workspaceDir, shellEnv: process.env }),
       session,
       models: createAurevoyPiModels(model),
       systemPrompt: buildSubagentSystemPrompt(

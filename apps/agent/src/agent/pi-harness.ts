@@ -9,7 +9,6 @@ import {
   type AgentTool,
   type Skill as PiHarnessSkill,
 } from '@earendil-works/pi-agent-core';
-import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node';
 import { Type } from 'typebox';
 import {
   anthropicMessagesApi,
@@ -325,7 +324,6 @@ async function createPiHarness(
   selectedModel: PiModel<any>,
   controller: ActivePiTaskController,
 ): Promise<AgentHarness> {
-  const env = new NodeExecutionEnv({ cwd: options.workspaceDir, shellEnv: process.env });
   const session = await new InMemorySessionRepo().create({ id: task.id });
   const seedMessages = await buildHarnessSeedMessages(task, selectedModel);
   for (const message of seedMessages) {
@@ -333,7 +331,6 @@ async function createPiHarness(
   }
 
   const harness = new AgentHarness({
-    env,
     session,
     models: createAurevoyPiModels(selectedModel),
     tools: createPiTools(task, options),
@@ -1648,20 +1645,31 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
     data: { output: toolResult.output },
   });
 
-  // attach_content：提取 contentBlock 并挂到「发起该 tool_call 的 assistant」消息。
+  // attach_content / present_ui：提取 contentBlock 并挂到对应的 assistant 消息。
   // 禁止回退挂到 tool 消息 id——前端交付面只渲染 assistant，挂错会导致文件卡丢归属/反复出现在 live tail。
-  if (!isError && toolName === 'attach_content') {
+  if (!isError && (toolName === 'attach_content' || toolName === 'present_ui')) {
     const raw = extractAttachContentBlock(result, details);
     if (isRecord(raw) && typeof raw.type === 'string') {
       const block = buildContentBlockFromTool(raw, workspaceDir);
       if (block) {
         let assistantMessageId: string | undefined;
-        for (let i = task.messages.length - 1; i >= 0; i--) {
-          const msg = task.messages[i];
-          if (msg.role === 'assistant' && msg.toolCalls?.some((tc) => tc.id === callId)) {
-            msg.contentBlocks = [...(msg.contentBlocks ?? []), block];
+        // 稳定 ID 表示更新既有 UI；先在历史 assistant 消息中原位 upsert。
+        if (block.type === 'ui') {
+          for (const msg of task.messages) {
+            if (msg.role !== 'assistant' || !msg.contentBlocks?.some((item) => item.id === block.id)) continue;
+            msg.contentBlocks = upsertContentBlock(msg.contentBlocks, block);
             assistantMessageId = msg.id;
             break;
+          }
+        }
+        if (!assistantMessageId) {
+          for (let i = task.messages.length - 1; i >= 0; i--) {
+            const msg = task.messages[i];
+            if (msg.role === 'assistant' && msg.toolCalls?.some((tc) => tc.id === callId)) {
+              msg.contentBlocks = upsertContentBlock(msg.contentBlocks, block);
+              assistantMessageId = msg.id;
+              break;
+            }
           }
         }
         if (assistantMessageId) {
@@ -1708,22 +1716,60 @@ function buildContentBlockFromTool(
   workspaceDir: string,
 ): ContentBlock | null {
   const type = String(raw.type);
+  if (type === 'ui') {
+    if (raw.kind !== 'canvas' || !isRecord(raw.props) || typeof raw.props.html !== 'string') return null;
+    return {
+      id: typeof raw.id === 'string' && raw.id ? raw.id : randomUUID(),
+      type: 'ui',
+      content: typeof raw.content === 'string' ? raw.content : '',
+      kind: 'canvas',
+      props: {
+        title: typeof raw.props.title === 'string' ? raw.props.title : undefined,
+        description: typeof raw.props.description === 'string' ? raw.props.description : undefined,
+        state: toUiCanvasState(raw.props.state),
+        html: raw.props.html,
+        css: typeof raw.props.css === 'string' ? raw.props.css : undefined,
+        script: typeof raw.props.script === 'string' ? raw.props.script : undefined,
+      },
+      fallbackText: typeof raw.fallbackText === 'string' ? raw.fallbackText : undefined,
+    };
+  }
+
   if (typeof raw.content !== 'string') return null;
   if (type !== 'file_reference' && type !== 'image' && type !== 'link') return null;
-
   let resolvedContent = String(raw.content);
   const isFile = type === 'file_reference' || type === 'image';
   if (isFile && resolvedContent.length > 0 && !resolvedContent.startsWith('/') && !resolvedContent.startsWith('~')) {
     resolvedContent = join(workspaceDir, resolvedContent);
   }
   return {
-    id: randomUUID(),
+    id: typeof raw.id === 'string' && raw.id ? raw.id : randomUUID(),
     type: type as ContentBlock['type'],
     content: resolvedContent,
     name: typeof raw.name === 'string' ? raw.name : undefined,
     mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : undefined,
     size: typeof raw.size === 'number' ? raw.size : undefined,
   };
+}
+
+/** 按稳定 ID 合并内容块；同 ID 的后到版本覆盖旧版本。 */
+function upsertContentBlock(existing: ContentBlock[] | undefined, next: ContentBlock): ContentBlock[] {
+  const blocks = [...(existing ?? [])];
+  const index = blocks.findIndex((block) => block.id === next.id);
+  if (index >= 0) blocks[index] = next;
+  else blocks.push(next);
+  return blocks;
+}
+
+/** 只让跨进程 UI 状态携带 JSON primitive，丢弃嵌套对象与不可序列化值。 */
+function toUiCanvasState(value: unknown): Record<string, string | number | boolean | null> | undefined {
+  if (!isRecord(value)) return undefined;
+  const state: Record<string, string | number | boolean | null> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (item === null || typeof item === 'string' || typeof item === 'boolean') state[key] = item;
+    else if (typeof item === 'number' && Number.isFinite(item)) state[key] = item;
+  }
+  return state;
 }
 
 function assistantMessageToAurevoy(task: Task, message: PiAssistantMessage): Message {

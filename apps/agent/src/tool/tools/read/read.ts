@@ -103,6 +103,7 @@ const Output = Schema.Union(
 
 export const readTool = make({
   name: "read",
+  riskLevel: "safe",
   description: `Read a text file or image, page through a large text file by line offset, or list a directory. Supports PNG/JPEG/GIF/WebP images (base64, max ${MAX_MEDIA_INGEST_BYTES / 1024 / 1024}MB).`,
   input: Input,
   output: Output,

@@ -84,18 +84,39 @@ export interface MessageImagePart {
 }
 
 /** Agent 主动发送到对话框的富内容块类型 */
-export type ContentBlockType = 'file_reference' | 'image' | 'link';
+export type ContentBlockType = 'file_reference' | 'image' | 'link' | 'ui';
 
-/** Agent 主动附加到消息的富内容块，可嵌入对话中呈现为文件引用、图片或超链接。 */
+/** 对话内 UI 仅支持隔离 canvas，避免 Agent 接触宿主 DOM 或应用 API。 */
+export type UiComponentKind = 'canvas';
+
+/** sandbox canvas 的受控输入；HTML/CSS/JS 都只在 iframe 内运行。 */
+export interface UiCanvasProps {
+  title?: string;
+  description?: string;
+  /** 初始状态由 Agent 提供，脚本可通过 window.aurevoy.state 读取。 */
+  state?: Record<string, string | number | boolean | null>;
+  /** iframe body 的 HTML 片段。 */
+  html: string;
+  /** 仅限内联样式。 */
+  css?: string;
+  /** 仅限 iframe 内执行的交互脚本；静态片段可省略。 */
+  script?: string;
+}
+
+/** Agent 主动附加到消息的富内容块，可嵌入对话中呈现为文件、图片、链接或隔离 UI。 */
 export interface ContentBlock {
   id: string;
   type: ContentBlockType;
-  /** file_reference / image / link: 路径或 URL。 */
+  /** file_reference / image / link: 路径或 URL；ui: 纯文本降级摘要。 */
   content: string;
   /** 显示名称（可选） */
   name?: string;
   mimeType?: string;
   size?: number;
+  /** type=ui 时的渲染类型和受控属性。 */
+  kind?: UiComponentKind;
+  props?: UiCanvasProps;
+  fallbackText?: string;
 }
 
 /** 一条对话消息 */
@@ -119,7 +140,7 @@ export interface Message {
   imageParts?: MessageImagePart[];
   /** 运行中追加用户消息时的 Pi 队列投递方式。首轮/非运行中消息为空。 */
   delivery?: 'steering' | 'follow_up';
-  /** Agent 主动附加的富内容块（文件/图片/链接），由 attach_content 生成 */
+  /** Agent 主动附加的富内容块（文件/图片/链接/UI），由交付工具生成 */
   contentBlocks?: ContentBlock[];
 }
 

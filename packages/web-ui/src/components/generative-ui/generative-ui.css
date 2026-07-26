@@ -1,0 +1,53 @@
+.gen-ui-card {
+  display: grid;
+  gap: var(--ui-space-3, 12px);
+  width: 100%;
+  min-width: 0;
+}
+
+.gen-ui-canvas {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--ui-radius-lg, 12px);
+  background: var(--color-bg-primary);
+}
+
+.gen-ui-canvas-head {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px 0;
+}
+
+.gen-ui-canvas-head h3,
+.gen-ui-canvas-head p {
+  margin: 0;
+}
+
+.gen-ui-canvas-head h3 {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.gen-ui-canvas-head p {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.gen-ui-canvas-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: var(--color-bg-primary);
+  transition: height 140ms ease;
+}
+
+.gen-ui-fallback {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--ui-radius-md, 8px);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}

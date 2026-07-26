@@ -495,7 +495,7 @@ export function useAgentEventHandler({
   };
 }
 
-function mergeContentBlocks(
+export function mergeContentBlocks(
   existing: ContentBlock[] | undefined,
   incoming: ContentBlock[],
 ): ContentBlock[] {
@@ -505,9 +505,7 @@ function mergeContentBlocks(
     map.set(block.id, block);
   }
   for (const block of incoming) {
-    if (!map.has(block.id)) {
-      map.set(block.id, block);
-    }
+    map.set(block.id, block);
   }
   return [...map.values()];
 }

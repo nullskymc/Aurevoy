@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Conversation 集成呈现：主路径过程层必须是 AgentRound 语法，
  * 不得再包一层「Thought process」抽屉。
@@ -578,5 +579,79 @@ describe("Conversation process presentation (integrated path)", () => {
     // Must not dump raw markdown markers as the only representation
     expect(html).not.toContain("## 调研话题");
     expect(html).not.toContain("**三大指数盘后表现**");
+  });
+
+  it("renders present_ui as the assistant delivery instead of process narration", () => {
+    const task = baseTask({
+      status: "completed",
+      phase: "finalizing",
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "给我一个交互探索器",
+          createdAt: "2026-07-10T00:00:00.000Z",
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-07-10T00:00:01.000Z",
+          toolCalls: [{
+            id: "call-ui",
+            type: "function",
+            function: {
+              name: "present_ui",
+              arguments: JSON.stringify({ kind: "canvas" }),
+            },
+          }],
+          contentBlocks: [{
+            id: "dataset-explorer",
+            type: "ui",
+            kind: "canvas",
+            content: "数据探索器",
+            props: {
+              title: "数据探索器",
+              html: "<p>可筛选的数据</p>",
+            },
+          }],
+        },
+        {
+          id: "t1",
+          role: "tool",
+          content: "交互片段已展示",
+          toolCallId: "call-ui",
+          createdAt: "2026-07-10T00:00:02.000Z",
+        },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "可以直接筛选并选择条目查看详情。",
+          createdAt: "2026-07-10T00:00:03.000Z",
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(
+      <Conversation
+        task={task}
+        status="completed"
+        phase="finalizing"
+        phaseDetail=""
+        plan={[]}
+        output=""
+        busy={false}
+        liveToolActivity={[]}
+        hasLiveTail={false}
+        onToolDecision={noop}
+        onClarificationAnswer={noop}
+      />,
+    );
+
+    expect(html).toContain("gen-ui-canvas");
+    expect(html).toContain("数据探索器");
+    expect(html).toContain("Content-Security-Policy");
+    expect(html).toContain("可以直接筛选并选择条目查看详情。");
+    expect(html).not.toContain("已调用 present_ui");
   });
 });

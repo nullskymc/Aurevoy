@@ -25,7 +25,7 @@ import {
 } from './llm-store.js';
 import { providerIdSupportsXaiOauth, XAI_OAUTH_LABEL } from './xai-oauth.js';
 
-// ---- Dynamic model discovery via Pi's createProvider + refreshModels ----
+// ---- Dynamic model discovery via Pi's createProvider + fetchModels ----
 
 let _piModelsCache: PiModels | null = null;
 
@@ -48,7 +48,7 @@ function createOpenAICompatProvider() {
     baseUrl: config.llm.baseUrl,
     auth: { apiKey: { name: 'none', resolve: async () => undefined } },
     models: [],
-    refreshModels: async () => {
+    fetchModels: async () => {
       const base = config.llm.baseUrl.replace(/\/+$/, '');
       const resp = await fetch(`${base}/models`, {
         headers: config.llm.apiKey ? { Authorization: `Bearer ${config.llm.apiKey}` } : {},

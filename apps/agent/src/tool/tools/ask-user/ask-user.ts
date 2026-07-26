@@ -28,6 +28,7 @@ const Output = Schema.Struct({
 
 export const askUserTool = make({
   name: "ask_user",
+  riskLevel: "safe",
   description:
     "Ask the user a question and wait for their response. Use when you need clarification before proceeding. Prefer field `message` (or `question`).",
   input: Input,

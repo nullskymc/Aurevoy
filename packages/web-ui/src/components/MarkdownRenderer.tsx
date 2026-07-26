@@ -361,6 +361,7 @@ export function StreamingMarkdownRenderer({ content, onOpenWorkspacePath }: Mark
         plugins={{ math: streamdownMath }}
         // 由桌面端统一处理链接打开策略，避免流式正文弹出网页安全确认框。
         linkSafety={{ enabled: false }}
+        components={{ strong: "strong" }}
       >
         {normalizeMarkdownMath(content)}
       </Streamdown>

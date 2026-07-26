@@ -5,7 +5,7 @@
  * 注意：xAI 可能按订阅档位限制 OAuth API；失败时应回退 API Key。
  */
 import type {
-  AuthLoginCallbacks,
+  AuthInteraction,
   ModelAuth,
   OAuthAuth,
   OAuthCredential,
@@ -148,7 +148,7 @@ async function pollDeviceToken(
   deviceCode: string,
   expiresIn: number,
   intervalSeconds: number,
-  callbacks: AuthLoginCallbacks,
+  callbacks: AuthInteraction,
 ): Promise<OAuthCredential> {
   const endpoint = assertXaiHttpsEndpoint(tokenEndpoint, 'token_endpoint');
   const deadline = Date.now() + Math.max(1, expiresIn) * 1000;

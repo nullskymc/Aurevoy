@@ -807,7 +807,7 @@ function AgentFailureCard({ message }: { message: Message }) {
 }
 
 /** 仅用于向用户交付附件的工具，不参与「工作流过程」叙事 */
-const PRESENTATION_TOOL_NAMES = new Set(["attach_content"]);
+const PRESENTATION_TOOL_NAMES = new Set(["attach_content", "present_ui"]);
 
 function isPresentationToolName(name: string): boolean {
   return PRESENTATION_TOOL_NAMES.has(name);

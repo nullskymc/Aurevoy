@@ -25,6 +25,7 @@ const Output = Schema.Struct({
 
 export const webFetchTool = make({
   name: "web_fetch",
+  riskLevel: "caution",
   description: "Fetch a public http(s) URL. HTML is extracted into readable text with links; binary content is not injected.",
   input: Input,
   output: Output,

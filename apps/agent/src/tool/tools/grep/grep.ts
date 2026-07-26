@@ -29,6 +29,7 @@ const Output = Schema.Array(Schema.Struct({
 
 export const grepTool = make({
   name: "grep",
+  riskLevel: "safe",
   description:
     "Search file contents by regular expression. Use path to narrow the search, include to filter files by glob, and limit to bound the match count. Returns file paths, line numbers, and matched text.",
   input: Input,

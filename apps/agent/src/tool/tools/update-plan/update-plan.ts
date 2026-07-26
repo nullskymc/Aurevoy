@@ -34,6 +34,8 @@ const Output = Schema.Struct({
 /** 模型显式维护计划；计划模式只记录待执行步骤，不把调研过程伪装成已执行。 */
 export const updatePlanTool = make({
   name: "update_plan",
+  riskLevel: "safe",
+  executionPolicy: { parallelizable: false },
   description: [
     "Create or replace the visible task plan for genuinely multi-step actionable work.",
     "Do not use for simple questions or work completed by the current answer.",
