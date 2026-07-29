@@ -48,6 +48,18 @@
   overflow-anchor: none;
 }
 
+/* 引擎重启后自动恢复的在途任务顶部提示（对齐 pi -r）。 */
+.conversation-resume-banner {
+  margin: 8px 16px 0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--accent-soft-fg);
+  background: var(--accent-soft-bg);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 /* ============ 门禁卡：审批 / 追问共用（紧凑、轻阴影） ============ */
 .process-gates {
   display: flex;
@@ -757,48 +769,6 @@
   color: var(--danger-soft-fg);
 }
 
-.plan-approval-card .approval-card-body {
-  color: var(--text-secondary);
-  font-size: calc(var(--ui-font-size) - 1px);
-}
-
-.plan-approval-steps {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.plan-approval-steps li {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 6px;
-  align-items: start;
-  color: var(--text-secondary);
-  font-size: calc(var(--ui-font-size) - 1px);
-  line-height: 1.4;
-}
-
-.plan-approval-steps li > span {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  margin-top: 1px;
-  border-radius: 50%;
-  background: var(--surface);
-  color: var(--text-tertiary);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.plan-approval-steps p {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text);
-}
-
 .tool-approval--decided {
   display: flex;
   align-items: center;
@@ -1017,4 +987,27 @@
 .approval-panel .btn-approve-once:hover {
   background: var(--accent-hover, #4f46e5);
   border-color: var(--accent-hover, #4f46e5);
+}
+.conversation-compaction {
+  margin: 2px auto 14px;
+  max-width: min(680px, calc(100% - 32px));
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.conversation-compaction summary {
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.conversation-compaction p {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  text-align: left;
+  white-space: pre-wrap;
 }

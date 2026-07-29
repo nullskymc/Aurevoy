@@ -47,10 +47,11 @@ describe("useSSEStream immediate dispatch", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     act(() => root?.render(createElement(Harness)));
-    act(() => openStream?.("task-1", (event) => received.push(event), () => {}));
+    act(() => openStream?.("task-1", (event) => received.push(event), () => {}, { hasSnapshot: true }));
 
     expect(fetchEventSourceMock).toHaveBeenCalledOnce();
-    const [, options] = fetchEventSourceMock.mock.calls[0] ?? [];
+    const [url, options] = fetchEventSourceMock.mock.calls[0] ?? [];
+    expect(url).toBe("http://127.0.0.1:8787/api/tasks/task-1/stream?afterSeq=0&snapshot=0");
     expect(options.openWhenHidden).toBe(true);
     expect(options.headers).toEqual({ Accept: "text/event-stream" });
     options.onmessage({ data: JSON.stringify({ type: "token", taskId: "task-1", delta: "你" }) });

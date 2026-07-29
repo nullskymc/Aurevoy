@@ -720,6 +720,89 @@ button:disabled {
   line-height: 1.45;
 }
 
+.agent-status-dock {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 4px 4px;
+}
+
+.agent-status-dock__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--accent-soft-fg);
+  background: var(--accent-soft-bg);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-status-dock__queue {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-status-dock__queue-clear {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.agent-status-dock__queue-clear:hover {
+  color: var(--text);
+}
+
+.agent-status-dock__chip--warn {
+  color: var(--warn-soft-fg);
+  background: var(--warn-soft-bg);
+  border-color: color-mix(in srgb, var(--warn-soft-fg) 24%, transparent);
+}
+
+.agent-status-dock__chip--ok {
+  color: var(--accent-soft-fg);
+  background: var(--accent-soft-bg);
+}
+
+.agent-status-dock__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: agent-status-pulse 1.2s ease-in-out infinite;
+}
+
+.agent-status-dock__dismiss {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+  opacity: 0.7;
+}
+
+.agent-status-dock__dismiss:hover {
+  opacity: 1;
+}
+
+@keyframes agent-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 .context-usage-ring {
   position: relative;
   display: flex;
@@ -1978,6 +2061,18 @@ button.user-bubble-attachment {
   align-items: center;
   justify-content: center;
   outline: none;
+}
+
+.image-viewer-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 @keyframes viewer-fade-in {

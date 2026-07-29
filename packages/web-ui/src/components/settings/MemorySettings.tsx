@@ -23,12 +23,16 @@ export function MemorySettings({
   onToggle,
   onEdit,
   onDelete,
+  recallEnabled,
+  onRecallChange,
 }: {
   memories: MemoryEntry[];
   onCreate: (content: string, category: MemoryCategory) => void;
   onToggle: (id: string, enabled: boolean) => void;
   onEdit: (id: string, content: string, category: MemoryCategory) => void;
   onDelete: (id: string) => void;
+  recallEnabled: boolean;
+  onRecallChange: (enabled: boolean) => void;
 }) {
   const [newContent, setNewContent] = useState("");
   const [newCategory, setNewCategory] = useState<MemoryCategory>("preference");
@@ -60,6 +64,13 @@ export function MemorySettings({
 
   return (
     <SettingsGroup title={`${t("memory.title")} (${memories.length} / ${enabledCount} ${t("memory.entriesInjected")})`}>
+      <label className="settings-row">
+        <span>
+          <strong>{t("memory.autoRecall")}</strong>
+          <small>{t("memory.autoRecallHint")}</small>
+        </span>
+        <input type="checkbox" checked={recallEnabled} onChange={(event) => onRecallChange(event.target.checked)} />
+      </label>
       <div className="memory-add">
         <select
           className="memory-cat-select"

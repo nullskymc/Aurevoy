@@ -36,9 +36,18 @@ function baseSettings(overrides: Partial<RuntimeSettings> = {}): RuntimeSettings
     dbPath: "/db",
     embedding: { provider: "off", model: "", baseUrl: "", apiKeyConfigured: false },
     pythonPath: "",
-    search: { provider: "duckduckgo_lite", baseUrl: "", apiKeyConfigured: false },
+    search: {
+      preferNative: false,
+      provider: "duckduckgo_lite",
+      baseUrl: "",
+      apiKeyConfigured: false,
+    },
     logging: { level: "info", logFile: "/log" },
     proxy: { enabled: false, url: "", noProxy: "localhost" },
+    agentAutoCompact: true,
+    autoResumeInterruptedTasks: true,
+    memoryRecallEnabled: false,
+    kbRecallEnabled: false,
     ...overrides,
   };
 }

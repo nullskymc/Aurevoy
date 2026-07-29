@@ -12,4 +12,10 @@ describe('built-in Effect tool catalog', () => {
     const deleteFile = allTools.find((tool) => tool.name === 'delete_file');
     expect(deleteFile?.enabledByDefault).toBe(false);
   });
+
+  it('exports every built-in input as a root JSON object schema', () => {
+    for (const tool of allTools) {
+      expect(tool.inputJSONSchema, tool.name).toMatchObject({ type: 'object' });
+    }
+  });
 });

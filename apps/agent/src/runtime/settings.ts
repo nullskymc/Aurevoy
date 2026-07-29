@@ -63,6 +63,10 @@ const SETTING_KEYS = {
   agentThinkingLevel: 'agent.thinkingLevel',
   agentToolExecution: 'agent.toolExecution',
   agentCacheRetention: 'agent.cacheRetention',
+  agentAutoCompact: 'agent.autoCompact',
+  autoResumeInterruptedTasks: 'agent.autoResumeInterruptedTasks',
+  memoryRecallEnabled: 'agent.memoryRecallEnabled',
+  kbRecallEnabled: 'agent.kbRecallEnabled',
   budgetRunMaxIterations: 'budget.run.maxIterations',
   budgetRunMaxToolCalls: 'budget.run.maxToolCalls',
   budgetRunMaxWallTimeMs: 'budget.run.maxWallTimeMs',
@@ -76,6 +80,7 @@ const SETTING_KEYS = {
   embeddingBaseUrl: 'embedding.baseUrl',
   embeddingApiKey: 'embedding.apiKey',
   pythonPath: 'python.path',
+  searchPreferNative: 'search.preferNative',
   searchProvider: 'search.provider',
   searchBaseUrl: 'search.baseUrl',
   searchApiKey: 'search.apiKey',
@@ -124,6 +129,9 @@ export function loadPersistedSettings(): void {
   }
 
   // Web 搜索配置
+  if (entries[SETTING_KEYS.searchPreferNative] !== undefined) {
+    config.search.preferNative = entries[SETTING_KEYS.searchPreferNative] === 'true';
+  }
   const searchProvider = entries[SETTING_KEYS.searchProvider];
   if (searchProvider === 'duckduckgo_lite' || searchProvider === 'tavily' || searchProvider === 'searxng' || searchProvider === 'custom') {
     config.search.provider = searchProvider;
@@ -164,6 +172,18 @@ export function loadPersistedSettings(): void {
   if (cacheRetention) config.agent.cacheRetention = cacheRetention;
   const toolExecution = normalizeToolExecution(entries[SETTING_KEYS.agentToolExecution]);
   if (toolExecution) config.agent.toolExecution = toolExecution;
+  if (entries[SETTING_KEYS.agentAutoCompact] !== undefined) {
+    config.agent.autoCompact = entries[SETTING_KEYS.agentAutoCompact] === 'true';
+  }
+  if (entries[SETTING_KEYS.autoResumeInterruptedTasks] !== undefined) {
+    config.agent.autoResumeInterruptedTasks = entries[SETTING_KEYS.autoResumeInterruptedTasks] === 'true';
+  }
+  if (entries[SETTING_KEYS.memoryRecallEnabled] !== undefined) {
+    config.agent.memoryRecallEnabled = entries[SETTING_KEYS.memoryRecallEnabled] === 'true';
+  }
+  if (entries[SETTING_KEYS.kbRecallEnabled] !== undefined) {
+    config.agent.kbRecallEnabled = entries[SETTING_KEYS.kbRecallEnabled] === 'true';
+  }
   applyBudgetSetting(entries[SETTING_KEYS.budgetRunMaxIterations], 'run', 'maxIterations');
   applyBudgetSetting(entries[SETTING_KEYS.budgetRunMaxToolCalls], 'run', 'maxToolCalls');
   applyBudgetSetting(entries[SETTING_KEYS.budgetRunMaxWallTimeMs], 'run', 'maxWallTimeMs');
@@ -215,7 +235,7 @@ export function readRuntimeSettings(): RuntimeSettings {
       temperature: config.llm.temperature,
       timeoutMs: config.llm.timeoutMs,
       maxTokens: config.llm.maxTokens,
-      apiKeyConfigured: hasApiKeyCredential(activeProvider),
+      apiKeyConfigured: isApiKeyConfigured(activeProvider),
       oauthConfigured: hasOauthCredential(activeProvider),
       providers: listProviderSlots(),
       /** provider 元数据；失败时回空，由前端 fallback。 */
@@ -230,6 +250,10 @@ export function readRuntimeSettings(): RuntimeSettings {
     agentThinkingLevel: config.agent.thinkingLevel,
     agentToolExecution: config.agent.toolExecution,
     agentCacheRetention: config.agent.cacheRetention,
+    agentAutoCompact: config.agent.autoCompact,
+    autoResumeInterruptedTasks: config.agent.autoResumeInterruptedTasks,
+    memoryRecallEnabled: config.agent.memoryRecallEnabled,
+    kbRecallEnabled: config.agent.kbRecallEnabled,
     budget: {
       run: { ...config.budget.run },
       lifetime: { ...config.budget.lifetime },
@@ -243,6 +267,7 @@ export function readRuntimeSettings(): RuntimeSettings {
     },
     pythonPath: config.python.userPath,
     search: {
+      preferNative: config.search.preferNative,
       provider: config.search.provider,
       baseUrl: config.search.baseUrl,
       apiKeyConfigured: config.search.apiKey.trim().length > 0,
@@ -443,6 +468,23 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
     settingsStore.set(SETTING_KEYS.agentCacheRetention, value);
   }
 
+  if (body.agentAutoCompact !== undefined) {
+    config.agent.autoCompact = Boolean(body.agentAutoCompact);
+    settingsStore.set(SETTING_KEYS.agentAutoCompact, String(config.agent.autoCompact));
+  }
+  if (body.autoResumeInterruptedTasks !== undefined) {
+    config.agent.autoResumeInterruptedTasks = Boolean(body.autoResumeInterruptedTasks);
+    settingsStore.set(SETTING_KEYS.autoResumeInterruptedTasks, String(config.agent.autoResumeInterruptedTasks));
+  }
+  if (body.memoryRecallEnabled !== undefined) {
+    config.agent.memoryRecallEnabled = Boolean(body.memoryRecallEnabled);
+    settingsStore.set(SETTING_KEYS.memoryRecallEnabled, String(config.agent.memoryRecallEnabled));
+  }
+  if (body.kbRecallEnabled !== undefined) {
+    config.agent.kbRecallEnabled = Boolean(body.kbRecallEnabled);
+    settingsStore.set(SETTING_KEYS.kbRecallEnabled, String(config.agent.kbRecallEnabled));
+  }
+
   if (body.budget?.run) {
     writeBudgetScope('run', body.budget.run);
   }
@@ -500,6 +542,10 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
 
   // Web 搜索配置
   if (body.search) {
+    if (body.search.preferNative !== undefined) {
+      config.search.preferNative = Boolean(body.search.preferNative);
+      settingsStore.set(SETTING_KEYS.searchPreferNative, String(config.search.preferNative));
+    }
     if (body.search.provider === 'duckduckgo_lite' || body.search.provider === 'tavily' || body.search.provider === 'searxng' || body.search.provider === 'custom') {
       config.search.provider = body.search.provider;
       settingsStore.set(SETTING_KEYS.searchProvider, config.search.provider);
@@ -665,7 +711,7 @@ function listProviderSlots(): LlmProviderSlot[] {
         availableModels: getAvailableModelIds(provider),
         enabledModels: getEnabledModelIds(provider),
         imageInputModels: getImageInputModelIds(provider),
-        apiKeyConfigured: hasApiKeyCredential(provider),
+        apiKeyConfigured: isApiKeyConfigured(provider),
         oauthConfigured: hasOauthCredential(provider),
       } satisfies LlmProviderSlot;
     })
@@ -674,6 +720,14 @@ function listProviderSlots(): LlmProviderSlot[] {
 
 function readActiveAvailableModels(): string[] {
   return getAvailableModelIds(config.llm.provider);
+}
+
+/** 测试引导可从 env 注入临时密钥；正式运行仍以 CredentialStore 为真源。 */
+function isApiKeyConfigured(provider: string): boolean {
+  return (
+    hasApiKeyCredential(provider) ||
+    (provider === config.llm.provider && config.llm.apiKey.trim().length > 0)
+  );
 }
 
 function readActiveEnabledModels(): string[] {

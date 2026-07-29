@@ -47,6 +47,7 @@ db.exec(`
     budget     TEXT,
     budget_usage TEXT,
     token_usage TEXT,
+    auto_mode_state TEXT,
     subagent_runs TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -89,6 +90,18 @@ db.exec(`
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_message_parts_task_message ON message_parts(task_id, message_id);
+
+  -- Pi harness 原生会话树快照。任务消息仍是产品级真相；该表保存 Pi entry/leaf，
+  -- 用于跨 run 恢复树上下文和后续分支导航，不把 Pi 私有结构塞进 Task JSON。
+  CREATE TABLE IF NOT EXISTS pi_session_trees (
+    task_id       TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    version       INTEGER NOT NULL,
+    entries       TEXT NOT NULL,
+    message_count INTEGER NOT NULL,
+    message_ids   TEXT NOT NULL DEFAULT '[]',
+    message_links TEXT NOT NULL DEFAULT '[]',
+    updated_at    TEXT NOT NULL
+  );
 
   CREATE TABLE IF NOT EXISTS memories (
     id            TEXT PRIMARY KEY,
@@ -162,6 +175,7 @@ const taskColumnMigrations: Array<{ name: string; sql: string }> = [
   { name: 'project_id', sql: 'ALTER TABLE tasks ADD COLUMN project_id TEXT' },
   { name: 'active_skills', sql: 'ALTER TABLE tasks ADD COLUMN active_skills TEXT' },
   { name: 'plan_mode', sql: 'ALTER TABLE tasks ADD COLUMN plan_mode TEXT' },
+  { name: 'auto_mode_state', sql: 'ALTER TABLE tasks ADD COLUMN auto_mode_state TEXT' },
   { name: 'context_tokens', sql: 'ALTER TABLE tasks ADD COLUMN context_tokens INTEGER' },
   { name: 'title', sql: 'ALTER TABLE tasks ADD COLUMN title TEXT' },
   { name: 'title_source', sql: 'ALTER TABLE tasks ADD COLUMN title_source TEXT' },
@@ -171,6 +185,14 @@ for (const migration of taskColumnMigrations) {
   if (!taskColumns.some((column) => column.name === migration.name)) {
     db.exec(migration.sql);
   }
+}
+
+const piSessionTreeColumns = db.prepare('PRAGMA table_info(pi_session_trees)').all() as Array<{ name: string }>;
+if (!piSessionTreeColumns.some((column) => column.name === 'message_ids')) {
+  db.exec("ALTER TABLE pi_session_trees ADD COLUMN message_ids TEXT NOT NULL DEFAULT '[]'");
+}
+if (!piSessionTreeColumns.some((column) => column.name === 'message_links')) {
+  db.exec("ALTER TABLE pi_session_trees ADD COLUMN message_links TEXT NOT NULL DEFAULT '[]'");
 }
 
 // P5: memory 表新增字段迁移
@@ -311,6 +333,7 @@ interface TaskRow {
   parent_task_id: string | null;
   project_id: string | null;
   plan_mode: string | null;
+  auto_mode_state: string | null;
   context_tokens: number | null;
   subagent_runs: string;
   created_at: string;
@@ -393,6 +416,7 @@ function rowToTask(row: TaskRow): Task {
     parentTaskId: row.parent_task_id ?? undefined,
     projectId: row.project_id ?? undefined,
     executionMode: row.plan_mode === 'plan' ? 'plan' : 'auto',
+    autoModeState: (parseJsonColumn(row.auto_mode_state) as Task['autoModeState']) ?? undefined,
     contextTokens: row.context_tokens ?? undefined,
     subagentRuns: (parseJsonColumn(row.subagent_runs) as Task['subagentRuns']) ?? [],
     createdAt: row.created_at,
@@ -447,6 +471,28 @@ function serializeMessages(messages: Message[]): string {
   return JSON.stringify(messages.map(({ imageParts: _imageParts, ...message }) => message));
 }
 
+function serializeMessage(message: Message): string {
+  const { imageParts: _imageParts, ...serializable } = message;
+  return JSON.stringify(serializable);
+}
+
+/** 新增消息只写入自己的图片分片，不再扫描整段历史。 */
+function appendMessageParts(taskId: string, message: Message): void {
+  const images = message.imageParts ?? [];
+  if (images.length === 0) return;
+  const upsert = db.prepare(`
+    INSERT INTO message_parts (id, task_id, message_id, type, data, created_at)
+    VALUES (?, ?, ?, 'image', ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `);
+  const write = db.transaction(() => {
+    for (const image of images) {
+      upsert.run(image.id, taskId, message.id, JSON.stringify(image), message.createdAt);
+    }
+  });
+  write();
+}
+
 function parseJsonColumn(value: string | null): unknown {
   if (value == null) return undefined;
   try {
@@ -492,13 +538,13 @@ export const taskStore = {
       `INSERT INTO tasks (
          id, goal, title, title_source, status, phase, plan, messages, artifacts, clarifications, pending_approvals, checkpoints,
          budget, budget_usage, lifetime_budget, lifetime_usage, budget_exceeded, token_usage, archived_messages, parent_task_id, project_id,
-         plan_mode, context_tokens, subagent_runs, created_at, updated_at
+         plan_mode, auto_mode_state, context_tokens, subagent_runs, created_at, updated_at
        )
        VALUES (
          @id, @goal, @title, @titleSource, @status, @phase, @plan, @messages, @artifacts, @clarifications,
          @pendingApprovals, @checkpoints, @budget, @budgetUsage, @lifetimeBudget, @lifetimeUsage, @budgetExceeded,
          @tokenUsage, @archivedMessages, @parentTaskId,
-         @projectId, @planMode, @contextTokens, @subagentRuns, @createdAt, @updatedAt
+         @projectId, @planMode, @autoModeState, @contextTokens, @subagentRuns, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
          goal=excluded.goal, title=excluded.title, title_source=excluded.title_source,
@@ -512,6 +558,7 @@ export const taskStore = {
          token_usage=excluded.token_usage, archived_messages=excluded.archived_messages,
          parent_task_id=excluded.parent_task_id, project_id=excluded.project_id,
          plan_mode=excluded.plan_mode,
+         auto_mode_state=excluded.auto_mode_state,
          context_tokens=excluded.context_tokens,
          subagent_runs=excluded.subagent_runs,
          updated_at=excluded.updated_at`,
@@ -538,6 +585,7 @@ export const taskStore = {
       parentTaskId: task.parentTaskId ?? null,
       projectId: task.projectId ?? null,
       planMode: task.executionMode ?? 'auto',
+      autoModeState: task.autoModeState === undefined ? null : JSON.stringify(task.autoModeState),
       contextTokens: task.contextTokens ?? null,
       subagentRuns: JSON.stringify(task.subagentRuns ?? []),
       createdAt: task.createdAt,
@@ -565,6 +613,31 @@ export const taskStore = {
       task.id,
     );
     syncMessageParts(task);
+  },
+
+  /**
+   * 消息热路径：使用 SQLite JSON append 追加单条消息，同时更新关联运行态。
+   * 避免每次 message/tool_result 都在 JS 中重序列化全部历史并重扫图片分片。
+   */
+  appendMessage(task: Task, message: Message): void {
+    db.prepare(
+      `UPDATE tasks SET
+         messages = json_insert(messages, '$[#]', json(?)),
+         plan = ?, checkpoints = ?, token_usage = ?,
+         budget_usage = ?, lifetime_usage = ?, context_tokens = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(
+      serializeMessage(message),
+      JSON.stringify(task.plan),
+      JSON.stringify(task.checkpoints ?? []),
+      task.tokenUsage === undefined ? null : JSON.stringify(task.tokenUsage),
+      task.budgetUsage === undefined ? null : JSON.stringify(task.budgetUsage),
+      task.lifetimeUsage === undefined ? null : JSON.stringify(task.lifetimeUsage),
+      task.contextTokens ?? null,
+      task.updatedAt,
+      task.id,
+    );
+    appendMessageParts(task.id, message);
   },
 
   /**
@@ -663,6 +736,83 @@ export const taskStore = {
       return { deleted: task > 0, deletedTraces: traces };
     })();
     return result;
+  },
+};
+
+export interface PiSessionTreeSnapshotRow {
+  version: number;
+  entries: unknown[];
+  messageCount: number;
+  messageIds: string[];
+  messageLinks: Array<{ messageId: string; entryId: string }>;
+  updatedAt: string;
+}
+
+/** Pi 会话树独立持久化；避免高频 entry 写入重写完整 Task。 */
+export const piSessionTreeStore = {
+  get(taskId: string): PiSessionTreeSnapshotRow | undefined {
+    const row = db.prepare(
+      `SELECT version, entries, message_count, message_ids, message_links, updated_at
+       FROM pi_session_trees WHERE task_id = ?`,
+    ).get(taskId) as {
+      version: number;
+      entries: string;
+      message_count: number;
+      message_ids: string;
+      message_links: string;
+      updated_at: string;
+    } | undefined;
+    if (!row) return undefined;
+    const entries = parseJsonColumn(row.entries);
+    if (!Array.isArray(entries)) return undefined;
+    const messageIds = parseJsonColumn(row.message_ids);
+    const messageLinks = parseJsonColumn(row.message_links);
+    return {
+      version: row.version,
+      entries,
+      messageCount: row.message_count,
+      messageIds: Array.isArray(messageIds)
+        ? messageIds.filter((id): id is string => typeof id === 'string')
+        : [],
+      messageLinks: Array.isArray(messageLinks)
+        ? messageLinks.filter((link): link is { messageId: string; entryId: string } => (
+            typeof link === 'object' &&
+            link !== null &&
+            'messageId' in link &&
+            typeof link.messageId === 'string' &&
+            'entryId' in link &&
+            typeof link.entryId === 'string'
+          ))
+        : [],
+      updatedAt: row.updated_at,
+    };
+  },
+
+  save(taskId: string, snapshot: Omit<PiSessionTreeSnapshotRow, 'updatedAt'>): void {
+    const updatedAt = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO pi_session_trees (task_id, version, entries, message_count, message_ids, message_links, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(task_id) DO UPDATE SET
+         version = excluded.version,
+         entries = excluded.entries,
+         message_count = excluded.message_count,
+         message_ids = excluded.message_ids,
+         message_links = excluded.message_links,
+         updated_at = excluded.updated_at`,
+    ).run(
+      taskId,
+      snapshot.version,
+      JSON.stringify(snapshot.entries),
+      snapshot.messageCount,
+      JSON.stringify(snapshot.messageIds),
+      JSON.stringify(snapshot.messageLinks),
+      updatedAt,
+    );
+  },
+
+  delete(taskId: string): boolean {
+    return db.prepare('DELETE FROM pi_session_trees WHERE task_id = ?').run(taskId).changes > 0;
   },
 };
 

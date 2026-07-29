@@ -46,6 +46,8 @@ export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 export interface MessageToolCall {
   id: string;
   type: 'function';
+  /** true 表示工具由 Provider 托管执行，不能在恢复上下文时交给本地执行器重放。 */
+  providerExecuted?: boolean;
   function: {
     /** 该工具调用关联的计划步骤 ID；前端 timeline 按此分组 */
     planStepId?: string;
@@ -138,6 +140,8 @@ export interface Message {
   toolCalls?: MessageToolCall[];
   /** 仅 role='tool'：该结果关联的 tool_call id */
   toolCallId?: string;
+  /** Provider 托管工具的调用/结果记录；用于历史渲染并阻止本地重复执行。 */
+  providerExecuted?: boolean;
   /** 用户消息携带的文件附件（路径引用）；Agent 据此注入文件上下文 */
   attachments?: MessageAttachment[];
   /** 用户消息中的图片内容块；不可作为文件工具的输入路径。 */
@@ -381,7 +385,7 @@ export type SubagentRole = 'explore' | 'research' | 'coder' | 'shell' | 'writer'
 
 export type SubagentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
-/** 终止原因。timeout / max_iterations 仅用于历史快照兼容，新运行不再产生。 */
+/** 子代理终止原因。独立预算会产生 timeout / max_iterations。 */
 export type SubagentStopReason = 'completed' | 'error' | 'timeout' | 'cancelled' | 'max_iterations';
 
 /** 子代理内部工具活动；只持久化用户可解释的元数据，不复制大段工具输出。 */
@@ -406,8 +410,10 @@ export interface SubagentRun {
   activities: SubagentActivity[];
   iterations: number;
   toolCallCount: number;
-  /** 历史字段：旧运行可能带轮次上限；新运行不再设置。 */
   maxIterations?: number;
+  maxWallMs?: number;
+  /** 子代理累计 token（provider 未返回 usage 时缺省）。 */
+  tokenUsage?: number;
   stopReason?: SubagentStopReason;
   result?: string;
   error?: string;
@@ -444,6 +450,16 @@ export function taskDisplayTitle(task: Pick<Task, 'title' | 'goal'>): string {
   const titled = task.title?.trim();
   if (titled) return titled.length <= TASK_TITLE_MAX_LENGTH ? titled : formatTaskTitle(titled);
   return formatTaskTitle(task.goal);
+}
+
+/**
+ * 任务级模型快照。创建任务时固化（或运行中显式切换时更新），
+ * resume / 续跑据此恢复原模型，避免全局设置变更静默替换既有对话的模型。
+ */
+export interface TaskModelSnapshot {
+  provider: string;
+  model: string;
+  thinkingLevel: AgentThinkingLevel;
 }
 
 /** 一个用户任务（Agent 的工作单元） */
@@ -487,6 +503,8 @@ export interface Task {
   tokenUsage?: AggregatedTokenUsage;
   /** 当前上下文窗口估算 token 数（后端 estimateTokens 计算） */
   contextTokens?: number;
+  /** 任务级模型快照：resume / 续跑恢复该任务原模型；缺省表示跟随全局当前模型。 */
+  modelSnapshot?: TaskModelSnapshot;
   /** 最近一次 revert 归档的消息（Phase 2 unrevert 钩子） */
   archivedMessages?: Message[];
   /** 分支来源的父任务 ID（branch 功能） */
@@ -499,6 +517,8 @@ export interface Task {
   executionMode?: AgentExecutionMode;
   /** 子代理运行历史；通过 parentCallId 关联到触发它的 assistant 消息。 */
   subagentRuns?: SubagentRun[];
+  /** 引擎重启后被自动恢复续跑（对齐 pi -r）；任务正常结束或用户手动 resume 后清除。 */
+  resumedAfterRestart?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -669,6 +689,8 @@ export interface ToolCall {
   id: string;
   toolName: string;
   args: Record<string, unknown>;
+  /** true 表示该工具由 Provider 执行，Aurevoy 只负责状态与历史记录。 */
+  providerExecuted?: boolean;
   /** 后端生成的人类可读调用摘要，不包含密钥、正文等敏感或大字段 */
   summary?: string;
   /** 该工具调用关联的计划步骤 ID；前端按 group 重新渲染 timeline */
@@ -679,6 +701,8 @@ export interface ToolCall {
 export interface ToolResult {
   callId: string;
   ok: boolean;
+  /** true 表示结果来自 Provider 托管工具。 */
+  providerExecuted?: boolean;
   output?: unknown;
   error?: string;
   errorCode?: 'schema_validation_failed' | 'approval_denied' | 'execution_failed';
@@ -696,6 +720,13 @@ export type AgentCacheRetention = 'short' | 'long';
 // ============================================================
 // Agent 事件流 (通过 SSE 推送给前端)
 // ============================================================
+
+/** 运行中待注入（steering/follow-up）队列里一条用户消息的安全投影。 */
+export interface PendingQueueItem {
+  kind: 'steering' | 'follow_up';
+  /** 待注入消息正文预览（截断）。 */
+  preview: string;
+}
 
 /**
  * Agent 在执行任务过程中向前端流式推送的事件。
@@ -790,20 +821,68 @@ export type AgentEvent =
       taskId: string;
       originalCount: number;
       summaryLength: number;
+      /** LLM 摘要正文；前端据此渲染可展开的压缩标记。 */
+      summary?: string;
+      /** 压缩前 / 后上下文估算 token，用于 context ring 下降展示。 */
+      tokensBefore?: number;
+      tokensAfter?: number;
+      /** 是否携带了自定义压缩指令；true 时表示按用户指令摘要。 */
+      instructed?: boolean;
+      /** true 表示阈值触发的自动压缩；false/缺省表示手动 /compact。 */
+      automatic?: boolean;
     }
   | { type: 'scout_started'; taskId: string }
   | { type: 'scout_report'; taskId: string; report: ScoutReport }
   | { type: 'plan_generated'; taskId: string; plan: PlanStep[]; source: 'llm' | 'heuristic' }
-  | { type: 'plan_approval_request'; taskId: string; plan: PlanStep[]; reasoning: string; scoutReport?: ScoutReport }
-  | { type: 'plan_approval_resolved'; taskId: string; approved: boolean; reason?: string }
   | { type: 'skill_deactivated'; taskId: string; previousSkill?: string | null }
   | { type: 'skill_installed'; taskId: string; skillNames: string[]; repoUrl: string }
   | { type: 'skill_uninstalled'; taskId: string; skillName: string }
   | { type: 'content_blocks_added'; taskId: string; messageId: string; blocks: ContentBlock[] }
   | { type: 'auto_mode_state'; taskId: string; state: AutoModeState }
+  | {
+      /** 运行中 steering/follow-up 待注入队列的可见快照。 */
+      type: 'queue_update';
+      taskId: string;
+      pending: PendingQueueItem[];
+    }
+  | {
+      /** LLM 后台操作（压缩/分支摘要）重试进度。active=false 表示重试结束。 */
+      type: 'retry_status';
+      taskId: string;
+      active: boolean;
+      attempt?: number;
+      maxAttempts?: number;
+      delayMs?: number;
+      reason?: string;
+    }
+  | {
+      /** 任务级模型/推理档已切换（会话内即时生效并记录到会话树）。 */
+      type: 'model_updated';
+      taskId: string;
+      provider: string;
+      model: string;
+      thinkingLevel: AgentThinkingLevel;
+    }
+  | {
+      /** 任务被恢复续跑；automatic=true 表示引擎重启后的自动恢复（对齐 pi -r）。 */
+      type: 'task_resumed';
+      taskId: string;
+      automatic: boolean;
+    }
   | { type: 'done'; taskId: string; status: TaskStatus }
   | { type: 'error'; taskId: string; message: string }
   | { type: 'task_deleted'; taskId: string };
+
+/**
+ * SSE 线上事件信封。
+ *
+ * seq 在单个 task 内严格递增，客户端可通过 Last-Event-ID 增量恢复；
+ * emittedAt 用于区分模型 TTFT、服务端排队和前端渲染延迟。
+ */
+export type StreamAgentEvent = AgentEvent & {
+  seq: number;
+  emittedAt: string;
+};
 
 // ============================================================
 // HTTP API 请求/响应
@@ -971,17 +1050,6 @@ export interface ClarificationAnswerResponse {
   delivered: boolean;
 }
 
-/** POST /api/tasks/:id/plan-approval — 审批 Plan Agent 生成的执行计划 */
-export interface PlanApprovalRequest {
-  approved: boolean;
-  reason?: string;
-}
-
-export interface PlanApprovalResponse {
-  taskId: string;
-  delivered: boolean;
-}
-
 /** GET /api/tasks/:id/artifacts */
 export interface TaskArtifactListResponse {
   taskId: string;
@@ -1007,6 +1075,60 @@ export interface TaskTraceListResponse {
   traces: TaskTraceEntry[];
 }
 
+/** Pi 原生会话树的安全投影；不向前端暴露完整模型消息和工具结果。 */
+export interface PiSessionTreeNode {
+  /** Aurevoy 产品消息 ID；不暴露 Pi 私有 entry ID。 */
+  id: string;
+  parentId: string | null;
+  type: string;
+  timestamp: string;
+  role?: MessageRole;
+  preview?: string;
+  label?: string;
+  /** 只有映射到 Pi user entry 的产品用户消息才可切换。 */
+  navigable?: boolean;
+}
+
+/** GET /api/tasks/:id/session-tree */
+export interface PiSessionTreeResponse {
+  taskId: string;
+  leafId: string | null;
+  nodes: PiSessionTreeNode[];
+  updatedAt?: string;
+}
+
+/** POST /api/tasks/:id/session-tree/navigate */
+export interface PiSessionTreeNavigateRequest {
+  targetId: string;
+  /** true 时回退/分叉前生成 LLM 分支摘要，保留被剪枝部分的上下文要点。 */
+  summarize?: boolean;
+  /** 可选的分支摘要自定义指令。 */
+  customInstructions?: string;
+}
+
+/** PUT /api/tasks/:id/session-tree/labels/:targetId */
+export interface PiSessionTreeLabelRequest {
+  /** 空字符串/null 语义由客户端转为 undefined，用于移除标签。 */
+  label?: string;
+}
+
+/** PATCH /api/tasks/:id/model — 会话内即时切换模型/推理档 */
+export interface UpdateTaskModelRequest {
+  provider?: string;
+  model?: string;
+  thinkingLevel?: AgentThinkingLevel;
+}
+
+export interface UpdateTaskModelResponse {
+  task: Task;
+  modelSnapshot: TaskModelSnapshot;
+}
+
+export interface PiSessionTreeNavigateResponse {
+  task: Task;
+  tree: PiSessionTreeResponse;
+}
+
 /**
  * POST /api/tasks/:id/messages — 在同一任务内追加一轮用户输入并继续执行。
  * 后端保留该任务的完整消息历史作为上下文重新进入 Agent 循环（多轮对话）。
@@ -1019,6 +1141,17 @@ export interface ContinueTaskRequest {
   attachments?: MessageAttachment[];
   /** 任务运行中追加消息时的投递方式；默认 steering，等当前工具批次后注入。 */
   delivery?: 'steering' | 'follow_up';
+}
+
+/** POST /api/tasks/:id/queue/clear */
+export interface ClearTaskQueueRequest {
+  kind?: 'steering' | 'follow_up' | 'all';
+}
+
+export interface ClearTaskQueueResponse {
+  taskId: string;
+  kind: 'steering' | 'follow_up' | 'all';
+  cleared: boolean;
 }
 
 export interface ContinueTaskResponse {
@@ -1109,6 +1242,8 @@ export interface CompactTaskRequest {
   fromMessageId?: string;
   /** 压缩结束消息 id（含）；缺省则到最后一条消息 */
   toMessageId?: string;
+  /** 可选的自定义压缩指令（如“只保留关于 X 的决定”），传给 LLM 摘要器。 */
+  instructions?: string;
 }
 
 export interface CompactTaskResponse {
@@ -1396,6 +1531,14 @@ export interface RuntimeSettings {
   agentToolExecution: AgentToolExecutionMode;
   /** Prompt cache 保留时长：long 利于多轮/长任务；short 更省 provider 侧缓存配额。 */
   agentCacheRetention: AgentCacheRetention;
+  /** 上下文接近阈值时用 LLM 自动生成结构化摘要（自动压缩）。 */
+  agentAutoCompact: boolean;
+  /** 引擎重启后自动恢复上次进行中（running/pending）的任务并续跑（对齐 pi -r）。 */
+  autoResumeInterruptedTasks: boolean;
+  /** 任务开始时按目标隐式召回相关长期记忆并注入上下文。 */
+  memoryRecallEnabled: boolean;
+  /** 任务开始时按目标隐式召回相关知识库片段并注入上下文。 */
+  kbRecallEnabled: boolean;
   /**
    * 新建任务时的默认执行预算（写入任务快照）。
    * 运行中任务不受此处后续修改影响。
@@ -1416,6 +1559,8 @@ export interface RuntimeSettings {
   pythonPath: string;
   /** Web 搜索配置 */
   search: {
+    /** 优先使用上游 Responses / Anthropic Messages 的服务器搜索；不支持时回退本地搜索。 */
+    preferNative: boolean;
     provider: 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom';
     baseUrl: string;
     apiKeyConfigured: boolean;
@@ -1502,6 +1647,10 @@ export interface UpdateRuntimeSettingsRequest {
   agentThinkingLevel?: AgentThinkingLevel;
   agentToolExecution?: AgentToolExecutionMode;
   agentCacheRetention?: AgentCacheRetention;
+  agentAutoCompact?: boolean;
+  autoResumeInterruptedTasks?: boolean;
+  memoryRecallEnabled?: boolean;
+  kbRecallEnabled?: boolean;
   /** 覆盖默认任务预算；仅影响此后新建的任务。 */
   budget?: {
     run?: Partial<TaskBudget>;
@@ -1519,6 +1668,7 @@ export interface UpdateRuntimeSettingsRequest {
   pythonPath?: string;
   /** Web 搜索配置 */
   search?: Partial<{
+    preferNative: boolean;
     provider: 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom';
     baseUrl: string;
     /** 写入新 Key；留空字段表示不修改，空字符串表示清除。响应永不回显。 */

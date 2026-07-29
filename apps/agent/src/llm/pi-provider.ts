@@ -87,7 +87,7 @@ export function listPiProviderCatalog(): PiProviderCatalogEntry[] {
     id: 'openai-compatible',
     name: 'OpenAI Compatible / Custom',
     defaultBaseUrl: '',
-    apis: ['openai-completions'],
+    apis: ['openai-completions', 'openai-responses'],
     supportsApiKey: true,
     apiKeyLabel: 'API key',
     supportsOauth: false,
@@ -199,6 +199,14 @@ export function listBuiltinModelIds(provider: string): string[] {
 export function resolveModelBaseUrl(modelBaseUrl?: string, provider?: string): string {
   ensureLlmSchemaMigrated();
   const providerId = (provider ?? config.llm.provider).trim();
+  // 回归引导显式注入本地 fixture；不得因迁移时自动创建的空 provider 槽回落到官方端点。
+  if (
+    process.env.AUREVOY_TEST_BOOTSTRAP === '1' &&
+    providerId === config.llm.provider &&
+    config.llm.baseUrl?.trim()
+  ) {
+    return config.llm.baseUrl.trim().replace(/\/+$/, '');
+  }
   const slot = getLlmProvider(providerId);
   if (slot) {
     const fromSlot = slot.baseUrl.trim().replace(/\/+$/, '');
@@ -221,11 +229,23 @@ export function resolveModelBaseUrl(modelBaseUrl?: string, provider?: string): s
  *   否则会打到 /backend-api/chat/completions 并被 Cloudflare 403。
  * - chatgpt.com 是 Codex 官方端点，不是「第三方网关」。
  */
-export function resolveModelApi(api: string | undefined, baseUrl: string, provider: string): string {
+export function resolveModelApi(
+  api: string | undefined,
+  baseUrl: string,
+  provider: string,
+  _modelId?: string,
+): string {
   const resolved = api || fallbackApiForProvider(provider);
   // Codex 订阅协议：始终保留
   if (resolved === 'openai-codex-responses' || provider === 'openai-codex') {
     return 'openai-codex-responses';
+  }
+  // 显式填写 Anthropic 兼容端点时尊重其 wire protocol（如 DeepSeek /anthropic）。
+  if (
+    (resolved === 'openai-completions' || resolved === 'openai-responses')
+    && isAnthropicCompatBaseUrl(baseUrl)
+  ) {
+    return 'anthropic-messages';
   }
   // 仅对「真·OpenAI Responses」在非官方主机上降级
   if (resolved === 'openai-responses' && !isOfficialOpenAIHost(baseUrl) && !isCodexHost(baseUrl)) {
@@ -256,7 +276,7 @@ export function createPiModel(modelOverride?: string, providerOverride?: string)
     const withBaseUrl = {
       ...builtin,
       baseUrl,
-      api: resolveModelApi(builtin.api, baseUrl, provider) as typeof builtin.api,
+      api: resolveModelApi(builtin.api, baseUrl, provider, modelId) as typeof builtin.api,
     };
     // 确保 DeepSeek / Qwen builtin 模型在 compat 缺失时仍有 reasoning_content 重放字段
     const needCompat = (
@@ -277,7 +297,7 @@ export function createPiModel(modelOverride?: string, providerOverride?: string)
     return withBaseUrl;
   }
   const baseUrl = resolveModelBaseUrl(undefined, provider);
-  const api = resolveModelApi(fallbackApiForProvider(provider), baseUrl, provider);
+  const api = resolveModelApi(fallbackApiForProvider(provider), baseUrl, provider, modelId);
   const openAICompat = api === 'openai-completions'
     ? openAICompletionsFallbackCompat(provider, baseUrl, modelId)
     : undefined;
@@ -743,6 +763,14 @@ function isOfficialOpenAIHost(baseUrl: string): boolean {
 function isCodexHost(baseUrl: string): boolean {
   const host = safeHost(baseUrl);
   return host === 'chatgpt.com' || host.endsWith('.chatgpt.com');
+}
+
+function isAnthropicCompatBaseUrl(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).pathname.replace(/\/+$/, '').endsWith('/anthropic');
+  } catch {
+    return /\/anthropic\/?$/.test(baseUrl);
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

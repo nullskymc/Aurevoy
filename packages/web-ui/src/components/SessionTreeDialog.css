@@ -1,0 +1,340 @@
+.session-tree-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: color-mix(in srgb, #0d1117 42%, transparent);
+  backdrop-filter: blur(2px);
+  animation: session-tree-fade-in 140ms ease-out;
+}
+
+.session-tree-dialog {
+  position: fixed;
+  z-index: 81;
+  top: 50%;
+  left: 50%;
+  width: min(640px, calc(100vw - 40px));
+  max-height: min(720px, calc(100vh - 48px));
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--ui-radius-xl);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 24px 72px color-mix(in srgb, #000 25%, transparent);
+  animation: session-tree-enter 160ms ease-out;
+}
+
+.session-tree-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 12px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-tree-header-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ui-radius-md);
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+}
+
+.session-tree-title {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+  font-weight: 650;
+}
+
+.session-tree-description {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.session-tree-close {
+  margin: -4px -4px 0 0;
+}
+
+.session-tree-body {
+  min-height: 220px;
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.session-tree-controls {
+  display: flex;
+  gap: 6px;
+  padding: 0 0 10px;
+}
+
+.session-tree-controls button,
+.session-tree-label-editor button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.session-tree-controls button {
+  padding: 4px 9px;
+}
+
+.session-tree-controls button[data-active="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+}
+
+.session-tree-state {
+  display: grid;
+  min-height: 210px;
+  place-items: center;
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.session-tree-state--error {
+  color: var(--danger, #c2413a);
+}
+
+.session-tree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.session-tree-row {
+  --session-tree-lane: 0;
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: calc(20px + var(--session-tree-lane) * 18px) minmax(0, 1fr);
+  align-items: stretch;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-tree-row:hover {
+  background: var(--card-bg);
+}
+
+.session-tree-row--readonly {
+  cursor: default;
+}
+
+.session-tree-row--readonly:hover {
+  background: transparent;
+}
+
+.session-tree-row[data-selected="true"] {
+  border-color: var(--border-strong);
+  background: var(--selection-bg);
+}
+
+.session-tree-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.session-tree-rail {
+  position: relative;
+  min-height: 58px;
+}
+
+.session-tree-rail::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 9px;
+  width: 1px;
+  background: var(--border);
+}
+
+.session-tree-dot {
+  position: absolute;
+  z-index: 1;
+  top: 22px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--text-muted);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+.session-tree-row[data-active="true"] .session-tree-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft-bg);
+}
+
+.session-tree-node-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 12px 10px 6px;
+}
+
+.session-tree-node-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.session-tree-node-meta > :first-child {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.session-tree-node-meta time {
+  margin-left: auto;
+}
+
+.session-tree-current {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft-bg);
+  color: var(--accent-soft-fg);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.session-tree-label {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.session-tree-preview {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-tree-footer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--card-bg);
+}
+
+.session-tree-footer-options {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.session-tree-label-editor {
+  display: flex;
+  gap: 6px;
+}
+
+.session-tree-label-editor input,
+.session-tree-summary-instructions {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.session-tree-label-editor button {
+  padding: 3px 8px;
+  border-radius: 7px;
+}
+
+.session-tree-summary-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.session-tree-warning {
+  flex: 1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.session-tree-switch {
+  flex: none;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--ui-radius-md);
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.session-tree-switch:disabled {
+  border-color: var(--border);
+  background: var(--border);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+@keyframes session-tree-fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes session-tree-enter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px)) scale(.985);
+  }
+}
+
+@media (max-width: 640px) {
+  .session-tree-dialog {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+  }
+
+  .session-tree-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -3,10 +3,11 @@
  * Conversation 集成呈现：主路径过程层必须是 AgentRound 语法，
  * 不得再包一层「Thought process」抽屉。
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Message, Task } from "@aurevoy/shared";
 import { Conversation } from "./Conversation";
+import { setLocale } from "../i18n";
 
 vi.mock("dompurify", () => ({
   default: {
@@ -33,6 +34,73 @@ function baseTask(overrides: Partial<Task> & { messages: Message[] }): Task {
 const noop = () => {};
 
 describe("Conversation process presentation (integrated path)", () => {
+  beforeEach(() => setLocale("zh"));
+
+  it("restores a provider-hosted search from persisted tool messages without trace adapters", () => {
+    const task = baseTask({
+      status: "completed",
+      phase: "finalizing",
+      messages: [
+        {
+          id: "u-hosted",
+          role: "user",
+          content: "查看最新信息",
+          createdAt: "2026-07-10T00:00:00.000Z",
+        },
+        {
+          id: "a-hosted",
+          role: "assistant",
+          content: "",
+          providerExecuted: true,
+          createdAt: "2026-07-10T00:00:01.000Z",
+          toolCalls: [{
+            id: "search-hosted",
+            type: "function",
+            providerExecuted: true,
+            function: {
+              name: "web_search",
+              arguments: "{}",
+              summary: "搜索网页",
+            },
+          }],
+        },
+        {
+          id: "r-hosted",
+          role: "tool",
+          content: "{}",
+          toolCallId: "search-hosted",
+          providerExecuted: true,
+          createdAt: "2026-07-10T00:00:02.000Z",
+        },
+        {
+          id: "final-hosted",
+          role: "assistant",
+          content: "搜索完成。",
+          createdAt: "2026-07-10T00:00:03.000Z",
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(
+      <Conversation
+        task={task}
+        status="completed"
+        phase="finalizing"
+        plan={[]}
+        output=""
+        busy={false}
+        liveToolActivity={[]}
+        hasLiveTail={false}
+        defaultToolDetailsOpen
+        onToolDecision={noop}
+        onClarificationAnswer={noop}
+      />,
+    );
+
+    expect((html.match(/已搜索网页/g) ?? []).length).toBe(1);
+    expect(html).not.toContain("tool_result:");
+  });
+
   it("live path shows process-live-status and never Thought process / workflow-drawer", () => {
     const task = baseTask({
       status: "running",
@@ -66,7 +134,7 @@ describe("Conversation process presentation (integrated path)", () => {
     expect(html).toContain("agent-process-stream");
     expect(html).toContain("process-live-status");
     expect(html).toContain("process-live-block");
-    expect(html).toContain("已处理");
+    expect(html).toContain("处理中");
     expect(html).toContain("正在思考");
     expect(html).toContain('data-process="live"');
     expect(html).not.toContain("Thought process");
@@ -226,7 +294,7 @@ describe("Conversation process presentation (integrated path)", () => {
     const deliverySlice = html.split('class="agent-final-response"')[1] ?? "";
     expect(deliverySlice).not.toContain("我先查看工作区里的项目结构");
     expect(deliverySlice).toContain("agent-message-actions");
-    expect(deliverySlice).toContain('aria-label="Copy"');
+    expect(deliverySlice).toContain('aria-label="复制"');
     expect(deliverySlice).toContain('dateTime="2026-07-10T00:00:03.000Z"');
     expect(html).toContain('dateTime="2026-07-10T00:00:00.000Z"');
   });

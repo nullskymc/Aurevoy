@@ -631,6 +631,29 @@ button.composer-mode-chip:hover {
   filter: none;
 }
 
+.composer-queue-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.composer-queue-action {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.composer-queue-action:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-strong);
+}
+
 :root[data-theme="dark"] .composer-project-bar {
   background: var(--surface);
   border-color: var(--border);

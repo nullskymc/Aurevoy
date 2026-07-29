@@ -3,6 +3,7 @@ import {
   type BranchTaskResponse,
   type ClarificationAnswerResponse,
   type CleanupDataResponse,
+  type ClearTaskQueueResponse,
   type CompactTaskResponse,
   type ContinueTaskResponse,
   type CreateMemoryRequest,
@@ -18,6 +19,8 @@ import {
   type OauthLoginStartRequest,
   type OauthLogoutRequest,
   type OauthSessionSnapshot,
+  type PiSessionTreeResponse,
+  type PiSessionTreeNavigateResponse,
   type ResumeTaskResponse,
   type RevertMode,
   type RevertTaskResponse,
@@ -37,6 +40,8 @@ import {
   type ToolListResponse,
   type ToolDescriptor,
   type UpdateRuntimeSettingsRequest,
+  type UpdateTaskModelRequest,
+  type UpdateTaskModelResponse,
   type UpdateToolRequest,
   type Project,
   type ProjectListResponse,
@@ -199,13 +204,28 @@ export async function continueTask(
   message: string,
   attachments?: MessageAttachment[],
   executionMode: "auto" | "plan" = "auto",
+  delivery?: "steering" | "follow_up",
 ): Promise<ContinueTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, attachments, executionMode }),
+    body: JSON.stringify({ message, attachments, executionMode, delivery }),
   });
   if (!res.ok) await throwApiError(res, "continue task failed");
+  return res.json();
+}
+
+/** 撤回仍在等待注入的运行中消息；已进入模型上下文的消息不可撤回。 */
+export async function clearTaskQueue(
+  taskId: string,
+  kind: "steering" | "follow_up" | "all" = "all",
+): Promise<ClearTaskQueueResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/queue/clear`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind }),
+  });
+  if (!res.ok) await throwApiError(res, "clear task queue failed");
   return res.json();
 }
 
@@ -262,11 +282,12 @@ export async function compactTask(
   taskId: string,
   fromMessageId?: string,
   toMessageId?: string,
+  instructions?: string,
 ): Promise<CompactTaskResponse> {
   const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/compact`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fromMessageId, toMessageId }),
+    body: JSON.stringify({ fromMessageId, toMessageId, instructions }),
   });
   if (!res.ok) throw new Error(`compact task failed: ${res.status}`);
   return res.json();
@@ -277,6 +298,60 @@ export async function listTaskTraces(taskId: string): Promise<TaskTraceEntry[]> 
   if (!res.ok) throw new Error(`list task traces failed: ${res.status}`);
   const body = (await res.json()) as TaskTraceListResponse;
   return body.traces;
+}
+
+export async function getTaskSessionTree(taskId: string): Promise<PiSessionTreeResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/session-tree`);
+  if (!res.ok) throw new Error(`get task session tree failed: ${res.status}`);
+  return res.json();
+}
+
+export async function navigateTaskSessionTree(
+  taskId: string,
+  targetId: string,
+  options?: { summarize?: boolean; customInstructions?: string },
+): Promise<PiSessionTreeNavigateResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/session-tree/navigate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ targetId, ...options }),
+  });
+  if (!res.ok) await throwApiError(res, 'navigate task session tree failed');
+  return res.json();
+}
+
+export async function setTaskSessionTreeLabel(
+  taskId: string,
+  targetId: string,
+  label?: string,
+): Promise<PiSessionTreeResponse> {
+  const res = await fetch(
+    `${BASE_URL}/api/tasks/${taskId}/session-tree/labels/${encodeURIComponent(targetId)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label }),
+    },
+  );
+  if (!res.ok) await throwApiError(res, "set task session tree label failed");
+  return res.json();
+}
+
+/**
+ * 会话内即时切换某个任务的模型 / 推理档（P1-2 模型粘性）。
+ * 后端持久化到 task.modelSnapshot 并发布 model_updated；运行中的任务会同步到 harness。
+ */
+export async function updateTaskModel(
+  taskId: string,
+  patch: UpdateTaskModelRequest,
+): Promise<UpdateTaskModelResponse> {
+  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/model`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) await throwApiError(res, 'update task model failed');
+  return res.json();
 }
 
 /** 请求后端取消一个进行中的任务（中断其 LLM 流） */
@@ -676,18 +751,4 @@ export async function updateProject(id: string, body: UpdateProjectRequest): Pro
 export async function deleteProject(id: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/projects/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`delete project failed: ${res.status}`);
-}
-
-/** 审批 Plan Agent 生成的执行计划 */
-export async function approvePlan(
-  taskId: string,
-  approved: boolean,
-  reason?: string,
-): Promise<void> {
-  const res = await fetch(`${BASE_URL}/api/tasks/${taskId}/plan-approval`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ approved, reason }),
-  });
-  if (!res.ok) await throwApiError(res, "plan approval failed");
 }

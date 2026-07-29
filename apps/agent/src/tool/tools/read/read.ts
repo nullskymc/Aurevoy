@@ -1,12 +1,8 @@
 import { Schema } from "effect"
-import { readFile, readdir, stat, realpath } from "node:fs/promises"
-import { isAbsolute, relative, resolve, extname } from "node:path"
+import { readFile, readdir, stat } from "node:fs/promises"
+import { extname } from "node:path"
 import { make, type ContentPart } from "../../framework/definition.js"
-
-function isInsideAllowedRoot(target: string, root: string): boolean {
-  const rel = relative(root, target)
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))
-}
+import { assertRealPathInside, resolveInWorkspace } from "../../filesystem/workspace-paths.js"
 
 /**
  * 解析可读路径：工作区内，或 externalPaths 白名单（用户附件 / 引擎上传目录）。
@@ -23,30 +19,10 @@ const resolveReadablePath = async (
     )
   }
 
-  const target = isAbsolute(input) ? resolve(input) : resolve(workspaceRoot, input)
-
-  const candidates = [workspaceRoot, ...externalPaths].filter(Boolean)
   try {
-    let realTarget: string
-    try {
-      realTarget = await realpath(target)
-    } catch {
-      realTarget = target
-    }
-    for (const root of candidates) {
-      try {
-        const realRoot = await realpath(root)
-        if (isInsideAllowedRoot(realTarget, realRoot) || realTarget === realRoot) return realTarget
-      } catch {
-        const normalizedRoot = resolve(root)
-        if (isInsideAllowedRoot(target, normalizedRoot) || target === normalizedRoot) return target
-      }
-    }
-    for (const root of candidates) {
-      const normalizedRoot = resolve(root)
-      if (isInsideAllowedRoot(target, normalizedRoot) || target === normalizedRoot) return target
-    }
-    throw new Error("路径越界：只允许访问工作区或用户附件路径")
+    const target = resolveInWorkspace(input, workspaceRoot, externalPaths)
+    await assertRealPathInside(target, workspaceRoot, externalPaths)
+    return target
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
     if (message.includes("路径越界") || message.includes("占位路径")) throw err

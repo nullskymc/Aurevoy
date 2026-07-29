@@ -967,19 +967,21 @@ button.settings-provider-line-main:focus-visible {
   position: fixed;
   inset: 0;
   z-index: 40;
-  display: grid;
-  place-items: center;
-  padding: 24px;
   background: color-mix(in srgb, #000 28%, transparent);
   backdrop-filter: blur(2px);
 }
 
 .settings-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 41;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  width: min(100%, 480px);
+  width: min(calc(100vw - 48px), 480px);
   max-height: min(88vh, 720px);
   overflow: hidden;
+  transform: translate(-50%, -50%);
   border: var(--ui-border-width) solid var(--border);
   border-radius: 16px;
   background: var(--card-bg);

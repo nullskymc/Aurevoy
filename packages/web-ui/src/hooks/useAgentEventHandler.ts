@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { AgentEvent, ContentBlock, PlanStep, Task, TaskArtifact, TaskPhase, TaskStatus, TaskSummary, TaskTraceEntry } from "@aurevoy/shared";
+import type { AgentEvent, ContentBlock, PendingQueueItem, PlanStep, Task, TaskArtifact, TaskPhase, TaskStatus, TaskSummary, TaskTraceEntry } from "@aurevoy/shared";
 import { getTask } from "../api";
 import { createLiveActivityStore } from "../app/liveActivityStore";
 import { createFailureMessage, fetchWithRetry, mergeById } from "../app/taskUtils";
@@ -51,6 +51,12 @@ export function useAgentEventHandler({
   const [liveToolActivity, setLiveToolActivity] = useState<ToolActivity[]>([]);
   const [liveContentBlocks, setLiveContentBlocks] = useState<ContentBlock[]>([]);
   const [phaseDetail, setPhaseDetail] = useState("");
+  /** LLM 后台操作（压缩等）重试状态；P0-3 重试可见性。 */
+  const [retryStatus, setRetryStatus] = useState<{ attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string } | null>(null);
+  /** Pi steering/follow-up 队列待投递项；P0-2 队列可见性。 */
+  const [pendingQueue, setPendingQueue] = useState<PendingQueueItem[]>([]);
+  /** 最近一次上下文压缩（自动或手动）；压缩后 context ring 应下降。 */
+  const [lastCompaction, setLastCompaction] = useState<{ summary?: string; tokensBefore?: number; tokensAfter?: number; automatic: boolean } | null>(null);
   const previousPhaseRef = useRef<TaskPhase | null>(null);
   const nextOutputFreshRef = useRef(false);
   const liveActivitySyncRafRef = useRef<number | null>(null);
@@ -77,6 +83,9 @@ export function useAgentEventHandler({
     setOutput("");
     setLiveContentBlocks([]);
     setPhaseDetail("");
+    setRetryStatus(null);
+    setPendingQueue([]);
+    setLastCompaction(null);
     nextOutputFreshRef.current = false;
   }, [setOutput]);
 
@@ -364,14 +373,44 @@ export function useAgentEventHandler({
       case "context_snapshot":
         patchCurrentTask({ contextTokens: event.tokens });
         break;
+      case "compacted": {
+        // 真压缩：压缩后 context 下降；自动压缩只经 SSE 到达，无 POST 响应可依赖。
+        if (typeof event.tokensAfter === "number") {
+          patchCurrentTask({ contextTokens: event.tokensAfter });
+        }
+        setLastCompaction({
+          summary: event.summary,
+          tokensBefore: event.tokensBefore,
+          tokensAfter: event.tokensAfter,
+          automatic: event.automatic ?? false,
+        });
+        break;
+      }
+      case "queue_update":
+        setPendingQueue(event.pending);
+        break;
+      case "retry_status":
+        setRetryStatus(
+          event.active
+            ? { attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, reason: event.reason }
+            : null,
+        );
+        break;
+      case "model_updated":
+        patchCurrentTask({
+          modelSnapshot: { provider: event.provider, model: event.model, thinkingLevel: event.thinkingLevel },
+        });
+        break;
+      case "task_resumed":
+        // 启动自动续跑：任务可能不在当前会话，只更新列表态。
+        if (currentTask?.id === event.taskId) {
+          setStatus("running");
+          patchCurrentTask({ status: "running" });
+        }
+        break;
       case "reverted":
       case "unreverted":
       case "branched":
-      case "compacted":
-        break;
-      case "plan_approval_request":
-      case "plan_approval_resolved":
-        // 兼容历史 Plan Agent 事件；当前模式切换不依赖审批状态。
         break;
       case "skill_installed":
       case "skill_deactivated":
@@ -497,6 +536,10 @@ export function useAgentEventHandler({
     handleEvent,
     liveContentBlocks,
     phaseDetail,
+    retryStatus,
+    pendingQueue,
+    lastCompaction,
+    dismissCompaction: () => setLastCompaction(null),
   };
 }
 

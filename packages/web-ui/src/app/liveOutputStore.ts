@@ -46,9 +46,14 @@ export class LiveOutputStore {
     this.notify();
   };
 
-  /** token 在本地合帧，最多每 32ms 触发一次 React、Markdown 与虚拟列表测高。 */
+  /** 首 token 立即显示；后续 token 在本地合帧，最多每 32ms 触发一次重渲染。 */
   readonly append = (delta: string): void => {
     if (!delta) return;
+    if (!this.value && !this.pending && this.flushTimer === null) {
+      this.value = delta;
+      this.notify();
+      return;
+    }
     this.pending += delta;
     if (this.flushTimer !== null) return;
     this.flushTimer = setTimeout(this.flush, STREAM_FRAME_MS);

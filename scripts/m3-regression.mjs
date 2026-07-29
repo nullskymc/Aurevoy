@@ -69,8 +69,6 @@ try {
   await caseCancel();
   await caseTraversalDenied();
   await caseSymlinkDenied();
-  await caseApprovalRejected();
-  await caseApprovalTimeout();
   await caseIllegalUrl();
   await caseSandboxBoundary();
   await caseUnconfiguredProvider();
@@ -88,7 +86,12 @@ process.exit(0);
 async function caseDirectAnswer() {
   const result = await runTask('M3_DIRECT answer directly');
   assert(result.task.status === 'completed', '直接回答任务未完成');
-  assertTrace(result.traces, 'llm', true, '直接回答缺少成功 LLM 轨迹');
+  assertTrace(
+    result.traces,
+    'llm',
+    true,
+    `直接回答缺少成功 LLM 轨迹；消息=${JSON.stringify(result.task.messages)}`,
+  );
   assertTrace(result.traces, 'done', true, '直接回答缺少 done 轨迹');
 
   const lateEvents = await streamExistingTask(result.task.id);
@@ -106,16 +109,19 @@ async function caseReadFile() {
 
 async function caseWriteApproval() {
   const result = await runTask('M3_WRITE_APPROVE write approved file', { approve: true });
-  assert(result.task.status === 'completed', '写文件审批任务未完成');
-  assertTrace(result.traces, 'approval', true, '写文件缺少审批通过轨迹');
+  assert(result.task.status === 'completed', '写文件自动执行任务未完成');
+  assert(
+    (result.task.autoModeState?.autoApprovedCalls ?? 0) > 0,
+    `写文件未记录 auto mode 自动放行，实际=${JSON.stringify(result.task.autoModeState)}`,
+  );
   const content = await readFile(join(workspaceDir, 'approved.txt'), 'utf8');
-  assert(content.includes('approved write'), '写文件审批未产生真实文件');
+  assert(content.includes('approved write'), '写文件自动执行未产生真实文件');
 }
 
 async function caseHttpApproval() {
   const result = await runTask('M3_HTTP_APPROVE fetch approved url', { approve: true });
-  assert(result.task.status === 'completed', 'HTTP 审批任务未完成');
-  assertTrace(result.traces, 'approval', true, 'HTTP 缺少审批通过轨迹');
+  assert(result.task.status === 'completed', 'HTTP 自动执行任务未完成');
+  assert((result.task.autoModeState?.autoApprovedCalls ?? 0) > 0, 'HTTP 未记录 auto mode 自动放行');
   assertTrace(result.traces, 'tool_result', true, 'HTTP 缺少成功工具结果轨迹');
 }
 
@@ -160,24 +166,6 @@ async function caseSymlinkDenied() {
   );
 }
 
-async function caseApprovalRejected() {
-  const result = await runTask('M3_WRITE_REJECT reject write', { approve: false });
-  assertTrace(result.traces, 'approval', false, '审批拒绝缺少失败审批轨迹');
-  assert(
-    result.traces.some((trace) => trace.errorCategory === 'permission'),
-    '审批拒绝缺少 permission 分类',
-  );
-}
-
-async function caseApprovalTimeout() {
-  const result = await runTask('M3_APPROVAL_TIMEOUT let approval expire', { approve: 'timeout' });
-  assertTrace(result.traces, 'approval', false, '审批超时缺少失败审批轨迹');
-  assert(
-    result.traces.some((trace) => trace.errorCategory === 'permission'),
-    '审批超时缺少 permission 分类',
-  );
-}
-
 async function caseIllegalUrl() {
   const result = await runTask('M3_BAD_URL fetch illegal url', { approve: true });
   assertTrace(result.traces, 'tool_result', false, '非法 URL 缺少失败工具轨迹');
@@ -219,7 +207,7 @@ async function caseSandboxBoundary() {
   try {
     await commandExecutor.execute({ command: 'node', args: ['--version'] });
   } catch (err) {
-    rejected = err instanceof Error && err.message.includes('命令执行默认关闭');
+    rejected = err instanceof Error && err.message.includes('终端命令默认关闭');
   }
   assert(rejected, '禁用命令执行器没有拒绝执行');
 }
@@ -312,12 +300,16 @@ async function startLlmFixture(httpUrl) {
       return;
     }
     const body = JSON.parse(await readRequestBody(req));
-    const userMessage = body.messages.find((message) => message.role === 'user');
-    const rawUserContent = userMessage?.content ?? '';
-    const userText = Array.isArray(rawUserContent)
-      ? rawUserContent.map((block) => (typeof block === 'object' && block !== null ? block.text ?? '' : '')).join('')
-      : String(rawUserContent);
-    const hasToolResult = body.messages.some((message) => message.role === 'tool');
+    const userText = body.messages
+      .filter((message) => message.role === 'user')
+      .map((message) => extractMessageText(message.content))
+      .join('\n');
+    const requestedTool = chooseTool(userText, httpUrl);
+    const hasToolResult = requestedTool
+      ? body.messages.some(
+          (message) => message.role === 'tool' && message.tool_call_id === requestedTool.id,
+        )
+      : body.messages.some((message) => message.role === 'tool');
 
     if (userText.includes('M3_CANCEL')) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -327,7 +319,7 @@ async function startLlmFixture(httpUrl) {
     }
 
     if (!hasToolResult) {
-      const tool = chooseTool(userText, httpUrl);
+      const tool = requestedTool;
       if (tool) {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         sendSse(res, {
@@ -380,6 +372,18 @@ function chooseTool(userText, httpUrl) {
   }
   if (userText.includes('M3_BAD_URL')) return { id: 'call_bad_url', name: 'web_fetch', args: { url: 'file:///etc/passwd' } };
   return null;
+}
+
+function extractMessageText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => (
+      part && typeof part === 'object' && typeof part.text === 'string'
+        ? part.text
+        : ''
+    ))
+    .join('\n');
 }
 
 function mcpServerCode() {
@@ -452,7 +456,10 @@ function runNode(code, env) {
 }
 
 function assertTrace(traces, kind, ok, message) {
-  assert(traces.some((trace) => trace.kind === kind && trace.ok === ok), message);
+  assert(
+    traces.some((trace) => trace.kind === kind && trace.ok === ok),
+    `${message}；现有轨迹=${JSON.stringify(traces.map((trace) => ({ kind: trace.kind, ok: trace.ok, summary: trace.summary, errorMessage: trace.errorMessage, data: trace.data })))}`,
+  );
 }
 
 function assert(condition, message) {

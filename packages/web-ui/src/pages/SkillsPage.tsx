@@ -379,7 +379,7 @@ function SkillDetailModal({
         <Dialog.Overlay className="skills-modal-backdrop" />
         <Dialog.Content
           className="skills-modal"
-          aria-label={display?.name ?? name}
+          aria-describedby={undefined}
         >
           <div className="skills-modal-toolbar">
           <label className="skills-switch" title={enabled ? t("memory.disable") : t("memory.enable")}>
@@ -399,10 +399,12 @@ function SkillDetailModal({
           </div>
 
           <header className="skills-modal-head">
+          <Dialog.Title asChild>
           <h2>
             {display?.name ?? name}
             <span className="skills-modal-head-suffix"> Skill</span>
           </h2>
+          </Dialog.Title>
           {display?.description && <p className="skills-modal-desc">{display.description}</p>}
           {display && (
             <div className="skills-modal-meta">

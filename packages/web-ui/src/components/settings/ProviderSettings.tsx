@@ -280,27 +280,26 @@ export function ProviderSettings({
     )}
 
     <Dialog.Root open={connectionOpen} onOpenChange={(nextOpen) => !nextOpen && closeConnection()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="settings-modal-backdrop" />
-        <Dialog.Content
-          className="settings-modal"
-          aria-labelledby="settings-connection-dialog-title"
-          data-auth={oauthOnly ? "oauth" : hybridAuth ? "hybrid" : "apikey"}
-        >
+      <Dialog.Overlay className="settings-modal-backdrop" />
+      <Dialog.Content
+        className="settings-modal"
+        aria-labelledby="settings-connection-dialog-title"
+        data-auth={oauthOnly ? "oauth" : hybridAuth ? "hybrid" : "apikey"}
+      >
           <header className="settings-modal-head">
             <div className="settings-modal-title-row">
               <ProviderIcon provider={draft.provider} />
               <div>
-                <h2 id="settings-connection-dialog-title">
+                <Dialog.Title id="settings-connection-dialog-title">
                   {providerLabel(draft.provider, editingCatalog?.name)}
-                </h2>
-                <p>
+                </Dialog.Title>
+                <Dialog.Description>
                   {oauthOnly
                     ? t("settings.providerKindOauth")
                     : hybridAuth
                       ? t("settings.providerKindApiKeyOauth")
                       : t("settings.connectionConfig")}
-                </p>
+                </Dialog.Description>
               </div>
             </div>
             <Dialog.Close asChild>
@@ -428,8 +427,7 @@ export function ProviderSettings({
               </button>
             )}
           </footer>
-        </Dialog.Content>
-      </Dialog.Portal>
+      </Dialog.Content>
     </Dialog.Root>
     </>
   );

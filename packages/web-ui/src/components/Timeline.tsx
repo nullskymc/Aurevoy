@@ -1527,13 +1527,18 @@ function subagentToActivityRow(run: SubagentRun): ProcessActivityRow {
   } else {
     label = goalShort ? `已创建子智能体 · ${role}：${goalShort}` : `已创建子智能体 · ${role}`;
   }
+  const budgetBits = [
+    run.maxIterations ? `${run.iterations}/${run.maxIterations} 轮` : `${run.iterations} 轮`,
+    run.maxWallMs ? `${Math.round((run.durationMs ?? 0) / 1000)}/${Math.round(run.maxWallMs / 1000)}s` : undefined,
+    run.tokenUsage ? `${run.tokenUsage.toLocaleString()} tokens` : undefined,
+  ].filter(Boolean).join(" · ");
   return {
     id: run.id,
     kind: "subagent",
     label,
     icon: "agent",
     status: failed ? "failed" : running ? "running" : "success",
-    detail: run.currentActivity || run.goal,
+    detail: [run.currentActivity || run.goal, budgetBits].filter(Boolean).join(" · "),
   };
 }
 
@@ -1623,9 +1628,18 @@ export function formatProcessedSummaryLabel(params: {
   durationMs?: number | null;
   failed?: boolean;
 }): string {
-  const parts: string[] = ["已处理"];
+  const parts: string[] = [t("timeline.processed")];
   if (params.durationMs != null && params.durationMs > 0 && Number.isFinite(params.durationMs)) {
     parts.push(formatDuration(params.durationMs));
+  }
+  return parts.join(" ");
+}
+
+/** 实时过程必须明确处于进行态；只有完成后的折叠摘要才使用“已处理”。 */
+function formatProcessingSummaryLabel(durationMs?: number | null): string {
+  const parts = [t("timeline.processing")];
+  if (durationMs != null && durationMs > 0 && Number.isFinite(durationMs)) {
+    parts.push(formatDuration(durationMs));
   }
   return parts.join(" ");
 }
@@ -1685,7 +1699,7 @@ export function LiveProcessBlock({
     startedAtMs != null && Number.isFinite(startedAtMs)
       ? Math.max(0, now - startedAtMs)
       : null;
-  const header = formatProcessedSummaryLabel({ durationMs });
+  const header = formatProcessingSummaryLabel(durationMs);
   const hasRows = activityRows.length > 0;
 
   return (

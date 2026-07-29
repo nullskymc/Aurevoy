@@ -51,6 +51,7 @@ export const rememberTool = make({
       source: {
         origin: "agent",
         taskId: ctx.taskID || undefined,
+        taskGoal: ctx.task?.goal,
         createdAt: now,
       },
       createdAt: now,

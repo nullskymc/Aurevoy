@@ -10,6 +10,9 @@ import {
   mergeAgentRoundData,
   resolveLiveStatusText,
 } from "./Timeline";
+import { setLocale } from "../i18n";
+
+setLocale("zh");
 
 vi.mock("dompurify", () => ({
   default: {
@@ -517,7 +520,7 @@ describe("AgentRound", () => {
     );
 
     expect(html).toContain("process-live-block");
-    expect(html).toContain("已处理");
+    expect(html).toContain("处理中");
     // live：每个子代理一行，与工具行并列；无协作工作组
     expect(html).not.toContain("协作工作组");
     expect(html).not.toContain("subagent-workgroup");
@@ -571,7 +574,7 @@ describe("AgentRound", () => {
       />,
     );
 
-    expect(html).toContain("已处理");
+    expect(html).toContain("处理中");
     expect(html).not.toContain("stream-caret");
     expect(html).toContain("is-streaming");
     // 正文已出时不叠灰字「正在思考」
@@ -594,7 +597,7 @@ describe("AgentRound", () => {
       />,
     );
 
-    expect(html).toContain("已处理");
+    expect(html).toContain("处理中");
     expect(html).toContain("正在思考");
     expect(html).toContain("process-live-status");
   });

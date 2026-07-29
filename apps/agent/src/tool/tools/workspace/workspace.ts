@@ -21,6 +21,15 @@ const MutationOutput = Schema.Struct({
   bytesMoved: Schema.optional(Schema.Number),
 });
 
+// Effect 会把空 Struct 导出为 object | array；函数工具协议要求根参数必须明确为 object。
+const EmptyObjectInput = Schema.Struct({}).annotations({
+  jsonSchema: {
+    type: 'object',
+    properties: {},
+    additionalProperties: false,
+  },
+});
+
 /** 只读目录枚举，仍使用同一套工作区与符号链接边界检查。 */
 export const listDirectoryTool = make({
   name: 'list_directory',
@@ -49,7 +58,7 @@ export const getCurrentTimeTool = make({
   name: 'get_current_time',
   description: '获取当前的 ISO 时间戳',
   riskLevel: 'safe',
-  input: Schema.Struct({}),
+  input: EmptyObjectInput,
   output: Schema.Struct({ now: Schema.String }),
   execute: async () => ({ now: new Date().toISOString() }),
 });

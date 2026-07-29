@@ -46,6 +46,8 @@ export interface SubTaskProgress {
   toolStatus?: 'completed' | 'failed';
   toolDurationMs?: number;
   error?: string;
+  maxIterations?: number;
+  maxWallMs?: number;
 }
 
 export interface SubTask {
@@ -81,13 +83,16 @@ export interface SubTaskResult {
   role: SubagentRole;
   stopReason: SubagentStopReason;
   durationMs: number;
+  maxIterations: number;
+  maxWallMs: number;
+  tokenUsage?: number;
   truncated: boolean;
   error?: string;
 }
 
 /**
  * 使用 Pi AgentHarness 执行隔离子任务。
- * 边界：并发闸门、父取消、工具白名单与父权限；无独立轮次/总时长上限。
+ * 边界：并发闸门、父取消、工具白名单、父权限与独立轮次/总时长上限。
  */
 export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
   const runId = randomUUID();
@@ -99,6 +104,8 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
     (name) => !!unifiedToolRegistry.get(name) && unifiedToolRegistry.isEnabled(name),
   );
   const approvalConfig = resolveSubagentApprovalConfig(subTask);
+  const maxIterations = resolveSubagentMaxIterations(subTask.parentTask);
+  const maxWallMs = resolveSubagentMaxWallMs(subTask.parentTask);
   const logger = subTask.parentTask?.id
     ? createTaskLogger(subTask.parentTask.id)
     : undefined;
@@ -110,6 +117,8 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
       startedAtMs,
       role,
       stopReason: 'error',
+      maxIterations,
+      maxWallMs,
       error: `子代理角色 ${role} 没有已启用的可用工具${unavailable}`,
     });
   }
@@ -129,6 +138,8 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
       startedAtMs,
       role,
       stopReason: 'cancelled',
+      maxIterations,
+      maxWallMs,
       error: '父任务已取消，子代理未启动',
     });
   }
@@ -136,19 +147,37 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
   let content = '';
   let toolCallCount = 0;
   let iterations = 0;
+  let tokenUsage = 0;
   let error: string | undefined;
-  let forcedStopReason: Extract<SubagentStopReason, 'cancelled'> | undefined;
+  let forcedStopReason: Extract<SubagentStopReason, 'cancelled' | 'timeout' | 'max_iterations'> | undefined;
   let harness: AgentHarness | undefined;
+  let softWallTimer: ReturnType<typeof setTimeout> | undefined;
+  let hardWallTimer: ReturnType<typeof setTimeout> | undefined;
+  let wrapUpRequested = false;
   const toolStartedAt = new Map<string, number>();
 
   const forceStop = (
-    reason: Extract<SubagentStopReason, 'cancelled'>,
+    reason: Extract<SubagentStopReason, 'cancelled' | 'timeout' | 'max_iterations'>,
     message: string,
   ): void => {
-    if (forcedStopReason) return;
-    forcedStopReason = reason;
+    if (!forcedStopReason || reason === 'cancelled') forcedStopReason = reason;
     error = message;
     void harness?.abort();
+  };
+
+  const requestWrapUp = (
+    reason: Extract<SubagentStopReason, 'timeout' | 'max_iterations'>,
+    message: string,
+  ): void => {
+    if (wrapUpRequested || forcedStopReason === 'cancelled') return;
+    wrapUpRequested = true;
+    forcedStopReason = reason;
+    error = message;
+    void harness?.setTools([]).then(() =>
+      harness?.followUp(
+        '你的独立预算即将耗尽。禁止继续调用工具；请立即用已取得的证据输出简洁结论、已完成事项和阻塞原因。',
+      ),
+    );
   };
 
   const onParentAbort = () => forceStop('cancelled', '父任务已取消，子代理同步终止');
@@ -157,11 +186,15 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
 
   traceSubagent(logger, runId, subTask, role, 'running', true, startedAtMs, {
     allowedTools,
+    maxIterations,
+    maxWallMs,
   });
   emitProgress(subTask, {
     runId,
     phase: 'running',
     message: `子代理 ${role} 已启动`,
+    maxIterations,
+    maxWallMs,
   });
 
   try {
@@ -188,6 +221,15 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
         cacheRetention: config.agent.cacheRetention === 'short' ? 'short' : 'long',
       },
     });
+    const elapsedBeforeHarnessMs = Math.max(0, Date.now() - startedAtMs);
+    const remainingWallMs = Math.max(1, maxWallMs - elapsedBeforeHarnessMs);
+    const wrapUpLeadMs = Math.min(10_000, Math.max(1_000, Math.floor(maxWallMs * 0.2)));
+    softWallTimer = setTimeout(() => {
+      requestWrapUp('timeout', `子代理达到 ${maxWallMs}ms 独立挂钟预算`);
+    }, Math.max(1, remainingWallMs - wrapUpLeadMs));
+    hardWallTimer = setTimeout(() => {
+      forceStop('timeout', `子代理达到 ${maxWallMs}ms 独立挂钟上限，已强制终止`);
+    }, remainingWallMs);
 
     harness.subscribe((event) => {
       if (!isPiAgentEvent(event)) return;
@@ -195,6 +237,7 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
       if (captured.content) content = captured.content;
       toolCallCount += captured.toolCalls;
       iterations += captured.turns;
+      tokenUsage += captured.tokens;
       if (captured.error && !forcedStopReason) error = captured.error;
 
       if (event.type === 'tool_execution_start') {
@@ -234,6 +277,14 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
         });
         toolStartedAt.delete(event.toolCallId);
       }
+      if (event.type === 'turn_end') {
+        const wasWrappingUp = wrapUpRequested;
+        if (!wasWrappingUp && iterations >= maxIterations) {
+          requestWrapUp('max_iterations', `子代理达到 ${maxIterations} 轮独立预算`);
+        } else if (wasWrappingUp) {
+          void harness?.abort();
+        }
+      }
     });
     harness.on('tool_call', (event) => {
       if (!allowedTools.includes(event.toolName)) {
@@ -265,11 +316,17 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
       truncated: truncatedContent.truncated,
       toolCallCount,
       iterations,
+      maxIterations,
+      maxWallMs,
+      tokenUsage: tokenUsage || undefined,
       error,
     });
     traceSubagent(logger, runId, subTask, role, stopReason, result.ok, startedAtMs, {
       iterations,
       toolCallCount,
+      maxIterations,
+      maxWallMs,
+      tokenUsage,
       truncated: result.truncated,
       error: result.error,
     });
@@ -296,11 +353,17 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
       truncated: truncatedContent.truncated,
       toolCallCount,
       iterations,
+      maxIterations,
+      maxWallMs,
+      tokenUsage: tokenUsage || undefined,
       error: finalError,
     });
     traceSubagent(logger, runId, subTask, role, stopReason, false, startedAtMs, {
       iterations,
       toolCallCount,
+      maxIterations,
+      maxWallMs,
+      tokenUsage,
       error: finalError,
     });
     emitProgress(subTask, {
@@ -311,6 +374,8 @@ export async function runSubTask(subTask: SubTask): Promise<SubTaskResult> {
     });
     return result;
   } finally {
+    if (softWallTimer) clearTimeout(softWallTimer);
+    if (hardWallTimer) clearTimeout(hardWallTimer);
     subTask.signal?.removeEventListener('abort', onParentAbort);
     releaseSlot();
   }
@@ -425,19 +490,21 @@ function captureSubagentEvent(event: AgentEvent): {
   toolCalls: number;
   turns: number;
   error?: string;
+  tokens: number;
 } {
-  if (event.type === 'tool_execution_end') return { toolCalls: 1, turns: 0 };
+  if (event.type === 'tool_execution_end') return { toolCalls: 1, turns: 0, tokens: 0 };
   if (event.type === 'turn_end') {
     const message = event.message;
-    if (message.role !== 'assistant') return { toolCalls: 0, turns: 0 };
+    if (message.role !== 'assistant') return { toolCalls: 0, turns: 0, tokens: 0 };
     return {
       content: piContentToText(message.content),
       toolCalls: 0,
       turns: 1,
       error: message.errorMessage,
+      tokens: message.usage?.totalTokens ?? 0,
     };
   }
-  return { toolCalls: 0, turns: 0 };
+  return { toolCalls: 0, turns: 0, tokens: 0 };
 }
 
 function piContentToText(content: unknown): string {
@@ -468,6 +535,9 @@ function buildResult(input: {
   iterations?: number;
   truncated?: boolean;
   error?: string;
+  maxIterations: number;
+  maxWallMs: number;
+  tokenUsage?: number;
 }): SubTaskResult {
   return {
     runId: input.runId,
@@ -478,9 +548,24 @@ function buildResult(input: {
     role: input.role,
     stopReason: input.stopReason,
     durationMs: Math.max(0, Date.now() - input.startedAtMs),
+    maxIterations: input.maxIterations,
+    maxWallMs: input.maxWallMs,
+    tokenUsage: input.tokenUsage,
     truncated: input.truncated ?? false,
     error: input.error,
   };
+}
+
+function resolveSubagentMaxIterations(parentTask?: Task): number {
+  const configured = config.agent.subagentMaxIterations;
+  const parentLimit = parentTask?.budget?.maxIterations;
+  return Math.max(1, Math.min(configured, parentLimit ? Math.floor(parentLimit / 2) : configured));
+}
+
+function resolveSubagentMaxWallMs(parentTask?: Task): number {
+  const configured = config.agent.subagentMaxWallMs;
+  const parentLimit = parentTask?.budget?.maxWallTimeMs;
+  return Math.max(30_000, Math.min(configured, parentLimit ? Math.floor(parentLimit / 2) : configured));
 }
 
 function emitProgress(subTask: SubTask, progress: SubTaskProgress): void {
