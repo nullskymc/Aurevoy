@@ -1,4 +1,4 @@
-import type { Credential, CredentialStore } from '@earendil-works/pi-ai';
+import type { Credential, CredentialInfo, CredentialStore } from '@earendil-works/pi-ai';
 import {
   deleteLlmCredential,
   ensureLlmSchemaMigrated,
@@ -6,6 +6,7 @@ import {
   hasLlmApiKeyCredential,
   hasLlmCredential,
   hasLlmOauthCredential,
+  listLlmCredentialInfo,
   readLlmCredential,
   writeLlmCredential,
 } from './llm-store.js';
@@ -33,6 +34,11 @@ class AurevoyCredentialStore implements CredentialStore {
   async read(providerId: string): Promise<Credential | undefined> {
     ensureLlmSchemaMigrated();
     return readLlmCredential(providerId);
+  }
+
+  /** Pi 要求的非敏感凭证目录，供状态展示和 provider 过滤使用。 */
+  async list(): Promise<readonly CredentialInfo[]> {
+    return listLlmCredentialInfo();
   }
 
   async modify(

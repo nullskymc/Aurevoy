@@ -145,6 +145,8 @@ export function useSettingsController({
       commandExecutionEnabled: draft.commandExecutionEnabled,
       autoModeSafetyEnabled: draft.autoModeSafetyEnabled,
       agentToolExecution: draft.agentToolExecution as "sequential" | "parallel",
+      memoryRecallEnabled: draft.memoryRecallEnabled,
+      kbRecallEnabled: draft.kbRecallEnabled,
       mcpServersJson: draft.mcpServersJson,
       cleanupPolicyDays: draft.cleanupPolicyDays,
       budget: {
@@ -166,6 +168,7 @@ export function useSettingsController({
         ...(draft.embeddingApiKey ? { apiKey: draft.embeddingApiKey } : {}),
       },
       search: {
+        preferNative: draft.searchPreferNative,
         provider: draft.searchProvider as "duckduckgo_lite" | "tavily" | "searxng" | "custom",
         baseUrl: draft.searchBaseUrl,
         ...(draft.searchApiKey ? { apiKey: draft.searchApiKey } : {}),

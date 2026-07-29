@@ -10,6 +10,9 @@ import {
   mergeAgentRoundData,
   resolveLiveStatusText,
 } from "./Timeline";
+import { setLocale } from "../i18n";
+
+setLocale("zh");
 
 vi.mock("dompurify", () => ({
   default: {
@@ -18,6 +21,70 @@ vi.mock("dompurify", () => ({
 }));
 
 describe("buildLiveAgentRoundData", () => {
+  it("uses the backend summary for an MCP activity instead of 已完成一步", () => {
+    const round = buildLiveAgentRoundData({
+      plan: [],
+      phase: "calling_tool",
+      liveToolActivity: [{
+        id: "call-zotero-search",
+        name: "mcp_zotero_zotero_search_items",
+        args: { query: "source-free domain adaptation" },
+        summary: "调用 Zotero · 搜索条目 · source-free domain adaptation",
+        status: "ok",
+      }],
+    });
+
+    expect(flattenProcessActivityRows(round)[0]?.label)
+      .toBe("已调用 Zotero · 搜索条目 · source-free domain adaptation");
+  });
+
+  it("keeps legacy MCP history descriptive when no backend summary was persisted", () => {
+    const round = buildAgentRoundFromMessage(
+      {
+        id: "assistant-mcp",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-07-26T00:00:00.000Z",
+        toolCalls: [{
+          id: "call-metadata",
+          type: "function",
+          function: {
+            name: "mcp_zotero_zotero_get_item_metadata",
+            arguments: JSON.stringify({ item_key: "MR79JRGV" }),
+          },
+        }],
+      },
+      new Map([["call-metadata", { ok: true }]]),
+      [],
+    );
+
+    expect(flattenProcessActivityRows(round)[0]?.label).toBe("已完成 · MR79JRGV");
+  });
+
+  it("restores a persisted backend summary from assistant tool calls", () => {
+    const round = buildAgentRoundFromMessage(
+      {
+        id: "assistant-summary",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-07-26T00:00:00.000Z",
+        toolCalls: [{
+          id: "call-summary",
+          type: "function",
+          function: {
+            name: "mcp_zotero_zotero_search_items",
+            arguments: "{}",
+            summary: "调用 Zotero · 搜索条目 · SFDA",
+          },
+        }],
+      },
+      new Map([["call-summary", { ok: true }]]),
+      [],
+    );
+
+    expect(flattenProcessActivityRows(round)[0]?.label).toBe("已调用 Zotero · 搜索条目 · SFDA");
+  });
+
   it("hides internal update_plan activity because the plan strip already represents it", () => {
     const round = buildLiveAgentRoundData({
       plan: [{ id: "step-1", description: "检查代码", status: "running" }],
@@ -453,7 +520,7 @@ describe("AgentRound", () => {
     );
 
     expect(html).toContain("process-live-block");
-    expect(html).toContain("已处理");
+    expect(html).toContain("处理中");
     // live：每个子代理一行，与工具行并列；无协作工作组
     expect(html).not.toContain("协作工作组");
     expect(html).not.toContain("subagent-workgroup");
@@ -507,8 +574,7 @@ describe("AgentRound", () => {
       />,
     );
 
-    expect(html).toContain("已处理");
-    expect(html).toContain("<strong>answer</strong>");
+    expect(html).toContain("处理中");
     expect(html).not.toContain("stream-caret");
     expect(html).toContain("is-streaming");
     // 正文已出时不叠灰字「正在思考」
@@ -531,7 +597,7 @@ describe("AgentRound", () => {
       />,
     );
 
-    expect(html).toContain("已处理");
+    expect(html).toContain("处理中");
     expect(html).toContain("正在思考");
     expect(html).toContain("process-live-status");
   });

@@ -19,7 +19,8 @@ process.env.AUREVOY_LLM_PROVIDER = 'openai';
 process.env.AUREVOY_LLM_API_KEY = 'test-key';
 process.env.AUREVOY_LLM_BASE_URL = llmFixture.url;
 process.env.AUREVOY_LLM_MODEL = 'm6-fixture-model';
-process.env.AUREVOY_APPROVAL_TIMEOUT_MS = '120';
+// Session Tree 持久化与 SSE 建连均为真实异步链路，留出足够窗口接收追问事件。
+process.env.AUREVOY_APPROVAL_TIMEOUT_MS = '1000';
 process.env.AUREVOY_ENABLE_COMMAND_EXECUTION = 'true';
 process.env.AUREVOY_COMMAND_TIMEOUT_MS = '2000';
 process.env.AUREVOY_COMMAND_OUTPUT_LIMIT_BYTES = '64';
@@ -62,8 +63,9 @@ async function caseAskUserAndResume() {
   });
   const task = await getJson(`/api/tasks/${created.task.id}`);
   assert(task.status === 'completed', '追问回复后任务未完成');
-  assert(events.some((event) => event.type === 'clarification_request'), '缺少 clarification_request');
-  assert(events.some((event) => event.type === 'clarification_resolved'), '缺少 clarification_resolved');
+  const eventTypes = events.map((event) => event.type);
+  assert(events.some((event) => event.type === 'clarification_request'), `缺少 clarification_request，实际事件=${eventTypes.join(',')}`);
+  assert(events.some((event) => event.type === 'clarification_resolved'), `缺少 clarification_resolved，实际事件=${eventTypes.join(',')}`);
   assert(task.clarifications?.[0]?.answer === 'docs/SUMMARY.md', '追问答案未持久化');
 }
 
@@ -146,7 +148,7 @@ async function caseExecuteCommandSandbox() {
   const result = await runTask('M6_COMMAND_SANDBOX reject outside cwd', { approve: true });
   assert(
     result.traces.some((trace) => trace.toolName === 'bash' && trace.ok === false),
-    '命令 cwd 越界缺少失败 trace',
+    `命令 cwd 越界缺少失败 trace，实际=${JSON.stringify(result.traces)}`,
   );
 }
 
@@ -238,7 +240,10 @@ async function startLlmFixture() {
       .map((message) => extractMessageText(message.content))
       .join('\n');
     const toolMessages = body.messages.filter((message) => message.role === 'tool');
-    const hasToolResult = toolMessages.length > 0;
+    const hasToolResult = toolMessages.some((message) =>
+      ['call_ask', 'call_artifact', 'call_budget', 'call_budget_again', 'call_cmd_sandbox', 'call_cmd']
+        .includes(message.tool_call_id),
+    );
 
     if (!hasToolResult) {
       const tool = chooseFirstTool(userText);

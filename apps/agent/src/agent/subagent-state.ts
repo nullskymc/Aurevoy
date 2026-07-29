@@ -66,6 +66,8 @@ export function recordSubagentProgress(
     currentActivity: progress.message,
     activities,
     iterations: progress.iteration ?? base.iterations,
+    maxIterations: progress.maxIterations ?? base.maxIterations,
+    maxWallMs: progress.maxWallMs ?? base.maxWallMs,
     startedAt: progress.phase === 'running' && !base.startedAt ? now : base.startedAt,
   };
   persistSubagentRun(task, run);
@@ -97,8 +99,9 @@ export function completeSubagentRun(
     activities: existing?.activities ?? [],
     iterations: result.iterations,
     toolCallCount: result.toolCallCount,
-    // 保留历史快照中的 maxIterations（若有）；新运行不再写入轮次上限
-    maxIterations: existing?.maxIterations,
+    maxIterations: result.maxIterations,
+    maxWallMs: result.maxWallMs,
+    tokenUsage: result.tokenUsage,
     stopReason: result.stopReason,
     result: result.content || undefined,
     error: result.error,

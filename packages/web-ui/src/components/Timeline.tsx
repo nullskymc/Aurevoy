@@ -20,6 +20,7 @@ import { MarkdownRenderer, StreamingMarkdownRenderer } from "./MarkdownRenderer"
 import { usePlatform } from "../platform/context";
 import { t } from "../i18n";
 import { ContextMenu } from "./ContextMenu";
+import { CanvasCard } from "./generative-ui/CanvasCard";
 import type { ContextMenuItem } from "./ContextMenu";
 import {
   buildFileMenuItems,
@@ -54,6 +55,8 @@ export interface TimelineStepData {
   id: string;
   kind: StepKind;
   title: string;
+  /** 后端提供的状态无关动作摘要；存在时优先于前端参数猜测 */
+  summary?: string;
   status: "pending" | "running" | "success" | "failed";
   planStepId?: string;
   logs?: string;
@@ -124,7 +127,10 @@ export function detectStepKind(toolName: string): StepKind {
 function shouldHideToolFromWorkflow(toolName: string): boolean {
   // 计划更新已有独立的计划进度条承载；再作为工具活动展示只会产生
   // 无上下文的「已完成一步」卡片，干扰真正的执行过程。
-  return toolName === "attach_content" || toolName === "delegate" || toolName === "update_plan";
+  return toolName === "attach_content"
+    || toolName === "present_ui"
+    || toolName === "delegate"
+    || toolName === "update_plan";
 }
 
 /** 生成聚合摘要文本 */
@@ -171,6 +177,7 @@ function buildStepsFromToolCalls(
       id: tc.id,
       kind,
       title,
+      summary: tc.function.summary,
       status,
       planStepId: tc.function.planStepId,
       logs,
@@ -236,7 +243,13 @@ function buildStepTitle(toolName: string, args: Record<string, unknown>): string
      typeof args.AbsolutePath === "string" ? args.AbsolutePath :
      typeof args.path === "string" ? args.path :
      typeof args.filePath === "string" ? args.filePath :
+     typeof args.query === "string" ? args.query :
      typeof args.Query === "string" ? args.Query :
+     typeof args.pattern === "string" ? args.pattern :
+     typeof args.item_key === "string" ? args.item_key :
+     typeof args.itemKey === "string" ? args.itemKey :
+     typeof args.resource_id === "string" ? args.resource_id :
+     typeof args.resourceId === "string" ? args.resourceId :
      typeof args.url === "string" ? args.url : null);
   if (target) return truncateTitle(target);
   if (toolName === "web_search") {
@@ -506,7 +519,7 @@ export function buildAgentRoundFromMessage(
 /** 从 SSE 实时数据 AgentRunningTimeline（即 ToolActivity[]）构建 AgentRoundData */
 export function buildLiveAgentRoundData(params: {
   plan: PlanStep[];
-  liveToolActivity: { id: string; name: string; args: unknown; status: string; planStepId?: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
+  liveToolActivity: { id: string; name: string; args: unknown; summary?: string; status: string; planStepId?: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
   output?: string;
   phase?: string | null;
   contentBlocks?: ContentBlock[];
@@ -535,6 +548,7 @@ export function buildLiveAgentRoundData(params: {
       id: act.id,
       kind,
       title: buildStepTitle(act.name, args),
+      summary: act.summary,
       status,
       planStepId: act.planStepId,
       logs: extractLogContent(act.name, act.status !== "running" ? { ok: act.status === "ok", output: act.output, error: act.error } : undefined),
@@ -1083,7 +1097,7 @@ export function PlanStepGroup({
 
 /* ============ 内容块渲染 ============ */
 
-/** Agent 通过 attach_content 工具附加的富内容块。 */
+/** Agent 通过 attach_content / present_ui 工具附加的富内容块。 */
 function ContentBlockView({
   block,
   onOpenWorkspacePath,
@@ -1132,6 +1146,8 @@ function ContentBlockView({
   }
 
   switch (block.type) {
+    case "ui":
+      return block.kind === "canvas" ? <CanvasCard block={block} /> : null;
     case "file_reference": {
       const handleFileClick = async () => {
         if (onOpenWorkspacePath) {
@@ -1391,7 +1407,9 @@ function toolStepToActivityRow(step: TimelineStepData, underGroup: boolean): Pro
   const title = step.title?.trim() || "";
   const running = step.status === "running" || step.status === "pending";
   const failed = step.status === "failed";
-  const { label, icon } = describeActivityStep(step.kind, title, running, failed, underGroup);
+  const { label, icon } = step.summary?.trim()
+    ? describeBackendToolSummary(step.kind, step.summary, running, failed)
+    : describeActivityStep(step.kind, title, running, failed, underGroup, step.toolName);
   return {
     id: step.id,
     kind: "tool",
@@ -1402,6 +1420,29 @@ function toolStepToActivityRow(step: TimelineStepData, underGroup: boolean): Pro
   };
 }
 
+/** 将后端状态无关摘要转换成当前时态，避免前端再次理解每个工具的参数 schema。 */
+function describeBackendToolSummary(
+  kind: StepKind,
+  summary: string,
+  running: boolean,
+  failed: boolean,
+): { label: string; icon: ProcessActivityRow["icon"] } {
+  const detail = summary.trim();
+  const icon = activityIconForKind(kind);
+  if (failed) return { label: `${detail}失败`, icon };
+  if (running) return { label: `正在${detail}`, icon };
+  return { label: `已${detail}`, icon };
+}
+
+function activityIconForKind(kind: StepKind): ProcessActivityRow["icon"] {
+  if (kind === "search") return "search";
+  if (kind === "browse") return "browse";
+  if (kind === "command") return "command";
+  if (kind === "file_read" || kind === "file_write") return "file";
+  if (kind === "edit") return "edit";
+  return "other";
+}
+
 /** 将工具步骤收成「一段时间的行为总结」文案（Codex：已搜索网页 / 已运行 cmd）。 */
 export function describeActivityStep(
   kind: StepKind,
@@ -1409,6 +1450,7 @@ export function describeActivityStep(
   running: boolean,
   failed: boolean,
   underGroup = false,
+  toolName?: string,
 ): { label: string; icon: ProcessActivityRow["icon"] } {
   const detail = title.trim();
   const withDetail = (base: string) => (detail ? `${base} (${detail})` : base);
@@ -1446,7 +1488,19 @@ export function describeActivityStep(
   }
   if (failed) return { label: withDetail("步骤失败"), icon: "other" };
   if (running) return { label: detail ? `正在处理 · ${detail}` : "正在处理", icon: "other" };
-  return { label: detail ? `已完成 · ${detail}` : "已完成一步", icon: "other" };
+  const fallbackTool = toolName ? humanizeToolName(toolName) : "";
+  return { label: detail ? `已完成 · ${detail}` : fallbackTool ? `已运行 ${fallbackTool}` : "已完成一步", icon: "other" };
+}
+
+function humanizeToolName(toolName: string): string {
+  if (toolName.startsWith("mcp_")) {
+    const parts = toolName.slice(4).split("_");
+    const server = parts.shift() ?? "";
+    if (parts[0] === server) parts.shift();
+    const action = parts.join(" ");
+    return [server, action].filter(Boolean).join(" · ");
+  }
+  return toolName.replace(/[_-]+/g, " ").trim();
 }
 
 function subagentToActivityRow(run: SubagentRun): ProcessActivityRow {
@@ -1473,13 +1527,18 @@ function subagentToActivityRow(run: SubagentRun): ProcessActivityRow {
   } else {
     label = goalShort ? `已创建子智能体 · ${role}：${goalShort}` : `已创建子智能体 · ${role}`;
   }
+  const budgetBits = [
+    run.maxIterations ? `${run.iterations}/${run.maxIterations} 轮` : `${run.iterations} 轮`,
+    run.maxWallMs ? `${Math.round((run.durationMs ?? 0) / 1000)}/${Math.round(run.maxWallMs / 1000)}s` : undefined,
+    run.tokenUsage ? `${run.tokenUsage.toLocaleString()} tokens` : undefined,
+  ].filter(Boolean).join(" · ");
   return {
     id: run.id,
     kind: "subagent",
     label,
     icon: "agent",
     status: failed ? "failed" : running ? "running" : "success",
-    detail: run.currentActivity || run.goal,
+    detail: [run.currentActivity || run.goal, budgetBits].filter(Boolean).join(" · "),
   };
 }
 
@@ -1522,12 +1581,16 @@ export function resolveLiveStatusText(params: {
     if (runningStep.progress?.message?.trim()) {
       return normalizeLiveStatus(runningStep.progress.message) ?? runningStep.progress.message.trim();
     }
-    const { label } = describeActivityStep(
-      runningStep.kind,
-      runningStep.title?.trim() || "",
-      true,
-      false,
-    );
+    const { label } = runningStep.summary?.trim()
+      ? describeBackendToolSummary(runningStep.kind, runningStep.summary, true, false)
+      : describeActivityStep(
+          runningStep.kind,
+          runningStep.title?.trim() || "",
+          true,
+          false,
+          false,
+          runningStep.toolName,
+        );
     return label;
   }
 
@@ -1565,9 +1628,18 @@ export function formatProcessedSummaryLabel(params: {
   durationMs?: number | null;
   failed?: boolean;
 }): string {
-  const parts: string[] = ["已处理"];
+  const parts: string[] = [t("timeline.processed")];
   if (params.durationMs != null && params.durationMs > 0 && Number.isFinite(params.durationMs)) {
     parts.push(formatDuration(params.durationMs));
+  }
+  return parts.join(" ");
+}
+
+/** 实时过程必须明确处于进行态；只有完成后的折叠摘要才使用“已处理”。 */
+function formatProcessingSummaryLabel(durationMs?: number | null): string {
+  const parts = [t("timeline.processing")];
+  if (durationMs != null && durationMs > 0 && Number.isFinite(durationMs)) {
+    parts.push(formatDuration(durationMs));
   }
   return parts.join(" ");
 }
@@ -1627,7 +1699,7 @@ export function LiveProcessBlock({
     startedAtMs != null && Number.isFinite(startedAtMs)
       ? Math.max(0, now - startedAtMs)
       : null;
-  const header = formatProcessedSummaryLabel({ durationMs });
+  const header = formatProcessingSummaryLabel(durationMs);
   const hasRows = activityRows.length > 0;
 
   return (

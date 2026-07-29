@@ -20,6 +20,7 @@ const Output = Schema.Struct({
 
 export const webSearchTool = make({
   name: "web_search",
+  riskLevel: "safe",
   description: "Search the web using the configured search provider. Returns titles, URLs, and snippets for the top results.",
   input: Input,
   output: Output,

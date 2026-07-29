@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { t, type TranslationKey } from "../i18n";
 import { usePlatform } from "../platform/context";
 import { ImageViewer } from "./ImageViewer";
-import type { AgentExecutionMode, LlmReadiness, LlmReadyState, MessageAttachment, SkillDescriptor } from "@aurevoy/shared";
+import type { AgentExecutionMode, LlmReadiness, LlmReadyState, MessageAttachment, SkillDescriptor, TaskModelSnapshot } from "@aurevoy/shared";
 import { formatModelEffortChipLabel } from "./ModelSelectorDrawer";
 import {
   IconArrowUp,
@@ -44,7 +44,8 @@ interface ComposerProps {
   llm?: LlmReadiness | null;
   projectName?: string;
   onChange: (value: string) => void;
-  onSubmit: () => void;
+  /** 运行中可显式选择立即插话或本轮结束后排队。 */
+  onSubmit: (delivery?: "steering" | "follow_up") => void;
   onOpenModelSelector: () => void;
   /** 模型按钮 ref，用于弹层定位锚点 */
   modelButtonRef?: React.RefObject<HTMLButtonElement | null>;
@@ -67,6 +68,11 @@ interface ComposerProps {
   onExecutionModeChange?: (mode: AgentExecutionMode) => void;
   /** 推理深度（与模型能力相关，仅支持推理的模型会生效） */
   thinkingLevel?: ThinkingUILevel;
+  /**
+   * P1-2 模型粘性：活动任务的模型快照。存在时，芯片优先显示该任务的模型 / 推理档，
+   * 而非全局默认，体现“任务内切换只影响本任务”。
+   */
+  taskModelSnapshot?: TaskModelSnapshot | null;
   /** @deprecated 已合并进模型菜单；保留 prop 以免破坏外部调用 */
   onCycleThinkingLevel?: () => void;
 }
@@ -96,6 +102,7 @@ export function Composer({
   executionMode = "auto",
   onExecutionModeChange,
   thinkingLevel = "medium",
+  taskModelSnapshot,
 }: ComposerProps) {
   const platform = usePlatform();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -113,6 +120,7 @@ export function Composer({
   })();
   const llmReady = llmState === "ready";
   const canSend = value.trim().length > 0 && !busy && online !== false && llmReady;
+  const canQueue = value.trim().length > 0 && busy && online !== false && llmReady && variant === "docked";
   /** health.provider 形如 "openai:gpt-4o-mini" 或纯 provider id */
   const providerId = llm?.provider
     || (provider && provider !== "unconfigured"
@@ -137,7 +145,10 @@ export function Composer({
         ? t("composer.providerUnconfigured")
         : t("composer.providerDisconnected");
     }
-    return formatModelEffortChipLabel(modelId, thinkingLevel);
+    // P1-2：活动任务有自己的模型快照时，芯片显示任务维度而非全局默认。
+    const chipModelId = taskModelSnapshot?.model || modelId;
+    const chipThinking = taskModelSnapshot?.thinkingLevel ?? thinkingLevel;
+    return formatModelEffortChipLabel(chipModelId, chipThinking);
   })();
 
   const slashCommands = useMemo<SlashCommand[]>(() => {
@@ -220,10 +231,14 @@ export function Composer({
       }
     }
 
-    // Enter 提交，Shift+Enter 换行（输入法组合期间不提交）
+    // 运行中：Enter 立即插话，Ctrl/Cmd+Enter 在当前轮结束后接续；Shift+Enter 换行。
     if (event.key === "Enter" && !event.shiftKey && !composingRef.current) {
       event.preventDefault();
-      if (canSend) onSubmit();
+      if (canQueue) {
+        onSubmit(event.ctrlKey || event.metaKey ? "follow_up" : "steering");
+      } else if (canSend) {
+        onSubmit();
+      }
     }
   }
 
@@ -434,6 +449,26 @@ export function Composer({
             </div>
 
             <div className="composer-tools-right">
+              {canQueue && (
+                <span className="composer-queue-actions">
+                  <button
+                    type="button"
+                    className="composer-queue-action"
+                    onClick={() => onSubmit("steering")}
+                    title={t("composer.queueSteeringHint")}
+                  >
+                    {t("composer.queueSteering")}
+                  </button>
+                  <button
+                    type="button"
+                    className="composer-queue-action"
+                    onClick={() => onSubmit("follow_up")}
+                    title={t("composer.queueFollowUpHint")}
+                  >
+                    {t("composer.queueFollowUp")}
+                  </button>
+                </span>
+              )}
               <button
                 ref={modelButtonRef}
                 type="button"
@@ -453,7 +488,7 @@ export function Composer({
                 className="composer-send"
                 data-busy={busy ? "true" : undefined}
                 disabled={busy ? !onStop : !canSend}
-                onClick={busy ? onStop : onSubmit}
+                onClick={busy ? onStop : () => onSubmit()}
                 aria-label={busy ? t("action.stop") : t("composer.send")}
                 title={
                   busy

@@ -27,6 +27,7 @@ process.env.AUREVOY_MCP_SERVERS_JSON = '';
 process.env.AUREVOY_CONTEXT_CHAR_BUDGET = '500';
 process.env.AUREVOY_RECENT_MESSAGE_WINDOW = '1';
 process.env.AUREVOY_COMPRESSED_MESSAGE_CHAR_CAP = '200';
+process.env.AUREVOY_COMPACT_KEEP_RECENT_TURNS = '1';
 // 禁用 LLM 规划：fixture mock server 不处理 scout/plan 对话模式，直接用正则兜底
 process.env.AUREVOY_LLM_PLANNING_ENABLED = 'false';
 
@@ -45,11 +46,15 @@ try {
   await caseContextCompression();
   await caseContinueNotFound();
   await caseContinueEmptyMessage();
+  console.log('M4 boundary cases passed; checking running-task guard');
   await caseContinueWhileRunning();
+  console.log('M4 running-task guard passed; checking memory cases');
   await caseMemoryCrud();
   await caseAgentRemembersWithSource();
+  await patchJson('/api/settings', { memoryRecallEnabled: true });
   await caseEnabledMemoryInjected();
   await caseDisabledMemoryNotInjected();
+  console.log('M4 memory cases passed');
 
   console.log('M4 regression passed');
 } finally {
@@ -107,7 +112,7 @@ async function caseStartupRecoveryAndResume() {
 
   const tracesBefore = (await getJson(`/api/tasks/${seededRecoveryTaskId}/traces`)).traces;
   assert(
-    tracesBefore.some((t) => String(t.summary).includes('进程中断前未结束')),
+    tracesBefore.some((t) => String(t.summary).includes('待手动恢复')),
     '启动恢复缺少可解释轨迹',
   );
 
@@ -122,9 +127,9 @@ async function caseStartupRecoveryAndResume() {
   assert(after.status === 'completed', `恢复后任务应完成，实际 ${after.status}`);
   assert(
     after.messages.some(
-      (m) => m.role === 'tool' && String(m.content).includes('上次执行在该工具返回前中断'),
+      (m) => m.role === 'tool' && String(m.content).includes('返回前中断'),
     ),
-    '恢复前应补齐悬空工具调用的可解释 tool 结果',
+    `恢复前应补齐悬空工具调用的可解释 tool 结果，实际=${JSON.stringify(after.messages)}`,
   );
   const last = after.messages[after.messages.length - 1];
   assert(last.content.includes('recovered=yes'), `恢复后模型未收到补齐后的历史，回复：${last.content}`);
@@ -169,7 +174,7 @@ async function caseContextCompression() {
   const tracesBody = await getJson(`/api/tasks/${created.task.id}/traces`);
   assert(
     tracesBody.traces.some(
-      (t) => typeof t.summary === 'string' && t.summary.includes('上下文压缩'),
+      (t) => typeof t.summary === 'string' && t.summary.includes('上下文自动压缩'),
     ),
     '上下文压缩缺少可审计轨迹',
   );
@@ -189,10 +194,12 @@ async function caseContinueEmptyMessage() {
 
 async function caseContinueWhileRunning() {
   const created = await postJson('/api/tasks', { goal: 'M4_HANG 持续生成不结束' });
-  // 不消费完流，任务仍在运行；此时续聊应 409
+  // 不消费完流，任务仍在运行；续聊应进入 steering 队列，而不是拆掉当前流。
   await waitForPhase(created.task.id, 'thinking');
   const res = await rawPost(`/api/tasks/${created.task.id}/messages`, { message: '追问' });
-  assert(res.status === 409, `运行中续聊应 409，实际 ${res.status}`);
+  assert(res.status === 202, `运行中续聊应进入队列并返回 202，实际 ${res.status}`);
+  const cleared = await rawPost(`/api/tasks/${created.task.id}/queue/clear`, { kind: 'all' });
+  assert(cleared.ok, `撤回运行中队列应成功，实际 ${cleared.status}`);
   await fetch(`${baseUrl}/api/tasks/${created.task.id}/cancel`, { method: 'POST' });
 }
 
@@ -294,9 +301,15 @@ async function startLlmFixture() {
     }
     const body = JSON.parse(await readBody(req));
     const messages = body.messages ?? [];
-    const userTexts = messages.filter((m) => m.role === 'user').map((m) => m.content);
+    const userTexts = messages
+      .filter((m) => m.role === 'user')
+      .map((m) => extractMessageText(m.content));
     const joined = userTexts.join(' | ');
+    const lastUserText = userTexts[userTexts.length - 1] ?? '';
     const hasToolResult = messages.some((m) => m.role === 'tool');
+    const hasRememberResult = messages.some(
+      (m) => m.role === 'tool' && m.tool_call_id === 'call_remember',
+    );
 
     // 持续生成（用于 409 运行中测试）
     if (joined.includes('M4_HANG')) {
@@ -306,8 +319,20 @@ async function startLlmFixture() {
       return;
     }
 
+    if (lastUserText.includes('structured context checkpoint summary')) {
+      const summary = joined.includes('M4_RECOVER')
+        ? '上下文压缩\n\nM4_RECOVER：工具返回前中断，恢复时必须保留该事实。'
+        : '上下文压缩\n\n用户约束：KEEP-CHINESE。';
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      sse(res, { choices: [{ delta: { content: summary } }] });
+      sse(res, { choices: [{ delta: {}, finish_reason: 'stop' }] });
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+
     // agent 通过 remember 工具写入长期记忆（首轮发起工具调用）
-    if (joined.includes('M4_REMEMBER') && !hasToolResult) {
+    if (joined.includes('M4_REMEMBER') && !hasRememberResult) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       sse(res, {
         choices: [
@@ -340,7 +365,8 @@ async function startLlmFixture() {
 
     let content;
     if (joined.includes('M4_RECOVER')) {
-      content = `final: recovered=${hasToolResult ? 'yes' : 'no'}`;
+      const recovered = hasToolResult || joined.includes('工具返回前中断');
+      content = `final: recovered=${recovered ? 'yes' : 'no'}`;
     } else if (joined.includes('M4_INJECT')) {
       // 校验某条记忆是否被注入到 system 消息（marker 来自用户文本）
       const marker = (joined.match(/MEM[A-Za-z0-9]+/) ?? [])[0];
@@ -352,13 +378,9 @@ async function startLlmFixture() {
       content = `final: injected=${injected ? 'yes' : 'no'}`;
     } else if (joined.includes('M4_ASK')) {
       // 第二轮：校验旧的大 assistant 内容是否被压缩、用户约束是否逐字保留
-      const bigAssistant = messages.find(
-        (m) => m.role === 'assistant' && String(m.content).length > 0,
+      const wasCompressed = messages.some(
+        (m) => extractMessageText(m.content).includes('上下文压缩'),
       );
-      const wasCompressed =
-        !!bigAssistant &&
-        String(bigAssistant.content).length < 1000 &&
-        String(bigAssistant.content).includes('上下文压缩');
       const constraintKept = messages.some((m) => String(m.content).includes('KEEP-CHINESE'));
       content = `final: compressed=${wasCompressed ? 'yes' : 'no'} constraint=${constraintKept ? 'yes' : 'no'}`;
     } else if (joined.includes('M4_BIG')) {
@@ -455,6 +477,18 @@ function sse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+function extractMessageText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => (
+      part && typeof part === 'object' && typeof part.text === 'string'
+        ? part.text
+        : ''
+    ))
+    .join('\n');
+}
+
 async function readBody(req) {
   let body = '';
   for await (const chunk of req) body += chunk;
@@ -487,8 +521,9 @@ function seedInterruptedTask(store) {
   store.save({
     id: taskId,
     goal: 'M4_RECOVER 恢复上次中断任务',
-    status: 'running',
-    phase: 'calling_tool',
+    // 等待外部状态的中断任务不能自动续跑，必须先保守标记再由用户恢复。
+    status: 'paused',
+    phase: 'waiting_approval',
     plan: [{ id: 'exec', description: '调用工具：list_directory', status: 'running' }],
     messages: [
       {

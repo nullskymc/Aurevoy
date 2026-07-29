@@ -1,7 +1,11 @@
 import { Schema } from "effect"
 import { make, type ContentPart } from "../../framework/definition.js"
 import { spawn } from "node:child_process"
-import { resolve } from "node:path"
+import {
+  assertRealPathInside,
+  resolveInWorkspace,
+  rootAndExternals,
+} from "../../filesystem/workspace-paths.js"
 
 const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000
 const MAX_TIMEOUT_MS = 10 * 60 * 1000
@@ -31,6 +35,7 @@ const Output = Schema.Struct({
 
 export const bashTool = make({
   name: "bash",
+  riskLevel: "dangerous",
   description:
     `Execute a shell command with the host user's filesystem, process, and network authority. ` +
     `The workspace root is the default working directory. Shell: ${defaultShell()}. ` +
@@ -39,12 +44,14 @@ export const bashTool = make({
     `Output is capped at ${MAX_CAPTURE_BYTES / 1024}KB.`,
   input: Input,
   output: Output,
-  execute: (input, ctx) => {
-    const cwd = input.workdir ? resolve(ctx.workspaceDir, input.workdir) : ctx.workspaceDir
+  execute: async (input, ctx) => {
+    const { root, externalPaths } = rootAndExternals(ctx)
+    const cwd = resolveInWorkspace(input.workdir ?? ".", root, externalPaths)
+    await assertRealPathInside(cwd, root, externalPaths)
     const timeoutMs = Math.min(input.timeout ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)
     const shell = defaultShell()
 
-    return new Promise((resolvePromise, rejectPromise) => {
+    return await new Promise((resolvePromise, rejectPromise) => {
       const child = spawn(input.command, [], {
         cwd,
         shell,

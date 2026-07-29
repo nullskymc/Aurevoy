@@ -35,15 +35,18 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 | GET | `/api/tasks` | 轻量 `TaskSummary[]` 列表（不含消息/计划）；`?projectId=` / `standalone` |
 | GET | `/api/tasks/:id` | 详情 |
 | GET | `/api/tasks/:id/traces` | 轨迹 |
+| GET | `/api/tasks/:id/session-tree` | Pi 原生会话树安全投影（节点、父子关系、当前 leaf） |
+| POST | `/api/tasks/:id/session-tree/navigate` | 将当前 leaf 切换到指定节点，并返回更新后的任务与会话树 |
+| PUT | `/api/tasks/:id/session-tree/labels/:targetId` | 写入或清除会话树节点标签 |
 | GET | `/api/tasks/:id/stream` | **SSE** |
 | POST | `/api/tasks` | 创建并异步跑；body `goal`、可选 `projectId`/`budget`/附件 |
 | POST | `/api/tasks/:id/messages` | 续聊；空闲则 `addUserTurn`+harness；运行中 steering/follow_up |
+| POST | `/api/tasks/:id/queue/clear` | 撤回尚未注入的 steering/follow_up 队列 |
 | POST | `/api/tasks/:id/resume` | 从历史恢复（不伪造用户句；可补悬空 tool result） |
 | POST | `/api/tasks/:id/budget/continue` | 预算触顶后续跑（可选扩容 lifetime / run） |
 | POST | `/api/tasks/:id/cancel` | 取消 |
 | DELETE | `/api/tasks/:id` | 删除 |
 | POST | `/api/tasks/:id/approvals` | 工具审批 |
-| POST | `/api/tasks/:id/plan-approval` | 旧版计划审批兼容接口；当前客户端通过消息请求中的 `executionMode` 切换模式 |
 | POST | `/api/tasks/:id/auto-mode-resume` | 解除 auto 安全暂停 |
 | POST | `/api/tasks/:id/clarifications/:id` | 回答追问 |
 | POST | `/api/tasks/:id/revert` | 编辑重试截断（见下） |
@@ -53,11 +56,21 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 
 **常见状态码：** `404` 不存在；`409` 冲突（运行中不可 revert 等）；`400` 参数；创建/续聊成功多为 `201`/`202`。
 
+#### Pi 会话树 `session-tree`
+
+- 返回 Aurevoy 产品消息节点及安全的摘要/模型/思考变化节点；产品消息节点仍使用 `messageId`，其余节点使用稳定哈希 ID，不暴露 Pi 私有 ID、完整提示词、图片或工具结果。
+- completion gate、max-steps 等 Pi 内部控制消息没有 Aurevoy message 映射，因此不进入响应，也不可导航。
+- 会话树快照独立保存在 SQLite；同一任务续聊时从原 leaf 恢复。
+- 导航 Body 为 `{ targetId, summarize?, customInstructions? }`，`targetId` 必须指向用户消息；`summarize=true` 时用当前任务模型生成被放弃分支摘要。assistant、tool、摘要和配置节点都不可作为切换目标。任务运行中、目标节点不可导航或任务包含图片消息时返回 `409`；含图片会话仍可只读浏览树。成功后任务进入可继续的 `pending`。
+- 导航只切换对话上下文，不回滚工作区文件；UI 会在确认按钮旁明确提示这一边界。
+- `Task.messages` 仍是产品级消息真相。revert/编辑造成消息前缀变化时，后端会从当前活跃消息安全重建 Pi 树，避免沿错误分支继续。
+
 #### 续聊 `messages`
 
 - Body：`message`，可选 `attachments`、`delivery: steering|follow_up`。  
 - 成功写入新 user 消息后**清空** `archivedMessages`。  
 - 运行中：投递 Pi 队列；队列不可用 → `409`。
+- 撤回：`queue/clear { kind: steering|follow_up|all }` 只清除尚未注入模型上下文的消息；已经被当前 turn 消费的消息不可改写。
 
 #### 编辑重试 `revert` + `messages`
 
@@ -100,13 +113,24 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 | POST | `/api/data/cleanup` | 清理旧终态任务 |
 
 多 Provider：每槽位独立 key/baseUrl/model/列表；`PATCH` 切换 `provider` 会激活对应槽位。  
+`search.preferNative` 控制搜索策略：开启后，Responses wire protocol 使用
+`{ "type": "web_search" }`，Anthropic Messages 使用
+`{ "type": "web_search_20250305", "name": "web_search" }`。兼容端不支持服务器搜索时，
+同一轮自动回退原协议与 Aurevoy 本地 `web_search` 后端。
+Provider 托管搜索会标准化为普通 `tool_call` / `tool_result` 事件，并以
+`Message.toolCalls[].providerExecuted=true` 和配对 tool 消息持久化；恢复上下文时不会交给本地执行器重放。
 `enabledModels` 必含当前 active model。
+`memoryRecallEnabled` / `kbRecallEnabled` 控制任务 run 起点的有界隐式召回；关闭时不注入。
 
 ## SSE：`GET /api/tasks/:id/stream`
 
-- 首事件 `task_created` 携带一份完整持久快照；快照内消息/产物不再逐条重复发送。
+- 每个线上事件包含任务内递增的 `seq`、服务端发出时间 `emittedAt`，并以 SSE `id` 同步该序号。
+- 客户端已经通过 POST/GET 获得 Task 时传 `snapshot=0&afterSeq=0`，服务端仅回放建连空窗内的增量事件。
+- 短线重连通过 `Last-Event-ID` 回放后续事件；短期环形日志出现缺口时自动回退 `task_created` 完整持久快照。
+- 外部/旧客户端不传 `snapshot=0` 时，仍以 `task_created` 完整快照开始。
 - 连续 `token` 会在短时间窗内无损合并，非 token 事件到来前强制排空以保持顺序。
 - 客户端在 `done` / 卸载时关闭连接。
+- Web UI 通过 Performance Timeline 写入 `aurevoy:task-request:*` 与 `aurevoy:sse:{connect-start|open|first-event|first-token}:*` 标记；事件标记 detail 含 `seq` 与估算的 `transportMs`。
 
 ### 事件类型（摘要）
 
@@ -114,7 +138,7 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 |---|---|
 | `task_created` / `task_title` | 任务创建 / 标题 |
 | `status` / `phase` | 生命周期 / 细阶段 |
-| `plan` / `step_update` / `plan_*` | 计划与审批 |
+| `plan` / `step_update` / `plan_generated` | 计划 |
 | `scout_*` | 工作区侦查 |
 | `token` / `message` / `message_start` | 流式与完整消息 |
 | `tool_call` / `tool_result` / `tool_progress` / `approval_request` | 工具与审批 |
@@ -123,6 +147,7 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 | `artifact_*` / `checkpoint_created` | 产物与检查点 |
 | `budget_usage` / `budget_exceeded` / `token_usage` | 预算与用量 |
 | `reverted` / `unreverted` / `branched` / `compacted` | 会话控制 |
+| `queue_update` / `retry_status` / `model_updated` / `task_resumed` | 队列、重试、会话模型与重启恢复 |
 | `content_blocks_*` | 主动附件 / 生成式 UI |
 | `skill_*` / `auto_mode_state` | Skill / auto 状态 |
 | `done` / `error` | 结束 / 错误 |

@@ -41,12 +41,17 @@ const baseUrl = `http://127.0.0.1:${address.port}`;
 let projectId;
 
 try {
+  // Provider slot 是当前模型端点的真相源；显式写入临时 fixture，避免回退到 OpenAI 默认端点。
+  await patchJson('/api/settings', {
+    llm: { baseUrl: llmFixture.url },
+  });
+
   const project = await postJson('/api/projects', { name: 'm7-regression', path: workspaceDir });
   projectId = project.id;
 
   await caseSearchFiles();
   await caseCopyMoveDeleteFile();
-  await caseCopyApprovalRejected();
+  await caseCopyAutoApproved();
   await caseHttpFetchSSRFDenied();
   await caseHttpFetchRedirectLimit();
   await caseToolSchemaValidation();
@@ -87,10 +92,10 @@ async function caseCopyMoveDeleteFile() {
   await assertMissing(join(workspaceDir, 'delete-me.txt'), 'delete_file 未移走原文件');
 }
 
-async function caseCopyApprovalRejected() {
-  const result = await runTask('M7_COPY_REJECT copy rejected', { approve: false });
-  assert(result.traces.some((trace) => trace.kind === 'approval' && trace.ok === false), 'copy_file 审批拒绝缺少 trace');
-  await assertMissing(join(workspaceDir, 'rejected-copy.txt'), '审批拒绝后不应复制文件');
+async function caseCopyAutoApproved() {
+  const result = await runTask('M7_COPY_AUTO copy auto approved');
+  assert(!result.events.some((event) => event.type === 'approval_request'), 'Auto 模式不应为 copy_file 请求单次审批');
+  assert((await readFile(join(workspaceDir, 'auto-approved-copy.txt'), 'utf8')) === 'copy me', 'Auto 模式未执行 copy_file');
 }
 
 async function caseHttpFetchSSRFDenied() {
@@ -232,14 +237,24 @@ async function startLlmFixture() {
       return;
     }
     const body = JSON.parse(await readRequestBody(req));
-    const userText = body.messages.find((message) => message.role === 'user')?.content ?? '';
+    const userMessages = body.messages.filter((message) => message.role === 'user');
+    const userText = messageText(userMessages[0]?.content);
+    const latestUserText = messageText(userMessages.at(-1)?.content);
     const toolMessages = body.messages.filter((message) => message.role === 'tool');
-    if (userText.includes('M7_RESUME') && toolMessages.length > 0) {
-      return sendToolCall(res, {
-        id: `call_resume_wait_${toolMessages.length}`,
-        name: 'ask_user',
-        args: { question: '恢复测试暂停点？' },
-      });
+    // 新完成门禁是追加 user follow-up；fixture 明确模拟“原目标已验收完成”。
+    if (latestUserText.includes('<completion_gate>')) {
+      return sendFinal(
+        res,
+        '<!-- aurevoy:completion=complete -->',
+        { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+      );
+    }
+    if (userText.includes('M7_PLAN') || userText.includes('M7_RESUME')) {
+      if (toolMessages.length === 0) return sendToolCall(res, multiStepPlanCall());
+      if (userText.includes('M7_PLAN') && toolMessages.length === 1) {
+        return sendToolCall(res, { id: 'call_plan_search', name: 'search_files', args: { glob: '**/*.md', query: 'TODO' } });
+      }
+      return sendFinal(res, `final:${userText}`, { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 });
     }
     if (toolMessages.length === 0) {
       const tool = chooseFirstTool(userText);
@@ -253,15 +268,38 @@ async function startLlmFixture() {
 
 function chooseFirstTool(userText) {
   if (userText.includes('M7_SEARCH')) return { id: 'call_search', name: 'search_files', args: { glob: '**/*.md', query: 'TODO' } };
-  if (userText.includes('M7_COPY_REJECT')) return { id: 'call_copy_reject', name: 'copy_file', args: { sourcePath: 'draft.txt', targetPath: 'rejected-copy.txt' } };
+  if (userText.includes('M7_COPY_AUTO')) return { id: 'call_copy_auto', name: 'copy_file', args: { sourcePath: 'draft.txt', targetPath: 'auto-approved-copy.txt' } };
   if (userText.includes('M7_COPY')) return { id: 'call_copy', name: 'copy_file', args: { sourcePath: 'draft.txt', targetPath: 'copied.txt' } };
   if (userText.includes('M7_MOVE')) return { id: 'call_move', name: 'move_file', args: { sourcePath: 'copied.txt', targetPath: 'moved.txt' } };
   if (userText.includes('M7_DELETE')) return { id: 'call_delete', name: 'delete_file', args: { path: 'delete-me.txt' } };
   if (userText.includes('M7_HTTP_SSRF')) return { id: 'call_http_ssrf', name: 'http_fetch', args: { url: 'http://127.0.0.1:8787/api/health' } };
   if (userText.includes('M7_HTTP_REDIRECT')) return { id: 'call_http_redirect', name: 'http_fetch', args: { url: 'http://0.0.0.0/redirect-loop' } };
   if (userText.includes('M7_SCHEMA')) return { id: 'call_schema', name: 'read_file', args: { path: 123 } };
-  if (userText.includes('M7_PLAN') || userText.includes('M7_RESUME')) return { id: 'call_plan_search', name: 'search_files', args: { glob: '**/*.md', query: 'TODO' } };
   return null;
+}
+
+/** 为 M7 多步场景复现当前运行时的显式 update_plan 调用，而非依赖已移除的启发式计划。 */
+function multiStepPlanCall() {
+  return {
+    id: 'call_plan',
+    name: 'update_plan',
+    args: {
+      steps: [
+        { id: 'discover', description: '检索本地材料', status: 'running', toolsExpected: ['search_files'] },
+        { id: 'synthesize', description: '整理检索结果', status: 'pending', dependsOn: ['discover'] },
+        { id: 'deliver', description: '生成 Markdown 报告', status: 'pending', dependsOn: ['synthesize'], verifiable: true },
+      ],
+    },
+  };
+}
+
+/** Pi 的 OpenAI 适配器可将消息内容编码成 text parts；fixture 统一还原为可匹配的用户文本。 */
+function messageText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => (part && typeof part === 'object' && typeof part.text === 'string' ? part.text : ''))
+    .join('\n');
 }
 
 function sendToolCall(res, tool) {

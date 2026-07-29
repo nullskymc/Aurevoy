@@ -19,7 +19,14 @@ export interface SkillFrontmatter {
   name: string;
   /** 必需。1-1024 字符，描述 skill 功能及何时使用。 */
   description: string;
-  /** 可选。工具白名单，空格分隔字符串（标准格式）或数组（兼容旧格式）。 */
+  /**
+   * 可选。工具白名单，空格分隔字符串（标准格式）或数组（兼容旧格式）。
+   *
+   * 仅解析并透出给前端，**本项目不据此收窄工具面**：
+   * Aurevoy 的 skill 是上下文注入（内容进 system prompt），不是受限执行环境，
+   * 且工具集在 AgentHarness 构造时一次性冻结，无法随运行中的 load_skill 变更。
+   * 需要按 skill 开关控制工具暴露时，用 tool/skill-integration.ts 的 SKILL_OWNED_TOOLS。
+   */
   'allowed-tools'?: string[];
   /** 可选。许可证名称或引用。 */
   license?: string;

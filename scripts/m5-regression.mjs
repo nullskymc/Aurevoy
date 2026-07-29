@@ -130,16 +130,26 @@ async function startLlmFixture() {
     }
     const body = JSON.parse(await readBody(req));
     const messages = body.messages ?? [];
+    const lastUserText = extractMessageText(
+      [...messages].reverse().find((message) => message.role === 'user')?.content,
+    );
     const userText = messages
       .filter((message) => message.role === 'user')
-      .map((message) => message.content)
+      .map((message) => extractMessageText(message.content))
       .join(' | ');
-    const hasToolResult = messages.some((message) => message.role === 'tool');
+    const hasToolResult = messages.some(
+      (message) => message.role === 'tool' && message.tool_call_id === 'call_read_note',
+    );
+
+    if (lastUserText.includes('aurevoy:completion=complete')) {
+      writeSseText(res, '<!-- aurevoy:completion=complete -->');
+      return;
+    }
 
     if (userText.includes('M5_READ_WORKSPACE') && !hasToolResult) {
       writeSseToolCall(res, {
         id: 'call_read_note',
-        name: 'read_file',
+        name: 'read',
         args: { path: 'note.txt' },
       });
       return;
@@ -252,6 +262,18 @@ function rawPatch(path, body) {
 
 function sse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function extractMessageText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => (
+      part && typeof part === 'object' && typeof part.text === 'string'
+        ? part.text
+        : ''
+    ))
+    .join('\n');
 }
 
 async function readBody(req) {

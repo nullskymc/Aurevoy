@@ -4,7 +4,13 @@ import { t } from "../../i18n";
 import type { KbDir, KbIndexStatus } from "./types";
 import { SettingsGroup } from "./layout";
 
-export function KbSettings({ settings: _settings }: { settings: RuntimeSettings | null }) {
+export function KbSettings({
+  settings,
+  onRecallChange,
+}: {
+  settings: RuntimeSettings | null;
+  onRecallChange: (enabled: boolean) => void;
+}) {
   const [dirs, setDirs] = useState<KbDir[]>([]);
   const [status, setStatus] = useState<KbIndexStatus | null>(null);
   const [dirInput, setDirInput] = useState("");
@@ -54,6 +60,19 @@ export function KbSettings({ settings: _settings }: { settings: RuntimeSettings 
 
   return (
     <>
+      <SettingsGroup title={t("kb.autoRecall")}>
+        <label className="settings-row">
+          <span>
+            <strong>{t("kb.autoRecall")}</strong>
+            <small>{t("kb.autoRecallHint")}</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={settings?.kbRecallEnabled ?? false}
+            onChange={(event) => onRecallChange(event.target.checked)}
+          />
+        </label>
+      </SettingsGroup>
       <SettingsGroup title={t("kb.dirsTitle")}>
         <div className="memory-add">
           <input

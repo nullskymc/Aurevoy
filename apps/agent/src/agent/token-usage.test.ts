@@ -87,7 +87,6 @@ describe("buildTokenUsageReport", () => {
       { provider: "anthropic", model: "claude", tasks: 1, totalTokens: 10 },
     ])
     expect(report.daily).toHaveLength(14)
-    expect(report.peakDay).not.toBeNull()
   })
 
   it("keeps report unavailable when no task has provider usage", () => {

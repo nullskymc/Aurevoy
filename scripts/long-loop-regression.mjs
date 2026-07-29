@@ -31,7 +31,7 @@ await import('../apps/agent/dist/tool/index.js').then(m => m.initializeUnifiedTo
 const { buildServer } = await import('../apps/agent/dist/server.js');
 const {
   buildConversationViewModel,
-} = await import('../packages/web-ui/dist/components/conversationWorkflow.js');
+} = await import('../packages/web-ui/src/components/conversationWorkflow.ts');
 
 const app = await buildServer(pino({ level: 'silent' }));
 await app.listen({ host: '127.0.0.1', port: 0 });
@@ -286,7 +286,8 @@ function assertReconnectedStream(events) {
       .map((event) => event.message.toolCallId),
   );
   assert(taskCreatedCount >= 3, `断线重连应至少收到 3 次 task_created/snapshot，实际 ${taskCreatedCount}`);
-  assert(statusCount >= 3, `断线重连应至少收到 3 次 status/snapshot，实际 ${statusCount}`);
+  // seq replay 只补发断线窗口内的增量，不再为每次重连伪造重复 status。
+  assert(statusCount >= 1, `断线重连应保留至少一次真实 status，实际 ${statusCount}`);
   assert(toolMessageIds.size === LOOP_COUNT, `重连流未覆盖全部 tool message，实际 ${toolMessageIds.size}`);
 }
 
@@ -313,9 +314,11 @@ function assertConversationWorkflow(messages) {
     .map((call) => call.id);
 
   assert(visibleAssistantCalls.includes(previousCallId), '前端 live 隐藏逻辑错误：已完成历史工具被隐藏');
-  assert(!visibleAssistantCalls.includes(activeCallId), '前端 live 隐藏逻辑错误：当前 live 工具未隐藏');
-
-  assert(partialView.liveOutput === activeText, '当前 assistant 仍隐藏时，不应压掉 live output');
+  assert(
+    visibleAssistantCalls.includes(activeCallId),
+    '带过程正文的当前工具消息应保留在历史区，避免隐藏执行叙事',
+  );
+  assert(partialView.liveOutput === '', '过程正文已进入历史区后，应压掉重复 live output');
 
   const completedSlice = messages.slice(0, activeAssistantIndex + 2);
   const completedView = buildConversationViewModel({
@@ -372,12 +375,15 @@ async function startLlmFixture() {
       return;
     }
     const body = JSON.parse(await readRequestBody(req));
-    const userText = textFromMessageContent(
-      body.messages.find((message) => message.role === 'user')?.content ?? '',
-    );
+    const userMessages = body.messages.filter((message) => message.role === 'user');
+    const userText = textFromMessageContent(userMessages[0]?.content ?? '');
+    const lastUserText = textFromMessageContent(userMessages.at(-1)?.content ?? '');
 
     if (!userText.includes('LONG_LOOP')) {
       return sendFinal(res, `unexpected:${userText}`);
+    }
+    if (lastUserText.includes('aurevoy:completion=complete')) {
+      return sendFinal(res, '<!-- aurevoy:completion=complete -->');
     }
 
     const nextIteration = (requestCountByGoal.get(userText) ?? 0) + 1;

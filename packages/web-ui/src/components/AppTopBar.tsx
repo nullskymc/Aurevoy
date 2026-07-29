@@ -3,7 +3,7 @@ import { t } from "../i18n";
 import { IconWorkbench } from "./workbenchIcons";
 import type { Task, TaskPhase, TaskStatus } from "@aurevoy/shared";
 import { taskDisplayTitle } from "@aurevoy/shared";
-import { IconFile, IconPanelLeftClose, IconPanelLeftOpen } from "../icons";
+import { IconFile, IconFork, IconGauge, IconPanelLeftClose, IconPanelLeftOpen } from "../icons";
 
 function SidebarIcon({ collapsed }: { collapsed: boolean }) {
   return collapsed ? <IconPanelLeftOpen size={18} /> : <IconPanelLeftClose size={18} />;
@@ -26,9 +26,13 @@ export function AppTopBar({
   currentTask,
   workbenchOpen,
   outputRailOpen,
+  sessionTreeOpen,
+  tracePanelOpen,
   leftCollapsed,
   onToggleWorkbench,
   onToggleOutputRail,
+  onToggleSessionTree,
+  onToggleTracePanel,
   onToggleSidebar,
 }: {
   activeView: MainView;
@@ -36,12 +40,16 @@ export function AppTopBar({
   workbenchOpen: boolean;
   /** 输出栏是否打开（与工作台互斥展示） */
   outputRailOpen?: boolean;
+  sessionTreeOpen?: boolean;
+  tracePanelOpen?: boolean;
   leftCollapsed: boolean;
   /** 保留兼容：调用方仍可传入，顶栏不再展示状态/消息数 */
   phase?: TaskPhase | null;
   status?: TaskStatus | null;
   onToggleWorkbench: () => void;
   onToggleOutputRail?: () => void;
+  onToggleSessionTree?: () => void;
+  onToggleTracePanel?: () => void;
   onToggleSidebar: () => void;
 }) {
   const isChatView = activeView === "chat";
@@ -67,6 +75,30 @@ export function AppTopBar({
             </h1>
           </div>
           <div className="topbar-actions">
+            {onToggleSessionTree && (
+              <button
+                type="button"
+                className="icon-btn"
+                data-active={sessionTreeOpen ? "true" : undefined}
+                aria-label={sessionTreeOpen ? t("sessionTree.hide") : t("sessionTree.show")}
+                title={sessionTreeOpen ? t("sessionTree.hide") : t("sessionTree.show")}
+                onClick={onToggleSessionTree}
+              >
+                <IconFork size={18} />
+              </button>
+            )}
+            {onToggleTracePanel && (
+              <button
+                type="button"
+                className="icon-btn"
+                data-active={tracePanelOpen ? "true" : undefined}
+                aria-label={tracePanelOpen ? t("trace.hide") : t("trace.show")}
+                title={tracePanelOpen ? t("trace.hide") : t("trace.show")}
+                onClick={onToggleTracePanel}
+              >
+                <IconGauge size={18} />
+              </button>
+            )}
             {onToggleOutputRail && !workbenchOpen && (
               <button
                 type="button"

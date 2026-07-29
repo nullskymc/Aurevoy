@@ -67,6 +67,8 @@ export interface ToolActivity {
   id: string;
   name: string;
   args: unknown;
+  /** 后端生成的状态无关动作摘要，例如“调用 zotero · search items · 关键词” */
+  summary?: string;
   status: "awaiting" | "running" | "ok" | "error";
   riskLevel?: ToolRiskLevel;
   planStepId?: string;
@@ -126,6 +128,13 @@ interface ConversationProps {
   liveContentBlocks?: ContentBlock[];
   /** 对话内文件引用 → 侧边工作台预览 */
   onOpenWorkspacePath?: (path: string) => void;
+  /** 最近一次上下文压缩；在 transcript 内展示可展开分隔条。 */
+  compaction?: {
+    summary?: string;
+    tokensBefore?: number;
+    tokensAfter?: number;
+    automatic: boolean;
+  } | null;
 }
 
 interface ToolResultInfo {
@@ -203,6 +212,7 @@ function toolActivitiesFromAssistant(
       id: tc.id,
       name: tc.function.name,
       args,
+      summary: tc.function.summary,
       status: result ? (result.ok ? "ok" : "error") : "running",
       planStepId: tc.function.planStepId,
       output: result?.output,
@@ -226,6 +236,7 @@ function collectApprovalItems(
       id: approval.call.id,
       name: approval.call.toolName,
       args: approval.call.args,
+      summary: approval.call.summary,
       status: "awaiting",
       riskLevel: approval.riskLevel,
       planStepId: approval.call.planStepId,
@@ -275,6 +286,7 @@ export function Conversation({
   onResume,
   liveContentBlocks = [],
   onOpenWorkspacePath,
+  compaction,
 }: ConversationProps) {
   const messageEditDisabled = editDisabled ?? busy;
   const platform = usePlatform();
@@ -327,8 +339,14 @@ export function Conversation({
         subagentRuns: task.subagentRuns ?? [],
       })
     : null;
+
   return (
     <div className="conversation">
+      {task.resumedAfterRestart && (task.status === "running" || task.status === "pending" || task.status === "planning") && (
+        <div className="conversation-resume-banner" role="status">
+          {t("agentStatus.resumedAfterRestart")}
+        </div>
+      )}
       <div className="conversation-thread">
         <VirtualConversationTurns
           key={task.id}
@@ -359,6 +377,18 @@ export function Conversation({
             />
           )}
         />
+
+        {compaction && (
+          <details className="conversation-compaction">
+            <summary>
+              {compaction.automatic ? t("agentStatus.compactedAuto") : t("agentStatus.compactedManual")}
+              {typeof compaction.tokensBefore === "number" && typeof compaction.tokensAfter === "number"
+                ? ` · ${compaction.tokensBefore.toLocaleString()} → ${compaction.tokensAfter.toLocaleString()} tokens`
+                : ""}
+            </summary>
+            {compaction.summary && <p>{compaction.summary}</p>}
+          </details>
+        )}
 
         {/* ask-user 追问：留在对话流内 */}
         {(() => {
@@ -580,7 +610,6 @@ function ConversationTurnView({
   onOpenWorkspacePath?: (path: string) => void;
 }) {
   const assistantMessages = turn.agentMessages.filter((message) => message.role === "assistant");
-  const attachContentToolCallIds = collectPresentationToolCallIds(turn.agentMessages);
   // 直播中也解析 final，用于把过程旁白从交付区剔除；直播正文主要靠 liveRoundData
   const finalMessage = findFinalAssistantMessage(turn.agentMessages);
   /**
@@ -592,6 +621,9 @@ function ConversationTurnView({
     excludeProcessNarration: true,
   });
   const deliveryMessageIds = new Set(deliveryMessages.map((message) => message.id));
+  const pairedToolCallIds = new Set(
+    assistantMessages.flatMap((message) => message.toolCalls?.map((call) => call.id) ?? []),
+  );
   const workflowMessages = assistantMessages.filter((message) => {
     // 含 list_dir/read 等过程工具的旁白：只进过程层
     if (isProcessToolNarration(message)) return true;
@@ -603,7 +635,7 @@ function ConversationTurnView({
     return !isPresentationOnlyAssistantMessage(message) || hasProcessNarration(message);
   });
   const standaloneToolMessages = turn.agentMessages.filter(
-    (message) => message.role === "tool" && (!message.toolCallId || !attachContentToolCallIds.has(message.toolCallId)),
+    (message) => message.role === "tool" && (!message.toolCallId || !pairedToolCallIds.has(message.toolCallId)),
   );
 
   return (
@@ -807,7 +839,7 @@ function AgentFailureCard({ message }: { message: Message }) {
 }
 
 /** 仅用于向用户交付附件的工具，不参与「工作流过程」叙事 */
-const PRESENTATION_TOOL_NAMES = new Set(["attach_content"]);
+const PRESENTATION_TOOL_NAMES = new Set(["attach_content", "present_ui"]);
 
 function isPresentationToolName(name: string): boolean {
   return PRESENTATION_TOOL_NAMES.has(name);
@@ -892,7 +924,7 @@ function AgentProcessStream({
   /** 最终消息已落库但任务尚未收到 done 时，过程仍应保持收纳。 */
   hasLiveDelivery: boolean;
 }) {
-  const historicalRounds = assistantMessages.map((message) =>
+  const messageRounds = assistantMessages.map((message) =>
     buildAgentRoundFromMessage(
       stripPresentationBlocksForWorkflow(message, presentationMessageIds),
       resultMap,
@@ -900,13 +932,13 @@ function AgentProcessStream({
       subagentRuns,
     ),
   );
-  const mergedHistorical = mergeAgentRoundData(historicalRounds, "turn-process");
+  const mergedHistorical = mergeAgentRoundData(messageRounds, "turn-process");
   const completedSegments: ProcessSegmentData[] = assistantMessages
     .map((message, index) => ({
       id: message.id,
       narration: message.content.trim() ? message.content : undefined,
       // 每条 assistant 消息单独压缩活动，避免跨消息合并命令后失去归属。
-      activityRows: flattenProcessActivityRows(historicalRounds[index]),
+      activityRows: flattenProcessActivityRows(messageRounds[index]),
     }))
     .filter((segment) => segment.narration || segment.activityRows.length > 0);
   // live 时展示实时状态流，并保留已经收到的过程叙事；完成后只展示合并后的一个「已处理」。
@@ -914,7 +946,7 @@ function AgentProcessStream({
   const showCompleted = !showLive && mergedHistorical != null;
   const liveNarrations = assistantMessages.filter(hasProcessNarration);
   const historicalRoundByMessageId = new Map(
-    assistantMessages.map((message, index) => [message.id, historicalRounds[index]]),
+    assistantMessages.map((message, index) => [message.id, messageRounds[index]]),
   );
   const narrationToolCallIds = new Set(
     liveNarrations.flatMap((message) => message.toolCalls?.map((call) => call.id) ?? []),
@@ -1187,7 +1219,10 @@ function LiveStreamingSegment({
           <StreamingMarkdownRenderer content={narration} onOpenWorkspacePath={onOpenWorkspacePath} />
         </article>
       )}
-      {activityRows.length > 0 && <ProcessActivityList rows={activityRows} live />}
+      {/* finalResponse 已在正文上方渲染 completedProcess；不要把同一批工具行泄漏到正文下方。 */}
+      {!finalResponse && activityRows.length > 0 && (
+        <ProcessActivityList rows={activityRows} live />
+      )}
     </section>
   );
 }

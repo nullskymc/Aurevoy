@@ -55,7 +55,12 @@ export function useTaskController({
   draftProjectId: string | undefined;
   goal: string;
   handleEvent: (event: AgentEvent) => void;
-  openStream: (taskId: string, onEvent: (event: AgentEvent) => void, onDone: () => void) => void;
+  openStream: (
+    taskId: string,
+    onEvent: (event: AgentEvent) => void,
+    onDone: () => void,
+    options?: { hasSnapshot?: boolean },
+  ) => void;
   refreshTaskTraces: (taskId: string) => Promise<void>;
   runAgentRequest: <T>(request: () => Promise<T>) => Promise<T>;
   setActiveView: Dispatch<SetStateAction<MainView>>;
@@ -81,6 +86,21 @@ export function useTaskController({
     setAttachments([]);
   }
 
+  /** 记录本地 HTTP 阶段耗时，与 useSSEStream 的 open/first-event/first-token 标记拼成完整延迟链。 */
+  async function runMeasuredTaskRequest<T extends { task: Task }>(
+    kind: string,
+    request: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = typeof performance !== "undefined" ? performance.now() : 0;
+    const response = await runAgentRequest(request);
+    if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+      performance.mark(`aurevoy:task-request:${kind}:${response.task.id}`, {
+        detail: { durationMs: Math.max(0, performance.now() - startedAt) },
+      });
+    }
+    return response;
+  }
+
   async function startGoal(rawGoal: string, attach?: MessageAttachment[]): Promise<void> {
     const trimmed = rawGoal.trim();
     if (!trimmed || busy) return;
@@ -96,14 +116,14 @@ export function useTaskController({
     closeStream();
 
     try {
-      const { task } = await runAgentRequest(() =>
+      const { task } = await runMeasuredTaskRequest("create", () =>
         createTask(trimmed, draftProjectId ?? currentTask?.projectId, attach, executionMode),
       );
       setCurrentTask(task);
       setPhase(task.phase);
       setTraces([]);
       updateTaskList(task);
-      openStream(task.id, handleEvent, () => setBusy(false));
+      openStream(task.id, handleEvent, () => setBusy(false), { hasSnapshot: true });
     } catch (err) {
       setStatus("failed");
       setOutput(`${t("notice.connectEngineFailed")}${err instanceof Error ? err.message : String(err)}`);
@@ -134,7 +154,7 @@ export function useTaskController({
           task.status === "planning" ||
           task.status === "running" ||
           task.status === "paused";
-        if (isLive) openStream(task.id, handleEvent, () => setBusy(false));
+        if (isLive) openStream(task.id, handleEvent, () => setBusy(false), { hasSnapshot: true });
         else setBusy(false);
       })
       .catch((err) => {
@@ -158,11 +178,14 @@ export function useTaskController({
     closeStream();
 
     try {
-      const { task } = await runAgentRequest(() => continueTask(currentTask.id, trimmed, attach, executionMode));
+      const { task } = await runMeasuredTaskRequest(
+        "continue",
+        () => continueTask(currentTask.id, trimmed, attach, executionMode),
+      );
       setCurrentTask(task);
       setPhase(task.phase);
       updateTaskList(task);
-      openStream(task.id, handleEvent, () => setBusy(false));
+      openStream(task.id, handleEvent, () => setBusy(false), { hasSnapshot: true });
     } catch (err) {
       setBusy(false);
       setNotice(`${t("notice.continueFailed")}${err instanceof Error ? err.message : String(err)}`);
@@ -170,17 +193,48 @@ export function useTaskController({
     }
   }
 
-  function handleComposerSubmit(): void {
+  /** 运行中消息不重置当前流；后端确认入队后只刷新任务快照。 */
+  async function queueGoal(
+    rawMessage: string,
+    delivery: "steering" | "follow_up",
+    attach?: MessageAttachment[],
+  ): Promise<void> {
+    const trimmed = rawMessage.trim();
+    if (!trimmed || !busy || !currentTask) return;
+    resetComposer();
+    try {
+      const { task } = await continueTask(
+        currentTask.id,
+        trimmed,
+        attach,
+        executionMode,
+        delivery,
+      );
+      setCurrentTask(task);
+      updateTaskList(task);
+    } catch (err) {
+      setGoal(rawMessage);
+      if (attach) setAttachments(attach);
+      setNotice(`${t("notice.continueFailed")}${err instanceof Error ? err.message : String(err)}`);
+      if (err instanceof TypeError) setOnline(false);
+    }
+  }
+
+  function handleComposerSubmit(delivery?: "steering" | "follow_up"): void {
     const trimmed = goal.trim();
-    if (trimmed === "/compact") {
+    const compactMatch = trimmed.match(/^\/compact(?:\s+([\s\S]+))?$/);
+    if (compactMatch && !busy) {
+      const instructions = compactMatch[1]?.trim().replace(/^(['"])([\s\S]*)\1$/, "$2");
       resetComposer();
-      void handleCompact();
+      void handleCompact(instructions || undefined);
       return;
     }
     const currentAttachments = attachments.length > 0 ? [...attachments] : undefined;
-    if (currentTask && !busy) {
+    if (currentTask && busy) {
+      void queueGoal(goal, delivery ?? "steering", currentAttachments);
+    } else if (currentTask) {
       void continueGoal(goal, currentAttachments);
-    } else if (!busy) {
+    } else {
       void startGoal(goal, currentAttachments);
     }
   }
@@ -236,13 +290,16 @@ export function useTaskController({
       setPlan(response.task.plan);
       updateTaskList(response.task);
 
-      const { task } = await runAgentRequest(() => continueTask(taskId, trimmed, attach, executionMode));
+      const { task } = await runMeasuredTaskRequest(
+        "revert-continue",
+        () => continueTask(taskId, trimmed, attach, executionMode),
+      );
       setCurrentTask(task);
       setPhase(task.phase);
       setStatus(task.status);
       setPlan(task.plan);
       updateTaskList(task);
-      openStream(task.id, handleEvent, () => setBusy(false));
+      openStream(task.id, handleEvent, () => setBusy(false), { hasSnapshot: true });
     } catch (err) {
       setBusy(false);
       // revert 已成功时保留截断态，用户可用「撤销编辑」恢复
@@ -269,11 +326,11 @@ export function useTaskController({
     closeStream();
 
     try {
-      const { task } = await runAgentRequest(() => resumeTask(currentTask.id));
+      const { task } = await runMeasuredTaskRequest("resume", () => resumeTask(currentTask.id));
       setCurrentTask(task);
       setPhase(task.phase);
       updateTaskList(task);
-      openStream(task.id, handleEvent, () => setBusy(false));
+      openStream(task.id, handleEvent, () => setBusy(false), { hasSnapshot: true });
     } catch (err) {
       setBusy(false);
       setNotice(`${t("notice.resumeFailed")}${err instanceof Error ? err.message : String(err)}`);
@@ -309,11 +366,11 @@ export function useTaskController({
     }
   }
 
-  async function handleCompact(): Promise<void> {
+  async function handleCompact(instructions?: string): Promise<void> {
     if (!currentTask || busy) return;
 
     try {
-      const response = await compactTask(currentTask.id);
+      const response = await compactTask(currentTask.id, undefined, undefined, instructions);
       setCurrentTask(response.task);
       updateTaskList(response.task);
       setNotice(`${t("notice.compacted")}${response.originalCount} ${t("notice.compactedMessages")} ${response.summaryLength} ${t("notice.compactedChars")}`);

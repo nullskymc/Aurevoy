@@ -29,6 +29,8 @@ export {
   branchTask,
   compactTask,
   listTaskTraces,
+  getTaskSessionTree,
+  navigateTaskSessionTree,
   cancelTask,
   deleteTask,
   approveToolCall,
@@ -53,7 +55,6 @@ export {
   createProject,
   updateProject,
   deleteProject,
-  approvePlan,
 } from './api';
 
 // Hooks

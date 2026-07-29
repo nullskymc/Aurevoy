@@ -52,6 +52,8 @@ const previewLines = (value: string, prefix: "+" | "-"): string[] => {
 
 export const editTool = make({
   name: "edit",
+  riskLevel: "dangerous",
+  executionPolicy: { parallelizable: false },
   description:
     "Preferred way to revise an existing file: replace exact oldString with newString (include enough surrounding context so the match is unique). " +
     "Use this for report/section fixes, wording, and small structural changes instead of rewrite-via-write. " +

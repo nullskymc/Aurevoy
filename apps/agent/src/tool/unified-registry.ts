@@ -4,12 +4,11 @@
  * 以 Pi Agent 的 AgentTool 接口为核心，提供：
  * 1. 统一工具定义 → AgentTool 桥接
  * 2. Skill 工具动态注册
- * 3. 工具白名单管理（基于 Skill allowed-tools）
+ * 3. 工具启用状态管理（设置页开关 + skill 归属门控）
  *
  * 设计原则：
  * - Pi AgentHarness 直接使用本注册表的 toAgentTools() 获取工具列表
  * - 所有工具统一注册到本注册表，不再维护多套注册表
- * - Skill 的 allowed-tools 用于过滤工具列表，而非创建新工具
  */
 
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
@@ -141,7 +140,7 @@ class UnifiedToolRegistry {
   /**
    * 转换为 Pi Agent 的 AgentTool 数组。
    *
-   * @param filter 可选的工具名称白名单（用于 Skill allowed-tools 过滤）
+   * @param filter 可选的工具名称白名单（子 Agent profile 工具集 / skill 归属门控）
    */
   toAgentTools(filter?: string[]): AgentTool[] {
     const tools = filter

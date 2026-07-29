@@ -1,2 +1,2 @@
 export { rememberTool } from "./remember.js"
-export { recallTool } from "./recall.js"
+export { runDreamsTool } from './dreams.js'

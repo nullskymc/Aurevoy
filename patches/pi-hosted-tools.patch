@@ -1,0 +1,115 @@
+diff --git a/node_modules/@earendil-works/pi-ai/dist/types.d.ts b/node_modules/@earendil-works/pi-ai/dist/types.d.ts
+--- a/node_modules/@earendil-works/pi-ai/dist/types.d.ts
++++ b/node_modules/@earendil-works/pi-ai/dist/types.d.ts
+@@ -405,8 +405,27 @@
+ } | {
+     type: "toolcall_end";
+     contentIndex: number;
+     toolCall: ToolCall;
+     partial: AssistantMessage;
++} | {
++    type: "hosted_tool_start";
++    call: {
++        id: string;
++        name: string;
++        arguments: Record<string, unknown>;
++        providerExecuted: true;
++    };
++    partial: AssistantMessage;
++} | {
++    type: "hosted_tool_end";
++    result: {
++        callId: string;
++        ok: boolean;
++        output?: unknown;
++        error?: string;
++        providerExecuted: true;
++    };
++    partial: AssistantMessage;
+ } | {
+     type: "done";
+     reason: Extract<StopReason, "stop" | "length" | "toolUse">;
+diff --git a/node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js b/node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js
+--- a/node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js
++++ b/node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js
+@@ -445,6 +445,18 @@
+         if (event.type === "response.created") {
+             output.responseId = event.response.id;
+         }
+         else if (event.type === "response.output_item.added") {
++            if (event.item.type === "web_search_call") {
++                stream.push({
++                    type: "hosted_tool_start",
++                    call: {
++                        id: event.item.id,
++                        name: "web_search",
++                        arguments: {},
++                        providerExecuted: true,
++                    },
++                    partial: output,
++                });
++            }
+             createSlot(event.output_index, event.item);
+         }
+@@ -544,4 +556,16 @@
+         else if (event.type === "response.output_item.done") {
+             const item = event.item;
++            if (item.type === "web_search_call") {
++                stream.push({
++                    type: "hosted_tool_end",
++                    result: {
++                        callId: item.id,
++                        ok: item.status !== "failed",
++                        providerExecuted: true,
++                    },
++                    partial: output,
++                });
++                continue;
++            }
+             const slot = getOrCreateSlot(event.output_index, item);
+             if (item.type === "reasoning" && slot?.type === "thinking") {
+diff --git a/node_modules/@earendil-works/pi-ai/dist/api/anthropic-messages.js b/node_modules/@earendil-works/pi-ai/dist/api/anthropic-messages.js
+--- a/node_modules/@earendil-works/pi-ai/dist/api/anthropic-messages.js
++++ b/node_modules/@earendil-works/pi-ai/dist/api/anthropic-messages.js
+@@ -438,5 +438,30 @@
+                         output.content.push(block);
+                         stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
+                     }
++                    else if (event.content_block.type === "server_tool_use" && event.content_block.name === "web_search") {
++                        stream.push({
++                            type: "hosted_tool_start",
++                            call: {
++                                id: event.content_block.id,
++                                name: "web_search",
++                                arguments: {},
++                                providerExecuted: true,
++                            },
++                            partial: output,
++                        });
++                    }
++                    else if (event.content_block.type === "web_search_tool_result") {
++                        const failed = event.content_block.content?.type === "web_search_tool_result_error";
++                        stream.push({
++                            type: "hosted_tool_end",
++                            result: {
++                                callId: event.content_block.tool_use_id,
++                                ok: !failed,
++                                error: failed ? String(event.content_block.content?.error_code ?? "网页搜索失败") : undefined,
++                                providerExecuted: true,
++                            },
++                            partial: output,
++                        });
++                    }
+                 }
+                 else if (event.type === "content_block_delta") {
+diff --git a/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js b/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js
+--- a/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js
++++ b/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js
+@@ -215,5 +215,7 @@
+             case "toolcall_start":
+             case "toolcall_delta":
+             case "toolcall_end":
++            case "hosted_tool_start":
++            case "hosted_tool_end":
+                 if (partialMessage) {
+                     partialMessage = event.partial;

@@ -5,6 +5,7 @@ import type {
   MessageAttachment,
 } from "@aurevoy/shared";
 import {
+  clearTaskQueue,
   createProject,
   deleteProject,
   deleteTask,
@@ -12,6 +13,7 @@ import {
   listTaskTraces,
   resumeAutoMode as resumeAutoModeApi,
   updateSettings,
+  updateTaskModel,
 } from "./api";
 import { usePlatform } from "./platform/context";
 import { useAgentEventHandler } from "./hooks/useAgentEventHandler";
@@ -30,10 +32,13 @@ import { useWorkbenchTabs } from "./hooks/useWorkbenchTabs";
 import { useTaskController } from "./hooks/useTaskController";
 import { Composer, nextThinkingLevel, type ThinkingUILevel } from "./components/Composer";
 import { ContextUsageRing } from "./components/ContextUsageRing";
+import { AgentStatusDock } from "./components/AgentStatusDock";
 import { SetupPanel } from "./components/SetupPanel";
 import { ApprovalsDock, Conversation } from "./components/Conversation";
 import { AppTopBar } from "./components/AppTopBar";
-import { ModelSelectorDrawer } from "./components/ModelSelectorDrawer";
+import { SessionTreeDialog } from "./components/SessionTreeDialog";
+import { TracePanel } from "./components/TracePanel";
+import { ModelSelectorDrawer, type ModelSelectorDraft } from "./components/ModelSelectorDrawer";
 import { WorkbenchPanel } from "./components/WorkbenchPanel";
 import { OutputFloatPanel } from "./components/OutputFloatPanel";
 import { PlanFloatPanel } from "./components/PlanFloatPanel";
@@ -94,6 +99,8 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
   const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
+  const [sessionTreeOpen, setSessionTreeOpen] = useState(false);
+  const [tracePanelOpen, setTracePanelOpen] = useState(false);
   const [online, setOnline] = useState<boolean | null>(null);
   const [notice, setNoticeState] = useState<{ message: string; tone: ToastTone } | null>(null);
   const setNotice = (message: string | null, tone?: ToastTone) => {
@@ -143,6 +150,7 @@ function App() {
     plan,
     status,
     tasks,
+    traces,
     setBusy,
     setCurrentTask,
     setOutput,
@@ -274,6 +282,36 @@ function App() {
     void updateSettings({ agentThinkingLevel: level }).catch(() => {});
   }
 
+  /**
+   * P1-2 模型粘性：有活动任务时，模型 / 推理档切换落到该任务（运行中即时生效），
+   * 而不是改全局默认。成功后同步本地 currentTask.modelSnapshot（SSE 也会再推一次，幂等）。
+   */
+  async function applyTaskModelSelection(draft: ModelSelectorDraft): Promise<void> {
+    const taskId = currentTask?.id;
+    if (!taskId) return;
+    try {
+      const res = await updateTaskModel(taskId, { provider: draft.provider, model: draft.model });
+      patchCurrentTask({ modelSnapshot: res.modelSnapshot });
+      setModelDrawerOpen(false);
+    } catch (err) {
+      setNotice(`切换任务模型失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** 活动任务的推理档切换：落任务快照，同时刷新本地 chip。 */
+  async function applyTaskThinkingLevel(level: ThinkingUILevel): Promise<void> {
+    setThinkingLevel(level);
+    localStorage.setItem("aurevoy.thinkingLevel", level);
+    const taskId = currentTask?.id;
+    if (!taskId) return;
+    try {
+      const res = await updateTaskModel(taskId, { thinkingLevel: level });
+      patchCurrentTask({ modelSnapshot: res.modelSnapshot });
+    } catch (err) {
+      setNotice(`切换推理档失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // 后端 settings 为推理深度真相源（刷新后与多端一致）
   useEffect(() => {
     const level = runtimeSettings?.agentThinkingLevel;
@@ -289,7 +327,17 @@ function App() {
   const workbenchTabsRef = useRef(workbenchTabs);
   workbenchTabsRef.current = workbenchTabs;
 
-  const { clearLiveState, derivedLive, handleEvent, liveContentBlocks, phaseDetail } = useAgentEventHandler({
+  const {
+    clearLiveState,
+    derivedLive,
+    handleEvent,
+    liveContentBlocks,
+    phaseDetail,
+    retryStatus: agentRetryStatus,
+    pendingQueue: agentPendingQueue,
+    lastCompaction: agentLastCompaction,
+    dismissCompaction: dismissAgentCompaction,
+  } = useAgentEventHandler({
     closeStream,
     currentTask,
     mergeArtifact,
@@ -530,8 +578,10 @@ function App() {
     currentTask.status !== "completed" &&
     currentTask.status !== "running" &&
     currentTask.status !== "planning" &&
-    // 普通 paused（审批/追问）由对应 UI 处理；预算触顶 paused 可 resume 续跑
-    (currentTask.status !== "paused" || currentTask.phase === "waiting_budget");
+    // 审批/追问由对应 UI 处理；预算触顶或完成门禁未通过时可直接续跑
+    (currentTask.status !== "paused" ||
+      currentTask.phase === "waiting_budget" ||
+      currentTask.phase === "waiting_completion");
 
   const hasLiveTail =
     busy ||
@@ -539,6 +589,19 @@ function App() {
     phase === "waiting_approval";
 
   const [outputRailOpen, setOutputRailOpen] = useState(true);
+
+  function handleSessionTreeTaskChange(task: NonNullable<typeof currentTask>): void {
+    clearLiveState();
+    setCurrentTask(task);
+    setStatus(task.status);
+    setPhase(task.phase);
+    setPlan(task.plan);
+    setOutput("");
+    setTraces([]);
+    setExecutionMode(task.executionMode ?? "auto");
+    updateTaskList(task);
+    void refreshTaskTraces(task.id);
+  }
 
   /** 输出栏与文件工作台互斥：对话中、工作台关、用户未手动关闭时占右侧列 */
   const showOutputRail =
@@ -584,11 +647,21 @@ function App() {
           currentTask={currentTask}
           workbenchOpen={workbenchOpen}
           outputRailOpen={outputRailOpen}
+          sessionTreeOpen={sessionTreeOpen}
+          tracePanelOpen={tracePanelOpen}
           leftCollapsed={leftCollapsed}
           phase={phase}
           status={status}
           onToggleWorkbench={() => setWorkbenchOpen((open) => !open)}
           onToggleOutputRail={() => setOutputRailOpen((open) => !open)}
+          onToggleSessionTree={() => setSessionTreeOpen((open) => !open)}
+          onToggleTracePanel={() => {
+            setTracePanelOpen((open) => {
+              const next = !open;
+              if (next && currentTask) void refreshTaskTraces(currentTask.id);
+              return next;
+            });
+          }}
           onToggleSidebar={() => setLeftCollapsed((collapsed) => !collapsed)}
         />
 
@@ -686,6 +759,7 @@ function App() {
                     workbenchTabs.openWorkspaceFile(path);
                     setWorkbenchOpen(true);
                   }}
+                  compaction={agentLastCompaction}
                 />
               </div>
               <div className="composer-dock">
@@ -693,6 +767,19 @@ function App() {
                   liveToolActivity={derivedLive}
                   pendingApprovals={currentTask.pendingApprovals}
                   onToolDecision={handleToolDecision}
+                />
+                <AgentStatusDock
+                  retry={agentRetryStatus}
+                  queue={agentPendingQueue}
+                  compaction={agentLastCompaction}
+                  formatTokens={formatContextK}
+                  onDismissCompaction={dismissAgentCompaction}
+                  onClearQueue={(kind) => {
+                    if (!currentTask) return;
+                    void clearTaskQueue(currentTask.id, kind).catch((err) => {
+                      setNotice(`${t("agentStatus.queueClearFailed")}: ${err instanceof Error ? err.message : String(err)}`);
+                    });
+                  }}
                 />
                 {health?.contextTokenBudget != null && currentTask && currentTask.messages.length > 0 && (
                   <ContextUsageRing
@@ -733,19 +820,24 @@ function App() {
                   executionMode={executionMode}
                   onExecutionModeChange={setExecutionMode}
                   thinkingLevel={thinkingLevel}
+                  taskModelSnapshot={currentTask?.modelSnapshot ?? null}
                   onCycleThinkingLevel={cycleThinkingLevel}
                 />
                 <ModelSelectorDrawer
                   open={modelDrawerOpen}
-                  provider={health?.provider}
+                  provider={
+                    currentTask?.modelSnapshot
+                      ? `${currentTask.modelSnapshot.provider}:${currentTask.modelSnapshot.model}`
+                      : health?.provider
+                  }
                   settings={runtimeSettings}
                   saving={settingsSaving}
                   anchorRef={modelButtonRef}
-                  thinkingLevel={thinkingLevel}
-                  onThinkingLevelChange={setThinkingLevelAndPersist}
+                  thinkingLevel={currentTask?.modelSnapshot?.thinkingLevel ?? thinkingLevel}
+                  onThinkingLevelChange={applyTaskThinkingLevel}
                   onClose={() => setModelDrawerOpen(false)}
                   onOpenFullSettings={handleOpenFullSettingsFromModelDrawer}
-                  onSave={handleSaveModelSelection}
+                  onSave={applyTaskModelSelection}
                 />
               </div>
             </div>
@@ -892,6 +984,26 @@ function App() {
           setActiveView("chat");
         }}
       />
+
+      {currentTask && (
+        <SessionTreeDialog
+          open={sessionTreeOpen}
+          task={currentTask}
+          busy={busy}
+          onOpenChange={setSessionTreeOpen}
+          onTaskChange={handleSessionTreeTaskChange}
+          onNotice={setNotice}
+        />
+      )}
+
+      {currentTask && (
+        <TracePanel
+          open={tracePanelOpen}
+          traces={traces}
+          onOpenChange={setTracePanelOpen}
+          onRefresh={() => void refreshTaskTraces(currentTask.id)}
+        />
+      )}
 
       {notice && (
         <ToastNotice

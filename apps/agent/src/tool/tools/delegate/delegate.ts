@@ -38,6 +38,8 @@ const Output = Schema.Struct({
 
 export const delegateTool = make({
   name: "delegate",
+  riskLevel: "safe",
+  executionPolicy: { parallelizable: false },
   description:
     "Delegate an independent sub-task to a specialized sub-agent; you keep the user conversation and final answer. " +
     "Roles: explore (readonly scout), research (web+local), coder (edit code), " +

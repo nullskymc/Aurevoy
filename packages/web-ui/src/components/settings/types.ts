@@ -36,6 +36,8 @@ export interface SettingsDraft {
   commandExecutionEnabled: boolean;
   autoModeSafetyEnabled: boolean;
   agentToolExecution: string;
+  memoryRecallEnabled: boolean;
+  kbRecallEnabled: boolean;
   mcpServersJson: string;
   cleanupPolicyDays: number;
   /** 新建任务默认：单次执行 / 任务寿命预算 */
@@ -49,6 +51,7 @@ export interface SettingsDraft {
   embeddingModel: string;
   embeddingBaseUrl: string;
   embeddingApiKey: string;
+  searchPreferNative: boolean;
   searchProvider: string;
   searchBaseUrl: string;
   searchApiKey: string;

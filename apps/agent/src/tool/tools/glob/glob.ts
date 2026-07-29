@@ -57,6 +57,7 @@ const Output = Schema.Array(Schema.Struct({
 
 export const globTool = make({
   name: "glob",
+  riskLevel: "safe",
   description: "Find files by glob pattern. Use ** to match directories recursively. Returns relative file paths.",
   input: Input,
   output: Output,

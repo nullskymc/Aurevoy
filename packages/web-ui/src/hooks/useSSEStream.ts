@@ -1,26 +1,29 @@
 import { useCallback, useEffect, useRef } from "react";
 import { EventStreamContentType, fetchEventSource } from "@microsoft/fetch-event-source";
-import type { AgentEvent } from "@aurevoy/shared";
+import type { AgentEvent, StreamAgentEvent } from "@aurevoy/shared";
 import { getBaseUrl } from "../api";
 
-const MAX_RECONNECT_DELAY_MS = 30_000;
-const BASE_RECONNECT_DELAY_MS = 1_000;
+const MAX_RECONNECT_DELAY_MS = 5_000;
+const BASE_RECONNECT_DELAY_MS = 250;
 
 /**
  * SSE 流管理 hook（带断线重连）。
  *
- * - fetch-event-source 断开时自动指数退避重连（1s → 2s → 4s → … → 30s 上限）
+ * - 本地引擎断开时自动指数退避重连（250ms → 500ms → 1s → … → 5s 上限）
  * - 收到 done / task_deleted 事件时终止重连
  * - 新 openStream 调用自动取消旧的待定重连
  * - 每次成功收到消息时重置退避计数器
- * - 后端 snapshot replay（server.ts:757-789）在重连时自动恢复所有丢失状态
+ * - 后端按 SSE id 增量回放；日志缺口时自动回退完整任务快照
  */
 export function useSSEStream() {
   const esRef = useRef<AbortController | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const lastSeqByTaskRef = useRef(new Map<string, number>());
   const taskIdRef = useRef<string | null>(null);
   const onEventRef = useRef<(event: AgentEvent) => void>(() => {});
   const onDoneRef = useRef<() => void>(() => {});
+  const firstEventSeenRef = useRef(false);
+  const firstTokenSeenRef = useRef(false);
 
   const closeStream = useCallback((): void => {
     esRef.current?.abort();
@@ -34,13 +37,19 @@ export function useSSEStream() {
    * 它通过 Fetch 支持自定义请求、页面隐藏时持续连接和由 onerror 控制的退避策略。
    */
   const doConnect = useCallback(
-    (taskId: string) => {
-      const streamUrl = `${getBaseUrl()}/api/tasks/${taskId}/stream`;
+    (taskId: string, hasSnapshot: boolean) => {
+      const lastSeq = lastSeqByTaskRef.current.get(taskId) ?? 0;
+      const query = new URLSearchParams({ afterSeq: String(lastSeq) });
+      if (hasSnapshot) query.set("snapshot", "0");
+      const streamUrl = `${getBaseUrl()}/api/tasks/${taskId}/stream?${query.toString()}`;
       const controller = new AbortController();
+      const headers: Record<string, string> = { Accept: EventStreamContentType };
+      if (lastSeq > 0) headers["Last-Event-ID"] = String(lastSeq);
+      markSseMilestone(taskId, "connect-start");
 
       void fetchEventSource(streamUrl, {
         method: "GET",
-        headers: { Accept: EventStreamContentType },
+        headers,
         signal: controller.signal,
         // Tauri 窗口被遮挡或最小化时，任务仍应完整接收，而不是重新建连回放。
         openWhenHidden: true,
@@ -49,11 +58,26 @@ export function useSSEStream() {
           if (!response.ok || !contentType?.startsWith(EventStreamContentType)) {
             throw new Error(`SSE connection failed: ${response.status}`);
           }
+          markSseMilestone(taskId, "open");
         },
         onmessage(message) {
           try {
-            const event = JSON.parse(message.data) as AgentEvent;
+            const event = JSON.parse(message.data) as StreamAgentEvent;
+            const previousSeq = lastSeqByTaskRef.current.get(taskId) ?? 0;
+            if (event.seq > previousSeq) {
+              lastSeqByTaskRef.current.set(taskId, event.seq);
+              // fetch-event-source 重试会复用 headers；同步游标后可从断点续传。
+              headers["Last-Event-ID"] = String(event.seq);
+            }
             reconnectAttemptRef.current = 0;
+            if (!firstEventSeenRef.current) {
+              firstEventSeenRef.current = true;
+              markSseMilestone(taskId, "first-event", event);
+            }
+            if (event.type === "token" && !firstTokenSeenRef.current) {
+              firstTokenSeenRef.current = true;
+              markSseMilestone(taskId, "first-token", event);
+            }
 
             // SSE 到达即按协议顺序分发；渲染合帧只在 LiveOutputStore 中进行。
             onEventRef.current(event);
@@ -96,13 +120,16 @@ export function useSSEStream() {
     taskId: string,
     onEvent: (event: AgentEvent) => void,
     onDone: () => void,
+    options: { hasSnapshot?: boolean } = {},
   ): void {
     closeStream();
     onEventRef.current = onEvent;
     onDoneRef.current = onDone;
     taskIdRef.current = taskId;
     reconnectAttemptRef.current = 0;
-    esRef.current = doConnect(taskId);
+    firstEventSeenRef.current = false;
+    firstTokenSeenRef.current = false;
+    esRef.current = doConnect(taskId, options.hasSnapshot === true);
   }
 
   /** App 每次 render 同步最新闭包，避免长连接持续调用建连时的旧任务状态。 */
@@ -114,4 +141,18 @@ export function useSSEStream() {
   useEffect(() => () => closeStream(), [closeStream]);
 
   return { esRef, closeStream, openStream, syncEventHandler };
+}
+
+/** Performance 面板可直接读取 milestone；detail 同时给出服务端到达延迟。 */
+function markSseMilestone(taskId: string, milestone: string, event?: StreamAgentEvent): void {
+  if (typeof performance === "undefined" || typeof performance.mark !== "function") return;
+  const emittedAtMs = event ? Date.parse(event.emittedAt) : Number.NaN;
+  performance.mark(`aurevoy:sse:${milestone}:${taskId}`, {
+    detail: event
+      ? {
+          seq: event.seq,
+          transportMs: Number.isFinite(emittedAtMs) ? Math.max(0, Date.now() - emittedAtMs) : undefined,
+        }
+      : undefined,
+  });
 }

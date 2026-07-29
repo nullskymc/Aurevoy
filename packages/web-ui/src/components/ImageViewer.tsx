@@ -26,7 +26,8 @@ export function ImageViewer({ src, alt, onClose }: ImageViewerProps) {
     <Dialog.Root open onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="image-viewer-backdrop" />
-        <Dialog.Content className="image-viewer-content" aria-label={alt ?? "Image viewer"}>
+        <Dialog.Content className="image-viewer-content" aria-describedby={undefined}>
+          <Dialog.Title className="image-viewer-title">{alt ?? "Image viewer"}</Dialog.Title>
           <Dialog.Close asChild>
             <button type="button" className="image-viewer-close" aria-label="Close image viewer">
               <CloseIcon />

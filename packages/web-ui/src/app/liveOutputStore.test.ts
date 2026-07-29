@@ -25,7 +25,7 @@ describe("LiveOutputStore", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("只合帧 token，避免每条 SSE 都触发 React 更新", () => {
+  it("首 token 立即显示，后续 token 合帧", () => {
     vi.useFakeTimers();
     const store = createLiveOutputStore();
     const listener = vi.fn();
@@ -33,14 +33,14 @@ describe("LiveOutputStore", () => {
 
     store.append("一二三四");
     store.append("五六七八");
-    expect(store.getSnapshot()).toBe("");
-    expect(listener).not.toHaveBeenCalled();
+    expect(store.getSnapshot()).toBe("一二三四");
+    expect(listener).toHaveBeenCalledTimes(1);
 
     vi.advanceTimersByTime(31);
-    expect(listener).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(1);
     expect(store.getSnapshot()).toBe("一二三四五六七八");
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("清空正文后从新消息重新追加", () => {

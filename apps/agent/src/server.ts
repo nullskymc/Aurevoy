@@ -6,16 +6,22 @@ import pino, { type Logger } from 'pino';
 import cors from '@fastify/cors';
 import type {
   AgentEvent,
+  StreamAgentEvent,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
   BranchTaskRequest,
   BranchTaskResponse,
   CleanupDataRequest,
   CleanupDataResponse,
+  ClearTaskQueueRequest,
+  ClearTaskQueueResponse,
   ClarificationAnswerRequest,
   ClarificationAnswerResponse,
   CompactTaskRequest,
   CompactTaskResponse,
+  UpdateTaskModelRequest,
+  UpdateTaskModelResponse,
+  AgentThinkingLevel,
   ContinueBudgetRequest,
   ContinueBudgetResponse,
   ContinueTaskRequest,
@@ -35,8 +41,10 @@ import type {
   OauthLoginStartRequest,
   OauthLogoutRequest,
   OauthSessionSnapshot,
-  PlanApprovalRequest,
-  PlanApprovalResponse,
+  PiSessionTreeResponse,
+  PiSessionTreeNavigateRequest,
+  PiSessionTreeNavigateResponse,
+  PiSessionTreeLabelRequest,
   ProjectListResponse,
   ResumeTaskResponse,
   RevertTaskRequest,
@@ -63,23 +71,29 @@ import {
   branchTask,
   cancelTask,
   compactTask,
+  clearRunningUserQueue,
   createTask,
   isTaskRunning,
-  markInterruptedTasksAfterRestart,
+  recoverInterruptedTasksOnBoot,
   prepareTaskForBudgetContinue,
   prepareTaskForResume,
   queueRunningUserTurn,
   resolveApproval,
   resolveClarificationAnswer,
-  resolvePlanApprovalDecision,
   resumeAutoMode,
   revertTask,
   runHarnessTask,
   setTaskExecutionMode,
+  updateTaskModel,
   resolveTaskWorkspace,
   unrevertTask,
 } from './agent/harness-controller.js';
 import { taskEvents } from './agent/events.js';
+import {
+  getPiSessionTreeResponse,
+  navigatePiSessionTree,
+  setPiSessionTreeLabel,
+} from './agent/pi-harness/session-tree.js';
 import { buildTokenUsageReport } from './agent/token-usage.js';
 import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore, invalidateMemorySummary } from './store/db.js';
 import { unifiedToolRegistry } from './tool/unified-registry.js';
@@ -140,9 +154,16 @@ export async function buildServer(externalLogger?: Logger) {
     unifiedToolRegistry.setEnabled(name, enabled);
   }
   unifiedToolRegistry.setEnabled('execute_command', config.sandbox.commandExecutionEnabled);
-  const recoveredTasks = markInterruptedTasksAfterRestart();
-  if (recoveredTasks.length > 0) {
-    log.warn(`启动恢复：${recoveredTasks.length} 个未完成任务已标记为可恢复失败`);
+  const { resumed: autoResumedTasks, manual: manualRecoveryTasks } = recoverInterruptedTasksOnBoot();
+  if (manualRecoveryTasks.length > 0) {
+    log.warn(`启动恢复：${manualRecoveryTasks.length} 个任务嵌有等待审批/预算等过期状态，已保守标记为待手动恢复`);
+  }
+  if (autoResumedTasks.length > 0) {
+    log.info(`启动恢复：自动续跑 ${autoResumedTasks.length} 个在途任务（对齐 pi -r）`);
+    for (const task of autoResumedTasks) {
+      taskEvents.publish({ type: 'task_resumed', taskId: task.id, automatic: true });
+      void runHarnessTask(task);
+    }
   }
 
   await app.register(cors, { origin: config.corsOrigins });
@@ -554,6 +575,57 @@ export async function buildServer(externalLogger?: Logger) {
     return reply.send(body);
   });
 
+  // Pi 原生会话树的只读投影；完整消息内容仍以 Task.messages 为产品级真相。
+  app.get<{ Params: { id: string } }>('/api/tasks/:id/session-tree', async (req, reply) => {
+    const task = taskStore.get(req.params.id);
+    if (!task) return reply.code(404).send({ error: 'task not found' });
+    const body: PiSessionTreeResponse = await getPiSessionTreeResponse(req.params.id);
+    return reply.send(body);
+  });
+
+  app.post<{
+    Params: { id: string };
+    Body: PiSessionTreeNavigateRequest;
+  }>('/api/tasks/:id/session-tree/navigate', async (req, reply) => {
+    const task = taskStore.get(req.params.id);
+    if (!task) return reply.code(404).send({ error: 'task not found' });
+    if (isTaskRunning(req.params.id)) {
+      return reply.code(409).send({ error: '任务运行中，不能切换会话分支' });
+    }
+    const targetId = req.body?.targetId?.trim();
+    if (!targetId) return reply.code(400).send({ error: 'targetId is required' });
+    try {
+      const body: PiSessionTreeNavigateResponse = await navigatePiSessionTree(task, targetId, {
+        summarize: req.body?.summarize,
+        customInstructions: req.body?.customInstructions?.trim() || undefined,
+      });
+      return reply.send(body);
+    } catch (error) {
+      return reply.code(409).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.put<{
+    Params: { id: string; targetId: string };
+    Body: PiSessionTreeLabelRequest;
+  }>('/api/tasks/:id/session-tree/labels/:targetId', async (req, reply) => {
+    const task = taskStore.get(req.params.id);
+    if (!task) return reply.code(404).send({ error: 'task not found' });
+    try {
+      return reply.send(await setPiSessionTreeLabel(
+        task.id,
+        req.params.targetId,
+        req.body?.label?.trim() || undefined,
+      ));
+    } catch (error) {
+      return reply.code(409).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   // 创建并启动任务
   app.post<{ Body: CreateTaskRequest }>('/api/tasks', { bodyLimit: IMAGE_UPLOAD_BODY_LIMIT }, async (req, reply) => {
     const goal = req.body?.goal?.trim();
@@ -612,7 +684,7 @@ export async function buildServer(externalLogger?: Logger) {
       }
       if (isTaskRunning(req.params.id)) {
         const delivery = req.body?.delivery === 'follow_up' ? 'follow_up' : 'steering';
-        const queued = queueRunningUserTurn(task, message, delivery, messageInput.attachments, messageInput.imageParts);
+        const queued = await queueRunningUserTurn(task, message, delivery, messageInput.attachments, messageInput.imageParts);
         if (!queued.delivered) {
           return reply.code(409).send({ error: '任务正在运行，但 Pi harness 队列不可用，请等待当前轮结束后再追问' });
         }
@@ -633,6 +705,28 @@ export async function buildServer(externalLogger?: Logger) {
         streamUrl: `/api/tasks/${task.id}/stream`,
       };
       return reply.code(202).send(body);
+    },
+  );
+
+  // 撤回尚未进入模型上下文的 steering / follow-up 队列。
+  app.post<{ Params: { id: string }; Body: ClearTaskQueueRequest }>(
+    '/api/tasks/:id/queue/clear',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      if (!isTaskRunning(req.params.id)) {
+        return reply.code(409).send({ error: '任务当前没有运行中的待注入队列' });
+      }
+      const kind = req.body?.kind ?? 'all';
+      if (kind !== 'steering' && kind !== 'follow_up' && kind !== 'all') {
+        return reply.code(400).send({ error: 'kind 必须是 steering/follow_up/all' });
+      }
+      const cleared = await clearRunningUserQueue(task, kind);
+      if (!cleared) {
+        return reply.code(409).send({ error: 'Pi harness 队列不可用，消息可能已经进入模型上下文' });
+      }
+      const body: ClearTaskQueueResponse = { taskId: task.id, kind, cleared };
+      return reply.send(body);
     },
   );
 
@@ -776,6 +870,7 @@ export async function buildServer(externalLogger?: Logger) {
         task,
         req.body?.fromMessageId?.trim() || undefined,
         req.body?.toMessageId?.trim() || undefined,
+        req.body?.instructions?.trim() || undefined,
       );
       if (result.originalCount === 0) {
         return reply.code(400).send({ error: '指定的消息范围无效' });
@@ -785,6 +880,27 @@ export async function buildServer(externalLogger?: Logger) {
         originalCount: result.originalCount,
         summaryLength: result.summaryLength,
       };
+      return reply.code(200).send(body);
+    },
+  );
+
+  // 会话内即时切换模型 / 推理档（P1-2 模型粘性）；运行中同步到 harness，空闲则下一次 run 生效。
+  app.patch<{ Params: { id: string }; Body: UpdateTaskModelRequest }>(
+    '/api/tasks/:id/model',
+    async (req, reply) => {
+      const task = taskStore.get(req.params.id);
+      if (!task) return reply.code(404).send({ error: 'task not found' });
+      const thinkingLevel = req.body?.thinkingLevel;
+      const allowedLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+      if (thinkingLevel !== undefined && !allowedLevels.includes(thinkingLevel)) {
+        return reply.code(400).send({ error: `thinkingLevel 必须是 ${allowedLevels.join('/')}` });
+      }
+      const result = await updateTaskModel(task, {
+        provider: req.body?.provider?.trim() || undefined,
+        model: req.body?.model?.trim() || undefined,
+        thinkingLevel: thinkingLevel as AgentThinkingLevel | undefined,
+      });
+      const body: UpdateTaskModelResponse = { task: result.task, modelSnapshot: result.modelSnapshot };
       return reply.code(200).send(body);
     },
   );
@@ -852,23 +968,6 @@ export async function buildServer(externalLogger?: Logger) {
       return reply.send(body);
     },
   );
-
-  // 批准只读计划并切换到自动执行。保留原路径以兼容旧客户端。
-  app.post<{ Params: { id: string }; Body: PlanApprovalRequest }>(
-    '/api/tasks/:id/plan-approval',
-    async (req, reply) => {
-      const task = taskStore.get(req.params.id);
-      if (!task) return reply.code(404).send({ error: 'task not found' });
-      const { approved } = req.body ?? {};
-      if (typeof approved !== 'boolean') {
-        return reply.code(400).send({ error: 'approved(boolean) 必填' });
-      }
-      const delivered = resolvePlanApprovalDecision(req.params.id, approved);
-      const body: PlanApprovalResponse = { taskId: req.params.id, delivered };
-      return reply.send(body);
-    },
-  );
-
 
   app.get<{ Params: { id: string; artifactId: string } }>(
     '/api/tasks/:id/artifacts/:artifactId/content',
@@ -1013,10 +1112,21 @@ export async function buildServer(externalLogger?: Logger) {
 
 
   // SSE 事件流：订阅某个任务的实时输出
-  app.get<{ Params: { id: string } }>('/api/tasks/:id/stream', (req, reply) => {
+  app.get<{
+    Params: { id: string };
+    Querystring: { snapshot?: string; afterSeq?: string };
+  }>('/api/tasks/:id/stream', (req, reply) => {
     const { id } = req.params;
     const task = taskStore.get(id);
     if (!task) return reply.code(404).send({ error: 'task not found' });
+    const headerAfterSeq = Number.parseInt(String(req.headers['last-event-id'] ?? ''), 10);
+    const queryAfterSeq = Number.parseInt(req.query.afterSeq ?? '', 10);
+    const afterSeq = Number.isFinite(headerAfterSeq)
+      ? Math.max(0, headerAfterSeq)
+      : Number.isFinite(queryAfterSeq)
+        ? Math.max(0, queryAfterSeq)
+        : 0;
+    const clientHasSnapshot = req.query.snapshot === '0';
     const origin = req.headers.origin;
     const corsOrigin = config.corsOrigins.includes('*')
       ? '*'
@@ -1036,20 +1146,21 @@ export async function buildServer(externalLogger?: Logger) {
     let unsubscribe = () => {};
     let replayingSnapshot = true;
     let streamClosed = false;
-    const bufferedLiveEvents: AgentEvent[] = [];
+    const bufferedLiveEvents: StreamAgentEvent[] = [];
     const snapshotMessageIds = new Set(task.messages.map((message) => message.id));
 
     // ---- SSE 批量写入 + TCP 背压 ----
     let sseBuf: string[] = [];
     let sseTimer: ReturnType<typeof setImmediate> | null = null;
     const writeQueue: string[] = [];
+    let writeQueueIndex = 0;
     let writePaused = false;
     let endRequested = false;
 
     const drainWriteQueue = () => {
       if (writePaused || reply.raw.writableEnded) return;
-      while (writeQueue.length > 0) {
-        const chunk = writeQueue.shift()!;
+      while (writeQueueIndex < writeQueue.length) {
+        const chunk = writeQueue[writeQueueIndex++]!;
         if (!reply.raw.write(chunk)) {
           writePaused = true;
           reply.raw.once('drain', () => {
@@ -1059,6 +1170,8 @@ export async function buildServer(externalLogger?: Logger) {
           return;
         }
       }
+      writeQueue.length = 0;
+      writeQueueIndex = 0;
       if (endRequested && !reply.raw.writableEnded) reply.raw.end();
     };
 
@@ -1079,7 +1192,6 @@ export async function buildServer(externalLogger?: Logger) {
     const DRAIN_EVENTS = new Set([
       'done', 'task_deleted', 'error', 'status',
       'agent_start', 'message_start',
-      'plan_approval_request', 'plan_approval_resolved',
       'context_snapshot',
       'clarification_request', 'clarification_resolved',
       'approval_request',
@@ -1087,9 +1199,9 @@ export async function buildServer(externalLogger?: Logger) {
       'subagent_updated',
     ]);
 
-    const send = (event: AgentEvent) => {
+    const send = (event: StreamAgentEvent) => {
       if (streamClosed) return;
-      const line = `data: ${JSON.stringify(event)}\n\n`;
+      const line = `id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`;
 
       if (event.type === 'done' || event.type === 'task_deleted') {
         if (sseBuf.length > 0) sseFlush();
@@ -1097,7 +1209,6 @@ export async function buildServer(externalLogger?: Logger) {
         streamClosed = true;
         if (heartbeat) clearInterval(heartbeat);
         unsubscribe();
-        taskEvents.cleanup(id);
         endRequested = true;
         drainWriteQueue();
         return;
@@ -1113,9 +1224,12 @@ export async function buildServer(externalLogger?: Logger) {
       }
     };
 
-    const sendSnapshot = (event: AgentEvent) => send(event);
+    const sendSnapshot = (event: AgentEvent, seq: number) => send(Object.assign(event, {
+      seq,
+      emittedAt: new Date().toISOString(),
+    }) as StreamAgentEvent);
 
-    const sendLive = (event: AgentEvent) => {
+    const sendLive = (event: StreamAgentEvent) => {
       if (replayingSnapshot) {
         bufferedLiveEvents.push(event);
         return;
@@ -1126,17 +1240,34 @@ export async function buildServer(externalLogger?: Logger) {
     // 先订阅实时事件，再补发任务持久状态快照。
     // 这样快照期间发生的新 message/tool_result 不会落入“快照之后、订阅之前”的空窗。
     // 快照发送期间的实时事件先缓冲，等快照完整发完后再按原顺序补发。
+    const replayHighWaterSeq = taskEvents.latestSeq(id);
     unsubscribe = taskEvents.subscribe(id, sendLive);
+    const replay = taskEvents.replayAfter(id, afterSeq, replayHighWaterSeq);
 
-    // task_created 已携带完整持久快照；不再逐条重放其中的消息和子结构。
-    sendSnapshot({ type: 'task_created', taskId: task.id, task });
+    if (clientHasSnapshot && replay.complete) {
+      // POST/GET 已提供完整 Task；这里只补建连空窗和短线重连期间的增量事件。
+      for (const event of replay.events) {
+        if (event.type === 'task_created') continue;
+        send(event);
+        if (streamClosed) return;
+      }
+    } else {
+      // 外部/旧客户端或事件日志出现缺口时回退完整持久快照。
+      sendSnapshot({ type: 'task_created', taskId: task.id, task }, replayHighWaterSeq);
+      sendSnapshot({
+        type: 'phase',
+        taskId: task.id,
+        phase: task.phase ?? 'initializing',
+      }, replayHighWaterSeq);
+    }
     // 终态，或预算触顶暂停（本 run 已结束，前端应解除 busy）
     if (
       ['completed', 'failed', 'cancelled'].includes(task.status) ||
-      (task.status === 'paused' && task.phase === 'waiting_budget')
+      (task.status === 'paused' &&
+        (task.phase === 'waiting_budget' || task.phase === 'waiting_completion'))
     ) {
       replayingSnapshot = false;
-      sendSnapshot({ type: 'done', taskId: task.id, status: task.status });
+      sendSnapshot({ type: 'done', taskId: task.id, status: task.status }, replayHighWaterSeq);
       return;
     }
 
@@ -1159,6 +1290,7 @@ export async function buildServer(externalLogger?: Logger) {
       if (sseTimer) clearImmediate(sseTimer);
       sseBuf = [];
       writeQueue.length = 0;
+      writeQueueIndex = 0;
       unsubscribe();
     });
   });

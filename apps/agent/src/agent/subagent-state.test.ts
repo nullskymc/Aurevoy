@@ -56,6 +56,8 @@ describe('subagent state projection', () => {
       role: 'coder',
       stopReason: 'completed',
       durationMs: 1200,
+      maxIterations: 12,
+      maxWallMs: 600_000,
       truncated: false,
     });
 
@@ -83,6 +85,8 @@ describe('subagent state projection', () => {
       role: 'research',
       stopReason: 'cancelled',
       durationMs: 50,
+      maxIterations: 12,
+      maxWallMs: 600_000,
       truncated: false,
       error: '父任务已取消',
     });

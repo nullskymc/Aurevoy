@@ -85,7 +85,15 @@ description: Aurevoy 设置说明：模型提供商、权限、预算、搜索�
 
 ## 搜索
 
-`web_search` 等工具的后端：
+开启 **优先使用 API 原生搜索** 后，Aurevoy 会按当前实际协议自动尝试服务器搜索：
+
+- Responses API（包括兼容端）使用托管 `web_search`。
+- Anthropic Messages API 使用服务器 Web Search；DeepSeek 官方 Anthropic 兼容端也包含在内。
+- 上游不支持相应工具或协议时，自动回退原协议与下方配置的本地搜索后端。
+- 对话过程只显示“正在搜索网页 / 已搜索网页”等工具状态；重启后从会话消息恢复，不展示 Provider 的内部搜索载荷。
+- 服务器搜索可能由模型服务商单独计费；具体以服务商说明为准。
+
+关闭该开关或发生自动回退时，Aurevoy `web_search` 函数工具使用这里配置的后端：
 
 | 选项 | 说明 |
 |---|---|

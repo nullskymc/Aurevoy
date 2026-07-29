@@ -226,11 +226,24 @@ export function SettingsPanel({
               onToggle={onToggleMemory}
               onEdit={onEditMemory}
               onDelete={onDeleteMemory}
+              recallEnabled={draft.memoryRecallEnabled}
+              onRecallChange={(enabled) => {
+                const next = { ...draft, memoryRecallEnabled: enabled };
+                setDraft(next);
+                void Promise.resolve(onSave(next));
+              }}
             />
           )}
 
           {activeSection === "kb" && (
-            <KbSettings settings={settings} />
+            <KbSettings
+              settings={settings ? { ...settings, kbRecallEnabled: draft.kbRecallEnabled } : settings}
+              onRecallChange={(enabled) => {
+                const next = { ...draft, kbRecallEnabled: enabled };
+                setDraft(next);
+                void Promise.resolve(onSave(next));
+              }}
+            />
           )}
 
           {activeSection === "search" && (

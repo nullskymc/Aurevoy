@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
+  AgentThinkingLevel,
   AutoModeLevel,
   ContinueBudgetRequest,
   Message,
@@ -12,6 +13,7 @@ import type {
   Task,
   TaskBudget,
   TaskErrorCategory,
+  TaskModelSnapshot,
   TaskPhase,
   TaskStatus,
   TaskTraceKind,
@@ -19,12 +21,17 @@ import type {
 import { config } from '../config.js';
 import { taskEvents } from './events.js';
 import {
+  clearPiHarnessTaskQueue,
   followUpPiHarnessTask,
+  getActivePiTaskController,
+  recordPiSessionExecutionMode,
   resolvePiHarnessClarificationAnswer,
   runPiHarnessTask,
   steerPiHarnessTask,
+  summarizeTaskMessagesWithPi,
 } from './pi-harness.js';
-import { cancelPiApprovals, resolvePiApproval, resolvePlanApproval } from './pi-approval.js';
+import { createPiModel } from '../llm/pi-provider.js';
+import { cancelPiApprovals, resolvePiApproval } from './pi-approval.js';
 import { createInitialAutoModeState, syncAutoModeState } from './approval.js';
 import { taskStore, projectStore } from '../store/db.js';
 import { createTaskLogger } from '../logging/trace.js';
@@ -60,31 +67,78 @@ export function isTaskRunning(taskId: string): boolean {
 
 /**
  * 启动期恢复扫描：SQLite 里仍处于运行态/等待态的任务，说明上一次进程已中断。
- * 不自动续跑，因为审批、外部工具副作用和用户意图都可能已经过期。
+ *
+ * 对齐 `pi -r`：当 `config.agent.autoResumeInterruptedTasks` 开启时，对「可安全续跑」
+ * 的在途任务（running/planning/pending 且无挂起审批/预算触顶）自动 prepare+续跑；
+ * 对嵌有脆弱状态（paused、等待审批/澄清/预算）的任务保守处理——标记为可恢复失败，
+ * 由用户手动决定，避免在审批/副作用已过期的情况下擅自续跑。
+ *
+ * 返回 resumed（已 prepare，待 boot 流程 runHarnessTask）与 manual（保守标记）两组。
  */
-export function markInterruptedTasksAfterRestart(): Task[] {
-  const recovered: Task[] = [];
+export function recoverInterruptedTasksOnBoot(): { resumed: Task[]; manual: Task[] } {
+  const resumed: Task[] = [];
+  const manual: Task[] = [];
+  const autoResume = config.agent.autoResumeInterruptedTasks;
   for (const task of taskStore.list()) {
     if (!INTERRUPTED_STATUSES.includes(task.status)) continue;
-    const previousStatus = task.status;
-    const previousPhase = task.phase;
-    task.status = 'failed';
-    task.phase = 'failed';
-    task.pendingApprovals = [];
-    task.plan = task.plan.map((step) =>
-      step.status === 'completed' ? step : { ...step, status: 'failed' },
-    );
-    task.updatedAt = new Date().toISOString();
-    taskStore.save(task);
-    writeTrace(task.id, 'error', 'failed', {
-      ok: false,
-      errorCategory: 'unknown',
-      summary: '引擎启动时发现任务在上次进程中断前未结束，已标记为可恢复失败',
-      data: { previousStatus, previousPhase, recoveredAt: task.updatedAt },
-    });
-    recovered.push(task);
+    if (autoResume && isAutoResumableOnRestart(task)) {
+      const prepared = prepareTaskForResume(task);
+      prepared.resumedAfterRestart = true;
+      taskStore.save(prepared);
+      writeTrace(prepared.id, 'phase', 'initializing', {
+        ok: true,
+        summary: '引擎重启后自动恢复在途任务（对齐 pi -r），悬挂工具结果已修补',
+        data: { previousStatus: task.status, automatic: true },
+      });
+      resumed.push(prepared);
+    } else {
+      markTaskInterruptedForManualResume(task, autoResume);
+      manual.push(task);
+    }
   }
-  return recovered;
+  return { resumed, manual };
+}
+
+/** 兼容旧调用方：只保守标记，不自动续跑（测试与无需恢复的场景）。 */
+export function markInterruptedTasksAfterRestart(): Task[] {
+  const manual: Task[] = [];
+  for (const task of taskStore.list()) {
+    if (!INTERRUPTED_STATUSES.includes(task.status)) continue;
+    markTaskInterruptedForManualResume(task, false);
+    manual.push(task);
+  }
+  return manual;
+}
+
+/** 在途任务是否可在重启后安全自动续跑：排除等待外部状态（审批/澄清/预算）的任务。 */
+function isAutoResumableOnRestart(task: Task): boolean {
+  if (task.status === 'paused') return false;
+  if ((task.pendingApprovals?.length ?? 0) > 0) return false;
+  if (task.budgetExceeded || task.phase === 'waiting_budget') return false;
+  if (task.phase === 'waiting_approval' || task.phase === 'waiting_clarification') return false;
+  return true;
+}
+
+/** 把中断任务保守标记为可恢复失败：保留 completed 计划步，其余标 failed，清空挂起审批。 */
+function markTaskInterruptedForManualResume(task: Task, autoResumeEnabled: boolean): void {
+  const previousStatus = task.status;
+  const previousPhase = task.phase;
+  task.status = 'failed';
+  task.phase = 'failed';
+  task.pendingApprovals = [];
+  task.plan = task.plan.map((step) =>
+    step.status === 'completed' ? step : { ...step, status: 'failed' },
+  );
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+  writeTrace(task.id, 'error', 'failed', {
+    ok: false,
+    errorCategory: 'unknown',
+    summary: autoResumeEnabled
+      ? '引擎启动时发现任务嵌有等待审批/预算等过期状态，已保守标记为待手动恢复'
+      : '引擎启动时发现任务在上次进程中断前未结束，已标记为可恢复失败',
+    data: { previousStatus, previousPhase, recoveredAt: task.updatedAt },
+  });
 }
 
 /** 恢复一个历史任务：修补悬空工具结果后交给 Pi harness 继续。 */
@@ -123,6 +177,14 @@ export function setTaskExecutionMode(task: Task, mode: AutoModeLevel): void {
   task.autoModeState = createInitialAutoModeState(mode);
   task.updatedAt = new Date().toISOString();
   taskStore.save(task);
+  void recordPiSessionExecutionMode(task.id, mode).catch((error) => {
+    writeTrace(task.id, 'error', task.phase, {
+      ok: false,
+      errorCategory: 'unknown',
+      errorMessage: error instanceof Error ? error.message : String(error),
+      summary: '写入会话执行模式变化节点失败',
+    });
+  });
   taskEvents.publish({ type: 'auto_mode_state', taskId: task.id, state: { ...task.autoModeState } });
 }
 
@@ -299,11 +361,15 @@ export function branchTask(
   return { task, messageCount: clonedMessages.length };
 }
 
-/** 本地压缩历史消息为 system 摘要，供下一次 Pi harness 运行读取。 */
+/**
+ * 手动 /compact：把指定范围历史压缩为一条 LLM 摘要（可携带用户指令）。
+ * LLM 摘要失败时退回确定性文本折叠并明确标注，绝不用截断冒充摘要。
+ */
 export async function compactTask(
   task: Task,
   fromMessageId?: string,
   toMessageId?: string,
+  instructions?: string,
 ): Promise<{ task: Task; originalCount: number; summaryLength: number }> {
   const messages = task.messages;
   const fromIndex = fromMessageId ? messages.findIndex((m) => m.id === fromMessageId) : 0;
@@ -318,7 +384,9 @@ export async function compactTask(
     return { task, originalCount: toCompress.length, summaryLength: 0 };
   }
 
-  const summaryText = summarizeMessages(toCompress);
+  const llmSummary = await summarizeTaskMessagesWithPi(task, toCompress, instructions);
+  const usedLlm = llmSummary !== null && llmSummary.trim().length > 0;
+  const summaryText = usedLlm ? llmSummary : summarizeMessages(toCompress);
   const summaryMessage: Message = {
     id: randomUUID(),
     role: 'system',
@@ -334,14 +402,65 @@ export async function compactTask(
     taskId: task.id,
     originalCount: toCompress.length,
     summaryLength: summaryText.length,
+    summary: summaryText,
+    instructed: !!instructions?.trim(),
+    automatic: false,
   });
   writeTrace(task.id, 'phase', null, {
-    ok: true,
-    summary: `本地压缩 ${toCompress.length} 条消息为 ${summaryText.length} 字符摘要`,
-    data: { fromIndex, toIndex, originalCount: toCompress.length, summaryLength: summaryText.length },
+    ok: usedLlm,
+    errorCategory: usedLlm ? undefined : 'model',
+    summary: usedLlm
+      ? `LLM 压缩 ${toCompress.length} 条消息为 ${summaryText.length} 字符摘要${instructions ? '（按用户指令）' : ''}`
+      : `LLM 摘要失败，${toCompress.length} 条消息退回确定性折叠（${summaryText.length} 字符）`,
+    data: { fromIndex, toIndex, originalCount: toCompress.length, summaryLength: summaryText.length, usedLlm, instructed: !!instructions },
   });
 
   return { task, originalCount: toCompress.length, summaryLength: summaryText.length };
+}
+
+/**
+ * 会话内即时切换任务模型 / 推理档（P1-2 模型粘性）。
+ *
+ * - 固化到 task.modelSnapshot：后续 resume / 续跑恢复该模型，不随全局设置漂移。
+ * - 运行中：同步到活动 harness（setModel/setThinkingLevel），使当前 run 后续轮次即用新配置；
+ *   harness own-event 回写快照为幂等。空闲：仅持久化，下一次 run 读取快照生效。
+ * 始终广播 model_updated，前端据此更新模型徽标。
+ */
+export async function updateTaskModel(
+  task: Task,
+  patch: { provider?: string; model?: string; thinkingLevel?: AgentThinkingLevel },
+): Promise<{ task: Task; modelSnapshot: TaskModelSnapshot }> {
+  const modelSnapshot: TaskModelSnapshot = {
+    provider: patch.provider?.trim() || task.modelSnapshot?.provider || config.llm.provider,
+    model: patch.model?.trim() || task.modelSnapshot?.model || config.llm.model,
+    thinkingLevel: patch.thinkingLevel ?? task.modelSnapshot?.thinkingLevel ?? config.agent.thinkingLevel,
+  };
+  task.modelSnapshot = modelSnapshot;
+  task.updatedAt = new Date().toISOString();
+  taskStore.save(task);
+  taskEvents.publish({
+    type: 'model_updated',
+    taskId: task.id,
+    provider: modelSnapshot.provider,
+    model: modelSnapshot.model,
+    thinkingLevel: modelSnapshot.thinkingLevel,
+  });
+  writeTrace(task.id, 'phase', task.phase ?? null, {
+    ok: true,
+    summary: `任务模型切换为 ${modelSnapshot.provider}:${modelSnapshot.model}（推理 ${modelSnapshot.thinkingLevel}）`,
+    data: { provider: modelSnapshot.provider, model: modelSnapshot.model, thinkingLevel: modelSnapshot.thinkingLevel },
+  });
+
+  const controller = getActivePiTaskController(task.id);
+  if (controller) {
+    if (patch.model?.trim() || patch.provider?.trim()) {
+      await controller.setModel(createPiModel(modelSnapshot.model, modelSnapshot.provider));
+    }
+    if (patch.thinkingLevel) {
+      await controller.setThinkingLevel(modelSnapshot.thinkingLevel);
+    }
+  }
+  return { task, modelSnapshot };
 }
 
 /** 在同一任务内追加一轮用户输入。 */
@@ -370,6 +489,8 @@ export function addUserTurn(
   task.messages.push(userMsg);
   // continue 一旦写入新用户消息，上一次 revert 的归档不再可撤销
   task.archivedMessages = [];
+  // 用户已主动继续交互，重启恢复标识完成使命
+  task.resumedAfterRestart = false;
   task.status = 'pending';
   task.phase = 'initializing';
   task.pendingApprovals = [];
@@ -385,13 +506,13 @@ export function addUserTurn(
 }
 
 /** 任务运行中追加用户消息，并投递到 Pi steering/follow-up 队列。 */
-export function queueRunningUserTurn(
+export async function queueRunningUserTurn(
   task: Task,
   content: string,
   delivery: 'steering' | 'follow_up' = 'steering',
   attachments?: MessageAttachment[],
   imageParts?: MessageImagePart[],
-): { message: Message; delivered: boolean } {
+): Promise<{ message: Message; delivered: boolean }> {
   // OpenCode proactiveness: status/question asks get a text-first reminder on the wire to the model.
   // Durable transcript keeps the user's raw content; steering payload may include the prefix.
   const steeredContent = applyQuestionFirstSteering(content);
@@ -410,9 +531,11 @@ export function queueRunningUserTurn(
       ? userMsg
       : { ...userMsg, content: steeredContent };
 
-  const delivered = delivery === 'follow_up'
+  // 真实投递结果：harness 拒绝（run 已收尾/不可用）时 delivered=false，
+  // 用户消息不入 transcript，前端据此提示重发而非假装已送达。
+  const delivered = await (delivery === 'follow_up'
     ? followUpPiHarnessTask(task.id, modelFacingMsg)
-    : steerPiHarnessTask(task.id, modelFacingMsg);
+    : steerPiHarnessTask(task.id, modelFacingMsg));
   if (delivered) {
     task.messages.push(userMsg);
     task.updatedAt = userMsg.createdAt;
@@ -423,10 +546,24 @@ export function queueRunningUserTurn(
     ok: delivered,
     summary: delivered
       ? `运行中追加用户消息已投递到 ${delivery} 队列`
-      : `运行中追加用户消息未投递：Pi harness 不可用`,
+      : `运行中追加用户消息未投递：Pi harness 队列不可用或已收尾`,
     data: { delivery, message: content },
   });
   return { message: userMsg, delivered };
+}
+
+/** 按投递语义撤回仍未注入的运行中消息队列。 */
+export async function clearRunningUserQueue(
+  task: Task,
+  kind: 'steering' | 'follow_up' | 'all',
+): Promise<boolean> {
+  const cleared = await clearPiHarnessTaskQueue(task.id, kind);
+  writeTrace(task.id, 'phase', task.phase ?? 'thinking', {
+    ok: cleared,
+    summary: cleared ? `已撤回 ${kind} 待注入队列` : `待注入队列不可用，未执行撤回`,
+    data: { kind },
+  });
+  return cleared;
 }
 
 /** plan 模式下恢复暂停的任务继续执行。 */
@@ -448,14 +585,6 @@ export function resolveApproval(
   approved: boolean,
 ): boolean {
   return resolvePiApproval(taskId, callId, approved);
-}
-
-/** @deprecated 计划审批已移除；保留 API 兼容，恒返回 false。 */
-export function resolvePlanApprovalDecision(
-  _taskId: string,
-  _approved: boolean,
-): boolean {
-  return resolvePlanApproval(_taskId, _approved);
 }
 
 /** 投递 ask_user 工具的用户补充答案。 */

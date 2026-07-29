@@ -1173,6 +1173,7 @@ export function buildAgentIdentityMessage(): Message {
     '',
     'Hard rules:',
     '- Prefer real tool results over speculation. Never claim work is done without evidence from tools or prior verified context.',
+    '- Before ending actionable tool work, re-check the original goal, required deliverables, and verification. If useful work remains and you are not blocked, keep working now; never stop at a promise about what you will do next.',
     '- Stay inside the workspace sandbox unless the user explicitly granted external paths.',
     '- When something fails, report the concrete error and what you already verified; do not invent success.',
     '- Keep final answers concise. Deliver large outputs via files + attach_content, not wall-of-text dumps.',
@@ -1198,6 +1199,11 @@ export function buildAgentIdentityMessage(): Message {
  */
 export function buildToolGuidanceMessage(): Message {
   const roleCatalog = formatSubagentRoleCatalogForTool();
+  // present_ui 随 visualize skill 一起开关；skill 关掉时不要在协议里宣传一个已收起的工具。
+  const inlineUiAvailable = skillRegistry.get('visualize') !== undefined && skillRegistry.isEnabled('visualize');
+  const inlineUiLine = inlineUiAvailable
+    ? '- Inline conversation UI (charts, explorers, forms, simulators, compact dashboards): load `visualize`, then deliver with `present_ui` kind=`canvas` so it renders directly in the chat. The skill carries the full sandbox rules; the short version: everything runs in a sandbox iframe, keep data and interaction local, no network/remote assets, no parent/window host APIs.'
+    : '- Inline conversation UI is unavailable in this session. For previews, dashboards, forms, or other rich content, write an HTML or Markdown file and deliver it with `attach_content`.';
   const content = [
     '<operating_protocol>',
     '',
@@ -1226,7 +1232,7 @@ export function buildToolGuidanceMessage(): Message {
     '## Delivery (use these — do not only paste long content in chat)',
     '- `attach_content`: deliver a workspace file, image, or link. Use for HTML / Markdown / reports / images so the chat card + workbench preview open.',
     '  Prefer type=file_reference with a real path after writing the file.',
-    '- Inline conversation UI is temporarily unavailable. For previews, dashboards, forms, or other rich content, write an HTML or Markdown file and deliver it with `attach_content`.',
+    inlineUiLine,
     '- Research or file reports (调研/简报/评估/计划/纪要等): load `research`. Prefer quick report; use deep mode only for multi-item structured research. Default file delivery is Markdown; HTML + `bundle_report` only when the user wants a single-page/component layout. Then `attach_content`.',
     '  Final chat reply = path + one-line summary (+ warnings). Do not restate the whole report.',
     '- `create_artifact` / `apply_artifact`: durable draft or file artifact when the user needs an inspectable intermediate, not as a substitute for attach_content delivery.',
@@ -1247,8 +1253,9 @@ export function buildToolGuidanceMessage(): Message {
     '',
     '## Web, memory, skills, user input',
     '- External facts: `web_search` then `web_fetch`; cite URLs; do not invent sources.',
-    '- Long-term notes: `remember` / `recall` when useful across turns.',
-    '- Skills: load a catalog skill only when the task explicitly needs that skill. `research` is for research and file reports (quick or deep; Markdown default, HTML optional).',
+    '- Long-term notes: `remember` when a fact should survive across turns (stored memories are injected automatically next turn — no need to fetch them). `recall` searches indexed workspace files, not memories.',
+    '- Skills: load a catalog skill only when the task explicitly needs that skill. `research` is for research and file reports (quick or deep; Markdown default, HTML optional).'
+      + (inlineUiAvailable ? ' `visualize` is for inline interactive UI in chat (present_ui canvas).' : ''),
     '- Ambiguity that blocks progress: `ask_user` with few concrete questions; otherwise decide and proceed.',
     '',
     '## Honesty & safety',

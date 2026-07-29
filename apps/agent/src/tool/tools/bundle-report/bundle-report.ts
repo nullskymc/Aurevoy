@@ -35,6 +35,7 @@ const Output = Schema.Struct({
 
 export const bundleReportTool = make({
   name: "bundle_report",
+  riskLevel: "safe",
   description:
     "Bundle a report HTML draft into a single self-contained file. " +
     "Inlines the report components.js library, local stylesheets, and base64-encodes local images. " +

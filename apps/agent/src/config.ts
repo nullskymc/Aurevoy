@@ -79,6 +79,10 @@ export const config = {
     /** 默认 long：多轮 agent 循环依赖跨请求 prompt cache。 */
     cacheRetention: 'long' as 'short' | 'long',
     subagentMaxConcurrency: 4,
+    /** 单个子代理的独立轮次上限；另留一轮只读收尾。 */
+    subagentMaxIterations: 12,
+    /** 单个子代理的独立挂钟上限。 */
+    subagentMaxWallMs: 10 * 60 * 1000,
     contextCharBudget: 1_000_000,
     recentMessageWindow: 8,
     compressedMessageCharCap: 600,
@@ -89,6 +93,14 @@ export const config = {
     contextTokenBudget: 400_000,
     compactThreshold: 0.85,
     compactKeepRecentTurns: 5,
+    /** 上下文接近阈值时用 LLM 自动生成结构化摘要（自动压缩；设置页可关）。 */
+    autoCompact: true,
+    /** 引擎重启后自动恢复上次进行中（running/pending）的任务续跑（对齐 pi -r）。 */
+    autoResumeInterruptedTasks: true,
+    /** 任务开始时隐式召回相关长期记忆注入上下文（默认关，设置页开启）。 */
+    memoryRecallEnabled: false,
+    /** 任务开始时隐式召回相关知识库片段注入上下文（默认关，设置页开启）。 */
+    kbRecallEnabled: false,
   },
 
   skills: {
@@ -161,6 +173,8 @@ export const config = {
   },
 
   search: {
+    /** 优先尝试模型 API 的服务器搜索；上游不支持时回退 Aurevoy 本地搜索。 */
+    preferNative: false,
     provider: 'duckduckgo_lite' as 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom',
     baseUrl: '',
     apiKey: '',
@@ -224,6 +238,14 @@ if (process.env.AUREVOY_TEST_BOOTSTRAP === '1') {
         1,
         Math.floor(parseNumber(process.env.AUREVOY_SUBAGENT_MAX_CONCURRENCY, config.agent.subagentMaxConcurrency)),
       ),
+      subagentMaxIterations: Math.max(
+        1,
+        Math.floor(parseNumber(process.env.AUREVOY_SUBAGENT_MAX_ITERATIONS, config.agent.subagentMaxIterations)),
+      ),
+      subagentMaxWallMs: Math.max(
+        30_000,
+        Math.floor(parseNumber(process.env.AUREVOY_SUBAGENT_MAX_WALL_MS, config.agent.subagentMaxWallMs)),
+      ),
       contextCharBudget: parseNumber(process.env.AUREVOY_CONTEXT_CHAR_BUDGET, config.agent.contextCharBudget),
       recentMessageWindow: parseNumber(process.env.AUREVOY_RECENT_MESSAGE_WINDOW, config.agent.recentMessageWindow),
       compressedMessageCharCap: parseNumber(
@@ -266,6 +288,7 @@ if (process.env.AUREVOY_TEST_BOOTSTRAP === '1') {
       timeoutMs: parseNumber(process.env.AUREVOY_EMBEDDING_TIMEOUT_MS, config.embedding.timeoutMs),
     },
     search: {
+      preferNative: config.search.preferNative,
       provider: (process.env.AUREVOY_SEARCH_PROVIDER ?? config.search.provider) as typeof config.search.provider,
       baseUrl: process.env.AUREVOY_SEARCH_BASE_URL ?? config.search.baseUrl,
       apiKey: process.env.AUREVOY_SEARCH_API_KEY ?? config.search.apiKey,

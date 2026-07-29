@@ -1,6 +1,6 @@
 import type { SettingsDraft } from "./types";
 import { t } from "../../i18n";
-import { SettingsActionRow, SettingsGroup } from "./layout";
+import { SettingsActionRow, SettingsGroup, SettingsSwitchRow } from "./layout";
 
 export function SearchSettings({
   draft,
@@ -16,6 +16,12 @@ export function SearchSettings({
   return (
     <>
       <SettingsGroup title={t("settings.searchTitle")}>
+        <SettingsSwitchRow
+          title={t("settings.preferNativeSearchTitle")}
+          description={t("settings.preferNativeSearchDesc")}
+          checked={draft.searchPreferNative}
+          onChange={(checked) => onDraftChange({ ...draft, searchPreferNative: checked })}
+        />
         <SettingsActionRow
           title={t("settings.searchProviderTitle")}
           description={t("settings.searchProviderDesc")}
