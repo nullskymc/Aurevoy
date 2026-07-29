@@ -7,7 +7,7 @@
  * 若 Pi 版本漂移导致上下文不匹配则明确失败，避免静默丢失搜索轨迹。
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -15,9 +15,13 @@ const ROOT = resolve(import.meta.dirname, '..');
 const PATCH = resolve(ROOT, 'patches', 'pi-hosted-tools.patch');
 
 function gitApply(args) {
-  return spawnSync('git', ['apply', ...args, PATCH], {
+  // Windows checkout 可能把补丁转换为 CRLF，而 npm 包内文件保持 LF。
+  // 从 stdin 传入规范化后的补丁，避免 git apply 受 core.autocrlf 影响。
+  const patchSource = readFileSync(PATCH, 'utf8').replace(/\r\n/g, '\n');
+  return spawnSync('git', ['apply', ...args, '-'], {
     cwd: ROOT,
     encoding: 'utf8',
+    input: patchSource,
   });
 }
 
