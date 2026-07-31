@@ -125,6 +125,51 @@ describe("Conversation streaming render boundary", () => {
     expect(container.querySelector('[data-index="39"]')).not.toBeNull();
   });
 
+  it("中间旁白流式期间不提前收纳过程层（抽屉不折叠历史旁白）", () => {
+    vi.useFakeTimers();
+    const outputStore = createLiveOutputStore();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => {
+      root?.render(
+        <Conversation
+          task={task([
+            { id: "u1", role: "user", content: "整理工作区", createdAt: "2026-07-22T00:00:00.000Z" },
+            {
+              id: "a1",
+              role: "assistant",
+              content: "我先看一下工作区结构。",
+              toolCalls: [{ id: "call-1", type: "function", function: { name: "list_dir", arguments: "{}" } }],
+              createdAt: "2026-07-22T00:00:01.000Z",
+            },
+            { id: "t1", role: "tool", content: "[]", toolCallId: "call-1", createdAt: "2026-07-22T00:00:02.000Z" },
+          ])}
+          status="running"
+          phase="thinking"
+          plan={[]}
+          outputStore={outputStore}
+          busy
+          liveToolActivity={[]}
+          hasLiveTail
+          onToolDecision={noop}
+          onClarificationAnswer={noop}
+        />,
+      );
+    });
+
+    // 第二条中间旁白开始流式：此时无运行中的工具、也无最终交付。
+    act(() => outputStore.append("工具返回了，我继续分析。"));
+    act(() => vi.advanceTimersByTime(32));
+
+    // 过程层应保持展开：历史旁白段仍在，且不出现提前收纳的「已处理」抽屉。
+    expect(container.querySelector(".process-live-narration")).not.toBeNull();
+    expect(container.querySelector(".process-completed")).toBeNull();
+    expect(container.textContent).toContain("我先看一下工作区结构");
+    expect(container.textContent).toContain("工具返回了，我继续分析");
+  });
+
   it("追加 token 只重渲染 live Markdown，不重渲染历史 Markdown", () => {
     vi.useFakeTimers();
     const outputStore = createLiveOutputStore();

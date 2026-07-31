@@ -1093,7 +1093,7 @@ function LiveOutputFrame({
   subagentRuns: SubagentRun[];
   onOpenWorkspacePath?: (path: string) => void;
   completedProcess?: ReactNode;
-  /** 已有历史工具过程且当前没有继续运行的工具时，最终正文可先收纳过程再展示。 */
+  /** 已有历史工具过程且当前没有继续运行的工具时，允许在最终交付落库后收纳过程。 */
   canCollectProcess: boolean;
   /** 最终消息已持久化时，即使 live store 已去重清空，也保持过程收纳。 */
   forceCollected: boolean;
@@ -1109,7 +1109,10 @@ function LiveOutputFrame({
     ? ""
     // 流式 Markdown 的尾部空白可能是换行、代码缩进或两空格换行，不能每帧 trim 掉。
     : rawOutput.trimStart();
-  const collectProcess = canCollectProcess && (narration.length > 0 || forceCollected);
+  // 仅当最终交付已持久化（forceCollected）时才收纳过程层。
+  // 不能以「有流式文本」为条件：中间旁白流式期间没有运行中的工具，若因此提前折叠抽屉，
+  // 历史旁白段会「出现→消失→工具启动再出现」反复抖动，过程层无法稳定排布。
+  const collectProcess = canCollectProcess && forceCollected;
 
   return (
     <>
