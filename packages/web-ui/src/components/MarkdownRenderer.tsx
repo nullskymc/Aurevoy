@@ -198,6 +198,21 @@ function escapeHtmlText(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
+/** 外链 favicon 预热缓存。
+ * 对话列表虚拟化会让消息卡在滚动时卸载/重挂载；若不预热，每次重挂载都会重新拉取
+ * favicon（loading=lazy 还会随视口反复求值），表现为链接图标「空白 → 出现」的闪烁。
+ * 首次渲染时预热浏览器内存缓存，重挂载后直接命中；不可达时由 CSS 内置链接字形兜底。
+ */
+const prefetchedFaviconDomains = new Set<string>();
+
+function prefetchFavicon(domain: string): void {
+  if (prefetchedFaviconDomains.has(domain)) return;
+  prefetchedFaviconDomains.add(domain);
+  if (typeof Image === "undefined") return; // 非浏览器环境（测试/SSR）跳过
+  const probe = new Image();
+  probe.src = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`;
+}
+
 /** 外链：favicon + 蓝色文案（Codex 正文链接感） */
 function enhanceExternalLinks(html: string): string {
   return html.replace(
@@ -215,6 +230,8 @@ function enhanceExternalLinks(html: string): string {
         return match;
       }
       if (!domain) return match;
+      // 预热内存缓存，滚动重挂载后不再重新拉取，避免图标闪烁。
+      prefetchFavicon(domain);
       const favicon = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`;
       const attrs = `${pre}href="${href}"${post}`.replace(/\s+/g, " ").trim();
       const hasTarget = /\btarget=/i.test(attrs);
@@ -223,7 +240,7 @@ function enhanceExternalLinks(html: string): string {
         `${hasTarget ? "" : ' target="_blank"'}${hasRel ? "" : ' rel="noopener noreferrer"'}`;
       return (
         `<a ${attrs}${extra} class="markdown-ext-link">` +
-        `<img class="markdown-link-favicon" src="${favicon}" alt="" width="14" height="14" loading="lazy" decoding="async" />` +
+        `<img class="markdown-link-favicon" src="${favicon}" alt="" width="14" height="14" decoding="async" />` +
         `<span class="markdown-ext-link-text">${text}</span>` +
         `</a>`
       );

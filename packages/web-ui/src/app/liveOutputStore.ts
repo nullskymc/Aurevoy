@@ -10,7 +10,8 @@ const STREAM_FRAME_MS = 32;
 export class LiveOutputStore {
   private value = "";
   private pending = "";
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 排定的合帧刷新：优先 rAF 句柄（number），rAF 不可用/窗口隐藏时退回 setTimeout 句柄。 */
+  private flushTimer: number | ReturnType<typeof setTimeout> | null = null;
   private readonly listeners = new Set<() => void>();
 
   readonly getSnapshot = (): string => this.value;
@@ -24,12 +25,21 @@ export class LiveOutputStore {
     for (const listener of this.listeners) listener();
   }
 
+  /** 取消已排定的合帧刷新（rAF 与 setTimeout 两种来源都能取消）。 */
+  private clearScheduledFlush(): void {
+    if (this.flushTimer === null) return;
+    const timer = this.flushTimer;
+    this.flushTimer = null;
+    if (typeof timer === "number" && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(timer);
+    } else {
+      clearTimeout(timer as ReturnType<typeof setTimeout>);
+    }
+  }
+
   /** 立即发布尚未显示的 token；消息持久化、清空或任务切换前调用，保证尾部不丢字。 */
   readonly flush = (): void => {
-    if (this.flushTimer !== null) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
+    this.clearScheduledFlush();
     if (!this.pending) return;
     this.value += this.pending;
     this.pending = "";
@@ -46,7 +56,12 @@ export class LiveOutputStore {
     this.notify();
   };
 
-  /** 首 token 立即显示；后续 token 在本地合帧，最多每 32ms 触发一次重渲染。 */
+  /**
+   * 首 token 立即显示；后续 token 在本地合帧。
+   * 合帧优先挂到 requestAnimationFrame：刷新与浏览器绘制帧对齐，避免 setTimeout
+   * 相位抖动或主线程繁忙/隐藏页定时器节流造成的「吐字一顿一顿」；
+   * rAF 不可用或窗口隐藏（rAF 不触发）时退回 setTimeout 兜底。
+   */
   readonly append = (delta: string): void => {
     if (!delta) return;
     if (!this.value && !this.pending && this.flushTimer === null) {
@@ -55,9 +70,29 @@ export class LiveOutputStore {
       return;
     }
     this.pending += delta;
-    if (this.flushTimer !== null) return;
-    this.flushTimer = setTimeout(this.flush, STREAM_FRAME_MS);
+    this.scheduleFlush();
   };
+
+  private scheduleFlush(): void {
+    if (this.flushTimer !== null) return;
+    const rafAvailable = typeof requestAnimationFrame === "function";
+    const pageHidden = typeof document !== "undefined" && document.hidden === true;
+    if (!rafAvailable || pageHidden) {
+      this.flushTimer = setTimeout(this.flush, STREAM_FRAME_MS);
+      return;
+    }
+    // 到帧边界且超过 32ms 合帧间隔才发布：保持 30 FPS 上限，同时刷新点稳定落在绘制帧上。
+    const scheduledAt = performance.now();
+    const step = (): void => {
+      this.flushTimer = null;
+      if (performance.now() - scheduledAt >= STREAM_FRAME_MS) {
+        this.flush();
+        return;
+      }
+      this.flushTimer = requestAnimationFrame(step);
+    };
+    this.flushTimer = requestAnimationFrame(step);
+  }
 }
 
 export function createLiveOutputStore(): LiveOutputStore {
