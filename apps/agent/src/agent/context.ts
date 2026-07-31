@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { getEmbeddingProvider } from '../embedding/provider.js';
 import { searchMemoryVec, isVecLoaded, getMemorySummary, setMemorySummary } from '../store/db.js';
 import { skillRegistry } from '../skills/registry.js';
+import { getDeferredToolSummaries } from '../tool/mcp-integration.js';
 import { formatSubagentRoleCatalogForTool } from './subagent-profiles.js';
 
 /**
@@ -27,6 +28,33 @@ export function buildSkillCatalogMessage(): Message | null {
     'with the skill\'s name to load its instructions.\n\n' +
     catalogLines +
     '\n</available_skills>';
+
+  return {
+    id: randomUUID(),
+    role: 'system',
+    content,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+export function buildDeferredToolMessage(): Message | null {
+  const summaries = getDeferredToolSummaries();
+  if (summaries.length === 0) return null;
+
+  const byServer = new Map<string, number>();
+  for (const s of summaries) {
+    byServer.set(s.serverName, (byServer.get(s.serverName) ?? 0) + 1);
+  }
+  const serverLines = [...byServer.entries()]
+    .map(([server, count]) => `- ${server} (${count} tools)`)
+    .join('\n');
+
+  const content =
+    '<deferred_tools>\n' +
+    `以下 MCP 服务器的工具已延迟加载（共 ${summaries.length} 个），不在直接可用工具列表中。\n` +
+    '需要时调用 tool_search 工具按关键词发现并使用它们。\n\n' +
+    serverLines +
+    '\n</deferred_tools>';
 
   return {
     id: randomUUID(),
@@ -1135,6 +1163,7 @@ export function buildStableSystemPromptParts(options: {
     buildAgentIdentityMessage().content,
     buildToolGuidanceMessage().content,
     buildSkillCatalogMessage()?.content,
+    buildDeferredToolMessage()?.content,
     buildStableWorkspaceContextMessage(
       options.workspaceDir,
       options.configDir,

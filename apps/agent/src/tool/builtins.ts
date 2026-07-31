@@ -17,6 +17,7 @@ import { createArtifactTool, applyArtifactTool } from "./tools/artifact/index.js
 import { delegateTool } from "./tools/delegate/index.js"
 import { bundleReportTool } from "./tools/bundle-report/index.js"
 import { updatePlanTool } from "./tools/update-plan/index.js"
+import { toolSearchTool } from "./tools/tool-search/index.js"
 import { ToolRegistry, toolRegistryLayer } from "./framework/index.js"
 
 export const allTools = [
@@ -46,6 +47,7 @@ export const allTools = [
   delegateTool,
   bundleReportTool,
   updatePlanTool,
+  toolSearchTool,
 ]
 
 export const builtinsLayer = Layer.effectDiscard(

@@ -14,6 +14,8 @@ export interface McpStdioServerConfig {
   enabled: boolean;
   /** MCP 工具缺省风险等级；不填时按 tool annotations 推断，兜底为 caution。 */
   riskLevel?: ToolRiskLevel;
+  /** true=强制延迟加载, false=强制直接暴露, 缺省=工具数超阈值时自动延迟。 */
+  deferTools?: boolean;
 }
 
 /**
@@ -28,6 +30,7 @@ export interface McpStreamableHttpServerConfig {
   headers?: Record<string, string>;
   enabled: boolean;
   riskLevel?: ToolRiskLevel;
+  deferTools?: boolean;
 }
 
 export type McpServerConfig = McpStdioServerConfig | McpStreamableHttpServerConfig;
@@ -394,6 +397,7 @@ function parseMcpServerConfig(
       headers: readStringRecord(value.headers, `${name}.headers`),
       enabled: value.enabled !== false,
       riskLevel: readRiskLevel(value.riskLevel, `${name}.riskLevel`),
+      deferTools: typeof value.deferTools === 'boolean' ? value.deferTools : undefined,
     };
   }
 
@@ -409,6 +413,7 @@ function parseMcpServerConfig(
     env: readStringRecord(value.env, `${name}.env`),
     enabled: value.enabled !== false,
     riskLevel: readRiskLevel(value.riskLevel, `${name}.riskLevel`),
+    deferTools: typeof value.deferTools === 'boolean' ? value.deferTools : undefined,
   };
 }
 

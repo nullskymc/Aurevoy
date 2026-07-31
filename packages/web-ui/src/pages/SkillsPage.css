@@ -343,17 +343,19 @@
   position: fixed;
   inset: 0;
   z-index: 80;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
   background: color-mix(in srgb, #000 28%, transparent);
+  backdrop-filter: blur(2px);
 }
 
 .skills-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 81;
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
-  width: min(100%, 560px);
+  width: min(calc(100vw - 48px), 560px);
   max-height: min(88vh, 760px);
   border-radius: 18px;
   background: var(--card-bg, var(--bg));

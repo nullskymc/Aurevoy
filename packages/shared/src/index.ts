@@ -1758,6 +1758,12 @@ export interface McpStatusResponse {
   servers: McpServerStatus[];
 }
 
+export interface DeferredToolSummary {
+  name: string;
+  description: string;
+  serverName: string;
+}
+
 export interface DataStatusResponse {
   dbPath: string;
   workspaceDir: string;

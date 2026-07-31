@@ -375,12 +375,11 @@ function SkillDetailModal({
 
   return (
     <Dialog.Root open onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="skills-modal-backdrop" />
-        <Dialog.Content
-          className="skills-modal"
-          aria-describedby={undefined}
-        >
+      <Dialog.Overlay className="skills-modal-backdrop" />
+      <Dialog.Content
+        className="skills-modal"
+        aria-describedby={undefined}
+      >
           <div className="skills-modal-toolbar">
           <label className="skills-switch" title={enabled ? t("memory.disable") : t("memory.enable")}>
             <input
@@ -459,8 +458,7 @@ function SkillDetailModal({
             </button>
           )}
           </footer>
-        </Dialog.Content>
-      </Dialog.Portal>
+      </Dialog.Content>
     </Dialog.Root>
   );
 }

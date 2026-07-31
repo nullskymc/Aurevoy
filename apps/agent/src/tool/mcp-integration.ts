@@ -8,7 +8,7 @@ import {
 } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Tool as McpSdkTool } from '@modelcontextprotocol/sdk/types.js';
-import type { McpServerStatus, ToolRiskLevel } from '@aurevoy/shared';
+import type { DeferredToolSummary, McpServerStatus, ToolRiskLevel } from '@aurevoy/shared';
 import {
   config,
   type McpServerConfig,
@@ -48,6 +48,19 @@ export interface McpInitSummary {
 const connections: McpConnection[] = [];
 const statuses = new Map<string, McpServerStatus>();
 
+const DEFER_THRESHOLD = 8;
+
+interface DeferredToolEntry {
+  name: string;
+  description: string;
+  serverName: string;
+  inputSchema: Record<string, unknown>;
+  client: Client;
+  originalName: string;
+}
+
+const deferredToolIndex = new Map<string, DeferredToolEntry>();
+
 /**
  * 启动期连接已配置的 MCP servers，并把它们暴露的 tools 注册到统一工具注册表。
  * 单个 MCP server 失败不会阻断 Agent 引擎启动，避免可选外部能力拖垮基础功能。
@@ -76,11 +89,23 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
       connectedServers += 1;
 
       const tools = await listAllTools(client);
+      const shouldDefer = server.deferTools ?? (tools.length > DEFER_THRESHOLD);
       for (const tool of tools) {
         const registeredName = makeRegistryToolName(server.name, tool.name, usedNames);
         usedNames.add(registeredName);
         unifiedToolRegistry.register(toRegistryTool(server, client, tool, registeredName));
         registeredTools += 1;
+        if (shouldDefer) {
+          unifiedToolRegistry.setEnabled(registeredName, false);
+          deferredToolIndex.set(registeredName, {
+            name: registeredName,
+            description: sanitizeMcpToolDescription(server, tool),
+            serverName: server.name,
+            inputSchema: (tool.inputSchema ?? {}) as Record<string, unknown>,
+            client,
+            originalName: tool.name,
+          });
+        }
       }
       statuses.set(server.name, {
         name: server.name,
@@ -120,6 +145,7 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
 export async function closeMcpTools(): Promise<void> {
   await Promise.allSettled(connections.map(({ client }) => client.close()));
   connections.length = 0;
+  deferredToolIndex.clear();
 }
 
 export async function reloadMcpTools(): Promise<McpInitSummary> {
@@ -138,6 +164,29 @@ export function getMcpStatuses(): McpServerStatus[] {
         registeredTools: 0,
       },
   );
+}
+
+export function getDeferredToolSummaries(): DeferredToolSummary[] {
+  return [...deferredToolIndex.values()].map(({ name, description, serverName }) => ({
+    name,
+    description,
+    serverName,
+  }));
+}
+
+export function getDeferredToolSchema(toolName: string): Record<string, unknown> | undefined {
+  return deferredToolIndex.get(toolName)?.inputSchema;
+}
+
+export async function executeDeferredTool(
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const entry = deferredToolIndex.get(toolName);
+  if (!entry) throw new Error(`延迟工具 "${toolName}" 不存在或已卸载`);
+  const result = await entry.client.callTool({ name: entry.originalName, arguments: args });
+  if (isRecord(result) && result.isError === true) throw new Error(formatMcpToolError(result));
+  return result;
 }
 
 async function connectMcpServer(server: McpServerConfig): Promise<Client> {
