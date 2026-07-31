@@ -521,43 +521,40 @@ describe("Conversation process presentation (integrated path)", () => {
     expect(segment).toContain("正在读取");
   });
 
-  it("collects completed tool process before streaming the final response", () => {
-    const task = baseTask({
-      status: "running",
-      phase: "thinking",
-      messages: [
-        {
-          id: "u1",
-          role: "user",
-          content: "检查工作区",
-          createdAt: "2026-07-10T00:00:00.000Z",
-        },
-        {
-          id: "a-process",
-          role: "assistant",
-          content: "我先读取项目说明。",
-          createdAt: "2026-07-10T00:00:01.000Z",
-          toolCalls: [
-            {
-              id: "call-read",
-              type: "function",
-              function: { name: "read", arguments: JSON.stringify({ path: "README.md" }) },
-            },
-          ],
-        },
-        {
-          id: "tool-read",
-          role: "tool",
-          content: JSON.stringify({ ok: true, output: "项目说明" }),
-          toolCallId: "call-read",
-          createdAt: "2026-07-10T00:00:02.000Z",
-        },
-      ],
-    });
+  it("最终回答流式期间保留过程层，落库后收纳为抽屉", () => {
+    const messages: Message[] = [
+      {
+        id: "u1",
+        role: "user",
+        content: "检查工作区",
+        createdAt: "2026-07-10T00:00:00.000Z",
+      },
+      {
+        id: "a-process",
+        role: "assistant",
+        content: "我先读取项目说明。",
+        createdAt: "2026-07-10T00:00:01.000Z",
+        toolCalls: [
+          {
+            id: "call-read",
+            type: "function",
+            function: { name: "read", arguments: JSON.stringify({ path: "README.md" }) },
+          },
+        ],
+      },
+      {
+        id: "tool-read",
+        role: "tool",
+        content: JSON.stringify({ ok: true, output: "项目说明" }),
+        toolCallId: "call-read",
+        createdAt: "2026-07-10T00:00:02.000Z",
+      },
+    ];
 
-    const html = renderToStaticMarkup(
+    // 阶段 1：最终回答正在流式但尚未落库 —— 过程层保持展开，中间旁白不能提前消失。
+    const htmlStreaming = renderToStaticMarkup(
       <Conversation
-        task={task}
+        task={baseTask({ status: "running", phase: "thinking", messages })}
         status="running"
         phase="thinking"
         phaseDetail="Agent 正在思考"
@@ -570,12 +567,37 @@ describe("Conversation process presentation (integrated path)", () => {
         onClarificationAnswer={noop}
       />,
     );
+    expect(htmlStreaming).toContain("process-live-narration");
+    expect(htmlStreaming).toContain("我先读取项目说明。");
+    expect(htmlStreaming).toContain("最终结论正在流式生成");
+    expect(htmlStreaming).not.toContain("process-completed");
 
-    const completedIndex = html.indexOf("process-completed");
-    const finalStreamIndex = html.indexOf("最终结论正在流式生成");
-    expect(completedIndex).toBeGreaterThanOrEqual(0);
-    expect(finalStreamIndex).toBeGreaterThan(completedIndex);
-    expect(html).not.toContain("process-live-narration");
+    // 阶段 2：最终回答已落库（交付区存在）—— 过程收纳为「已处理」抽屉。
+    const deliveredMessages: Message[] = [
+      ...messages,
+      {
+        id: "a-final",
+        role: "assistant",
+        content: "最终结论",
+        createdAt: "2026-07-10T00:00:03.000Z",
+      },
+    ];
+    const htmlDelivered = renderToStaticMarkup(
+      <Conversation
+        task={baseTask({ status: "running", phase: "finalizing", messages: deliveredMessages })}
+        status="running"
+        phase="finalizing"
+        plan={[]}
+        output=""
+        busy
+        liveToolActivity={[]}
+        hasLiveTail
+        onToolDecision={noop}
+        onClarificationAnswer={noop}
+      />,
+    );
+    expect(htmlDelivered).toContain("process-completed");
+    expect(htmlDelivered).not.toContain("process-live-narration");
   });
 
   it("ask_user clarification renders question markdown structure (not plain escaped text)", () => {
