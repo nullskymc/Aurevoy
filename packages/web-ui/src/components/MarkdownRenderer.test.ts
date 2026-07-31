@@ -93,6 +93,17 @@ describe("MarkdownRenderer math (KaTeX)", () => {
     expect(html).not.toMatch(/\[ \\text\{FCFE\}/);
   });
 
+  it("外链 favicon 不使用 lazy 加载，避免虚拟列表滚动重挂载闪烁", () => {
+    const html = renderMarkdownToSafeHtml("see [docs](https://example.com/path)");
+    expect(html).toContain('class="markdown-ext-link"');
+    expect(html).toContain('class="markdown-link-favicon"');
+    expect(html).toContain("google.com/s2/favicons?domain=example.com");
+    // 固定 14×14 不产生布局位移；eager 解码 + 内存预热缓存避免「空白 → 出现」闪烁。
+    expect(html).toContain('width="14" height="14"');
+    expect(html).toContain('decoding="async"');
+    expect(html).not.toContain("loading=");
+  });
+
   it("does not rewrite markdown links as math", () => {
     const md = "see [docs](https://example.com) and [note]";
     const normalized = normalizeMarkdownMath(md);

@@ -1267,7 +1267,12 @@ button.markdown-file-chip:hover {
   border-radius: 3px;
   object-fit: contain;
   vertical-align: -0.15em;
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background-color: color-mix(in srgb, var(--text) 4%, transparent);
+  /* 网络 favicon 加载中/不可达时的确定性占位：避免虚拟列表滚动重挂载导致图标空白闪烁 */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a2a2a7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 17H7A5 5 0 0 1 7 7h2'/%3E%3Cpath d='M15 7h2a5 5 0 1 1 0 10h-2'/%3E%3Cline x1='8' x2='16' y1='12' y2='12'/%3E%3C/svg%3E");
+  background-size: 14px 14px;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 .markdown-ext-link-text {
