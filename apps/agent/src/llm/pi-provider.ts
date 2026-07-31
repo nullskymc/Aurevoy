@@ -74,6 +74,40 @@ function createOpenAICompatProvider() {
   });
 }
 
+/**
+ * DeepSeek 官方接入统一走 Responses API（/responses），不再保留 Chat Completions 路径。
+ *
+ * 依据 https://api-docs.deepseek.com/zh-cn/guides/responses_api ：
+ * 官方模型全量支持 Responses；个别模型（如 deepseek-v4-pro）在官方开放前调用
+ * 会收到上游明确错误，属于真实链路失败而非降级到旧协议。
+ */
+
+/** DeepSeek Responses 的思考档位映射（与 Pi 内置 deepseek 目录一致）。 */
+const DEEPSEEK_RESPONSES_THINKING_LEVELS: Record<string, string | null> = {
+  off: null,
+  minimal: null,
+  low: null,
+  medium: null,
+  high: 'high',
+  max: 'max',
+};
+
+/** DeepSeek 官方主机（api.deepseek.com），Responses 与 Completions 共用该端点。 */
+function isDeepSeekHost(baseUrl: string): boolean {
+  return safeHost(baseUrl) === 'api.deepseek.com';
+}
+
+/**
+ * 是否应走 DeepSeek 官方 Responses API：
+ * - baseUrl 指向官方主机（含 openai-compatible 槽指向 api.deepseek.com 的情况）；
+ * - 或 provider 为 deepseek 且 baseUrl 为空（回落 catalog 官方默认端点）。
+ * 第三方网关（非官方主机）即使 provider 为 deepseek 也不强制，保持网关协议兼容。
+ */
+function isDeepSeekResponsesModel(provider: string, baseUrl: string): boolean {
+  if (isDeepSeekHost(baseUrl)) return true;
+  return provider === 'deepseek' && !baseUrl.trim();
+}
+
 // ---- Public API ----
 
 /**
@@ -228,6 +262,8 @@ export function resolveModelBaseUrl(modelBaseUrl?: string, provider?: string): s
  * - `openai-codex-responses` 必须走 chatgpt.com Codex 协议，**绝不能**降级，
  *   否则会打到 /backend-api/chat/completions 并被 Cloudflare 403。
  * - chatgpt.com 是 Codex 官方端点，不是「第三方网关」。
+ * - DeepSeek 官方 Responses API 与 Completions 共用 baseUrl，已开放模型固定走
+ *   Responses，不再回落到旧式 chat/completions。
  */
 export function resolveModelApi(
   api: string | undefined,
@@ -240,15 +276,26 @@ export function resolveModelApi(
   if (resolved === 'openai-codex-responses' || provider === 'openai-codex') {
     return 'openai-codex-responses';
   }
-  // 显式填写 Anthropic 兼容端点时尊重其 wire protocol（如 DeepSeek /anthropic）。
+  // 显式填写 Anthropic 兼容端点（第三方网关）时尊重其 wire protocol。
   if (
     (resolved === 'openai-completions' || resolved === 'openai-responses')
     && isAnthropicCompatBaseUrl(baseUrl)
   ) {
     return 'anthropic-messages';
   }
-  // 仅对「真·OpenAI Responses」在非官方主机上降级
-  if (resolved === 'openai-responses' && !isOfficialOpenAIHost(baseUrl) && !isCodexHost(baseUrl)) {
+  // DeepSeek 官方模型全量统一走 Responses API：目录里仍是 openai-completions 的
+  // 模型也升级到 /responses，不再保留旧式 completions 路径。
+  if (isDeepSeekResponsesModel(provider, baseUrl)) {
+    return 'openai-responses';
+  }
+  // 仅对「真·OpenAI Responses」在非官方主机上降级（DeepSeek 官方端不降级，
+  // 以便未来目录直接声明 openai-responses 的 v4-pro 等模型原样通过）。
+  if (
+    resolved === 'openai-responses'
+    && !isOfficialOpenAIHost(baseUrl)
+    && !isCodexHost(baseUrl)
+    && !isDeepSeekHost(baseUrl)
+  ) {
     return 'openai-completions';
   }
   return resolved;
@@ -301,14 +348,21 @@ export function createPiModel(modelOverride?: string, providerOverride?: string)
   const openAICompat = api === 'openai-completions'
     ? openAICompletionsFallbackCompat(provider, baseUrl, modelId)
     : undefined;
+  // fallback 构造路径下 DeepSeek 官方模型（统一 Responses）也要保持推理能力
+  const deepSeekResponses = api === 'openai-responses'
+    && isDeepSeekResponsesModel(provider, baseUrl);
   return {
     id: modelId,
     name: modelId,
     api,
     provider,
     baseUrl,
-    reasoning: openAICompat?.reasoning ?? false,
-    ...(openAICompat?.thinkingLevelMap ? { thinkingLevelMap: openAICompat.thinkingLevelMap } : {}),
+    reasoning: openAICompat?.reasoning ?? (deepSeekResponses ? true : false),
+    ...(openAICompat?.thinkingLevelMap
+      ? { thinkingLevelMap: openAICompat.thinkingLevelMap }
+      : deepSeekResponses
+        ? { thinkingLevelMap: DEEPSEEK_RESPONSES_THINKING_LEVELS }
+        : {}),
     // 自定义模型的图片能力来自本机注册表；未声明时在运行前明确拒绝图片请求。
     input: modelSupportsImage(provider, modelId) ? ['text', 'image'] : ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

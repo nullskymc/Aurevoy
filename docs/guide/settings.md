@@ -83,12 +83,17 @@ description: Aurevoy 设置说明：模型提供商、权限、预算、搜索�
 
 常见问题：「有 Key 但发不了」→ 模型未启用，或选中了未配置 Key 的 Provider。
 
+> **DeepSeek 官方接入**：全量模型统一走官方 [Responses API](https://api-docs.deepseek.com/zh-cn/guides/responses_api)（`/responses`），不再使用旧式 Chat Completions。
+> 个别模型在官方开放前调用会收到上游明确错误（如 `deepseek-v4-pro` 预计 2026 年 8 月初开放），不会降级到旧协议。
+> 第三方网关（非官方主机）挂 DeepSeek 模型时仍按网关能力走 Chat Completions。
+
 ## 搜索
 
 开启 **优先使用 API 原生搜索** 后，Aurevoy 会按当前实际协议自动尝试服务器搜索：
 
-- Responses API（包括兼容端）使用托管 `web_search`。
-- Anthropic Messages API 使用服务器 Web Search；DeepSeek 官方 Anthropic 兼容端也包含在内。
+- Responses API（包括兼容端）使用托管 `web_search`；DeepSeek 官方 Responses 端点同样支持服务器搜索。
+- Anthropic Messages API 使用服务器 Web Search。
+- DeepSeek 官方模型全量走 Responses API，原生搜索使用服务器 `web_search`；上游拒绝时自动回落下方本地搜索后端。
 - 上游不支持相应工具或协议时，自动回退原协议与下方配置的本地搜索后端。
 - 对话过程只显示“正在搜索网页 / 已搜索网页”等工具状态；重启后从会话消息恢复，不展示 Provider 的内部搜索载荷。
 - 服务器搜索可能由模型服务商单独计费；具体以服务商说明为准。

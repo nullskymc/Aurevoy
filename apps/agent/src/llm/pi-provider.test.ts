@@ -8,6 +8,7 @@ import {
   hasPiLLMCredential,
   hasPiLLMModel,
   isPiLLMConfigured,
+  resolveModelApi,
   resolveModelBaseUrl,
 } from "./pi-provider.js"
 import {
@@ -204,6 +205,120 @@ describe("createPiModel", () => {
       const model = createPiModel()
       expect(model.api).toBe("openai-codex-responses")
     })
+  })
+})
+
+describe("DeepSeek Responses API routing", () => {
+  afterEach(() => {
+    Object.assign(config.llm, originalLlm)
+  })
+
+  it("routes official DeepSeek flash to the Responses API (completions retired)", () => {
+    withLlmConfig({
+      provider: "deepseek",
+      apiKey: "sk-test",
+      baseUrl: "",
+      model: "deepseek-v4-flash",
+    }, () => {
+      withProviderMap({
+        deepseek: { baseUrl: "" },
+      }, () => {
+        const model = createPiModel()
+        expect(model.provider).toBe("deepseek")
+        expect(model.baseUrl?.replace(/\/+$/, "")).toBe("https://api.deepseek.com")
+        expect(model.api).toBe("openai-responses")
+        expect(model.reasoning).toBe(true)
+      })
+    })
+  })
+
+  it("routes all official DeepSeek models to the Responses API (completions retired)", () => {
+    withLlmConfig({
+      provider: "deepseek",
+      apiKey: "sk-test",
+      baseUrl: "",
+      model: "deepseek-v4-pro",
+    }, () => {
+      withProviderMap({
+        deepseek: { baseUrl: "" },
+      }, () => {
+        const model = createPiModel()
+        expect(model.provider).toBe("deepseek")
+        // v4-pro 在 DeepSeek 开放前由上游明确报错，不再降级到 chat/completions
+        expect(model.api).toBe("openai-responses")
+      })
+    })
+  })
+
+  it("routes a custom openai-compatible slot at the official host to Responses", () => {
+    withLlmConfig({
+      provider: "openai-compatible",
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-flash",
+    }, () => {
+      withProviderMap({
+        deepseek: { baseUrl: "" },
+      }, () => {
+        const model = createPiModel()
+        // 官方主机经 host 推断为 deepseek 内置 provider
+        expect(model.provider).toBe("deepseek")
+        expect(model.api).toBe("openai-responses")
+      })
+    })
+  })
+
+  it("does not force Responses when a deepseek slot overrides a gateway baseUrl", () => {
+    withLlmConfig({
+      provider: "deepseek",
+      apiKey: "sk-test",
+      baseUrl: "https://deepseek-gateway.example.test/v1",
+      model: "deepseek-v4-flash",
+    }, () => {
+      withProviderMap({
+        deepseek: { baseUrl: "https://deepseek-gateway.example.test/v1" },
+      }, () => {
+        const model = createPiModel()
+        expect(model.provider).toBe("deepseek")
+        expect(model.api).toBe("openai-completions")
+      })
+    })
+  })
+
+  it("does not force Responses on third-party gateways serving deepseek models", () => {
+    withLlmConfig({
+      provider: "openai-compatible",
+      baseUrl: "https://gateway.example.test/v1",
+      model: "deepseek-v4-flash",
+    }, () => {
+      const model = createPiModel()
+      const compat = model.compat as Record<string, unknown>
+      expect(model.provider).toBe("openai-compatible")
+      expect(model.api).toBe("openai-completions")
+      expect(model.reasoning).toBe(true)
+      expect(compat.requiresReasoningContentOnAssistantMessages).toBe(true)
+    })
+  })
+
+  it("respects an explicit DeepSeek Anthropic-compatible endpoint", () => {
+    withLlmConfig({
+      provider: "deepseek",
+      apiKey: "sk-test",
+      baseUrl: "https://api.deepseek.com/anthropic",
+      model: "deepseek-v4-flash",
+    }, () => {
+      withProviderMap({
+        deepseek: { baseUrl: "https://api.deepseek.com/anthropic" },
+      }, () => {
+        const model = createPiModel()
+        expect(model.api).toBe("anthropic-messages")
+      })
+    })
+  })
+
+  it("keeps deepseek Responses api when Pi catalog later declares it directly", () => {
+    // 未来目录直接声明 openai-responses（如 v4-pro 开放后）时不得被非官方主机规则降级
+    expect(resolveModelApi("openai-responses", "https://api.deepseek.com", "deepseek", "deepseek-v4-pro"))
+      .toBe("openai-responses")
   })
 })
 

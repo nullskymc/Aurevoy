@@ -61,27 +61,19 @@ export function injectNativeWebSearchTool(payload: unknown, api: string): unknow
   return { ...payload, tools };
 }
 
-function deepSeekAnthropicBaseUrl(baseUrl: string): string {
-  const normalized = baseUrl.replace(/\/+$/, '');
-  return normalized.endsWith('/anthropic') ? normalized : `${normalized}/anthropic`;
-}
-
 /**
  * 根据当前实际 wire API 自动选择 hosted search 协议。
- * OpenAI-compatible 端先试 Responses；DeepSeek 官方端优先其 Anthropic Messages 接口。
+ * - Responses 族 / Anthropic Messages 已有服务器搜索，原样使用；
+ * - 普通 OpenAI-completions 端先试 Responses hosted search；
+ * - DeepSeek 官方已全量走 Responses；防御性兜底：旧快照里仍为 completions 的
+ *   deepseek 模型不发 hosted search，直接回落本地搜索后端，避免协议杂糅。
  */
 export function resolveNativeWebSearchModel(model: PiModel<any>): PiModel<any> | null {
   if (!config.search.preferNative) return null;
   if (RESPONSES_APIS.has(model.api) || model.api === 'anthropic-messages') return model;
 
   if (model.api !== 'openai-completions') return null;
-  if (model.provider === 'deepseek') {
-    return {
-      ...model,
-      api: 'anthropic-messages',
-      baseUrl: deepSeekAnthropicBaseUrl(model.baseUrl),
-    };
-  }
+  if (model.provider === 'deepseek') return null;
   return { ...model, api: 'openai-responses' };
 }
 
