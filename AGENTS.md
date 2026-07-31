@@ -48,7 +48,9 @@ packages/shared  ← 跨进程类型唯一来源
 3. 新 Provider 扩展 Pi 映射，不恢复第二套 ReAct 后端。
 4. 后端不绑 macOS 路径/命令；前端不假设非 Tauri 环境。
 5. 外部能力缺失时明确失败/降级，不假成功。
-6. 单个任务完成时至少 `npm run typecheck`；行为/安全/存储改动补回归或可复现轨迹。完整回归测试仅在准备提交时统一执行。
+6. 验证分层：单个任务完成时至少 `npm run typecheck`；行为/安全/存储改动补定向回归或可复现轨迹。
+   提交前按改动影响面跑相关回归即可（见下方命令表），不必每次全套 m3–m8；
+   完整回归仅在发布/合并前统一执行。
 7. 密钥只走环境变量 / 设置存储，禁止提交。
 8. 新能力同步考虑：日志、审批、权限、失败恢复、用户可解释性。
 
@@ -61,7 +63,13 @@ npm run dev:agent        # 仅引擎热重载
 npm run typecheck        # 全仓类型检查
 npm run build            # shared → agent → desktop
 npm run build:shared     # 改 shared 后必做
-npm run regression:m3    # … m8 见 package.json
+npm run regression:m3    # 文件工具/工作区（工具改动 → m3+m7）
+npm run regression:m4    # 多轮对话/历史（LLM/对话改动 → m4+m7）
+npm run regression:m5    # 项目工作区切换
+npm run regression:m6    # 记忆/Session Tree（记忆改动 → m6+m8）
+npm run regression:m7    # agent 循环/工具 schema/MCP/审批（通用联动）
+npm run regression:m8    # 知识库/向量检索（KB 改动 → m6+m8）
+npm run regression:*     # 提交前按影响面选跑；全套留给发布/合并前
 npm run docs:dev         # 文档站本地预览
 ```
 
