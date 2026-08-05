@@ -31,8 +31,8 @@ metadata:
 
 1. 未指定格式 → 文件用 **Markdown**。  
 2. HTML 仅在用户要求或组件版式明显更合适时。  
-3. 最终回复 = **路径 + 一句话摘要**；不复述全文。  
-4. 文件交付后 `attach_content`。HTML 须先 `bundle_report`。  
+3. 最终回复 = **`[文件名](workspace/relative/path)` + 一句话摘要**；不复述全文。
+4. 文件用正文 Markdown 链接交付；任意扩展名均可在工作台打开。HTML 须先 `bundle_report`。只有用户明确要卡片时才用 `attach_content`。
 5. **禁止**把「按字段 key 全量展开」当作主报告。  
 6. **改稿纪律**：首次用 `write` 落草稿；之后补证据/改段落用 `edit`（精确 old→new），禁止为小改反复 `write` 整篇覆盖。
 
@@ -63,7 +63,7 @@ metadata:
 ```
 
 3. HTML 时用下方组件骨架 + `bundle_report`。  
-4. `attach_content`。
+4. 用正文 Markdown 链接交付报告。
 
 ---
 
@@ -182,7 +182,7 @@ JSON 留在 `results/` 即可。不要生成「字段 dump」当 `report.md`。
 - [ ] 模式正确（快 / 深）  
 - [ ] 主报告可读，非字段展开  
 - [ ] 事实有来源或标明不确定  
-- [ ] 已 attach（文件时）；HTML 已 bundle  
+- [ ] 最终回复含工作区相对路径的 Markdown 文件链接；HTML 已 bundle
 - [ ] 聊天未贴全文  
 
 ## 不要
@@ -191,4 +191,3 @@ JSON 留在 `results/` 即可。不要生成「字段 dump」当 `report.md`。
 - 默认上 HTML  
 - 静默假装完成未通过校验的 deep item  
 - 报告已存在后仍多次 `write` 整文件重写（应 `edit`）  
-

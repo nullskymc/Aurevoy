@@ -83,6 +83,12 @@
   background: var(--warning-soft-bg, color-mix(in srgb, #f59e0b 12%, var(--surface)));
 }
 
+.plan-progress-item[data-status="cancelled"] .plan-progress-index {
+  color: var(--text-tertiary);
+  border-color: color-mix(in srgb, var(--text-tertiary) 35%, var(--border));
+  background: var(--pill-bg);
+}
+
 .plan-progress-desc {
   min-width: 0;
   display: -webkit-box;
@@ -127,6 +133,10 @@
 
 .plan-progress-status.is-blocked {
   color: var(--warning-soft-fg, #a16207);
+}
+
+.plan-progress-status.is-cancelled {
+  color: var(--text-tertiary);
 }
 
 .plan-progress-blocker {

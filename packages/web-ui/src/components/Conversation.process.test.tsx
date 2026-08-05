@@ -142,6 +142,115 @@ describe("Conversation process presentation (integrated path)", () => {
     expect(html).not.toContain("timeline-step");
   });
 
+  it("keeps persisted completed subagents visible while later tools are still live", () => {
+    const delegateCallId = "call-research";
+    const task = baseTask({
+      status: "running",
+      phase: "calling_tool",
+      subagentRuns: [{
+        id: "run-research",
+        parentCallId: delegateCallId,
+        role: "research",
+        goal: "调研市场反弹原因",
+        status: "completed",
+        currentActivity: "已完成并返回结果",
+        activities: [],
+        iterations: 2,
+        toolCallCount: 1,
+        createdAt: "2026-07-10T00:00:01.000Z",
+        startedAt: "2026-07-10T00:00:01.000Z",
+        completedAt: "2026-07-10T00:00:02.000Z",
+      }, {
+        id: "run-old",
+        parentCallId: "old-delegate",
+        role: "explore",
+        goal: "旧轮次子代理不应出现在当前实时过程",
+        status: "completed",
+        currentActivity: "旧轮次已完成",
+        activities: [],
+        iterations: 1,
+        toolCallCount: 1,
+        createdAt: "2026-07-09T00:00:01.000Z",
+        startedAt: "2026-07-09T00:00:01.000Z",
+        completedAt: "2026-07-09T00:00:02.000Z",
+      }],
+      messages: [
+        { id: "u1", role: "user", content: "研究行情", createdAt: "2026-07-10T00:00:00.000Z" },
+        {
+          id: "a-delegate",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-07-10T00:00:01.000Z",
+          toolCalls: [{
+            id: delegateCallId,
+            type: "function",
+            function: { name: "delegate", arguments: "{}" },
+          }],
+        },
+        { id: "r-delegate", role: "tool", content: "done", toolCallId: delegateCallId, createdAt: "2026-07-10T00:00:02.000Z" },
+      ],
+    });
+
+    const html = renderToStaticMarkup(
+      <Conversation
+        task={task}
+        status="running"
+        phase="calling_tool"
+        plan={[]}
+        output=""
+        busy
+        liveToolActivity={[{ id: "call-search", name: "web_search", args: { query: "market" }, status: "running" }]}
+        hasLiveTail
+        onToolDecision={noop}
+        onClarificationAnswer={noop}
+      />,
+    );
+
+    expect(html).toContain("已创建子智能体 · 调研：调研市场反弹原因");
+    expect(html).toContain("正在搜索网页");
+    expect(html).not.toContain("旧轮次子代理不应出现在当前实时过程");
+  });
+
+  it("replays a cancelled task's dangling tool as cancelled after live state is cleared", () => {
+    const task = baseTask({
+      status: "cancelled",
+      phase: "cancelled",
+      messages: [
+        { id: "u-cancelled", role: "user", content: "搜索资料", createdAt: "2026-07-10T00:00:00.000Z" },
+        {
+          id: "a-cancelled",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-07-10T00:00:01.000Z",
+          toolCalls: [{
+            id: "call-dangling-search",
+            type: "function",
+            function: { name: "web_search", arguments: "{}" },
+          }],
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(
+      <Conversation
+        task={task}
+        status="cancelled"
+        phase="cancelled"
+        plan={[]}
+        output=""
+        busy={false}
+        liveToolActivity={[]}
+        hasLiveTail={false}
+        defaultToolDetailsOpen
+        onToolDecision={noop}
+        onClarificationAnswer={noop}
+      />,
+    );
+
+    expect(html).toContain("搜索网页已取消");
+    expect(html).not.toContain("已搜索网页");
+  });
+
   it("completed path exposes 已处理 summary without nested Thought process chrome", () => {
     const task = baseTask({
       status: "completed",

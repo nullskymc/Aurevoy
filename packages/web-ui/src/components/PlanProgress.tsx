@@ -4,7 +4,7 @@
  */
 import type { PlanStep } from "@aurevoy/shared";
 import { t } from "../i18n";
-import { IconAlertCircle, IconCheck, IconClock, IconLoader } from "../icons";
+import { IconAlertCircle, IconBan, IconCheck, IconClock, IconLoader } from "../icons";
 import {
   getPlanStepStatusLabel,
   mapPlanStepToUiStatus,
@@ -78,6 +78,8 @@ function statusIcon(ui: PlanUiStatus) {
     case "blocked":
     case "failed":
       return <IconAlertCircle size={14} />;
+    case "cancelled":
+      return <IconBan size={14} />;
     default:
       return <IconClock size={14} />;
   }

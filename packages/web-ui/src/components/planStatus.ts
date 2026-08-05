@@ -6,12 +6,12 @@ import type { PlanStep, PlanStepStatus } from "@aurevoy/shared";
 import { t } from "../i18n";
 
 /** Group / chip status used in timeline plan UI */
-export type PlanUiStatus = "pending" | "running" | "completed" | "failed" | "blocked";
+export type PlanUiStatus = "pending" | "running" | "completed" | "failed" | "blocked" | "cancelled";
 
 /**
  * Map a durable PlanStep.status to a UI group status.
  * - blocked / paused → blocked (waiting on user/env)
- * - cancelled without tools → pending (not shown as success)
+ * - cancelled → cancelled (distinct from failure and pending)
  */
 export function mapPlanStepToUiStatus(status: PlanStepStatus): PlanUiStatus {
   switch (status) {
@@ -24,9 +24,10 @@ export function mapPlanStepToUiStatus(status: PlanStepStatus): PlanUiStatus {
       return "blocked";
     case "running":
       return "running";
+    case "cancelled":
+      return "cancelled";
     case "pending":
     case "proposed":
-    case "cancelled":
       return "pending";
     default:
       return "pending";
@@ -38,8 +39,13 @@ export function mapPlanStepGroupStatus(
   planStatus: PlanStepStatus,
   toolFailed = false,
   phaseFailed = false,
+  phaseCancelled = false,
 ): PlanUiStatus {
   if (phaseFailed) return "failed";
+  // 已完成步骤的历史结果仍应保留；取消造成的计划失败没有真实工具失败时仍显示 cancelled。
+  if (phaseCancelled && planStatus !== "completed" && !toolFailed) {
+    return "cancelled";
+  }
   if (toolFailed && planStatus !== "completed") return "failed";
   return mapPlanStepToUiStatus(planStatus);
 }

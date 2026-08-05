@@ -153,6 +153,7 @@ function enhancePathChips(html: string): string {
   // 用标签栈记录祖先 class，含 katex 则整段跳过。
   const parts = html.split(/(<[^>]+>)/g);
   let inCode = false;
+  let inLink = false;
   const classStack: string[] = [];
   return parts
     .map((part) => {
@@ -160,6 +161,8 @@ function enhancePathChips(html: string): string {
         const lower = part.toLowerCase();
         if (/^<(code|pre)\b/.test(lower)) inCode = true;
         if (/^<\/(code|pre)>/.test(lower)) inCode = false;
+        if (/^<a\b/.test(lower)) inLink = true;
+        if (/^<\/a>/.test(lower)) inLink = false;
 
         const isClose = /^<\//.test(part);
         const isSelfClose = /\/>$/.test(part) || /^<(?:br|hr|img|input|meta|link|path|line|use|mspace)\b/i.test(part);
@@ -172,7 +175,7 @@ function enhancePathChips(html: string): string {
         return part;
       }
       const inKatex = classStack.some((cls) => /\bkatex\b/i.test(cls));
-      if (inCode || inKatex || !part.trim()) return part;
+      if (inCode || inLink || inKatex || !part.trim()) return part;
       return part.replace(PATH_CHIP_RE, (match, path: string) => {
         const prefix = match.slice(0, match.indexOf(path));
         const escaped = escapeHtmlAttr(path);
@@ -181,6 +184,38 @@ function enhancePathChips(html: string): string {
       });
     })
     .join("");
+}
+
+/** 将普通 Markdown 本地链接转为工作台入口；扩展名不参与判断，所有文件类型一视同仁。 */
+function enhanceWorkspaceFileLinks(html: string): string {
+  return html.replace(
+    /<a\s+([^>]*?)href="([^"]+)"([^>]*)>([\s\S]*?)<\/a>/gi,
+    (match, pre: string, href: string, post: string, text: string) => {
+      const path = workspacePathFromHref(href);
+      if (!path) return match;
+      const attrs = `${pre}href="${href}"${post}`.replace(/\s+/g, " ").trim();
+      if (/\bdata-path=/i.test(attrs)) return match;
+      return `<a ${attrs} class="markdown-file-link" data-path="${escapeHtmlAttr(path)}">${text}</a>`;
+    },
+  );
+}
+
+function workspacePathFromHref(href: string): string | null {
+  try {
+    const value = href.trim();
+    if (!value || /^(?:https?:|mailto:|tel:|#|data:|javascript:)/i.test(value)) return null;
+    if (/^file:\/\//i.test(value)) {
+      return decodeURIComponent(new URL(value).pathname);
+    }
+    // Windows 盘符、POSIX 绝对路径、./ ../ 和不含协议的相对路径都由任务工作区解析。
+    if (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith("/") || value.startsWith("./") || value.startsWith("../")) {
+      return decodeURIComponent(value);
+    }
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(value) && !value.startsWith("//")) return decodeURIComponent(value);
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function escapeHtmlAttr(value: string): string {
@@ -284,7 +319,8 @@ export function renderMarkdownToSafeHtml(content: string): string {
   const normalized = normalizeMarkdownMath(content);
   const raw = marked.parse(normalized, { async: false }) as string;
   const withCode = wrapCodeBlocks(raw);
-  const withChips = enhancePathChips(withCode);
+  const withFileLinks = enhanceWorkspaceFileLinks(withCode);
+  const withChips = enhancePathChips(withFileLinks);
   const withLinks = enhanceExternalLinks(withChips);
   // KaTeX 输出含 MathML + 内联 style/SVG；放行 html/svg/math 配置，并保留交互 attr。
   return DOMPurify.sanitize(withLinks, {

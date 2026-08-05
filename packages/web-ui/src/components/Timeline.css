@@ -148,6 +148,10 @@
   color: var(--danger-soft-fg);
 }
 
+.process-activity-row[data-status="cancelled"] {
+  color: var(--text-tertiary);
+}
+
 .process-activity-row[data-status="running"] {
   color: var(--text-secondary);
 }
@@ -346,6 +350,10 @@
   color: var(--danger-soft-fg);
 }
 
+.timeline-plan-status-text.is-cancelled {
+  color: var(--text-tertiary);
+}
+
 /* 计划步骤尾部连接线 */
 .timeline-plan-trail {
   display: none;
@@ -417,6 +425,13 @@
   font-weight: 700;
 }
 
+.timeline-step-glyph.is-cancelled {
+  background: var(--pill-bg);
+  color: var(--text-tertiary);
+  font-size: var(--ui-font-sm);
+  font-weight: 700;
+}
+
 .timeline-step-icon.is-pending {
   border: 2px dashed var(--border-strong);
   background: transparent;
@@ -464,6 +479,11 @@
 .timeline-step[data-status="failed"] .timeline-step-title-btn,
 .timeline-step[data-status="failed"] .timeline-step-title {
   color: var(--danger-soft-fg);
+}
+
+.timeline-step[data-status="cancelled"] .timeline-step-title-btn,
+.timeline-step[data-status="cancelled"] .timeline-step-title {
+  color: var(--text-tertiary);
 }
 
 .timeline-step-tool {
@@ -831,6 +851,15 @@
 
 .timeline-step-status.is-failed {
   color: var(--danger-soft-fg);
+}
+
+.timeline-step-status.is-cancelled {
+  color: var(--text-tertiary);
+}
+
+.process-agent-round.is-cancelled .process-summary-toggle,
+.process-agent-round[data-status="cancelled"] .process-summary-toggle {
+  color: var(--text-tertiary);
 }
 
 .timeline-step-status.is-success {

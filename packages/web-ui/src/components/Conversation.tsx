@@ -69,7 +69,7 @@ export interface ToolActivity {
   args: unknown;
   /** 后端生成的状态无关动作摘要，例如“调用 zotero · search items · 关键词” */
   summary?: string;
-  status: "awaiting" | "running" | "ok" | "error";
+  status: "awaiting" | "running" | "ok" | "error" | "cancelled";
   riskLevel?: ToolRiskLevel;
   planStepId?: string;
   output?: unknown;
@@ -178,6 +178,16 @@ function currentTurnMessages(messages: Message[]): Message[] {
     if (messages[index]?.role === "user") return messages.slice(index);
   }
   return messages;
+}
+
+/** 只把当前用户轮次创建的子代理保留在实时过程层，避免续跑时重放旧轮次。 */
+function currentTurnSubagentRuns(messages: Message[], subagentRuns: SubagentRun[]): SubagentRun[] {
+  const delegateCallIds = new Set(
+    messages.flatMap((message) => (message.toolCalls ?? [])
+      .filter((call) => call.function.name === "delegate")
+      .map((call) => call.id)),
+  );
+  return subagentRuns.filter((run) => delegateCallIds.has(run.parentCallId));
 }
 
 function standaloneToolActivityFromMessage(message: Message): ToolActivity {
@@ -322,6 +332,10 @@ export function Conversation({
     hasLiveTail,
   });
   const liveOutputMessages = currentTurnMessages(messages);
+  const liveTurnSubagentRuns = currentTurnSubagentRuns(
+    liveOutputMessages,
+    task.subagentRuns ?? [],
+  );
   // 已落到历史消息上的 contentBlocks 不再塞进 live tail，避免「每条消息底部都挂同一文件卡」
   const historicalContentBlockIds = new Set(
     messages.flatMap((message) => dedupeContentBlocks(message.contentBlocks).map((block) => block.id)),
@@ -336,7 +350,7 @@ export function Conversation({
         output: viewModel.liveOutput,
         phase,
         contentBlocks: liveOnlyContentBlocks,
-        subagentRuns: task.subagentRuns ?? [],
+        subagentRuns: liveTurnSubagentRuns,
       })
     : null;
 
@@ -373,6 +387,8 @@ export function Conversation({
               liveOutputFallback={hasLiveTail && index === viewModel.turns.length - 1 ? viewModel.liveOutput : ""}
               liveOutputMessages={liveOutputMessages}
               liveOutputHiddenAssistantIds={viewModel.hiddenAssistantIds}
+              // 终态取消后 live tail 已清空，最新 turn 仍需知道 cancelled 才能正确回放悬空工具。
+              phase={index === viewModel.turns.length - 1 ? phase : undefined}
               phaseDetail={hasLiveTail && index === viewModel.turns.length - 1 ? phaseDetail : undefined}
             />
           )}
@@ -581,6 +597,7 @@ function ConversationTurnView({
   liveOutputFallback,
   liveOutputMessages,
   liveOutputHiddenAssistantIds,
+  phase,
   phaseDetail,
   onOpenWorkspacePath,
 }: {
@@ -606,6 +623,7 @@ function ConversationTurnView({
   liveOutputFallback: string;
   liveOutputMessages: Message[];
   liveOutputHiddenAssistantIds: Set<string>;
+  phase?: TaskPhase | null;
   phaseDetail?: string;
   onOpenWorkspacePath?: (path: string) => void;
 }) {
@@ -667,6 +685,7 @@ function ConversationTurnView({
               liveOutputMessages={liveOutputMessages}
               liveOutputHiddenAssistantIds={liveOutputHiddenAssistantIds}
               liveToolActivity={liveToolActivity}
+              phase={phase}
               phaseDetail={phaseDetail}
               resultMap={resultMap}
               plan={plan}
@@ -892,6 +911,7 @@ function AgentProcessStream({
   liveOutputMessages,
   liveOutputHiddenAssistantIds,
   liveToolActivity,
+  phase,
   phaseDetail,
   resultMap,
   plan,
@@ -912,6 +932,7 @@ function AgentProcessStream({
   liveOutputHiddenAssistantIds: Set<string>;
   /** 仅包含尚未落入 tool result 历史的活动，用于和过程消息按 callId 绑定。 */
   liveToolActivity: ToolActivity[];
+  phase?: TaskPhase | null;
   phaseDetail?: string;
   resultMap: Map<string, ToolResultInfo>;
   plan: PlanStep[];
@@ -930,6 +951,7 @@ function AgentProcessStream({
       resultMap,
       plan,
       subagentRuns,
+      phase,
     ),
   );
   const mergedHistorical = mergeAgentRoundData(messageRounds, "turn-process");
@@ -953,9 +975,10 @@ function AgentProcessStream({
   );
   const unboundLiveActivities = liveToolActivity.filter((activity) => !narrationToolCallIds.has(activity.id));
   const hasStaticLiveDetails = liveNarrations.length > 0 || unboundLiveActivities.length > 0;
+  const liveTurnSubagentRuns = currentTurnSubagentRuns(liveOutputMessages, subagentRuns);
   const hasActiveProcess = liveToolActivity.some((activity) =>
     activity.status === "running" || activity.status === "awaiting",
-  ) || subagentRuns.some((run) => run.status === "running" || run.status === "queued");
+  ) || liveTurnSubagentRuns.some((run) => run.status === "running" || run.status === "queued");
 
   const processStartedAtMs = resolveProcessStartMs(turnStartedAt);
   const processDurationMs = (() => {
@@ -999,8 +1022,8 @@ function AgentProcessStream({
             hasStaticLiveDetails={hasStaticLiveDetails}
             activities={unboundLiveActivities}
             plan={plan}
-            phase={phaseDetail}
-            subagentRuns={subagentRuns}
+            phase={phase ?? undefined}
+            subagentRuns={liveTurnSubagentRuns}
             onOpenWorkspacePath={onOpenWorkspacePath}
             completedProcess={mergedHistorical ? (
               <AgentRound
@@ -1026,8 +1049,8 @@ function AgentProcessStream({
                   message.toolCalls?.some((call) => call.id === activity.id),
                 )}
                 plan={plan}
-                phase={phaseDetail}
-                subagentRuns={subagentRuns}
+                phase={phase ?? undefined}
+                subagentRuns={currentTurnSubagentRuns([message], subagentRuns)}
                 historicalRound={historicalRoundByMessageId.get(message.id)}
                 onOpenWorkspacePath={onOpenWorkspacePath}
               />

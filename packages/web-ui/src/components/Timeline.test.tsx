@@ -166,6 +166,27 @@ describe("buildLiveAgentRoundData", () => {
     expect(step?.progress).toEqual({ message: "正在搜索", percent: 45 });
   });
 
+  it("keeps cancelled live work visually distinct from failed work", () => {
+    const round = buildLiveAgentRoundData({
+      plan: [{ id: "exec", description: "执行任务", status: "running" }],
+      phase: "cancelled",
+      liveToolActivity: [{
+        id: "cancelled-search",
+        name: "web_search",
+        args: { query: "cancelled timeline" },
+        status: "running",
+        planStepId: "exec",
+      }],
+    });
+
+    expect(round.status).toBe("cancelled");
+    expect(round.planStepGroups[0]?.status).toBe("cancelled");
+    expect(flattenProcessActivityRows(round)[0]).toMatchObject({
+      status: "cancelled",
+      label: "搜索网页已取消 (cancelled timeline)",
+    });
+  });
+
   it("does not render empty plan groups when named and unnamed live tools are mixed", () => {
     const round = buildLiveAgentRoundData({
       plan: [
@@ -332,6 +353,60 @@ describe("buildAgentRoundFromMessage", () => {
     expect(steps.find((step) => step.id === "call-ok")?.status).toBe("success");
     expect(steps.find((step) => step.id === "call-fail")?.status).toBe("failed");
   });
+
+  it("recognizes an interrupted tool result as cancelled instead of failed", () => {
+    const round = buildAgentRoundFromMessage(
+      {
+        id: "assistant-cancelled-tool",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-07-31T00:00:00.000Z",
+        toolCalls: [{
+          id: "call-cancelled",
+          type: "function",
+          function: { name: "web_search", arguments: "{}" },
+        }],
+      },
+      new Map([[
+        "call-cancelled",
+        { ok: false, error: "上次运行在工具 web_search 返回前中断；该调用结果不可用。" },
+      ]]),
+      [],
+    );
+
+    expect(round.status).toBe("cancelled");
+    expect(flattenProcessActivityRows(round)[0]).toMatchObject({
+      status: "cancelled",
+      label: "搜索网页已取消",
+    });
+  });
+
+  it("marks a dangling tool call as cancelled when the task phase is cancelled", () => {
+    const round = buildAgentRoundFromMessage(
+      {
+        id: "assistant-dangling-cancelled",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-07-31T00:00:00.000Z",
+        toolCalls: [{
+          id: "call-dangling-cancelled",
+          type: "function",
+          function: { name: "web_search", arguments: "{}", planStepId: "exec" },
+        }],
+      },
+      new Map(),
+      [{ id: "exec", description: "执行任务", status: "failed" }],
+      [],
+      "cancelled",
+    );
+
+    expect(round.status).toBe("cancelled");
+    expect(round.planStepGroups[0]).toMatchObject({ planStepId: "exec", status: "cancelled" });
+    expect(flattenProcessActivityRows(round)[0]).toMatchObject({
+      status: "cancelled",
+      label: "搜索网页已取消",
+    });
+  });
 });
 
 describe("process presentation helpers", () => {
@@ -438,6 +513,37 @@ describe("process presentation helpers", () => {
   it("formatProcessedSummaryLabel does not invent duration seconds", () => {
     expect(formatProcessedSummaryLabel({ stepCount: 3 })).toBe("已处理");
     expect(formatProcessedSummaryLabel({ stepCount: 3, durationMs: 13_000 })).toBe("已处理 13s");
+    expect(formatProcessedSummaryLabel({ stepCount: 3, cancelled: true })).toBe("已取消");
+  });
+
+  it("renders a cancelled process with neutral status instead of failure styling", () => {
+    const html = renderToStaticMarkup(
+      <AgentRound
+        defaultToolDetailsOpen
+        data={{
+          id: "cancelled-round",
+          planStepGroups: [{
+            planStepId: "_default",
+            description: "执行任务",
+            status: "cancelled",
+            steps: [{
+              id: "cancelled-step",
+              kind: "search",
+              title: "deepseek api key",
+              status: "cancelled",
+              toolName: "web_search",
+            }],
+          }],
+          summary: "",
+          status: "cancelled",
+        }}
+      />,
+    );
+
+    expect(html).toContain('data-status="cancelled"');
+    expect(html).toContain("已取消");
+    expect(html).not.toContain('data-status="failed"');
+    expect(html).not.toContain("失败");
   });
 
   it("mergeAgentRoundData collapses multiple rounds into one process block", () => {

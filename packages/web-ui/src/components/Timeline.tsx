@@ -31,6 +31,7 @@ import {
 import { getPlanStepStatusLabel, mapPlanStepGroupStatus, type PlanUiStatus } from "./planStatus";
 import {
   IconAlertCircle,
+  IconBan,
   IconBot,
   IconChevron,
   IconClock,
@@ -57,7 +58,7 @@ export interface TimelineStepData {
   title: string;
   /** 后端提供的状态无关动作摘要；存在时优先于前端参数猜测 */
   summary?: string;
-  status: "pending" | "running" | "success" | "failed";
+  status: "pending" | "running" | "success" | "failed" | "cancelled";
   planStepId?: string;
   logs?: string;
   output?: string;
@@ -90,7 +91,7 @@ export interface AgentRoundData {
   markdownOutput?: string;
   contentBlocks?: ContentBlock[];
   subagentRuns?: SubagentRun[];
-  status: "pending" | "running" | "completed" | "failed" | "blocked";
+  status: "pending" | "running" | "completed" | "failed" | "blocked" | "cancelled";
 }
 
 /* ============ 工具函数 ============ */
@@ -155,10 +156,16 @@ export function computeSummaryFromSteps(steps: TimelineStepData[]): string {
   return `执行了 ${parts.join("，")}`;
 }
 
+/** 将取消/重启时补写的悬空工具结果与真实工具失败区分开。 */
+function isCancelledToolError(error?: string): boolean {
+  return !!error && /返回前中断|任务(?:被|已)取消|父任务已取消|用户取消|\b(?:cancelled|canceled|aborted)\b/i.test(error);
+}
+
 /** 从 MessageToolCall 构建 TimelineStepData[] */
 function buildStepsFromToolCalls(
   toolCalls: MessageToolCall[],
   resultMap: Map<string, { ok: boolean; output?: unknown; error?: string }>,
+  phaseCancelled = false,
 ): TimelineStepData[] {
   return toolCalls.filter((tc) => !shouldHideToolFromWorkflow(tc.function.name)).map((tc) => {
     const kind = detectStepKind(tc.function.name);
@@ -169,8 +176,8 @@ function buildStepsFromToolCalls(
     const title = buildStepTitle(tc.function.name, args);
     const result = resultMap.get(tc.id);
     const status: TimelineStepData["status"] = result
-      ? (result.ok ? "success" : "failed")
-      : "success";
+      ? (result.ok ? "success" : isCancelledToolError(result.error) ? "cancelled" : "failed")
+      : phaseCancelled ? "cancelled" : "success";
     const logs = extractLogContent(tc.function.name, result);
     const error = result && !result.ok ? (result.error ?? "执行失败") : undefined;
     return {
@@ -338,6 +345,7 @@ function resolveHistoricalSubagentRuns(
   resultMap: Map<string, { ok: boolean; output?: unknown; error?: string }>,
   persistedRuns: SubagentRun[],
   createdAt: string,
+  phaseCancelled = false,
 ): SubagentRun[] {
   const delegateCalls = toolCalls.filter((call) => call.function.name === "delegate");
   const callIds = new Set(delegateCalls.map((call) => call.id));
@@ -355,6 +363,7 @@ function resolveHistoricalSubagentRuns(
     const result = resultMap.get(call.id);
     const output = isRecord(result?.output) ? result.output : undefined;
     const completed = output?.completed === true;
+    const cancelled = !completed && (isCancelledToolError(result?.error) || (phaseCancelled && !result));
     const role = normalizeSubagentRole(output?.role ?? args.role);
     const error = !completed
       ? (typeof output?.result === "string" ? output.result : result?.error)
@@ -364,15 +373,15 @@ function resolveHistoricalSubagentRuns(
       parentCallId: call.id,
       role,
       goal: typeof args.goal === "string" ? args.goal : "委托子任务",
-      status: completed ? "completed" : "failed",
-      currentActivity: completed ? "已完成并返回结果" : error ?? "子代理运行失败",
+      status: completed ? "completed" : cancelled ? "cancelled" : "failed",
+      currentActivity: completed ? "已完成并返回结果" : cancelled ? "已取消" : error ?? "子代理运行失败",
       activities: [],
       iterations: typeof output?.iterations === "number" ? output.iterations : 0,
       toolCallCount: typeof output?.toolCallCount === "number" ? output.toolCallCount : 0,
       maxIterations: typeof args.maxIterations === "number" ? args.maxIterations : undefined,
       stopReason: typeof output?.stopReason === "string"
         ? output.stopReason as SubagentRun["stopReason"]
-        : completed ? "completed" : "error",
+        : completed ? "completed" : cancelled ? "cancelled" : "error",
       result: completed && typeof output?.result === "string" ? output.result : undefined,
       error,
       truncated: output?.truncated === true,
@@ -398,6 +407,8 @@ function subagentRunFromLiveActivity(activity: {
       ? "failed"
       : activity.status === "ok"
         ? "completed"
+        : activity.status === "cancelled"
+          ? "cancelled"
         : activity.status === "running"
           ? "running"
           : "queued";
@@ -409,7 +420,7 @@ function subagentRunFromLiveActivity(activity: {
     status,
     currentActivity:
       activity.progress?.message
-      ?? (status === "running" ? "子智能体执行中" : status === "completed" ? "已完成" : "正在创建子智能体"),
+      ?? (status === "running" ? "子智能体执行中" : status === "completed" ? "已完成" : status === "cancelled" ? "已取消" : "正在创建子智能体"),
     activities: [],
     iterations: 0,
     toolCallCount: 0,
@@ -439,15 +450,18 @@ export function buildAgentRoundFromMessage(
   resultMap: Map<string, { ok: boolean; output?: unknown; error?: string }>,
   planSteps: PlanStep[],
   persistedSubagentRuns: SubagentRun[] = [],
+  phase?: string | null,
 ): AgentRoundData {
   const toolCalls = message.toolCalls ?? [];
-  const steps = buildStepsFromToolCalls(toolCalls, resultMap);
+  const phaseCancelled = phase === "cancelled";
+  const steps = buildStepsFromToolCalls(toolCalls, resultMap, phaseCancelled);
   const summary = computeSummaryFromSteps(steps);
   const subagentRuns = resolveHistoricalSubagentRuns(
     toolCalls,
     resultMap,
     persistedSubagentRuns,
     message.createdAt,
+    phaseCancelled,
   );
 
   // 按 planStepId 分组
@@ -476,7 +490,7 @@ export function buildAgentRoundFromMessage(
       planStepGroups.push({
         planStepId: ps.id,
         description: ps.description,
-        status: mapPlanStepGroupStatus(ps.status, toolFailed),
+        status: mapPlanStepGroupStatus(ps.status, toolFailed, false, phaseCancelled),
         blockedReason: ps.blockedReason,
         steps: stepsInGroup,
       });
@@ -486,7 +500,11 @@ export function buildAgentRoundFromMessage(
       planStepGroups.push({
         planStepId,
         description: "执行工具",
-        status: stepsInGroup.some((step) => step.status === "failed") ? "failed" : "completed",
+        status: stepsInGroup.some((step) => step.status === "failed")
+          ? "failed"
+          : stepsInGroup.some((step) => step.status === "cancelled")
+            ? "cancelled"
+            : "completed",
         steps: stepsInGroup,
       });
     }
@@ -497,7 +515,11 @@ export function buildAgentRoundFromMessage(
     planStepGroups.push({
       planStepId: "_default",
       description: "执行任务",
-      status: "completed",
+      status: unnamedSteps.some((step) => step.status === "failed")
+        ? "failed"
+        : unnamedSteps.some((step) => step.status === "cancelled")
+          ? "cancelled"
+          : "completed",
       steps: unnamedSteps,
     });
   }
@@ -510,9 +532,12 @@ export function buildAgentRoundFromMessage(
     contentBlocks: message.contentBlocks,
     subagentRuns,
     status: steps.some((step) => step.status === "failed")
-      || subagentRuns.some((run) => run.status === "failed" || run.status === "cancelled")
+      || subagentRuns.some((run) => run.status === "failed")
       ? "failed"
-      : "completed",
+      : steps.some((step) => step.status === "cancelled")
+        || subagentRuns.some((run) => run.status === "cancelled")
+        ? "cancelled"
+        : "completed",
   };
 }
 
@@ -526,9 +551,13 @@ export function buildLiveAgentRoundData(params: {
   subagentRuns?: SubagentRun[];
 }): AgentRoundData {
   const { plan, liveToolActivity, output, phase, contentBlocks, subagentRuns = [] } = params;
+  const isFailed = phase === "failed";
+  const isCancelled = phase === "cancelled";
+  const isActivePhase = phase === "thinking" || phase === "planning" || phase === "initializing";
   const delegateActivities = liveToolActivity.filter((activity) => activity.name === "delegate");
-  const delegateCallIds = new Set(delegateActivities.map((activity) => activity.id));
-  const visibleSubagentRuns = subagentRuns.filter((run) => delegateCallIds.has(run.parentCallId));
+  // 子代理快照已独立持久化；delegate 收到 tool_result 后虽会离开实时工具列表，
+  // 但其对应的子代理行必须留在当前 live 过程，直到整个任务结束后统一收纳。
+  const visibleSubagentRuns = [...subagentRuns];
   for (const activity of delegateActivities) {
     if (visibleSubagentRuns.some((run) => run.parentCallId === activity.id)) continue;
     visibleSubagentRuns.push(subagentRunFromLiveActivity(activity));
@@ -541,7 +570,9 @@ export function buildLiveAgentRoundData(params: {
     const rawStatus = act.status;
     const status: TimelineStepData["status"] =
       rawStatus === "ok" ? "success"
-      : rawStatus === "error" ? "failed"
+      : rawStatus === "error" ? (isCancelledToolError(act.error) ? "cancelled" : "failed")
+      : rawStatus === "cancelled" ? "cancelled"
+      : isCancelled ? "cancelled"
       : rawStatus === "awaiting" ? "pending"
       : "running";
     return {
@@ -577,8 +608,6 @@ export function buildLiveAgentRoundData(params: {
   }
 
   const planStepGroups: PlanStepGroupData[] = [];
-  const isFailed = phase === "failed" || phase === "cancelled";
-  const isActivePhase = phase === "thinking" || phase === "planning" || phase === "initializing";
 
   if (stepsByPlanStepId.size > 0) {
     const renderedPlanStepIds = new Set<string>();
@@ -590,7 +619,7 @@ export function buildLiveAgentRoundData(params: {
       planStepGroups.push({
         planStepId: ps.id,
         description: ps.description,
-        status: mapPlanStepGroupStatus(ps.status, toolFailed, isFailed),
+        status: mapPlanStepGroupStatus(ps.status, toolFailed, isFailed, isCancelled),
         blockedReason: ps.blockedReason,
         steps: stepsInGroup,
       });
@@ -601,7 +630,9 @@ export function buildLiveAgentRoundData(params: {
         planStepId,
         description: "执行工具",
         status: isFailed ? "failed"
+          : isCancelled ? "cancelled"
           : stepsInGroup.some((step) => step.status === "failed") ? "failed"
+          : stepsInGroup.some((step) => step.status === "cancelled") ? "cancelled"
           : stepsInGroup.some((step) => step.status === "running" || step.status === "pending") ? "running"
           : "completed",
         steps: stepsInGroup,
@@ -611,7 +642,7 @@ export function buildLiveAgentRoundData(params: {
       planStepGroups.push({
         planStepId: "_live",
         description: "执行工具",
-        status: isFailed ? "failed" : "running",
+        status: isFailed ? "failed" : isCancelled ? "cancelled" : "running",
         steps: unnamedSteps,
       });
     }
@@ -626,7 +657,7 @@ export function buildLiveAgentRoundData(params: {
     planStepGroups.push({
       planStepId: activeStepId ?? "_live",
       description: currentPlanDesc,
-      status: isFailed ? "failed" : "running",
+      status: isFailed ? "failed" : isCancelled ? "cancelled" : "running",
       steps,
     });
   }
@@ -638,8 +669,12 @@ export function buildLiveAgentRoundData(params: {
     markdownOutput: output,
     contentBlocks,
     subagentRuns: visibleSubagentRuns,
-    status: isFailed || visibleSubagentRuns.some((run) => run.status === "failed" || run.status === "cancelled")
-      ? "failed"
+    status: isCancelled
+      ? "cancelled"
+      : isFailed || visibleSubagentRuns.some((run) => run.status === "failed")
+        ? "failed"
+        : visibleSubagentRuns.some((run) => run.status === "cancelled")
+          ? "cancelled"
       : (steps.some((s) => s.status === "running")
         || visibleSubagentRuns.some((run) => run.status === "running" || run.status === "queued")
         || isActivePhase)
@@ -654,6 +689,7 @@ export function buildLiveAgentRoundData(params: {
 function StepStatus({ status }: { status: TimelineStepData["status"] }) {
   if (status === "running") return <span className="timeline-step-status is-running">运行中</span>;
   if (status === "failed") return <span className="timeline-step-status is-failed">失败</span>;
+  if (status === "cancelled") return <span className="timeline-step-status is-cancelled">已取消</span>;
   return null;
 }
 
@@ -662,6 +698,13 @@ function StepGlyph({ step }: { step: TimelineStepData }) {
     return (
       <span className="timeline-step-glyph is-running" aria-hidden="true">
         <IconLoader size={15} />
+      </span>
+    );
+  }
+  if (step.status === "cancelled") {
+    return (
+      <span className="timeline-step-glyph is-cancelled" aria-hidden="true">
+        <IconBan size={15} />
       </span>
     );
   }
@@ -1030,6 +1073,8 @@ export function PlanStepGroup({
         ? `${t("plan.step.running")} ${runningCount}`
         : failedCount > 0
           ? `${t("plan.step.failed")} ${failedCount}`
+          : group.status === "cancelled"
+            ? t("plan.step.cancelled")
           : group.status === "pending"
             ? t("plan.step.pending")
             : `${t("plan.step.completed")} ${doneCount}`;
@@ -1052,7 +1097,7 @@ export function PlanStepGroup({
             <span className="timeline-plan-count">
               <span
                 className={
-                  group.status === "failed" || group.status === "blocked"
+                  group.status === "failed" || group.status === "blocked" || group.status === "cancelled"
                     ? `timeline-plan-status-text is-${group.status}`
                     : "timeline-plan-status-text"
                 }
@@ -1278,7 +1323,7 @@ export type ProcessActivityRow = {
   kind: "tool" | "subagent" | "group";
   /** 展示用行为摘要（如「已搜索网页」），不是原始 tool 名 */
   label: string;
-  status: "pending" | "running" | "success" | "failed";
+  status: "pending" | "running" | "success" | "failed" | "cancelled";
   /** 工具原始 title / 命令预览 */
   detail?: string;
   /** 行图标语义：search / browse / command / file / edit / agent / other */
@@ -1325,11 +1370,13 @@ export function mergeAgentRoundData(
         ...group,
         planStepId: `${group.planStepId}__${planStepGroups.length}`,
         steps,
-        status: steps.some((s) => s.status === "failed")
+        status: group.status === "failed" || steps.some((s) => s.status === "failed")
           ? "failed"
-          : steps.some((s) => s.status === "running" || s.status === "pending")
-            ? "running"
-            : "completed",
+          : group.status === "cancelled" || steps.some((s) => s.status === "cancelled")
+            ? "cancelled"
+            : steps.some((s) => s.status === "running" || s.status === "pending")
+              ? "running"
+              : "completed",
       });
     }
     for (const run of round.subagentRuns ?? []) {
@@ -1338,7 +1385,8 @@ export function mergeAgentRoundData(
       subagentRuns.push(run);
     }
     if (round.status === "failed") status = "failed";
-    else if (round.status === "running" && status !== "failed") status = "running";
+    else if (round.status === "cancelled" && status !== "failed") status = "cancelled";
+    else if (round.status === "running" && status !== "failed" && status !== "cancelled") status = "running";
     else if (round.status === "pending" && status === "completed") status = "pending";
   }
 
@@ -1356,11 +1404,15 @@ export function mergeAgentRoundData(
     status:
       status === "failed" ||
       allSteps.some((s) => s.status === "failed") ||
-      subagentRuns.some((r) => r.status === "failed" || r.status === "cancelled")
+      subagentRuns.some((r) => r.status === "failed")
         ? "failed"
-        : status === "running" || allSteps.some((s) => s.status === "running")
-          ? "running"
-          : "completed",
+        : status === "cancelled" ||
+          allSteps.some((s) => s.status === "cancelled") ||
+          subagentRuns.some((r) => r.status === "cancelled")
+          ? "cancelled"
+          : status === "running" || allSteps.some((s) => s.status === "running")
+            ? "running"
+            : "completed",
   };
 }
 
@@ -1378,6 +1430,8 @@ export function flattenProcessActivityRows(data: AgentRoundData): ProcessActivit
       label: `运行了多个命令`,
       status: commandSteps.some((s) => s.status === "failed")
         ? "failed"
+        : commandSteps.some((s) => s.status === "cancelled")
+          ? "cancelled"
         : commandSteps.some((s) => s.status === "running" || s.status === "pending")
           ? "running"
           : "success",
@@ -1407,15 +1461,16 @@ function toolStepToActivityRow(step: TimelineStepData, underGroup: boolean): Pro
   const title = step.title?.trim() || "";
   const running = step.status === "running" || step.status === "pending";
   const failed = step.status === "failed";
+  const cancelled = step.status === "cancelled";
   const { label, icon } = step.summary?.trim()
-    ? describeBackendToolSummary(step.kind, step.summary, running, failed)
-    : describeActivityStep(step.kind, title, running, failed, underGroup, step.toolName);
+    ? describeBackendToolSummary(step.kind, step.summary, running, failed, cancelled)
+    : describeActivityStep(step.kind, title, running, failed, underGroup, step.toolName, cancelled);
   return {
     id: step.id,
     kind: "tool",
     label,
     icon,
-    status: failed ? "failed" : running ? "running" : step.status === "pending" ? "pending" : "success",
+    status: failed ? "failed" : cancelled ? "cancelled" : running ? "running" : step.status === "pending" ? "pending" : "success",
     detail: title,
   };
 }
@@ -1426,10 +1481,12 @@ function describeBackendToolSummary(
   summary: string,
   running: boolean,
   failed: boolean,
+  cancelled: boolean,
 ): { label: string; icon: ProcessActivityRow["icon"] } {
   const detail = summary.trim();
   const icon = activityIconForKind(kind);
   if (failed) return { label: `${detail}失败`, icon };
+  if (cancelled) return { label: `${detail}已取消`, icon };
   if (running) return { label: `正在${detail}`, icon };
   return { label: `已${detail}`, icon };
 }
@@ -1451,42 +1508,50 @@ export function describeActivityStep(
   failed: boolean,
   underGroup = false,
   toolName?: string,
+  cancelled = false,
 ): { label: string; icon: ProcessActivityRow["icon"] } {
   const detail = title.trim();
   const withDetail = (base: string) => (detail ? `${base} (${detail})` : base);
 
   if (kind === "search") {
     if (failed) return { label: withDetail("搜索网页失败"), icon: "search" };
+    if (cancelled) return { label: withDetail("搜索网页已取消"), icon: "search" };
     if (running) return { label: detail ? `正在搜索网页 · ${detail}` : "正在搜索网页", icon: "search" };
     return { label: withDetail("已搜索网页"), icon: "search" };
   }
   if (kind === "browse") {
     if (failed) return { label: withDetail("浏览网页失败"), icon: "browse" };
+    if (cancelled) return { label: withDetail("浏览网页已取消"), icon: "browse" };
     if (running) return { label: detail ? `正在浏览 · ${detail}` : "正在浏览网页", icon: "browse" };
     return { label: withDetail("已浏览网页"), icon: "browse" };
   }
   if (kind === "command") {
     if (failed) return { label: withDetail("命令失败"), icon: "command" };
+    if (cancelled) return { label: withDetail("命令已取消"), icon: "command" };
     if (running) return { label: detail ? `正在运行 ${detail}` : "正在运行命令", icon: "command" };
     if (underGroup) return { label: detail ? `已运行 ${detail}` : "已运行命令", icon: "command" };
     return { label: detail ? `已运行 ${detail}` : "已运行命令", icon: "command" };
   }
   if (kind === "file_read") {
     if (failed) return { label: withDetail("读取失败"), icon: "file" };
+    if (cancelled) return { label: withDetail("读取已取消"), icon: "file" };
     if (running) return { label: detail ? `正在读取 ${detail}` : "正在读取文件", icon: "file" };
     return { label: detail ? `已读取 ${detail}` : "已读取文件", icon: "file" };
   }
   if (kind === "file_write") {
     if (failed) return { label: withDetail("写入失败"), icon: "file" };
+    if (cancelled) return { label: withDetail("写入已取消"), icon: "file" };
     if (running) return { label: detail ? `正在写入 ${detail}` : "正在写入文件", icon: "file" };
     return { label: detail ? `已写入 ${detail}` : "已写入文件", icon: "file" };
   }
   if (kind === "edit") {
     if (failed) return { label: withDetail("编辑失败"), icon: "edit" };
+    if (cancelled) return { label: withDetail("编辑已取消"), icon: "edit" };
     if (running) return { label: detail ? `正在编辑 ${detail}` : "正在编辑文件", icon: "edit" };
     return { label: detail ? `已编辑 ${detail}` : "已编辑文件", icon: "edit" };
   }
   if (failed) return { label: withDetail("步骤失败"), icon: "other" };
+  if (cancelled) return { label: withDetail("步骤已取消"), icon: "other" };
   if (running) return { label: detail ? `正在处理 · ${detail}` : "正在处理", icon: "other" };
   const fallbackTool = toolName ? humanizeToolName(toolName) : "";
   return { label: detail ? `已完成 · ${detail}` : fallbackTool ? `已运行 ${fallbackTool}` : "已完成一步", icon: "other" };
@@ -1506,7 +1571,8 @@ function humanizeToolName(toolName: string): string {
 function subagentToActivityRow(run: SubagentRun): ProcessActivityRow {
   const role = SUBAGENT_ROLE_META[run.role]?.label ?? run.role;
   const running = run.status === "running" || run.status === "queued";
-  const failed = run.status === "failed" || run.status === "cancelled";
+  const failed = run.status === "failed";
+  const cancelled = run.status === "cancelled";
   const goalShort = run.goal?.trim()
     ? run.goal.trim().length > 40
       ? `${run.goal.trim().slice(0, 40)}…`
@@ -1524,6 +1590,8 @@ function subagentToActivityRow(run: SubagentRun): ProcessActivityRow {
     }
   } else if (failed) {
     label = goalShort ? `子智能体失败 · ${role}：${goalShort}` : `子智能体失败 · ${role}`;
+  } else if (cancelled) {
+    label = goalShort ? `子智能体已取消 · ${role}：${goalShort}` : `子智能体已取消 · ${role}`;
   } else {
     label = goalShort ? `已创建子智能体 · ${role}：${goalShort}` : `已创建子智能体 · ${role}`;
   }
@@ -1537,7 +1605,7 @@ function subagentToActivityRow(run: SubagentRun): ProcessActivityRow {
     kind: "subagent",
     label,
     icon: "agent",
-    status: failed ? "failed" : running ? "running" : "success",
+    status: failed ? "failed" : cancelled ? "cancelled" : running ? "running" : "success",
     detail: [run.currentActivity || run.goal, budgetBits].filter(Boolean).join(" · "),
   };
 }
@@ -1582,7 +1650,7 @@ export function resolveLiveStatusText(params: {
       return normalizeLiveStatus(runningStep.progress.message) ?? runningStep.progress.message.trim();
     }
     const { label } = runningStep.summary?.trim()
-      ? describeBackendToolSummary(runningStep.kind, runningStep.summary, true, false)
+      ? describeBackendToolSummary(runningStep.kind, runningStep.summary, true, false, false)
       : describeActivityStep(
           runningStep.kind,
           runningStep.title?.trim() || "",
@@ -1627,8 +1695,9 @@ export function formatProcessedSummaryLabel(params: {
   subagentCount?: number;
   durationMs?: number | null;
   failed?: boolean;
+  cancelled?: boolean;
 }): string {
-  const parts: string[] = [t("timeline.processed")];
+  const parts: string[] = [params.cancelled ? t("status.cancelled") : t("timeline.processed")];
   if (params.durationMs != null && params.durationMs > 0 && Number.isFinite(params.durationMs)) {
     parts.push(formatDuration(params.durationMs));
   }
@@ -1785,6 +1854,7 @@ function CompletedProcess({
     subagentCount,
     durationMs,
     failed: data.status === "failed",
+    cancelled: data.status === "cancelled",
   });
 
   return (
@@ -1918,7 +1988,7 @@ export function AgentRound({
     <MotionConfig reducedMotion="user">
       <div
         ref={containerRef}
-        className={`timeline-agent-round process-agent-round ${busy ? "is-live" : ""} ${data.status === "failed" ? "is-failed" : ""}`}
+        className={`timeline-agent-round process-agent-round ${busy ? "is-live" : ""} ${data.status === "failed" ? "is-failed" : data.status === "cancelled" ? "is-cancelled" : ""}`}
         data-status={data.status}
         data-process={busy ? "live" : hasProcess ? "completed" : "none"}
       >

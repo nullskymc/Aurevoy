@@ -18,7 +18,7 @@ describe("planStatus mapping", () => {
     expect(mapPlanStepToUiStatus("pending")).toBe("pending");
     expect(mapPlanStepToUiStatus("completed")).toBe("completed");
     expect(mapPlanStepToUiStatus("failed")).toBe("failed");
-    expect(mapPlanStepToUiStatus("cancelled")).toBe("pending");
+    expect(mapPlanStepToUiStatus("cancelled")).toBe("cancelled");
   });
 
   it("mapPlanStepGroupStatus escalates tool failure", () => {
@@ -26,6 +26,9 @@ describe("planStatus mapping", () => {
     expect(mapPlanStepGroupStatus("blocked", false)).toBe("blocked");
     expect(mapPlanStepGroupStatus("completed", true)).toBe("completed");
     expect(mapPlanStepGroupStatus("pending", false, true)).toBe("failed");
+    expect(mapPlanStepGroupStatus("pending", false, false, true)).toBe("cancelled");
+    expect(mapPlanStepGroupStatus("failed", false, false, true)).toBe("cancelled");
+    expect(mapPlanStepGroupStatus("failed", true, false, true)).toBe("failed");
   });
 
   it("shouldShowPlanProgress only for multi-step plans", () => {

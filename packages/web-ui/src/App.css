@@ -1322,10 +1322,14 @@ button.markdown-file-chip:hover {
   color: var(--accent-soft-fg);
 }
 
-.status-pill[data-status="failed"],
-.status-pill[data-status="cancelled"] {
+.status-pill[data-status="failed"] {
   background: var(--danger-soft-bg);
   color: var(--danger-soft-fg);
+}
+
+.status-pill[data-status="cancelled"] {
+  background: var(--pill-bg);
+  color: var(--text-tertiary);
 }
 
 /* 工具进度条 */

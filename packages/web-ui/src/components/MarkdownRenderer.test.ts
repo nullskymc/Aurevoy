@@ -104,6 +104,20 @@ describe("MarkdownRenderer math (KaTeX)", () => {
     expect(html).not.toContain("loading=");
   });
 
+  it("treats standard Markdown links to workspace files as clickable workbench links regardless of type", () => {
+    const html = renderMarkdownToSafeHtml(
+      "已生成 [研究报告](research/us-stocks/report.md) 和 [数据包](exports/result.parquet)。",
+    );
+    expect(html).toContain('class="markdown-file-link"');
+    expect(html).toContain('data-path="research/us-stocks/report.md"');
+    expect(html).toContain('data-path="exports/result.parquet"');
+    expect(html).not.toContain("markdown-path-chip");
+  });
+
+  it("does not fail the whole document on a malformed encoded workspace path", () => {
+    expect(() => renderMarkdownToSafeHtml("[坏链接](exports/result%ZZ.parquet)")).not.toThrow();
+  });
+
   it("does not rewrite markdown links as math", () => {
     const md = "see [docs](https://example.com) and [note]";
     const normalized = normalizeMarkdownMath(md);
