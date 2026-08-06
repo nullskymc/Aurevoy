@@ -1,0 +1,20 @@
+/** 工具、MCP 和浏览器权限契约的按域入口。 */
+export type {
+  BrowserPermissionProfile,
+  BrowserRuntimeState,
+  BrowserRuntimeStatus,
+  BrowserRuntimeTestResponse,
+  DeferredToolSummary,
+  McpConnectionTestResponse,
+  McpServerStatus,
+  McpStatusResponse,
+  McpToolChangeSummary,
+  ToolCall,
+  ToolDescriptor,
+  ToolExecutionPolicy,
+  ToolListResponse,
+  ToolResult,
+  ToolRiskLevel,
+  ToolSource,
+  UpdateToolRequest,
+} from '../index.js';

@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { LlmProviderSlot, RuntimeSettings } from "@aurevoy/shared";
 import { t } from "../i18n";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { providerLabel } from "./providerIcons";
 import type { ThinkingUILevel } from "./Composer";
 import "./ModelSelectorDrawer.css";
@@ -124,6 +125,7 @@ export function ModelSelectorDrawer({
   onOpenFullSettings,
   onSave,
 }: ModelSelectorDrawerProps) {
+  const focusScopeRef = useFocusTrap<HTMLDivElement>(open);
   const activeProvider = settings?.llm.provider ?? parseProviderLabel(provider);
   const currentModel = settings?.llm.model ?? parseProviderModel(provider);
   const groups = useMemo(() => buildModelGroups(settings), [settings]);
@@ -414,7 +416,7 @@ export function ModelSelectorDrawer({
   const thinkingDisplay = thinkingLevelLabel(thinkingLevel);
 
   return (
-    <>
+    <div ref={focusScopeRef} className="model-menu-focus-scope">
       <div
         ref={rootRef}
         className="model-menu-root model-menu-card"
@@ -619,7 +621,7 @@ export function ModelSelectorDrawer({
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 

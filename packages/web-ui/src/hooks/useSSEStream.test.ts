@@ -4,7 +4,10 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@aurevoy/shared";
 
-vi.mock("../api", () => ({ getBaseUrl: () => "http://127.0.0.1:8787" }));
+vi.mock("../api", () => ({
+  getBaseUrl: () => "http://127.0.0.1:8787",
+  getApiToken: () => null,
+}));
 
 const { fetchEventSourceMock } = vi.hoisted(() => ({
   fetchEventSourceMock: vi.fn(),
@@ -62,5 +65,49 @@ describe("useSSEStream immediate dispatch", () => {
     expect(received.map((event) => event.type)).toEqual(["token", "token", "tool_progress", "tool_progress"]);
     expect(received.slice(0, 2).map((event) => event.type === "token" ? event.delta : "")).toEqual(["你", "好"]);
     expect(requestFrame).not.toHaveBeenCalled();
+  });
+
+  it("按 seq 丢弃重复事件，并从最后游标重连", () => {
+    fetchEventSourceMock.mockResolvedValue(undefined);
+    const received: AgentEvent[] = [];
+    let stream: ReturnType<typeof useSSEStream> | undefined;
+
+    function Harness() {
+      stream = useSSEStream();
+      return null;
+    }
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(createElement(Harness)));
+    act(() => stream?.openStream("task-seq", (event) => received.push(event), () => {}, { hasSnapshot: true }));
+
+    const firstOptions = fetchEventSourceMock.mock.calls[0]?.[1];
+    firstOptions.onmessage({
+      data: JSON.stringify({
+        type: "status",
+        taskId: "task-seq",
+        status: "running",
+        seq: 4,
+        emittedAt: "2026-08-06T00:00:00.000Z",
+      }),
+    });
+    firstOptions.onmessage({
+      data: JSON.stringify({
+        type: "status",
+        taskId: "task-seq",
+        status: "running",
+        seq: 4,
+        emittedAt: "2026-08-06T00:00:00.000Z",
+      }),
+    });
+
+    expect(received).toHaveLength(1);
+    act(() => stream?.openStream("task-seq", (event) => received.push(event), () => {}, { hasSnapshot: true }));
+
+    const [url, options] = fetchEventSourceMock.mock.calls[1] ?? [];
+    expect(url).toBe("http://127.0.0.1:8787/api/tasks/task-seq/stream?afterSeq=4&snapshot=0");
+    expect(options.headers).toMatchObject({ "Last-Event-ID": "4" });
   });
 });

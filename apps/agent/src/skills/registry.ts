@@ -18,6 +18,7 @@ import { skillSettingsStore } from '../store/db.js';
 
 class SkillRegistry {
   private catalog = new Map<string, SkillCatalogEntry>();
+  private readonly loadErrors = new Map<string, { message: string; at: string }>();
 
   /**
    * 从配置的目录发现所有 skill（Tier 1：仅加载 name + description）。
@@ -26,6 +27,7 @@ class SkillRegistry {
   load(): void {
     const log = getLogger('skills/registry');
     this.catalog.clear();
+    this.loadErrors.clear();
 
     const builtinDir = resolve(config.skills.builtinDir);
 
@@ -138,7 +140,16 @@ class SkillRegistry {
   getContent(name: string): SkillContent | null {
     const entry = this.catalog.get(name);
     if (!entry) return null;
-    return loadSkillContent(entry);
+    const content = loadSkillContent(entry);
+    if (content) {
+      this.loadErrors.delete(name);
+    } else {
+      this.loadErrors.set(name, {
+        message: 'SKILL.md 读取或解析失败',
+        at: new Date().toISOString(),
+      });
+    }
+    return content;
   }
 
   /** 列出所有已发现 skill 的名称。 */
@@ -162,8 +173,10 @@ class SkillRegistry {
           sourceDir: s.sourceDir,
           sourcePath,
           location: s.location,
+          directory: s.skillDir,
           installUrl: s.installUrl,
           installedAt: s.installedAt,
+          lastLoadError: this.loadErrors.get(s.frontmatter.name),
           // 未显式设置的：builtin 预装 + .aurevoy + system 默认启用，其他默认禁用
           enabled: stored !== null ? stored : sourcePath === '.aurevoy' || s.sourceDir === 'builtin' || s.sourceDir === 'system',
         };

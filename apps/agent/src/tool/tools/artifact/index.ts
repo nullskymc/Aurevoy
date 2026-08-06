@@ -1,1 +1,1 @@
-export { createArtifactTool, applyArtifactTool } from "./artifact.js"
+export { applyArtifactTool, artifactTargetExists, createArtifactTool, writeArtifactToWorkspace } from "./artifact.js"

@@ -60,6 +60,38 @@
   border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+.conversation-automation-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  font-size: var(--ui-font-sm);
+}
+
+.conversation-automation-button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--ui-font-sm);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.conversation-automation-button:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 /* ============ 门禁卡：审批 / 追问共用（紧凑、轻阴影） ============ */
 .process-gates {
   display: flex;
@@ -119,6 +151,22 @@
   font-size: calc(var(--ui-font-size) + 0.5px);
   font-weight: 650;
   line-height: 1.25;
+}
+
+.approval-card-risk {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--warn-soft-bg);
+  color: var(--warn-soft-fg);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.approval-card-risk[data-risk="dangerous"] {
+  background: var(--danger-soft-bg);
+  color: var(--danger-soft-fg);
 }
 
 .approval-card-meta {
@@ -285,6 +333,16 @@
 .approval-card-result {
   color: var(--text-secondary);
   font-size: calc(var(--ui-font-size) - 1px);
+}
+
+.approval-card-error {
+  margin: 0;
+  color: var(--danger-soft-fg);
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+.approval-card[data-status="submitting"] .approval-card-meta {
+  color: var(--text-secondary);
 }
 
 .approval-card[data-decision="approve"] .approval-card-result {

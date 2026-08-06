@@ -34,6 +34,7 @@ export function AppTopBar({
   onToggleSessionTree,
   onToggleTracePanel,
   onToggleSidebar,
+  onBackToChat,
 }: {
   activeView: MainView;
   currentTask: Task | null;
@@ -51,6 +52,7 @@ export function AppTopBar({
   onToggleSessionTree?: () => void;
   onToggleTracePanel?: () => void;
   onToggleSidebar: () => void;
+  onBackToChat?: () => void;
 }) {
   const isChatView = activeView === "chat";
   const showConversation = currentTask !== null;
@@ -139,6 +141,11 @@ export function AppTopBar({
         </>
       ) : (
         <div className="topbar-context">
+          {onBackToChat ? (
+            <button type="button" className="topbar-back-btn" onClick={onBackToChat}>
+              ← {t("common.backToChat")}
+            </button>
+          ) : null}
           <div className="topbar-title-group">
             <span className="topbar-title">{getMainViewTitle(activeView)}</span>
           </div>

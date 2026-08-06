@@ -1,0 +1,76 @@
+name: Windows install and update smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      previous_tag:
+        description: "已发布的旧版本 tag，例如 v0.7.0"
+        required: true
+        type: string
+      current_tag:
+        description: "已发布的待验证版本 tag，例如 v0.7.1"
+        required: true
+        type: string
+      require_signature:
+        description: "要求安装器与主程序签名有效"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  install-update-uninstall:
+    name: Clean Windows install, update and uninstall
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download previous and current installers
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          CURRENT_TAG: ${{ inputs.current_tag }}
+        run: |
+          $previousDir = Join-Path $env:RUNNER_TEMP "aurevoy-install-smoke\previous"
+          $currentDir = Join-Path $env:RUNNER_TEMP "aurevoy-install-smoke\current"
+          New-Item -ItemType Directory -Path $previousDir, $currentDir -Force | Out-Null
+          gh release download $env:PREVIOUS_TAG --repo $env:GITHUB_REPOSITORY --pattern "*-setup.exe" --dir $previousDir --clobber
+          gh release download $env:CURRENT_TAG --repo $env:GITHUB_REPOSITORY --pattern "*-setup.exe" --dir $currentDir --clobber
+          $previous = @(Get-ChildItem -LiteralPath $previousDir -Filter "*-setup.exe" -File)
+          $current = @(Get-ChildItem -LiteralPath $currentDir -Filter "*-setup.exe" -File)
+          if ($previous.Count -ne 1 -or $current.Count -ne 1) {
+            throw "每个 tag 必须恰好下载一个 NSIS setup.exe；previous=$($previous.Count), current=$($current.Count)"
+          }
+          "PREVIOUS_INSTALLER=$($previous[0].FullName)" >> $env:GITHUB_ENV
+          "CURRENT_INSTALLER=$($current[0].FullName)" >> $env:GITHUB_ENV
+
+      - name: Run clean install, launch, update and uninstall smoke
+        shell: pwsh
+        env:
+          REQUIRE_SIGNATURE: ${{ inputs.require_signature }}
+          REPORT_PATH: ${{ runner.temp }}\aurevoy-install-smoke\report.json
+        run: |
+          $arguments = @(
+            "-File", "scripts/windows-install-smoke.ps1",
+            "-InstallerPath", $env:PREVIOUS_INSTALLER,
+            "-UpgradeInstallerPath", $env:CURRENT_INSTALLER,
+            "-ReportPath", $env:REPORT_PATH
+          )
+          if ($env:REQUIRE_SIGNATURE -eq "true") {
+            $arguments += "-RequireSignature"
+          }
+          & pwsh @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows install smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurevoy-windows-install-smoke
+          if-no-files-found: error
+          path: ${{ runner.temp }}/aurevoy-install-smoke/report.json

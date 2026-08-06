@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getArtifactContent, readWorkspaceEntry } from "../api";
 import type { WorkbenchTab } from "../hooks/useWorkbenchTabs";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { shouldVirtualizeText, VirtualTextSource } from "./VirtualTextSource";
 import { t } from "../i18n";
 
 interface FileViewerProps {
@@ -126,6 +127,7 @@ function TextPreview({
 }) {
   const mode = useMemo(() => detectPreviewMode(path, content), [path, content]);
   const formatted = useMemo(() => formatStructuredText(path, content), [content, path]);
+  const virtualizeSource = shouldVirtualizeText(formatted);
   const canToggleSource = mode === "markdown" || mode === "html";
   const isRenderMode = canToggleSource && !showSource;
   // 截断提示仅在源码/纯文本视图显示，预览渲染模式不打扰阅读
@@ -162,6 +164,8 @@ function TextPreview({
           srcDoc={content}
           referrerPolicy="no-referrer"
         />
+      ) : virtualizeSource ? (
+        <VirtualTextSource key={path} content={formatted} label={path} />
       ) : (
         <pre className="file-viewer-pre">
           <code>{formatted}</code>

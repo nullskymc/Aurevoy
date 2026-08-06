@@ -40,6 +40,7 @@ export function SettingsPanel({
   onSaveConnection,
   onCleanup,
   onExportData,
+  onBackupDatabase,
   onRefresh,
   onFetchModels: _onFetchModels,
   onFetchModelsForProvider,
@@ -67,6 +68,7 @@ export function SettingsPanel({
   const [draft, setDraft] = useState<SettingsDraft>(() => makeDraft(settings));
   const [cleanupDays, setCleanupDays] = useState(settings?.cleanupPolicyDays ?? 30);
   const [saveRefreshBusy, setSaveRefreshBusy] = useState(false);
+  const [saveRefreshError, setSaveRefreshError] = useState<string | null>(null);
 
   useEffect(() => {
     // 传入 previous，避免旧 Agent 无 proxy 字段时把本地代理地址冲成空
@@ -81,11 +83,31 @@ export function SettingsPanel({
   async function handleSaveAndRefresh(): Promise<void> {
     if (saveRefreshBusy || saving) return;
     setSaveRefreshBusy(true);
+    setSaveRefreshError(null);
     try {
       await Promise.resolve(onSave(draft));
       onRefresh();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSaveRefreshError(`${t("notice.saveSettingsFailed")}${detail}`);
     } finally {
       setSaveRefreshBusy(false);
+    }
+  }
+
+  /** 自动保存召回开关失败时恢复本地 draft，避免界面显示与引擎状态不一致。 */
+  async function handleRecallChange(
+    field: "memoryRecallEnabled" | "kbRecallEnabled",
+    enabled: boolean,
+  ): Promise<void> {
+    const previous = draft;
+    const next = { ...draft, [field]: enabled };
+    setDraft(next);
+    try {
+      await Promise.resolve(onSave(next));
+    } catch (error) {
+      setDraft(previous);
+      throw error;
     }
   }
 
@@ -144,6 +166,12 @@ export function SettingsPanel({
               </button>
             </div>
           </header>
+
+          {saveRefreshError && (
+            <p className="settings-action-error settings-header-error" role="alert">
+              {saveRefreshError}
+            </p>
+          )}
 
           {activeSection === "general" && (
             <GeneralSettings
@@ -217,6 +245,7 @@ export function SettingsPanel({
               settings={settings}
               onCleanup={onCleanup}
               onExportData={onExportData}
+              onBackupDatabase={onBackupDatabase}
               onCleanupDaysChange={setCleanupDays}
             />
           )}
@@ -229,22 +258,14 @@ export function SettingsPanel({
               onEdit={onEditMemory}
               onDelete={onDeleteMemory}
               recallEnabled={draft.memoryRecallEnabled}
-              onRecallChange={(enabled) => {
-                const next = { ...draft, memoryRecallEnabled: enabled };
-                setDraft(next);
-                void Promise.resolve(onSave(next));
-              }}
+              onRecallChange={(enabled) => handleRecallChange("memoryRecallEnabled", enabled)}
             />
           )}
 
           {activeSection === "kb" && (
             <KbSettings
               settings={settings ? { ...settings, kbRecallEnabled: draft.kbRecallEnabled } : settings}
-              onRecallChange={(enabled) => {
-                const next = { ...draft, kbRecallEnabled: enabled };
-                setDraft(next);
-                void Promise.resolve(onSave(next));
-              }}
+              onRecallChange={(enabled) => handleRecallChange("kbRecallEnabled", enabled)}
             />
           )}
 

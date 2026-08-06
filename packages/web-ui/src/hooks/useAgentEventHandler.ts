@@ -3,7 +3,7 @@ import type { AgentEvent, ContentBlock, PendingQueueItem, PlanStep, Task, TaskAr
 import { getTask } from "../api";
 import { createLiveActivityStore } from "../app/liveActivityStore";
 import { createFailureMessage, fetchWithRetry, mergeById } from "../app/taskUtils";
-import type { ToolActivity } from "../components/Conversation";
+import type { ToolActivity } from "../components/conversationData";
 
 export function useAgentEventHandler({
   closeStream,
@@ -335,6 +335,9 @@ export function useAgentEventHandler({
         }
         break;
       }
+      case "recall_summary":
+        patchCurrentTask({ recallSummary: event.summary });
+        break;
       case "checkpoint_created":
         setCurrentTask((previous) => {
           if (!previous) return previous;
@@ -405,7 +408,7 @@ export function useAgentEventHandler({
         // 启动自动续跑：任务可能不在当前会话，只更新列表态。
         if (currentTask?.id === event.taskId) {
           setStatus("running");
-          patchCurrentTask({ status: "running" });
+          patchCurrentTask({ status: "running", resumedAfterRestart: event.automatic });
         }
         break;
       case "reverted":

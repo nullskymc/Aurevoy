@@ -2,7 +2,7 @@ import { Schema } from "effect"
 import { make, type ContentPart } from "../../framework/definition.js"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { resolve } from "node:path"
+import { resolveInWorkspace, assertRealPathInside } from "../../filesystem/workspace-paths.js"
 
 const execFileAsync = promisify(execFile)
 
@@ -35,7 +35,8 @@ export const grepTool = make({
   input: Input,
   output: Output,
   execute: async (input, ctx) => {
-    const cwd = input.path ? resolve(ctx.workspaceDir, input.path) : ctx.workspaceDir
+    const cwd = resolveInWorkspace(input.path ?? '.', ctx.workspaceDir, [])
+    await assertRealPathInside(cwd, ctx.workspaceDir, [])
     const limit = input.limit ?? 100
     const args = ["-rni", "--binary-files=without-match", "-m", String(limit)]
 

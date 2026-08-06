@@ -1,6 +1,7 @@
 {
   "name": "@aurevoy/shared",
-  "version": "0.6.15",
+  "version": "0.7.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -9,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "default": "./dist/contracts/index.js"
     }
   },
   "scripts": {

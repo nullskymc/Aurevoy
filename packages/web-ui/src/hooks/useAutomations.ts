@@ -6,6 +6,7 @@ import {
   listAutomationRuns,
   listAutomations,
   runAutomation,
+  testAutomation,
   updateAutomation,
 } from "../api";
 
@@ -46,7 +47,9 @@ export function useAutomations() {
     return result;
   }, []);
 
+  const testRun = useCallback((body: CreateAutomationRequest) => testAutomation(body), []);
+
   const loadRuns = useCallback((id: string) => listAutomationRuns(id), []);
 
-  return { automations, loading, refresh, create, update, remove, run, loadRuns };
+  return { automations, loading, refresh, create, update, remove, run, testRun, loadRuns };
 }

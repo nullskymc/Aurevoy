@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import { dirname, extname, join } from 'node:path';
+import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   AgentHarness,
@@ -31,6 +31,8 @@ import type {
   Task,
   TaskErrorCategory,
   TaskPhase,
+  TaskFileChange,
+  TaskFileChangeOperation,
   TaskStatus,
   TaskTraceKind,
   ToolCall,
@@ -40,13 +42,17 @@ import type {
   AgentToolExecutionMode,
   PendingQueueItem,
   TaskModelSnapshot,
+  TaskRecallSummary,
+  RecallSourceStatus,
 } from '@aurevoy/shared';
+import { classifyTaskError } from '../task-error-category.js';
 import { config } from '../../config.js';
 import { taskEvents } from '../events.js';
 import { createTaskLogger } from '../../logging/trace.js';
 import { taskStore, projectStore, memoryStore } from '../../store/db.js';
 import { unifiedToolRegistry, validateToolInputSchema } from '../../tool/unified-registry.js';
 import { initializeUnifiedToolFramework, getAgentToolsForPi, createToolContext } from '../../tool/index.js';
+import { artifactTargetExists, writeArtifactToWorkspace } from '../../tool/tools/artifact/index.js';
 import {
   buildMemorySystemMessage,
   buildStableSystemPromptParts,
@@ -72,6 +78,7 @@ import {
   createProviderHostedResultMessage,
 } from './provider-hosted-messages.js';
 import { buildToolCallSummary } from '../tool-call-summary.js';
+import { materializeMcpBrowserContentBlocks } from './mcp-browser-artifacts.js';
 import {
   beginRunBudget,
   createArtifact,
@@ -133,6 +140,7 @@ const TEXT_EXTENSIONS = new Set([
   '.sql', '.graphql', '.gql',
 ]);
 const MAX_ATTACHMENT_CONTENT_CHARS = 30_000;
+const MAX_ARTIFACT_CONTENT_CHARS = 1_000_000;
 const activePiControllers = new Map<string, ActivePiTaskController>();
 /** 单任务 provider 请求起点；Pi 主循环同一任务内串行请求。 */
 const providerRequestStartedAtByTask = new Map<string, number>();
@@ -343,12 +351,7 @@ export async function runPiHarnessTask(task: Task, options: PiHarnessOptions): P
       finishBudgetPaused(task, budgetStop);
       return;
     }
-    const message = err instanceof Error ? err.message : String(err);
-    const isConfigError =
-      message.includes('未配置 LLM') ||
-      message.includes('未选择模型') ||
-      message.includes('未支持的 Provider');
-    finishFailed(task, err, isConfigError ? 'configuration' : 'unknown');
+    finishFailed(task, err, classifyTaskError(err));
   }
 }
 
@@ -732,6 +735,15 @@ async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<st
  * 编排细节由独立模块负责；这里仅把产品配置与轨迹写入适配进去。
  */
 async function buildImplicitRecallPrompt(task: Task): Promise<string> {
+  const summary: TaskRecallSummary = {
+    memory: createRecallSourceSummary(config.agent.memoryRecallEnabled),
+    knowledgeBase: createRecallSourceSummary(config.agent.kbRecallEnabled),
+    updatedAt: new Date().toISOString(),
+  };
+  task.recallSummary = summary;
+  taskStore.patch(task.id, { recallSummary: summary });
+  publish({ type: 'recall_summary', taskId: task.id, summary });
+
   return composeImplicitRecallPrompt(task, {
     memoryEnabled: config.agent.memoryRecallEnabled,
     kbEnabled: config.agent.kbRecallEnabled,
@@ -741,6 +753,14 @@ async function buildImplicitRecallPrompt(task: Task): Promise<string> {
       return recallKb(query, topK);
     },
     onSource: ({ source, count, citationCount }) => {
+      const nextSummary = updateRecallSourceSummary(
+        task,
+        source,
+        count > 0 || citationCount > 0 ? 'used' : 'empty',
+        count,
+        citationCount,
+      );
+      publish({ type: 'recall_summary', taskId: task.id, summary: nextSummary });
       const label = source === 'memory' ? '长期记忆' : '知识库片段';
       writePiTrace(task, 'phase', {
         ok: true,
@@ -750,6 +770,8 @@ async function buildImplicitRecallPrompt(task: Task): Promise<string> {
       });
     },
     onError: ({ source, error }) => {
+      const nextSummary = updateRecallSourceSummary(task, source, 'failed', 0, 0);
+      publish({ type: 'recall_summary', taskId: task.id, summary: nextSummary });
       const label = source === 'memory' ? '记忆' : '知识库';
       const message = error instanceof Error ? error.message : String(error);
       writePiTrace(task, 'error', {
@@ -762,6 +784,42 @@ async function buildImplicitRecallPrompt(task: Task): Promise<string> {
       });
     },
   });
+}
+
+function createRecallSourceSummary(enabled: boolean): TaskRecallSummary['memory'] {
+  return {
+    enabled,
+    status: enabled ? 'empty' : 'disabled',
+    count: 0,
+    citationCount: 0,
+  };
+}
+
+function updateRecallSourceSummary(
+  task: Task,
+  source: 'memory' | 'knowledge_base',
+  status: RecallSourceStatus,
+  count: number,
+  citationCount: number,
+): TaskRecallSummary {
+  const current = task.recallSummary ?? {
+    memory: createRecallSourceSummary(config.agent.memoryRecallEnabled),
+    knowledgeBase: createRecallSourceSummary(config.agent.kbRecallEnabled),
+    updatedAt: new Date().toISOString(),
+  };
+  const next: TaskRecallSummary = {
+    ...current,
+    [source === 'memory' ? 'memory' : 'knowledgeBase']: {
+      ...current[source === 'memory' ? 'memory' : 'knowledgeBase'],
+      status,
+      count,
+      citationCount,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  task.recallSummary = next;
+  taskStore.patch(task.id, { recallSummary: next });
+  return next;
 }
 
 /** 首个 run 固化任务级模型快照；之后全局设置变更不影响本对话 resume 的模型（P1-2）。 */
@@ -872,6 +930,15 @@ function createPiTools(task: Task, options: PiHarnessOptions): AgentTool[] {
         }
         if (agentTool.name === 'create_artifact') {
           const result = await executeCreateArtifactTool(task, toolCallId, params, options.workspaceDir);
+          return {
+            content: [{ type: 'text' as const, text: formatUnknown(result) }],
+            details: result,
+          };
+        }
+        if (agentTool.name === 'apply_artifact') {
+          const validationError = validateToolInputSchema(inputSchemaForPiTool(agentTool.name, def.inputSchema), params);
+          if (validationError) throw new Error(`schema_validation_failed: ${validationError}`);
+          const result = await executeApplyArtifactTool(task, params, options.workspaceDir);
           return {
             content: [{ type: 'text' as const, text: formatUnknown(result) }],
             details: result,
@@ -993,6 +1060,9 @@ async function executeCreateArtifactTool(
   const args = isRecord(params) ? params : {};
   const name = typeof args.name === 'string' && args.name.trim() ? args.name.trim() : 'artifact.txt';
   const content = typeof args.content === 'string' ? args.content : '';
+  if (content.length > MAX_ARTIFACT_CONTENT_CHARS) {
+    throw new Error(`create_artifact 内容超过 ${MAX_ARTIFACT_CONTENT_CHARS.toLocaleString()} 字符上限，请改用工作区文件交付`);
+  }
   const mimeType = typeof args.mimeType === 'string' ? args.mimeType : undefined;
   const type =
     args.type === 'text' || args.type === 'file' || args.type === 'diff' || args.type === 'url'
@@ -1006,15 +1076,15 @@ async function executeCreateArtifactTool(
     type,
     mimeType,
     sourceCallId: callId,
+    sourceTaskId: task.id,
   });
   task.artifacts = [...(task.artifacts ?? []), artifact];
   saveTask(task);
   publish({ type: 'artifact_created', taskId: task.id, artifact });
 
   if (applyPath) {
-    const abs = join(workspaceDir, applyPath);
-    await fs.mkdir(dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content, 'utf8');
+    const overwritesExisting = await artifactTargetExists(workspaceDir, applyPath);
+    await writeArtifactToWorkspace(workspaceDir, applyPath, content);
     const applied = markArtifactApplied(task, artifact.id, applyPath);
     if (applied) {
       saveTask(task);
@@ -1024,6 +1094,7 @@ async function executeCreateArtifactTool(
         path: applyPath,
         status: applied.status,
         appliedPath: applyPath,
+        overwritesExisting,
       };
     }
   }
@@ -1032,6 +1103,34 @@ async function executeCreateArtifactTool(
     artifactId: artifact.id,
     path: applyPath ?? name,
     status: artifact.status,
+  };
+}
+
+/** 将已创建的任务产物安全写入工作区；实际写入仍复用统一 artifact path helper。 */
+async function executeApplyArtifactTool(
+  task: Task,
+  params: unknown,
+  workspaceDir: string,
+): Promise<unknown> {
+  const args = isRecord(params) ? params : {};
+  const artifactId = typeof args.artifactId === 'string' ? args.artifactId.trim() : '';
+  const path = typeof args.path === 'string' ? args.path.trim() : '';
+  if (!artifactId || !path) throw new Error('artifactId 与 path 必须是非空字符串');
+  const artifact = task.artifacts?.find((item) => item.id === artifactId);
+  if (!artifact) throw new Error(`找不到产物：${artifactId}`);
+  if (artifact.status === 'rejected') throw new Error(`产物已被拒绝，不能应用：${artifact.name}`);
+  const overwritesExisting = await artifactTargetExists(workspaceDir, path);
+  await writeArtifactToWorkspace(workspaceDir, path, artifact.content);
+  const applied = markArtifactApplied(task, artifact.id, path);
+  if (!applied) throw new Error(`应用产物状态更新失败：${artifactId}`);
+  saveTask(task);
+  publish({ type: 'artifact_updated', taskId: task.id, artifact: applied });
+  return {
+    applied: true,
+    artifactId: applied.id,
+    path,
+    status: applied.status,
+    overwritesExisting,
   };
 }
 
@@ -1142,9 +1241,9 @@ async function gatePiToolCall(
   }
 
   const riskLevel = unifiedToolRegistry.riskLevelOf(call.toolName);
-  // Plan 下的 shell 不自动放行：它可能需要读取工作区外的用户目录。
-  // 保留工具调用，由用户在现有审批界面明确确认，而不是把探索直接判死。
-  const permission = planMode && call.toolName === 'bash'
+  const requiresExplicitApproval = unifiedToolRegistry.executionPolicyOf(call.toolName).requiresExplicitApproval === true;
+  // shell、Skill 安装和 MCP 即使处于 auto 模式也必须停在用户审批处；计划模式另外保留 shell 的只读侦查入口。
+  const permission = (planMode && call.toolName === 'bash') || requiresExplicitApproval
     ? { allowed: false }
     : decideToolPermission(
         approvalConfigFromTask(task, 'auto'),
@@ -1161,7 +1260,11 @@ async function gatePiToolCall(
   }
 
   // 仅 paused 等少数情况会走到单次工具审批
-  const autoModeReason = task.autoModeState?.paused ? ('paused' as const) : undefined;
+  const autoModeReason = requiresExplicitApproval
+    ? ('not_covered' as const)
+    : task.autoModeState?.paused
+      ? ('paused' as const)
+      : undefined;
 
   task.pendingApprovals = [
     ...(task.pendingApprovals ?? []),
@@ -1310,7 +1413,7 @@ async function handlePiEvent(
       });
       break;
     case 'tool_execution_end':
-      appendToolResult(task, event.toolCallId, event.toolName, event.result, event.isError, workspaceDir);
+      await appendToolResult(task, event.toolCallId, event.toolName, event.result, event.isError, workspaceDir);
       break;
     case 'turn_end':
       recordIteration(task);
@@ -1839,7 +1942,7 @@ function appendPiMessage(task: Task, message: AgentMessage): void {
   });
 }
 
-function appendToolResult(task: Task, callId: string, toolName: string, result: unknown, isError: boolean, workspaceDir: string): void {
+async function appendToolResult(task: Task, callId: string, toolName: string, result: unknown, isError: boolean, workspaceDir: string): Promise<void> {
   const details = isRecord(result) && 'details' in result ? result.details : result;
   const errorMessage = isError ? extractToolErrorMessage(result, details) : undefined;
   const errorCode = isError ? classifyToolError(errorMessage) : undefined;
@@ -1861,6 +1964,7 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
     advancePlanAfterTool(task, toolName, true);
   }
   taskStore.appendMessage(task, message);
+  if (!isError) recordTaskFileChange(task, callId, toolName, toolResult.output);
   publish({ type: 'tool_result', taskId: task.id, result: toolResult });
   publish({ type: 'message', taskId: task.id, message });
   writePiTrace(task, 'tool_result', {
@@ -1869,8 +1973,23 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
     toolName,
     errorMessage: isError ? toolResult.error : undefined,
     summary: isError ? `工具 ${toolName} 执行失败` : `工具 ${toolName} 执行成功`,
-    data: { output: toolResult.output },
+    data: {
+      output: toolResult.output,
+      untrusted: isUntrustedToolOutput(toolResult.output),
+    },
   });
+  if (!isError && hasPromptInjectionSignal(toolResult.output)) {
+    // 只记录检测结果和工具关联，不把可疑外部正文再次写入专门的安全轨迹。
+    writePiTrace(task, 'tool_result', {
+      ok: true,
+      callId,
+      toolName,
+      summary: '检测到疑似 prompt injection，已按不可信输入继续处理',
+      data: { untrusted: true, promptInjectionDetected: true },
+    });
+  }
+
+  const contentBlocks: ContentBlock[] = [];
 
   // attach_content / present_ui：提取 contentBlock 并挂到对应的 assistant 消息。
   // 禁止回退挂到 tool 消息 id——前端交付面只渲染 assistant，挂错会导致文件卡丢归属/反复出现在 live tail。
@@ -1878,34 +1997,122 @@ function appendToolResult(task: Task, callId: string, toolName: string, result: 
     const raw = extractAttachContentBlock(result, details);
     if (isRecord(raw) && typeof raw.type === 'string') {
       const block = buildContentBlockFromTool(raw, workspaceDir);
-      if (block) {
-        let assistantMessageId: string | undefined;
-        // 稳定 ID 表示更新既有 UI；先在历史 assistant 消息中原位 upsert。
-        if (block.type === 'ui') {
-          for (const msg of task.messages) {
-            if (msg.role !== 'assistant' || !msg.contentBlocks?.some((item) => item.id === block.id)) continue;
-            msg.contentBlocks = upsertContentBlock(msg.contentBlocks, block);
-            assistantMessageId = msg.id;
-            break;
-          }
-        }
-        if (!assistantMessageId) {
-          for (let i = task.messages.length - 1; i >= 0; i--) {
-            const msg = task.messages[i];
-            if (msg.role === 'assistant' && msg.toolCalls?.some((tc) => tc.id === callId)) {
-              msg.contentBlocks = upsertContentBlock(msg.contentBlocks, block);
-              assistantMessageId = msg.id;
-              break;
-            }
-          }
-        }
-        if (assistantMessageId) {
-          saveTask(task);
-          publish({ type: 'content_blocks_added', taskId: task.id, messageId: assistantMessageId, blocks: [block] });
-        }
+      if (block) contentBlocks.push(block);
+    }
+  }
+
+  if (!isError) {
+    try {
+      contentBlocks.push(...await materializeMcpBrowserContentBlocks({
+        taskId: task.id,
+        callId,
+        result,
+        workspaceDir,
+      }));
+    } catch (error) {
+      // 产物写入失败不能把已经成功的浏览器调用改判为工具失败，只记录可诊断的短错误。
+      writePiTrace(task, 'tool_result', {
+        ok: false,
+        callId,
+        toolName,
+        summary: '浏览器结果无法写入工作台产物',
+        errorMessage: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+      });
+    }
+  }
+  for (const block of contentBlocks) attachContentBlock(task, callId, block);
+}
+
+/** 将工具交付块挂到发起调用的 assistant 消息，统一处理历史 upsert 与实时广播。 */
+function attachContentBlock(task: Task, callId: string, block: ContentBlock): void {
+  let assistantMessageId: string | undefined;
+  if (block.type === 'ui') {
+    for (const msg of task.messages) {
+      if (msg.role !== 'assistant' || !msg.contentBlocks?.some((item) => item.id === block.id)) continue;
+      msg.contentBlocks = upsertContentBlock(msg.contentBlocks, block);
+      assistantMessageId = msg.id;
+      break;
+    }
+  }
+  if (!assistantMessageId) {
+    for (let i = task.messages.length - 1; i >= 0; i--) {
+      const msg = task.messages[i];
+      if (msg.role === 'assistant' && msg.toolCalls?.some((tc) => tc.id === callId)) {
+        msg.contentBlocks = upsertContentBlock(msg.contentBlocks, block);
+        assistantMessageId = msg.id;
+        break;
       }
     }
   }
+  if (assistantMessageId) {
+    saveTask(task);
+    publish({ type: 'content_blocks_added', taskId: task.id, messageId: assistantMessageId, blocks: [block] });
+  }
+}
+
+/** 将文件工具的结构化结果汇总到任务级摘要，供工作台展示且不复制文件正文。 */
+function recordTaskFileChange(task: Task, callId: string, toolName: string, output: unknown): void {
+  if (!isRecord(output)) return;
+  // create_artifact 的 draft/confirmed 只存在于任务 JSON；只有 apply_artifact 或
+  // 已明确返回 applied 的结果才代表工作区真实发生了文件变更。
+  if (toolName === 'create_artifact' && output.status !== 'applied') return;
+  const path = typeof output.resource === 'string'
+    ? output.resource
+    : typeof output.file === 'string'
+      ? output.file
+      : typeof output.appliedPath === 'string'
+        ? output.appliedPath
+        : typeof output.targetPath === 'string'
+          ? output.targetPath
+          : typeof output.path === 'string'
+            ? output.path
+            : undefined;
+  if (!path || !['write', 'edit', 'copy_file', 'move_file', 'rename_file', 'delete_file', 'create_artifact', 'apply_artifact'].includes(toolName)) return;
+
+  const operation: TaskFileChangeOperation = toolName === 'edit'
+    ? 'modified'
+    : toolName === 'copy_file'
+      ? 'copied'
+      : toolName === 'move_file' || toolName === 'rename_file'
+        ? 'moved'
+        : toolName === 'delete_file'
+          ? 'deleted'
+          : toolName === 'create_artifact' || toolName === 'apply_artifact'
+            ? 'artifact_applied'
+            : output.operation === 'appended' ? 'appended' : output.existed === true ? 'modified' : 'created';
+  const change: TaskFileChange = {
+    id: randomUUID(),
+    path,
+    operation,
+    additions: numberOrUndefined(output.additions),
+    deletions: numberOrUndefined(output.deletions),
+    bytesBefore: numberOrUndefined(output.bytesBefore),
+    bytesAfter: numberOrUndefined(output.bytesAfter ?? output.bytes),
+    baselineAvailable: toolName === 'edit'
+      || (toolName === 'write' && output.existed === true)
+      || toolName === 'copy_file'
+      || toolName === 'move_file'
+      || toolName === 'rename_file',
+    sourceCallId: callId,
+    updatedAt: new Date().toISOString(),
+  };
+  const changes = [...(task.fileChanges ?? []), change].slice(-100);
+  task.fileChanges = changes;
+  taskStore.patch(task.id, { fileChanges: changes });
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function isUntrustedToolOutput(value: unknown): boolean {
+  return isRecord(value) && value.untrusted === true;
+}
+
+function hasPromptInjectionSignal(value: unknown): boolean {
+  if (!isUntrustedToolOutput(value)) return false;
+  const text = JSON.stringify(value).slice(0, 120_000);
+  return /ignore\s+(all\s+)?(previous|prior)\s+instructions|system\s+prompt|developer\s+message|reveal\s+(secrets|credentials|api\s+keys?)|bypass\s+(approval|security|policy)|do\s+not\s+tell/i.test(text);
 }
 
 function maybeCreateToolCheckpoint(task: Task, callId: string, toolName: string): void {
@@ -1976,6 +2183,8 @@ function buildContentBlockFromTool(
     name: typeof raw.name === 'string' ? raw.name : undefined,
     mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : undefined,
     size: typeof raw.size === 'number' ? raw.size : undefined,
+    source: type === 'link' ? 'external_untrusted' : 'tool',
+    untrusted: type === 'link',
   };
 }
 
@@ -2019,7 +2228,12 @@ function assistantMessageToAurevoy(task: Task, message: PiAssistantMessage): Mes
     createdAt: new Date(message.timestamp).toISOString(),
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     failure: message.errorMessage
-      ? { message: message.errorMessage, category: message.stopReason === 'aborted' ? 'cancelled' : 'model' }
+      ? {
+          message: message.errorMessage,
+          category: message.stopReason === 'aborted'
+            ? 'cancelled'
+            : classifyTaskError(message.errorMessage, 'model'),
+        }
       : undefined,
   };
 }

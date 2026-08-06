@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { Task, TaskArtifact, WorkspaceReadEntry } from "@aurevoy/shared";
+import { clamp } from "../app/preferences";
 import { readStoredPaneSize, startPaneResize } from "../app/paneResize";
 import { useFileTree } from "../hooks/useFileTree";
 import type { WorkbenchTab } from "../hooks/useWorkbenchTabs";
@@ -44,6 +45,7 @@ interface WorkbenchPanelProps {
   activeTabId: string | null;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
+  onClose?: () => void;
   onOpenFile: (path: string) => void;
   onOpenArtifact: (artifact: TaskArtifact) => void;
   onAttachToChat: (entry: WorkspaceReadEntry) => void;
@@ -58,6 +60,7 @@ export function WorkbenchPanel({
   activeTabId,
   onSelectTab,
   onCloseTab,
+  onClose,
   onOpenFile,
   onOpenArtifact: _onOpenArtifact,
   onAttachToChat,
@@ -120,6 +123,17 @@ export function WorkbenchPanel({
                 onShowTree={() => setExplorerOpen(true)}
               />
               <div className="workbench-editor-toolbar-end">
+                {onClose ? (
+                  <button
+                    type="button"
+                    className="workbench-toolbar-close"
+                    onClick={onClose}
+                    aria-label={t("workbench.hide")}
+                    title={t("workbench.hide")}
+                  >
+                    <IconClose />
+                  </button>
+                ) : null}
                 {!explorerOpen && (
                   <button
                     type="button"
@@ -168,6 +182,10 @@ export function WorkbenchPanel({
                 role="separator"
                 aria-orientation="vertical"
                 aria-label={t("workbench.resizeExplorer")}
+                tabIndex={0}
+                aria-valuemin={MIN_EXPLORER_WIDTH}
+                aria-valuemax={explorerMaxWidth}
+                aria-valuenow={effectiveExplorerWidth}
                 onPointerDown={(event) =>
                   startPaneResize(event, {
                     axis: "x",
@@ -178,6 +196,22 @@ export function WorkbenchPanel({
                     onSize: setExplorerWidth,
                   })
                 }
+                onDoubleClick={() => setExplorerWidth(DEFAULT_EXPLORER_WIDTH)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === "Home") {
+                    event.preventDefault();
+                    setExplorerWidth(DEFAULT_EXPLORER_WIDTH);
+                    return;
+                  }
+                  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                  event.preventDefault();
+                  const delta = event.key === "ArrowLeft" ? 16 : -16;
+                  setExplorerWidth((previous) => clamp(
+                    previous + delta,
+                    MIN_EXPLORER_WIDTH,
+                    explorerMaxWidth,
+                  ));
+                }}
               />
               <div className="workbench-explorer">
                 <FileTree
@@ -239,8 +273,8 @@ function EditorTabBar({
   }
 
   return (
-    <div className="workbench-tabbar" role="tablist" aria-label={t("workbench.tabs")}>
-      {tabs.map((tab) => (
+    <div className="workbench-tabbar" role="tablist" aria-orientation="horizontal" aria-label={t("workbench.tabs")}>
+      {tabs.map((tab, index) => (
         <div
           key={tab.id}
           className="workbench-tab"
@@ -254,6 +288,17 @@ function EditorTabBar({
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
               onSelect(tab.id);
+              return;
+            }
+            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+              event.preventDefault();
+              const tabElements = Array.from(
+                event.currentTarget.parentElement?.querySelectorAll<HTMLElement>(".workbench-tab") ?? [],
+              );
+              const nextIndex = event.key === "ArrowLeft"
+                ? (index - 1 + tabElements.length) % tabElements.length
+                : (index + 1) % tabElements.length;
+              tabElements[nextIndex]?.focus();
             }
           }}
           title={tab.kind === "workspace" ? tab.path : tab.name}

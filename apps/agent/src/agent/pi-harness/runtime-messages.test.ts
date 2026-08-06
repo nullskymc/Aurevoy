@@ -37,6 +37,69 @@ describe('Pi runtime durable message reconciliation', () => {
       .toEqual(['original', 'failure']);
   });
 
+  it('keeps rich content blocks appended to an already durable assistant message', () => {
+    const durableAssistant = {
+      ...message('assistant', 'assistant', ''),
+      toolCalls: [{
+        id: 'attach-1',
+        type: 'function' as const,
+        function: { name: 'attach_content', arguments: '{}' },
+      }],
+    };
+    const reportBlock = {
+      id: 'report',
+      type: 'file_reference' as const,
+      content: '/tmp/research/report.md',
+      name: 'report.md',
+      mimeType: 'text/markdown',
+      source: 'tool' as const,
+    };
+    const chartBlock = {
+      id: 'chart',
+      type: 'image' as const,
+      content: '/tmp/research/chart.png',
+      name: 'chart.png',
+      mimeType: 'image/png',
+      source: 'tool' as const,
+    };
+    const memoryAssistant = {
+      ...durableAssistant,
+      contentBlocks: [reportBlock, chartBlock],
+    };
+
+    const [merged] = mergeDurableTaskMessages([durableAssistant], [memoryAssistant]);
+
+    expect(merged.contentBlocks).toEqual([reportBlock, chartBlock]);
+    expect(merged.toolCalls).toEqual(durableAssistant.toolCalls);
+  });
+
+  it('retains durable blocks and applies a runtime update for the same block id', () => {
+    const durable = {
+      ...message('assistant', 'assistant', ''),
+      contentBlocks: [{
+        id: 'report',
+        type: 'file_reference' as const,
+        content: '/tmp/old-report.md',
+      }],
+    };
+    const updated = {
+      ...durable,
+      contentBlocks: [{
+        id: 'report',
+        type: 'file_reference' as const,
+        content: '/tmp/new-report.md',
+      }, {
+        id: 'chart',
+        type: 'image' as const,
+        content: '/tmp/chart.png',
+      }],
+    };
+
+    const [merged] = mergeDurableTaskMessages([durable], [updated]);
+
+    expect(merged.contentBlocks).toEqual(updated.contentBlocks);
+  });
+
   it('does not replay provider-hosted calls through the local Pi tool executor', async () => {
     const call: Message = {
       ...message('hosted-call', 'assistant', ''),

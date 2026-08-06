@@ -7,6 +7,9 @@ import { mkdtemp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
+import { installRegressionAuth } from './regression-auth.mjs';
+
+installRegressionAuth();
 import { randomUUID } from 'node:crypto';
 
 const tempRoot = await mkdtemp(join(tmpdir(), 'aurevoy-m10-'));
@@ -50,7 +53,7 @@ function readBody(req) {
 async function request(method, path, body) {
   const url = new URL(path, baseUrl);
   return new Promise((resolve, reject) => {
-    const options = { method, hostname: url.hostname, port: url.port, path: url.pathname + url.search, headers: {} };
+    const options = { method, hostname: url.hostname, port: url.port, path: url.pathname + url.search, headers: { Authorization: 'Bearer aurevoy-regression-token' } };
     if (body !== undefined) options.headers['Content-Type'] = 'application/json';
     const req = http.request(options, async (res) => {
       const raw = await readBody(res);
@@ -118,6 +121,22 @@ try {
   assert(created.data.cadence === 'daily' && created.data.enabled === false, '配方应保存频率与启用状态');
   const listed = await get('/api/automations');
   assert(listed.status === 200 && listed.data.automations.length === 1, '列表应返回新配方');
+
+  console.log('--- 保存前试跑不污染配方与运行历史 ---');
+  const testRun = await post('/api/automations/test-run', {
+    name: 'draft only',
+    goal: '试跑一个尚未保存的自动化草稿',
+    cadence: 'daily',
+    enabled: false,
+  });
+  assert(testRun.status === 202, '未保存草稿试跑应返回 202');
+  assert(testRun.data.task?.automationId === undefined, '草稿试跑不应绑定 automationId');
+  assert(typeof testRun.data.streamUrl === 'string', '草稿试跑应返回任务流地址');
+  const afterTestRun = await get('/api/automations');
+  assert(afterTestRun.status === 200 && afterTestRun.data.automations.length === 1, '草稿试跑不应创建自动化配方');
+  const draftRuns = await get(`/api/automations/${created.data.id}/runs`);
+  assert(draftRuns.status === 200 && draftRuns.data.runs.length === 0, '草稿试跑不应写入配方运行历史');
+
   const enabled = await patch(`/api/automations/${created.data.id}`, { enabled: true });
   assert(enabled.status === 200 && enabled.data.nextRunAt, '启用定时配方应生成 nextRunAt');
   const invalid = await post('/api/automations', { name: 'bad', goal: 'bad', cadence: 'yearly' });
@@ -142,7 +161,8 @@ try {
     goal: 'fixture',
     cadence: 'hourly',
     enabled: true,
-    nextRunAt: new Date(0).toISOString(),
+    // 只落后一个周期，命中 due 但不触发“停机跨越多个周期”的 missed 跳过策略。
+    nextRunAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     runCount: 0,
     failureCount: 0,
     executionMode: 'auto',

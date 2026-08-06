@@ -374,6 +374,20 @@
   flex-shrink: 0;
 }
 
+.settings-action-error {
+  margin: 0 12px 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  color: var(--danger-soft-fg);
+  background: var(--danger-soft-bg);
+  font-size: var(--ui-font-xs);
+  line-height: 1.45;
+}
+
+.settings-header-error {
+  margin: -18px 0 22px;
+}
+
 .settings-content-group {
   margin-bottom: 32px;
 }
@@ -1437,8 +1451,10 @@ button.settings-provider-line-main:focus-visible {
 
 .settings-models-row-remove {
   appearance: none;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
   margin: 0;
   padding: 0;
   border: none;
@@ -1668,6 +1684,80 @@ button.settings-provider-line-main:focus-visible {
   overflow: hidden;
 }
 
+.mcp-templates {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.mcp-templates-head h3 {
+  margin: 0 0 4px;
+  color: var(--text);
+  font-size: var(--ui-font-base);
+}
+
+.mcp-templates-head p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--ui-font-sm);
+  line-height: 1.45;
+}
+
+.mcp-template-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mcp-template-card {
+  display: grid;
+  align-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.mcp-template-card strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text);
+  font-size: var(--ui-font-sm);
+}
+
+.mcp-template-card p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--ui-font-xs);
+  line-height: 1.45;
+}
+
+.mcp-template-add {
+  justify-self: start;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0 9px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--ui-font-xs);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.mcp-template-add:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: var(--accent);
+}
+
+.mcp-template-add:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
 .mcp-empty {
   padding: 28px 20px;
   text-align: center;
@@ -1738,6 +1828,15 @@ button.settings-provider-line-main:focus-visible {
 .mcp-server-sub.is-muted {
   color: var(--text-tertiary);
   opacity: 0.85;
+}
+
+.mcp-server-change {
+  overflow: hidden;
+  color: var(--accent);
+  font-size: var(--ui-font-xs);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mcp-server-actions {
@@ -1847,6 +1946,23 @@ button.settings-provider-line-main:focus-visible {
   background: var(--danger-soft-bg);
   font-size: var(--ui-font-xs);
   border-radius: 10px;
+}
+
+.mcp-test-result {
+  margin: 0 12px 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: var(--ui-font-xs);
+}
+
+.mcp-test-result.is-ok {
+  color: var(--success-soft-fg, #216e52);
+  background: var(--success-soft-bg, rgba(33, 110, 82, .1));
+}
+
+.mcp-test-result.is-error {
+  color: var(--danger-soft-fg);
+  background: var(--danger-soft-bg);
 }
 
 .mcp-back-btn {
@@ -1985,6 +2101,28 @@ button.settings-provider-line-main:focus-visible {
   align-items: center;
   gap: 12px;
   padding: 14px 16px 16px;
+}
+
+.mcp-test-btn {
+  min-height: var(--ui-control-md);
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-md);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mcp-test-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.mcp-test-btn:disabled {
+  opacity: .55;
+  cursor: default;
 }
 
 .mcp-danger-btn {

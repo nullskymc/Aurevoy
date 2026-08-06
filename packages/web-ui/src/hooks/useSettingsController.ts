@@ -12,6 +12,7 @@ import {
   createMemory,
   deleteMemory,
   downloadDataExport,
+  downloadDatabaseBackup,
   getDataStatus,
   getMcpStatus,
   getSettings,
@@ -397,34 +398,60 @@ export function useSettingsController({
     }
   }
 
-  function handleCreateMemory(content: string, category: MemoryCategory): void {
-    void createMemory({ content, category })
-      .then((created) => setMemories((prev) => [created, ...prev]))
-      .catch((err) => setNotice(`${t("notice.addMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
+  async function handleBackupDatabase(): Promise<void> {
+    try {
+      const result = await downloadDatabaseBackup();
+      setNotice(`${t("notice.backedUpDatabasePrefix")}${result.filename}${t("notice.backedUpDatabaseSuffix")}`);
+    } catch (err) {
+      setNotice(`${t("notice.backupDatabaseFailed")}${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
-  function handleToggleMemory(id: string, enabled: boolean): void {
-    void updateMemory(id, { enabled })
-      .then((updated) => setMemories((prev) => prev.map((m) => (m.id === id ? updated : m))))
-      .catch((err) => setNotice(`${t("notice.updateMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
+  async function handleCreateMemory(content: string, category: MemoryCategory): Promise<void> {
+    try {
+      const created = await createMemory({ content, category });
+      setMemories((prev) => [created, ...prev]);
+    } catch (err) {
+      setNotice(`${t("notice.addMemoryFailed")}${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
   }
 
-  function handleEditMemory(id: string, content: string, category: MemoryCategory): void {
-    void updateMemory(id, { content, category })
-      .then((updated) => setMemories((prev) => prev.map((m) => (m.id === id ? updated : m))))
-      .catch((err) => setNotice(`${t("notice.editMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
+  async function handleToggleMemory(id: string, enabled: boolean): Promise<void> {
+    try {
+      const updated = await updateMemory(id, { enabled });
+      setMemories((prev) => prev.map((m) => (m.id === id ? updated : m)));
+    } catch (err) {
+      setNotice(`${t("notice.updateMemoryFailed")}${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
   }
 
-  function handleDeleteMemory(id: string): void {
-    void deleteMemory(id)
-      .then(() => setMemories((prev) => prev.filter((m) => m.id !== id)))
-      .catch((err) => setNotice(`${t("notice.deleteMemoryFailed")}${err instanceof Error ? err.message : String(err)}`));
+  async function handleEditMemory(id: string, content: string, category: MemoryCategory): Promise<void> {
+    try {
+      const updated = await updateMemory(id, { content, category });
+      setMemories((prev) => prev.map((m) => (m.id === id ? updated : m)));
+    } catch (err) {
+      setNotice(`${t("notice.editMemoryFailed")}${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
+  }
+
+  async function handleDeleteMemory(id: string): Promise<void> {
+    try {
+      await deleteMemory(id);
+      setMemories((prev) => prev.filter((m) => m.id !== id));
+    } catch (err) {
+      setNotice(`${t("notice.deleteMemoryFailed")}${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
   }
 
   return {
     handleActivateProviderModel,
     handleCleanupData,
     handleExportData,
+    handleBackupDatabase,
     handleCreateMemory,
     handleDeleteMemory,
     handleEditMemory,

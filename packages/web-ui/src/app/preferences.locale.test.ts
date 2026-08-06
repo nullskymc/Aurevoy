@@ -3,7 +3,13 @@ import {
   detectSystemLocale,
   mapLanguageTagToLocale,
 } from "../i18n";
-import { LOCALE_KEY, readStoredLocale } from "./preferences";
+import {
+  LOCALE_KEY,
+  OUTPUT_RAIL_OPEN_KEY,
+  SIDEBAR_COLLAPSED_KEY,
+  readStoredBoolean,
+  readStoredLocale,
+} from "./preferences";
 
 describe("mapLanguageTagToLocale", () => {
   it("maps primary tags and regional variants", () => {
@@ -90,5 +96,34 @@ describe("readStoredLocale", () => {
       languages: ["ko-KR"],
     });
     expect(readStoredLocale()).toBe("ko");
+  });
+});
+
+describe("readStoredBoolean", () => {
+  const store = new Map<string, string>();
+
+  beforeEach(() => {
+    store.clear();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("restores persisted shell panel state and rejects malformed values", () => {
+    store.set(SIDEBAR_COLLAPSED_KEY, "true");
+    store.set(OUTPUT_RAIL_OPEN_KEY, "false");
+
+    expect(readStoredBoolean(SIDEBAR_COLLAPSED_KEY, false)).toBe(true);
+    expect(readStoredBoolean(OUTPUT_RAIL_OPEN_KEY, true)).toBe(false);
+    expect(readStoredBoolean("aurevoy.invalid", true)).toBe(true);
+
+    store.set(SIDEBAR_COLLAPSED_KEY, "1");
+    expect(readStoredBoolean(SIDEBAR_COLLAPSED_KEY, false)).toBe(false);
   });
 });

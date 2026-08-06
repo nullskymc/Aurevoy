@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { EventStreamContentType, fetchEventSource } from "@microsoft/fetch-event-source";
 import type { AgentEvent, StreamAgentEvent } from "@aurevoy/shared";
-import { getBaseUrl } from "../api";
+import { getApiToken, getBaseUrl } from "../api";
 
 const MAX_RECONNECT_DELAY_MS = 5_000;
 const BASE_RECONNECT_DELAY_MS = 250;
@@ -24,6 +24,7 @@ export function useSSEStream() {
   const onDoneRef = useRef<() => void>(() => {});
   const firstEventSeenRef = useRef(false);
   const firstTokenSeenRef = useRef(false);
+  const modelByTaskRef = useRef(new Map<string, { provider: string; model: string }>());
 
   const closeStream = useCallback((): void => {
     esRef.current?.abort();
@@ -44,6 +45,8 @@ export function useSSEStream() {
       const streamUrl = `${getBaseUrl()}/api/tasks/${taskId}/stream?${query.toString()}`;
       const controller = new AbortController();
       const headers: Record<string, string> = { Accept: EventStreamContentType };
+      const apiToken = getApiToken();
+      if (apiToken) headers.Authorization = `Bearer ${apiToken}`;
       if (lastSeq > 0) headers["Last-Event-ID"] = String(lastSeq);
       markSseMilestone(taskId, "connect-start");
 
@@ -64,19 +67,27 @@ export function useSSEStream() {
           try {
             const event = JSON.parse(message.data) as StreamAgentEvent;
             const previousSeq = lastSeqByTaskRef.current.get(taskId) ?? 0;
-            if (event.seq > previousSeq) {
-              lastSeqByTaskRef.current.set(taskId, event.seq);
+            const eventSeq = Number(event.seq);
+            const hasSequence = Number.isFinite(eventSeq);
+            // 浏览器重试、代理缓存或快照与实时缓冲交叠时可能收到同一 seq；
+            // 先丢弃已消费事件，再交给业务层，避免消息/工具结果重复展示。
+            if (hasSequence && eventSeq <= previousSeq) return;
+            if (hasSequence) {
+              lastSeqByTaskRef.current.set(taskId, eventSeq);
               // fetch-event-source 重试会复用 headers；同步游标后可从断点续传。
-              headers["Last-Event-ID"] = String(event.seq);
+              headers["Last-Event-ID"] = String(eventSeq);
             }
             reconnectAttemptRef.current = 0;
+            const eventModel = getEventModel(event);
+            if (eventModel) modelByTaskRef.current.set(taskId, eventModel);
+            const model = modelByTaskRef.current.get(taskId);
             if (!firstEventSeenRef.current) {
               firstEventSeenRef.current = true;
-              markSseMilestone(taskId, "first-event", event);
+              markSseMilestone(taskId, "first-event", event, model);
             }
             if (event.type === "token" && !firstTokenSeenRef.current) {
               firstTokenSeenRef.current = true;
-              markSseMilestone(taskId, "first-token", event);
+              markSseMilestone(taskId, "first-token", event, model);
             }
 
             // SSE 到达即按协议顺序分发；渲染合帧只在 LiveOutputStore 中进行。
@@ -85,6 +96,7 @@ export function useSSEStream() {
             if (event.type === "done" || event.type === "task_deleted") {
               taskIdRef.current = null;
               esRef.current = null;
+              modelByTaskRef.current.delete(taskId);
               controller.abort();
               onDoneRef.current();
             }
@@ -144,7 +156,12 @@ export function useSSEStream() {
 }
 
 /** Performance 面板可直接读取 milestone；detail 同时给出服务端到达延迟。 */
-function markSseMilestone(taskId: string, milestone: string, event?: StreamAgentEvent): void {
+function markSseMilestone(
+  taskId: string,
+  milestone: string,
+  event?: StreamAgentEvent,
+  model?: { provider: string; model: string },
+): void {
   if (typeof performance === "undefined" || typeof performance.mark !== "function") return;
   const emittedAtMs = event ? Date.parse(event.emittedAt) : Number.NaN;
   performance.mark(`aurevoy:sse:${milestone}:${taskId}`, {
@@ -152,7 +169,20 @@ function markSseMilestone(taskId: string, milestone: string, event?: StreamAgent
       ? {
           seq: event.seq,
           transportMs: Number.isFinite(emittedAtMs) ? Math.max(0, Date.now() - emittedAtMs) : undefined,
+          provider: model?.provider,
+          model: model?.model,
         }
       : undefined,
   });
+}
+
+function getEventModel(event: StreamAgentEvent): { provider: string; model: string } | undefined {
+  if (event.type === "task_created") {
+    const snapshot = event.task.modelSnapshot ?? event.task.tokenUsage;
+    return snapshot?.provider && snapshot.model
+      ? { provider: snapshot.provider, model: snapshot.model }
+      : undefined;
+  }
+  if (event.type === "model_updated") return { provider: event.provider, model: event.model };
+  return undefined;
 }

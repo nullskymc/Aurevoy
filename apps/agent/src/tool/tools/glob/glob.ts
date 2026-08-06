@@ -1,8 +1,9 @@
 import { Schema } from "effect"
 import { make, type ContentPart } from "../../framework/definition.js"
 import { readdir } from "node:fs/promises"
-import { resolve, relative, join, basename } from "node:path"
+import { relative, join, basename } from "node:path"
 import { minimatch } from "minimatch"
+import { assertRealPathInside, resolveInWorkspace } from "../../filesystem/workspace-paths.js"
 
 const matchGlob = (filePath: string, pattern: string): boolean => {
   const name = basename(filePath)
@@ -62,7 +63,8 @@ export const globTool = make({
   input: Input,
   output: Output,
   execute: async (input, ctx) => {
-    const cwd = input.path ? resolve(ctx.workspaceDir, input.path) : ctx.workspaceDir
+    const cwd = resolveInWorkspace(input.path ?? '.', ctx.workspaceDir, [])
+    await assertRealPathInside(cwd, ctx.workspaceDir, [])
     const limit = input.limit ?? 200
     return scanRecursive(cwd, input.pattern, limit)
   },

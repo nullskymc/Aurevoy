@@ -94,8 +94,13 @@ export function useTaskController({
     const startedAt = typeof performance !== "undefined" ? performance.now() : 0;
     const response = await runAgentRequest(request);
     if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+      const model = response.task.modelSnapshot ?? response.task.tokenUsage;
       performance.mark(`aurevoy:task-request:${kind}:${response.task.id}`, {
-        detail: { durationMs: Math.max(0, performance.now() - startedAt) },
+        detail: {
+          durationMs: Math.max(0, performance.now() - startedAt),
+          provider: model?.provider,
+          model: model?.model,
+        },
       });
     }
     return response;
@@ -390,15 +395,18 @@ export function useTaskController({
     }
   }
 
-  function handleToolDecision(callId: string, approved: boolean): void {
+  async function handleToolDecision(callId: string, approved: boolean): Promise<void> {
     const taskId = currentTask?.id;
     if (!taskId) return;
     setNotice(null);
-    void approveToolCall(taskId, callId, approved).catch((err) => {
+    try {
+      await approveToolCall(taskId, callId, approved);
+    } catch (err) {
       setNotice(
         `${t("notice.submit")}${approved ? t("action.approve") : t("action.reject")}${t("notice.failedColon")}${err instanceof Error ? err.message : String(err)}${t("notice.pleaseRetry")}`,
       );
-    });
+      throw err;
+    }
   }
 
   function handleClarificationAnswer(clarificationId: string, answer: string): void {

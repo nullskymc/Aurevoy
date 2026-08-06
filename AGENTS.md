@@ -6,7 +6,7 @@
 
 Aurevoy 是**本地个人 AI Agent 桌面应用**：用户用自然语言给目标，引擎规划、调工具、持续执行直至完成。
 
-- 版本：v0.6.15（当前提交对应发布 tag `v0.6.15`；上一版 `v0.6.14`）
+- 版本：v0.7.0（当前工作树基线；尚未打 tag 或推送 Release）
 - 形态：支持 macOS、Windows 和 Linux 桌面端；各平台通过 Tauri 构建对应安装包与更新产物
 - 原则：真实链路、可恢复、可审计；禁止 Mock / 假能力
 
@@ -35,7 +35,7 @@ packages/shared  ← 跨进程类型唯一来源
 | [CONVENTIONS](./docs/CONVENTIONS.md) | 代码与扩展约定 |
 | [TECH_STACK](./docs/TECH_STACK.md) | 选型理由 |
 | [ROADMAP](./docs/ROADMAP.md) | 已完成能力 + 未竟项 |
-| **文档站** | 用户文档：`docs/guide/`（quickstart / prompting / best-practices…）；开发者：`docs/dev/` + 下文协作页 → [aurevoy.nullskymc.site](https://aurevoy.nullskymc.site/) |
+| **文档站** | 用户文档：`docs/guide/`（quickstart / prompting / best-practices…）；开发者：`docs/dev/`（含 UI 与 Agent eval 验收）+ 下文协作页 → [aurevoy.nullskymc.site](https://aurevoy.nullskymc.site/) |
 
 类型真相在 `packages/shared/src/`，API 细节以代码为准。用户可见行为变化时优先改 `docs/guide/`（可操作步骤 + 示例 + 反例）；契约/架构变化再改协作参考页。
 
@@ -61,6 +61,7 @@ npm install              # workspace 依赖（Node >= 22.19.0）
 npm run dev              # 引擎 + 桌面
 npm run dev:agent        # 仅引擎热重载
 npm run typecheck        # 全仓类型检查
+npm run test:web-ui      # Web UI 单测统一入口
 npm run build            # shared → agent → desktop
 npm run build:shared     # 改 shared 后必做
 npm run regression:m3    # 文件工具/工作区（工具改动 → m3+m7）
@@ -71,7 +72,14 @@ npm run regression:m7    # agent 循环/工具 schema/MCP/审批（通用联动�
 npm run regression:m8    # 知识库/向量检索（KB 改动 → m6+m8）
 npm run regression:m9    # 健康诊断/脱敏导出/数据清理（数据管理改动）
 npm run regression:m10   # 自动化配方/调度/运行历史（自动化改动）
+npm run regression:auth  # 本地 API token / Origin / CORS 预检边界
+npm run regression:process-recovery # 真实 Agent 子进程强制退出与重启恢复
+npm run regression:full # 发布/合并前完整 test、typecheck、build、M3–M10、eval、docs、audit 门
+npm test                 # shared + agent + web-ui 单元组件测试
 npm run regression:*     # 提交前按影响面选跑；全套留给发布/合并前
+npm run eval:agent-usability # 固定 fixture 的 Agent 交付/安全评测
+npm run audit:release       # 版本、锁文件与发布产物审计
+npm run ui:baseline         # 运行中的 Web UI 截图与性能基线（AUREVOY_UI_URL）
 npm run docs:dev         # 文档站本地预览
 ```
 
@@ -83,6 +91,8 @@ npm run docs:dev         # 文档站本地预览
 内联编辑重试/分支/压缩、子代理（并发与工作组 UI）、Skill、网页搜索、多模态、项目工作区、  
 双层预算、记忆向量 + KB RAG、设置/数据管理、CI。
 
-**进行中：** macOS Apple 签名与公证、评测与发布体验。
+**本轮已落地：** 0.7 系列的前端性能基线、无障碍与异步反馈、SQLite 迁移/备份、数据边界、API/Tauri/MCP/Skill 安全、自动化恢复、Agent eval、依赖审计与诊断指标。**仍需真实环境验证：** macOS/Windows WebView smoke、浏览器运行时、进程级恢复、长期性能对比、三平台 Release 产物，以及按公开分发条件推进的 Windows 代码签名。
 **已交付（分发）：** GitHub Releases 自动更新（Tauri updater + `latest.json`）。维护见 [docs/dev/auto-update.md](./docs/dev/auto-update.md)。  
 清单与验收见 [ROADMAP](./docs/ROADMAP.md)。
+
+**不纳入计划：** macOS Apple Developer 签名、公证及相关 key 管理；现有 macOS 构建与 updater 继续维护。

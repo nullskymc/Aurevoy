@@ -5,6 +5,9 @@
  * 任何跨进程传输的数据结构都应定义在此，避免类型漂移。
  */
 
+// 项目/工作区契约已迁移到按域文件；根入口继续 re-export 兼容旧消费者。
+export * from './contracts/projects-model.js';
+
 // ============================================================
 // 基础枚举
 // ============================================================
@@ -123,6 +126,9 @@ export interface ContentBlock {
   kind?: UiComponentKind;
   props?: UiCanvasProps;
   fallbackText?: string;
+  /** 内容来源标签；external_untrusted 表示网页/MCP 等外部文本，不是系统指令。 */
+  source?: 'model' | 'tool' | 'user_file' | 'external_untrusted';
+  untrusted?: boolean;
 }
 
 /** 一条对话消息 */
@@ -213,6 +219,23 @@ export interface GeneratedPlan {
 export type TaskArtifactType = 'text' | 'file' | 'diff' | 'url';
 export type TaskArtifactStatus = 'draft' | 'confirmed' | 'applied' | 'rejected';
 
+export type TaskFileChangeOperation = 'created' | 'modified' | 'appended' | 'copied' | 'moved' | 'deleted' | 'artifact_applied';
+
+/** 单个任务内文件变更的可解释摘要；不把完整文件正文复制进此结构。 */
+export interface TaskFileChange {
+  id: string;
+  path: string;
+  operation: TaskFileChangeOperation;
+  additions?: number;
+  deletions?: number;
+  bytesBefore?: number;
+  bytesAfter?: number;
+  /** false 表示没有可靠基线（例如新文件或外部命令修改）。 */
+  baselineAvailable: boolean;
+  sourceCallId?: string;
+  updatedAt: string;
+}
+
 /** Agent 交付给用户确认、预览或落盘的任务产物。 */
 export interface TaskArtifact {
   id: string;
@@ -223,8 +246,27 @@ export interface TaskArtifact {
   sourceCallId?: string;
   status: TaskArtifactStatus;
   createdAt: string;
+  updatedAt?: string;
+  sourceTaskId?: string;
+  sizeBytes?: number;
   appliedAt?: string;
   appliedPath?: string;
+}
+
+export type RecallSourceStatus = 'disabled' | 'used' | 'empty' | 'failed';
+
+/** 本轮自动召回的可解释摘要；不保存召回正文，只保存来源计数和状态。 */
+export interface TaskRecallSourceSummary {
+  enabled: boolean;
+  status: RecallSourceStatus;
+  count: number;
+  citationCount: number;
+}
+
+export interface TaskRecallSummary {
+  memory: TaskRecallSourceSummary;
+  knowledgeBase: TaskRecallSourceSummary;
+  updatedAt: string;
 }
 
 export type ClarificationStatus = 'pending' | 'answered' | 'timeout' | 'cancelled';
@@ -258,8 +300,18 @@ export interface TaskBudget {
 /** 本地自动化任务的运行频率；manual 只允许用户显式触发。 */
 export type AutomationCadence = 'manual' | 'hourly' | 'every_6_hours' | 'daily' | 'weekly';
 
-/** 自动化最近一次运行的持久化状态。 */
-export type AutomationRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+/** 自动化最近一次运行的持久化状态；等待类状态不会被调度器重复启动。 */
+export type AutomationRunStatus =
+  | 'pending'
+  | 'running'
+  | 'waiting_approval'
+  | 'waiting_clarification'
+  | 'waiting_budget'
+  | 'waiting_completion'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'missed';
 
 /** 可复用的本地 Agent 任务配方。 */
 export interface Automation {
@@ -402,6 +454,27 @@ export interface TokenUsageReport {
   peakDay: { date: string; totalTokens: number } | null;
 }
 
+/** GET /api/data/task-metrics — 本地任务可观测汇总；不包含提示词、文件正文或完整路径。 */
+export interface TaskObservabilityReport {
+  generatedAt: string;
+  tasks: number;
+  terminalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  cancelledTasks: number;
+  activeTasks: number;
+  pausedTasks: number;
+  successRate: number | null;
+  recoveredTasks: number;
+  userInterventions: number;
+  retries: number;
+  measuredDurationTasks: number;
+  averageDurationMs: number | null;
+  p95DurationMs: number | null;
+  failureCategories: Partial<Record<TaskErrorCategory, number>>;
+  tokenUsage: TokenUsageReport;
+}
+
 export interface TaskCheckpoint {
   id: string;
   label: string;
@@ -536,6 +609,8 @@ export interface Task {
   /** 最近一次预算触顶详情；续跑成功后清除。 */
   budgetExceeded?: BudgetExceededInfo;
   artifacts?: TaskArtifact[];
+  fileChanges?: TaskFileChange[];
+  recallSummary?: TaskRecallSummary;
   clarifications?: ClarificationRequest[];
   pendingApprovals?: PendingToolApproval[];
   checkpoints?: TaskCheckpoint[];
@@ -591,16 +666,6 @@ export function taskSummaryFromTask(task: Task): TaskSummary {
   };
 }
 
-/** 一个项目（导入的文件夹） */
-export interface Project {
-  id: string;
-  name: string;
-  /** 绝对路径 */
-  path: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 // ============================================================
 // 工具层 (为 MCP 接入预留)
 // ============================================================
@@ -641,12 +706,14 @@ export type TaskTraceKind =
   | 'done'
   | 'phase';
 
-/** 运行错误分类，帮助判断失败来自配置、模型、工具、权限、超时、取消或解析。 */
+/** 运行错误分类，帮助 UI 给出可执行的恢复入口。 */
 export type TaskErrorCategory =
   | 'configuration'
   | 'model'
   | 'tool'
   | 'permission'
+  | 'network'
+  | 'engine'
   | 'timeout'
   | 'budget'
   | 'cancelled'
@@ -697,6 +764,8 @@ export interface ToolExecutionPolicy {
   parallelizable?: boolean;
   /** 同一轮内该工具必须在哪些工具之后执行（工具名列表）。 */
   waitsFor?: string[];
+  /** 是否无论 auto 模式都必须停在用户审批处；用于 shell、Skill 安装和外部 MCP。 */
+  requiresExplicitApproval?: boolean;
 }
 
 /** 工具的元信息描述 */
@@ -881,6 +950,7 @@ export type AgentEvent =
   | { type: 'skill_installed'; taskId: string; skillNames: string[]; repoUrl: string }
   | { type: 'skill_uninstalled'; taskId: string; skillName: string }
   | { type: 'content_blocks_added'; taskId: string; messageId: string; blocks: ContentBlock[] }
+  | { type: 'recall_summary'; taskId: string; summary: TaskRecallSummary }
   | { type: 'auto_mode_state'; taskId: string; state: AutoModeState }
   | {
       /** 运行中 steering/follow-up 待注入队列的可见快照。 */
@@ -983,6 +1053,12 @@ export interface RunAutomationResponse {
   streamUrl: string;
 }
 
+/** POST /api/automations/test-run — 在保存配方前启动一次真实任务试跑。 */
+export interface TestAutomationResponse {
+  task: Task;
+  streamUrl: string;
+}
+
 /**
  * POST /api/tasks/:id/budget/continue — 预算触顶后续跑。
  * 引擎会在寿命预算不足时自动扩容一份额度，并重新进入 harness。
@@ -1009,68 +1085,6 @@ export interface CreateTaskResponse {
   /** SSE 事件流地址，前端用它订阅该任务的实时输出 */
   streamUrl: string;
 }
-
-/** POST /api/projects — 导入文件夹创建项目 */
-export interface CreateProjectRequest {
-  /** 项目名称；缺省取目录 basename */
-  name?: string;
-  /** 文件夹绝对路径 */
-  path: string;
-}
-
-/** PATCH /api/projects/:id — 更新项目 */
-export interface UpdateProjectRequest {
-  name?: string;
-}
-
-/** GET /api/projects */
-export interface ProjectListResponse {
-  projects: Project[];
-}
-
-export type WorkspaceReadEntryType = 'file' | 'directory';
-export type WorkspaceReadResultType = 'directory' | 'text' | 'image';
-
-export interface WorkspaceReadEntry {
-  name: string;
-  path: string;
-  type: WorkspaceReadEntryType;
-  size?: number;
-  mimeType?: string;
-}
-
-export interface WorkspaceReadBaseResponse {
-  root: string;
-  path: string;
-  type: WorkspaceReadResultType;
-}
-
-export interface WorkspaceDirectoryReadResponse extends WorkspaceReadBaseResponse {
-  type: 'directory';
-  entries: WorkspaceReadEntry[];
-  truncated: boolean;
-  next?: number;
-}
-
-export interface WorkspaceTextReadResponse extends WorkspaceReadBaseResponse {
-  type: 'text';
-  content: string;
-  offset?: number;
-  truncated: boolean;
-  next?: number;
-}
-
-export interface WorkspaceImageReadResponse extends WorkspaceReadBaseResponse {
-  type: 'image';
-  content: string;
-  mimeType: string;
-}
-
-/** GET /api/workspace/read — UI-facing adapter over the Pi read tool. */
-export type WorkspaceReadResponse =
-  | WorkspaceDirectoryReadResponse
-  | WorkspaceTextReadResponse
-  | WorkspaceImageReadResponse;
 
 /**
  * LLM 主对话就绪态（全应用防呆共用）。
@@ -1446,10 +1460,14 @@ export interface SkillDescriptor {
   sourcePath: string;
   /** SKILL.md 文件的绝对路径（供模型 file-read 激活用）。 */
   location?: string;
+  /** skill 目录的绝对路径，供设置页展示安装位置。 */
+  directory?: string;
   /** 安装来源 Git 仓库 URL（仅通过 install 安装的 skill）。 */
   installUrl?: string;
   /** 安装时间 ISO 时间戳。 */
   installedAt?: string;
+  /** 最近一次懒加载失败；只保存短错误摘要，不保存技能正文。 */
+  lastLoadError?: { message: string; at: string };
   /** 是否启用；禁用的 skill 不会出现在 Agent 的 skill catalog 中，也不能被 load_skill 加载。 */
   enabled: boolean;
 }
@@ -1467,6 +1485,12 @@ export interface SkillDetail extends SkillDescriptor {
 /** POST /api/skills/install — 从 Git 仓库安装 skill */
 export interface SkillInstallRequest {
   repoUrl: string;
+  /** 调用前在仓库页面确认过的 skill 目录或 SKILL.md 路径。 */
+  skillPaths: string[];
+  /** 实际检查过的网页、仓库页面或文件树地址。 */
+  inspectedSource?: string;
+  /** 说明已确认 SKILL.md 与来源可信的简短依据。 */
+  inspectionSummary: string;
 }
 
 /** POST /api/skills/install 响应 */
@@ -1475,6 +1499,8 @@ export interface SkillInstallResponse {
   repoUrl: string;
   alreadyExisted: string[];
   totalFound: number;
+  inspectedSkillPaths: string[];
+  inspectedSource?: string;
 }
 
 /** DELETE /api/skills/:name 响应 */
@@ -1856,16 +1882,67 @@ export interface UpdateToolRequest {
   enabled: boolean;
 }
 
+export interface McpToolChangeSummary {
+  added: string[];
+  removed: string[];
+  riskChanged: string[];
+}
+
 export interface McpServerStatus {
   name: string;
   enabled: boolean;
   connected: boolean;
   registeredTools: number;
+  /** 浏览器 permission profile 拦截的工具数。 */
+  blockedTools?: number;
+  /** MCP server 原始工具名；仅用于设置页预览与重载差异，不包含参数/凭据。 */
+  toolNames?: string[];
+  toolRisks?: Record<string, ToolRiskLevel>;
+  changes?: McpToolChangeSummary;
   error?: string;
 }
 
 export interface McpStatusResponse {
   servers: McpServerStatus[];
+}
+
+/** POST /api/mcp/test 的一次性连接探测结果；不包含凭据或工具参数。 */
+export interface McpConnectionTestResponse {
+  ok: boolean;
+  connected: boolean;
+  registeredTools: number;
+  /** 浏览器权限 profile 拦截的工具数；普通 MCP 未提供时保持 undefined。 */
+  blockedTools?: number;
+  latencyMs: number;
+  error?: string;
+}
+
+/** 浏览器 MCP 的能力边界；后一级包含前一级能力，提交级默认不启用。 */
+export type BrowserPermissionProfile = 'read_only' | 'download' | 'login' | 'submit';
+
+/** 浏览器 Skill 的运行时发现状态；不包含 MCP command/env/header 等敏感配置。 */
+export type BrowserRuntimeState = 'ready' | 'not_configured' | 'disabled' | 'unhealthy';
+
+/** GET /api/browser/status — 浏览器运行时检查结果。 */
+export interface BrowserRuntimeStatus {
+  state: BrowserRuntimeState;
+  skillInstalled: boolean;
+  skillEnabled: boolean;
+  serverName?: string;
+  connected: boolean;
+  registeredTools: number;
+  blockedTools: number;
+  /** 仅列出工具名，供用户确认能力范围；不包含 schema、参数或凭据。 */
+  toolNames: string[];
+  error?: string;
+  installCommand: string;
+  configExample: string;
+}
+
+/** POST /api/browser/test — 对已配置的 Playwright MCP 做一次性连接测试。 */
+export interface BrowserRuntimeTestResponse extends McpConnectionTestResponse {
+  state: BrowserRuntimeState;
+  serverName: string;
 }
 
 export interface DeferredToolSummary {

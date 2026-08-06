@@ -1,14 +1,18 @@
 import { useMemo, useState } from "react";
-import type { McpServerStatus } from "@aurevoy/shared";
-import { t } from "../../i18n";
+import type { McpConnectionTestResponse, McpServerStatus } from "@aurevoy/shared";
+import { testMcpConnection } from "../../api";
+import { t, type TranslationKey } from "../../i18n";
 import type { SettingsDraft } from "./types";
 import {
   emptyMcpServerDraft,
+  MCP_SERVER_TEMPLATES,
   mcpServerEndpointLabel,
+  isBrowserMcpServerName,
   parseMcpServersJson,
   removeMcpServer,
   setMcpServerEnabled,
   stringifyMcpServersJson,
+  mcpDraftToJsonBody,
   upsertMcpServer,
   type McpServerDraft,
   type McpTransport,
@@ -34,6 +38,8 @@ export function McpSettings({
 }) {
   const [view, setView] = useState<View>({ mode: "list" });
   const [formError, setFormError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<McpConnectionTestResponse | null>(null);
 
   const parsed = useMemo(() => {
     try {
@@ -52,11 +58,11 @@ export function McpSettings({
     return map;
   }, [mcpServers]);
 
-  function commitServers(next: McpServerDraft[], options?: { silent?: boolean }) {
+  async function commitServers(next: McpServerDraft[], options?: { silent?: boolean }): Promise<void> {
     const json = stringifyMcpServersJson(next);
     const nextDraft = { ...draft, mcpServersJson: json };
+    await onSave(nextDraft, options);
     onDraftChange(nextDraft);
-    return onSave(nextDraft, options);
   }
 
   async function handleToggle(name: string, enabled: boolean) {
@@ -65,7 +71,11 @@ export function McpSettings({
       return;
     }
     setFormError(null);
-    await commitServers(setMcpServerEnabled(parsed.servers, name, enabled));
+    try {
+      await commitServers(setMcpServerEnabled(parsed.servers, name, enabled));
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function handleRemove(name: string) {
@@ -75,8 +85,12 @@ export function McpSettings({
     }
     if (!window.confirm(t("settings.mcpConfirmRemove").replace("{name}", name))) return;
     setFormError(null);
-    await commitServers(removeMcpServer(parsed.servers, name));
-    setView({ mode: "list" });
+    try {
+      await commitServers(removeMcpServer(parsed.servers, name));
+      setView({ mode: "list" });
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function handleSaveEditor() {
@@ -102,7 +116,7 @@ export function McpSettings({
         isNew={!view.originalName}
         saving={saving}
         error={formError}
-        onChange={(next) => setView({ mode: "edit", originalName: view.originalName, draft: next })}
+          onChange={(next) => setView({ mode: "edit", originalName: view.originalName, draft: next })}
         onBack={() => {
           setFormError(null);
           setView({ mode: "list" });
@@ -112,6 +126,26 @@ export function McpSettings({
             ? () => void handleRemove(view.originalName!)
             : undefined
         }
+        testing={testing}
+        testResult={testResult}
+        onTest={async () => {
+          if (view.mode !== "edit") return;
+          setTesting(true);
+          setTestResult(null);
+          try {
+            setTestResult(await testMcpConnection(mcpDraftToJsonBody(view.draft)));
+          } catch (error) {
+            setTestResult({
+              ok: false,
+              connected: false,
+              registeredTools: 0,
+              latencyMs: 0,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          } finally {
+            setTesting(false);
+          }
+        }}
         onSave={() => void handleSaveEditor()}
       />
     );
@@ -127,6 +161,7 @@ export function McpSettings({
           disabled={saving || Boolean(parsed.error)}
           onClick={() => {
             setFormError(null);
+            setTestResult(null);
             setView({ mode: "edit", draft: emptyMcpServerDraft() });
           }}
         >
@@ -164,7 +199,18 @@ export function McpSettings({
                   : connected
                     ? `${t("settings.connected")} · ${tools} ${t("settings.mcpTools")}`
                     : t("settings.failed");
-              const subtitle = `${transportLabel} · ${endpoint} · ${statusLine}`;
+              const toolPreview = status?.toolNames?.length
+                ? ` · ${t("settings.mcpToolPreview")}: ${status.toolNames.join(", ")}`
+                : "";
+              const subtitle = `${transportLabel} · ${endpoint} · ${statusLine}${toolPreview}`;
+              const changes = status?.changes;
+              const changeSummary = changes
+                ? [
+                    changes.added.length ? `${t("settings.mcpToolsAdded")}: ${changes.added.join(", ")}` : "",
+                    changes.removed.length ? `${t("settings.mcpToolsRemoved")}: ${changes.removed.join(", ")}` : "",
+                    changes.riskChanged.length ? `${t("settings.mcpToolsRiskChanged")}: ${changes.riskChanged.join(", ")}` : "",
+                  ].filter(Boolean).join(" · ")
+                : "";
 
               return (
                 <li key={server.name} className="mcp-server-row">
@@ -182,6 +228,7 @@ export function McpSettings({
                     >
                       {subtitle}
                     </span>
+                    {changeSummary ? <span className="mcp-server-change" title={changeSummary}>{changeSummary}</span> : null}
                   </div>
                   <div className="mcp-server-actions">
                     <button
@@ -192,6 +239,7 @@ export function McpSettings({
                       disabled={saving}
                       onClick={() => {
                         setFormError(null);
+                        setTestResult(null);
                         setView({ mode: "edit", originalName: server.name, draft: { ...server } });
                       }}
                     >
@@ -215,6 +263,37 @@ export function McpSettings({
 
         {formError ? <p className="mcp-error" role="alert">{formError}</p> : null}
       </div>
+
+      <section className="mcp-templates" aria-labelledby="mcp-templates-title">
+        <div className="mcp-templates-head">
+          <div>
+            <h3 id="mcp-templates-title">{t("settings.mcpTemplates")}</h3>
+            <p>{t("settings.mcpTemplatesDesc")}</p>
+          </div>
+        </div>
+        <div className="mcp-template-list">
+          {MCP_SERVER_TEMPLATES.map((template) => (
+            <article key={template.id} className="mcp-template-card">
+              <div>
+                <strong>{t(template.nameKey as TranslationKey)}</strong>
+                <p>{t(template.descriptionKey as TranslationKey)}</p>
+              </div>
+              <button
+                type="button"
+                className="mcp-template-add"
+                disabled={saving || Boolean(parsed.error)}
+                onClick={() => {
+                  setFormError(null);
+                  setTestResult(null);
+                  setView({ mode: "edit", draft: template.createDraft() });
+                }}
+              >
+                {t("settings.mcpTemplateUse")}
+              </button>
+            </article>
+          ))}
+        </div>
+      </section>
     </section>
   );
 }
@@ -227,6 +306,9 @@ function McpServerEditor({
   onChange,
   onBack,
   onRemove,
+  testing,
+  testResult,
+  onTest,
   onSave,
 }: {
   value: McpServerDraft;
@@ -236,6 +318,9 @@ function McpServerEditor({
   onChange: (next: McpServerDraft) => void;
   onBack: () => void;
   onRemove?: () => void;
+  testing: boolean;
+  testResult: McpConnectionTestResponse | null;
+  onTest: () => void | Promise<void>;
   onSave: () => void;
 }) {
   function setTransport(transport: McpTransport) {
@@ -268,6 +353,23 @@ function McpServerEditor({
             onChange={(e) => onChange({ ...value, name: e.currentTarget.value })}
           />
         </label>
+
+        {isBrowserMcpServerName(value.name) ? (
+          <label className="mcp-field">
+            <span>{t("settings.mcpBrowserPermission")}</span>
+            <select
+              className="settings-input"
+              value={value.browserPermissionProfile ?? "read_only"}
+              onChange={(e) => onChange({ ...value, browserPermissionProfile: e.currentTarget.value as McpServerDraft["browserPermissionProfile"] })}
+            >
+              <option value="read_only">{t("settings.mcpBrowserReadOnly")}</option>
+              <option value="download">{t("settings.mcpBrowserDownload")}</option>
+              <option value="login">{t("settings.mcpBrowserLogin")}</option>
+              <option value="submit">{t("settings.mcpBrowserSubmit")}</option>
+            </select>
+            <p className="mcp-hint">{t("settings.mcpBrowserPermissionHint")}</p>
+          </label>
+        ) : null}
 
         <div className="mcp-field">
           <span>{t("settings.mcpFieldTransport")}</span>
@@ -487,6 +589,13 @@ function McpServerEditor({
         </label>
 
         {error ? <p className="mcp-error" role="alert">{error}</p> : null}
+        {testResult ? (
+          <p className={`mcp-test-result${testResult.ok ? " is-ok" : " is-error"}`} role="status">
+            {testResult.ok
+              ? `${t("settings.mcpTestSuccess")} · ${testResult.registeredTools} ${t("settings.mcpTools")} · ${testResult.latencyMs}ms`
+              : `${t("settings.mcpTestFailed")} ${testResult.error ?? ""}`}
+          </p>
+        ) : null}
 
         <div className="mcp-editor-actions">
           {onRemove ? (
@@ -496,7 +605,10 @@ function McpServerEditor({
           ) : (
             <span />
           )}
-          <button type="button" className="settings-primary-btn" disabled={saving} onClick={onSave}>
+          <button type="button" className="mcp-test-btn" disabled={saving || testing} onClick={() => void onTest()}>
+            {testing ? t("settings.mcpTesting") : t("settings.mcpTestConnection")}
+          </button>
+          <button type="button" className="settings-primary-btn" disabled={saving || testing} onClick={onSave}>
             {saving ? t("settings.saving") : t("settings.mcpSaveServer")}
           </button>
         </div>
@@ -504,5 +616,3 @@ function McpServerEditor({
     </section>
   );
 }
-
-

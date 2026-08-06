@@ -63,6 +63,12 @@
   border-left: 1px solid var(--border);
 }
 
+.workbench-split:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
 .workbench-split-row {
   width: 100%;
   height: 5px;
@@ -114,6 +120,24 @@
   cursor: pointer;
 }
 
+.workbench-toolbar-close {
+  display: none;
+  place-items: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.workbench-toolbar-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
 .workbench-toolbar-btn:hover {
   background: var(--hover);
   color: var(--text);
@@ -132,7 +156,7 @@
 
 .file-tree-section {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
 }
@@ -201,6 +225,14 @@
   color: var(--text-tertiary);
 }
 
+.file-tree-action-error {
+  margin: -2px 10px 6px;
+  color: var(--danger-soft-fg);
+  font-size: var(--ui-font-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .file-tree-filter:focus {
   border: none;
   background: transparent;
@@ -223,6 +255,20 @@
   padding: 2px 8px 10px;
 }
 
+.file-tree-virtual-canvas {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+}
+
+.file-tree-virtual-item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  min-width: 0;
+}
+
 .file-tree-row {
   display: grid;
   grid-template-columns: 14px 20px minmax(0, 1fr);
@@ -239,9 +285,42 @@
   cursor: pointer;
 }
 
+.file-tree-load-more {
+  display: block;
+  width: 100%;
+  min-height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent);
+  padding: 4px 8px 4px calc(4px + var(--tree-depth, 0) * 12px);
+  text-align: left;
+  font-size: var(--ui-font-xs);
+  cursor: pointer;
+}
+
+.file-tree-load-more:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.file-tree-load-more:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .file-tree-row:hover:not(:disabled) {
   background: var(--hover);
   color: var(--text);
+}
+
+.file-tree-row:focus-visible,
+.workbench-tab:focus-visible,
+.workbench-open-file-pill:focus-visible,
+.workbench-tab-add:focus-visible,
+.workbench-toolbar-btn:focus-visible,
+.icon-btn-small:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 1px;
 }
 
 .file-tree-row[data-selected="true"] {
@@ -302,7 +381,8 @@
 
 .file-tree-empty,
 .file-tree-error {
-  margin: 8px 10px;
+  margin: 4px 10px;
+  padding-left: calc(var(--tree-depth, 0) * 12px);
   color: var(--text-tertiary);
   font-size: 12px;
   line-height: 1.4;
@@ -438,8 +518,10 @@
 .workbench-tab-close {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
   border: none;
   border-radius: 999px;
   background: transparent;
@@ -678,6 +760,35 @@
   padding: 14px;
   tab-size: 2;
   white-space: pre;
+}
+
+.file-viewer-pre-virtual {
+  position: relative;
+  overflow: auto;
+  padding: 0;
+  white-space: pre;
+}
+
+.file-viewer-code-canvas {
+  position: relative;
+  width: 100%;
+  min-width: max-content;
+}
+
+.file-viewer-code-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  min-height: 22px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  white-space: pre;
+}
+
+.file-viewer-code-line code {
+  display: block;
+  min-height: 22px;
 }
 
 .file-viewer-image-wrap {

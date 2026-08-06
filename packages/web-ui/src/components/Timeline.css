@@ -466,7 +466,8 @@
   font-size: var(--ui-font-size);
   font-weight: 500;
   text-align: left;
-  padding: 0;
+  min-height: 24px;
+  padding: 2px 0;
   cursor: pointer;
   border-radius: var(--ui-radius-sm);
 }
@@ -577,6 +578,16 @@
 .timeline-search-count {
   flex: 0 0 auto;
   color: var(--text-tertiary);
+}
+
+.timeline-search-untrusted {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning, #c38a32) 14%, transparent);
+  color: var(--warning-fg, var(--text-secondary));
+  font-size: 10px;
+  font-weight: 650;
 }
 
 .timeline-search-results {
@@ -832,6 +843,133 @@
 
 .timeline-output.is-streaming .doc-body {
   padding-left: 0;
+}
+
+.recall-summary {
+  width: min(680px, calc(100% - 32px));
+  margin: 0 auto 10px;
+  color: var(--text-tertiary);
+  font-size: var(--ui-font-xs);
+}
+
+.recall-summary summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.recall-summary-count {
+  color: var(--accent-soft-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.recall-summary-body {
+  display: grid;
+  gap: 5px;
+  max-width: 520px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-sm);
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%);
+}
+
+.recall-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recall-summary-label {
+  color: var(--text-secondary);
+}
+
+.recall-summary-status {
+  color: var(--text-tertiary);
+  text-align: right;
+}
+
+.recall-summary-row[data-status="failed"] .recall-summary-status {
+  color: var(--danger-soft-fg);
+}
+
+.recall-summary-hint {
+  margin: 2px 0 0;
+  color: var(--text-tertiary);
+}
+
+.research-sources {
+  width: min(680px, calc(100% - 32px));
+  margin: 0 auto 10px;
+  color: var(--text-secondary);
+  font-size: var(--ui-font-xs);
+}
+
+.research-sources summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  cursor: pointer;
+  color: var(--accent-soft-fg);
+}
+
+.research-sources-body {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.timeline-knowledge-preview {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--surface);
+}
+
+.timeline-knowledge-results {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.timeline-knowledge-result {
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.timeline-knowledge-file {
+  max-width: calc(100% - 56px);
+  min-height: 24px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-soft-fg);
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-knowledge-file:disabled {
+  cursor: default;
+  color: var(--text-secondary);
+}
+
+.timeline-knowledge-score {
+  float: right;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-knowledge-result p {
+  margin: 4px 0 0;
+  color: var(--text-tertiary);
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 /* 步骤状态文本 */

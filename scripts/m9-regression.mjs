@@ -3,10 +3,15 @@
 // 运行: node scripts/m9-regression.mjs
 // 依赖: Agent 引擎已编译（npm run build）
 
-import { mkdtemp, mkdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
+import { installRegressionAuth } from './regression-auth.mjs';
+
+installRegressionAuth();
+
+const packageMetadata = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
 const tempRoot = await mkdtemp(join(tmpdir(), 'aurevoy-m9-'));
 const workspaceDir = join(tempRoot, 'workspace');
@@ -49,7 +54,7 @@ function readBody(req) {
 async function request(method, path, body) {
   const url = new URL(path, baseUrl);
   return new Promise((resolve, reject) => {
-    const options = { method, hostname: url.hostname, port: url.port, path: url.pathname, headers: {} };
+    const options = { method, hostname: url.hostname, port: url.port, path: url.pathname, headers: { Authorization: 'Bearer aurevoy-regression-token' } };
     if (body !== undefined) options.headers['Content-Type'] = 'application/json';
     const req = http.request(options, async (res) => {
       const raw = await readBody(res);
@@ -118,13 +123,18 @@ try {
   console.log('--- 健康诊断契约 ---');
   const health = await get('/api/health');
   assert(health.status === 200, '基础 health 应返回 200');
-  assert(health.data.version === '0.6.15', 'health 应返回当前迭代版本而非历史硬编码版本');
+  assert(health.data.version === packageMetadata.version, 'health 应返回 package.json 当前迭代版本');
 
   const diagnostics = await get('/api/health/diagnostics');
   assert(diagnostics.status === 200, 'health diagnostics 应返回 200');
   assert(diagnostics.data.checks?.length === 6, '诊断应覆盖 6 个本地运行时检查');
   assert(diagnostics.data.checks?.some((item) => item.id === 'database' && item.status === 'ok'), 'SQLite quick check 应通过');
   assert(diagnostics.data.checks?.some((item) => item.id === 'embedding' && item.status === 'warning'), 'embedding off 应明确标为降级');
+
+  const metrics = await get('/api/data/task-metrics');
+  assert(metrics.status === 200, '本地任务指标应返回 200');
+  assert(metrics.data.tasks >= 1 && metrics.data.terminalTasks >= 1, '任务指标应统计当前任务与终态任务');
+  assert(metrics.data.goal === undefined && metrics.data.prompt === undefined, '任务指标不得泄漏任务正文');
 
   console.log('--- 脱敏数据导出 ---');
   const exportMeta = await post('/api/data/export', {});

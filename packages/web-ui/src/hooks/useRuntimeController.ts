@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { HealthResponse, Project, TaskSummary } from "@aurevoy/shared";
-import { checkHealth, listProjects, listTasks, setBaseUrl } from "../api";
+import { bootstrapApiSession, checkHealth, listProjects, listTasks, setBaseUrl } from "../api";
 import { t } from "../i18n";
 import type { PlatformAdapter } from "../platform/types";
 
@@ -43,6 +43,7 @@ export function useRuntimeController({
       if (status?.baseUrl) {
         setBaseUrl(status.baseUrl);
       }
+      await bootstrapApiSession();
       if (status?.error) {
         setNotice(`${status.message}：${status.error}`);
       }
@@ -59,6 +60,7 @@ export function useRuntimeController({
     if (status?.baseUrl) {
       setBaseUrl(status.baseUrl);
     }
+    await bootstrapApiSession();
     if (status && !status.running) {
       throw new Error(status.error ? `${status.message}: ${status.error}` : status.message ?? "Agent 引擎未运行");
     }

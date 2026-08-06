@@ -43,6 +43,17 @@ jobs:
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli
 
+      - name: Real macOS WKWebView smoke
+        run: npm run regression:tauri-webview:strict -- --report "$RUNNER_TEMP/aurevoy-tauri-webview.json"
+
+      - name: Upload macOS WebView smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurevoy-macos-tauri-webview
+          if-no-files-found: error
+          path: ${{ runner.temp }}/aurevoy-tauri-webview.json
+
       - name: Prepare updater signing key
         env:
           RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -144,11 +155,26 @@ jobs:
       - name: Build (shared + agent + desktop)
         run: npm run build
 
+      - name: Verify Windows Job Object isolation
+        run: npm run regression:shell-isolation:strict
+
       - name: Prepare desktop bundle resources
         run: npm run prepare-desktop-bundle
 
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli
+
+      - name: Real Windows WebView2 smoke
+        shell: pwsh
+        run: npm run regression:tauri-webview:strict -- --report "$env:RUNNER_TEMP\aurevoy-tauri-webview.json"
+
+      - name: Upload Windows WebView smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurevoy-windows-tauri-webview
+          if-no-files-found: error
+          path: ${{ runner.temp }}/aurevoy-tauri-webview.json
 
       - name: Prepare updater signing key
         shell: bash
@@ -188,6 +214,15 @@ jobs:
         run: cd apps/desktop && tauri build --bundles nsis
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign and verify Windows artifacts
+        shell: pwsh
+        env:
+          WINDOWS_CODE_SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_CODE_SIGNING_CERT_BASE64 }}
+          WINDOWS_CODE_SIGNING_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_PASSWORD }}
+          WINDOWS_CODE_SIGNING_TIMESTAMP_URL: ${{ vars.WINDOWS_CODE_SIGNING_TIMESTAMP_URL }}
+          WINDOWS_SIGNING_REQUIRED: ${{ startsWith(github.ref, 'refs/tags/v') && 'true' || 'false' }}
+        run: ./scripts/sign-windows-release.ps1
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -294,9 +329,29 @@ jobs:
             apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
             apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage.sig
 
+  release-gate:
+    name: Full regression and documentation gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run full release regression
+        run: npm run regression:full
+
   create-release:
     name: Create Release
-    needs: [build-macos, build-windows, build-linux]
+    needs: [build-macos, build-windows, build-linux, release-gate]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -304,6 +359,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install dependencies for release audit
+        run: npm ci
 
       - name: Download all platform artifacts
         uses: actions/download-artifact@v4
@@ -347,6 +411,9 @@ jobs:
               process.exit(1);
             }
           '
+
+      - name: Audit updater manifest and release versions
+        run: npm run audit:release -- --version "${{ steps.meta.outputs.version }}" --updater-manifest latest.json --manifest release-audit.json
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

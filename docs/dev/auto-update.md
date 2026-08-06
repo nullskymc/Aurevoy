@@ -126,6 +126,7 @@ npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
    - **macOS 必须** `tauri build --bundles app,dmg`：仅 `dmg` 时 **不会** 生成 `.app.tar.gz` / `.sig`（Tauri v2 的 `createUpdaterArtifacts` 只在 package types 含 `app` 时打热更新包）
    - 上传安装包 + updater 产物 + `.sig`；mac job 校验 `.app.tar.gz` 存在
    - `scripts/generate-latest-json.mjs` 生成 `latest.json`，并要求含 `darwin-aarch64` / `windows-x86_64` / `linux-x86_64`
+   - `release-gate` 在创建 Release 前运行 `npm run regression:full`；随后 `audit:release --updater-manifest` 核对清单版本、URL、签名和三平台 key
    - `softprops/action-gh-release` 创建 Release
 
 手动触发 `workflow_dispatch` 时，版本取自 `tauri.conf.json`。
@@ -135,9 +136,9 @@ npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 | 层 | 用途 | 状态 |
 |---|---|---|
 | Tauri updater 签名 | 验证更新包来源（minisign） | **已接入** |
-| Apple Developer 签名/公证 | Gatekeeper / 无「未知开发者」提示 | 仍需证书与 Secrets，见 ROADMAP |
+| Apple Developer 签名/公证 | Gatekeeper / 无「未知开发者」提示 | **不纳入当前路线图** |
 
-无 Apple 签名时自动更新仍可用，但用户首次打开可能被系统拦截。
+无 Apple 签名时自动更新仍可用，但用户首次打开可能被系统拦截。当前只维护真实限制说明和既有打开方式，不围绕 Apple Developer key、公证或 Gatekeeper 提示追加开发任务。
 
 ## 相关文件
 

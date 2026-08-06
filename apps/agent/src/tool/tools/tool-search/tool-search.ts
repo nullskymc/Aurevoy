@@ -35,8 +35,10 @@ const Output = Schema.Struct({
 export const toolSearchTool = make({
   name: "tool_search",
   riskLevel: "caution",
+  // 延迟 MCP 工具最终会在本工具内部执行，不能让 tool_search 成为审批绕过通道。
+  executionPolicy: { parallelizable: false, requiresExplicitApproval: true },
   description:
-    "搜索并调用延迟加载的 MCP 工具。" +
+    "在用户明确批准后搜索并调用延迟加载的 MCP 工具。" +
     "仅传 query 时返回匹配工具列表；" +
     "传 tool_name 时返回该工具的参数 schema；" +
     "同时传 tool_name 和 arguments 时直接执行该工具并返回结果。",

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { ContentBlock, Task, TaskArtifact } from "@aurevoy/shared";
+import type { ContentBlock, Task, TaskArtifact, TaskFileChange } from "@aurevoy/shared";
 import { t } from "../i18n";
 import { IconFile, IconFolder, IconPlus, IconX } from "../icons";
 import "./OutputFloatPanel.css";
@@ -21,7 +21,7 @@ function collectOutputItems(task: Task | null, liveBlocks: ContentBlock[]): Outp
       kind: "artifact",
       id: artifact.id,
       name: artifact.name || t("output.untitled"),
-      subtitle: artifact.mimeType || artifact.type,
+      subtitle: artifactMetadataLabel(artifact),
       artifact,
     });
   }
@@ -76,6 +76,19 @@ function collectOutputItems(task: Task | null, liveBlocks: ContentBlock[]): Outp
   }
 
   return items;
+}
+
+function artifactMetadataLabel(artifact: TaskArtifact): string {
+  const parts = [artifact.mimeType || artifact.type];
+  if (artifact.sizeBytes !== undefined) parts.push(formatBytes(artifact.sizeBytes));
+  if (artifact.appliedPath) parts.push(artifact.appliedPath);
+  return parts.join(" · ");
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function OutputFloatPanel({
@@ -147,6 +160,22 @@ export function OutputFloatPanel({
 
       {!collapsed && (
         <div className="output-float-body">
+          {task?.fileChanges?.length ? (
+            <section className="output-float-changes" aria-label={t("output.changesTitle")}>
+              <h2>{t("output.changesTitle")}</h2>
+              <ul>
+                {task.fileChanges.slice().reverse().slice(0, 12).map((change) => (
+                  <li key={change.id}>
+                    <span className="output-float-change-operation">{fileChangeOperationLabel(change)}</span>
+                    <span className="output-float-change-path" title={change.path}>{change.path}</span>
+                    <span className="output-float-change-stats">
+                      {formatChangeStats(change)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           {items.length === 0 ? (
             <button type="button" className="output-float-empty" onClick={onOpenWorkbench}>
               {t("output.empty")}
@@ -183,6 +212,27 @@ export function OutputFloatPanel({
       )}
     </aside>
   );
+}
+
+function fileChangeOperationLabel(change: TaskFileChange): string {
+  switch (change.operation) {
+    case "created": return t("output.changeCreated");
+    case "modified": return t("output.changeModified");
+    case "appended": return t("output.changeAppended");
+    case "copied": return t("output.changeCopied");
+    case "moved": return t("output.changeMoved");
+    case "deleted": return t("output.changeDeleted");
+    case "artifact_applied": return t("output.changeArtifact");
+  }
+}
+
+function formatChangeStats(change: TaskFileChange): string {
+  const lines = [
+    change.additions !== undefined ? `+${change.additions}` : "",
+    change.deletions !== undefined ? `-${change.deletions}` : "",
+  ].filter(Boolean);
+  if (!change.baselineAvailable) lines.push(t("output.changeNoBaseline"));
+  return lines.join(" ");
 }
 
 function DocIcon() {

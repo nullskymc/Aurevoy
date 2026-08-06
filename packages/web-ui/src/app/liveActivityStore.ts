@@ -1,4 +1,4 @@
-import type { ToolActivity } from "../components/Conversation";
+import type { ToolActivity } from "../components/conversationData";
 
 /**
  * 实时工具活动状态（替代 deriveToolActivityFromEvents 的 events[] 全量扫描）。

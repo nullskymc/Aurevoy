@@ -113,7 +113,7 @@ function makeTask(): Task {
 describe('buildDataExportPayload', () => {
   it('projects sensitive runtime and filesystem fields out of the default export', () => {
     const payload = buildDataExportPayload({
-      appVersion: '0.6.15',
+      appVersion: '0.7.0',
       exportedAt: '2026-08-05T00:00:00.000Z',
       settings: makeSettings(),
       projects: [{ id: 'project-1', name: 'Private', path: '/Users/example/project', createdAt: 'now', updatedAt: 'now' }],
@@ -138,7 +138,7 @@ describe('buildDataExportPayload', () => {
 
   it('includes message text while retaining only safe attachment and tool metadata when opted in', () => {
     const payload = buildDataExportPayload({
-      appVersion: '0.6.15',
+      appVersion: '0.7.0',
       exportedAt: '2026-08-05T00:00:00.000Z',
       settings: makeSettings(),
       projects: [],

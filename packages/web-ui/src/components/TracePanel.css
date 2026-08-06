@@ -85,3 +85,8 @@
   font-size: 11px;
   overflow-wrap: anywhere;
 }
+
+.trace-row__security {
+  color: var(--warn-soft-fg) !important;
+  font-weight: 600;
+}

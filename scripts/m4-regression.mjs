@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { installRegressionAuth } from './regression-auth.mjs';
+
+installRegressionAuth();
 
 // M4.1 多轮对话回归：验证同一任务内追加用户输入后，后端带完整历史重跑循环，
 // 上下文真实保留；并校验续聊端点的 404 / 409 / 400 边界。

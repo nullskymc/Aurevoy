@@ -58,6 +58,7 @@ export function GeneralSettings({
     "idle" | "testing" | "ok" | "fail"
   >("idle");
   const [proxyTestDetail, setProxyTestDetail] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const canCheckUpdate = typeof platform.checkForAppUpdate === "function";
 
   useEffect(() => {
@@ -160,6 +161,17 @@ export function GeneralSettings({
         kind: "error",
         message: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /** 保存失败时在设置页保留可见反馈，同时消费父层抛出的异步错误。 */
+  async function handleSave(): Promise<void> {
+    setSaveError(null);
+    try {
+      await Promise.resolve(onSave(draft));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSaveError(`${t("notice.saveSettingsFailed")}${detail}`);
     }
   }
 
@@ -425,12 +437,13 @@ export function GeneralSettings({
               type="button"
               className="settings-primary-btn"
               disabled={saving}
-              onClick={() => void onSave(draft)}
+              onClick={() => void handleSave()}
             >
               {saving ? t("settings.saving") : t("settings.saveSettings")}
             </button>
           }
         />
+        {saveError && <p className="settings-action-error" role="alert">{saveError}</p>}
         <SettingsActionRow
           title={t("settings.agentServerUrl")}
           description={t("settings.agentServerUrlDesc")}

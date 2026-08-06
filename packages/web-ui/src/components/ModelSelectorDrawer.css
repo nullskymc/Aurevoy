@@ -1,5 +1,10 @@
 /* ============ 模型 + 推理强度（根/二级各自 fixed，二级 hover 跟行对齐） ============ */
 
+/* 焦点捕获的容器不参与定位，根菜单与二级菜单仍各自使用 fixed。 */
+.model-menu-focus-scope {
+  display: contents;
+}
+
 @keyframes model-menu-in {
   from {
     opacity: 0;
@@ -70,9 +75,14 @@
   background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
-.model-menu-nav-row:focus,
-.model-menu-nav-row:focus-visible {
+.model-menu-nav-row:focus {
   outline: none;
+  box-shadow: none;
+}
+
+.model-menu-nav-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -2px;
   box-shadow: none;
 }
 
@@ -233,9 +243,14 @@
   transition: background 80ms ease, color 80ms ease;
 }
 
-.model-menu-item:focus,
-.model-menu-item:focus-visible {
+.model-menu-item:focus {
   outline: none;
+  box-shadow: none;
+}
+
+.model-menu-item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -2px;
   box-shadow: none;
 }
 
@@ -294,6 +309,10 @@
 /* ---- Legacy bits still imported via this stylesheet ---- */
 .toast-close {
   flex: 0 0 auto;
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-grid;
+  place-items: center;
   border: none;
   background: transparent;
   color: inherit;

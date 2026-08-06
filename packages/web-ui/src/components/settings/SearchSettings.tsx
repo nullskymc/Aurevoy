@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { SettingsDraft } from "./types";
 import { t } from "../../i18n";
 import { SettingsActionRow, SettingsGroup, SettingsSwitchRow } from "./layout";
@@ -13,6 +14,19 @@ export function SearchSettings({
   onDraftChange: (draft: SettingsDraft) => void;
   onSave: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
 }) {
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  /** 搜索配置保存失败时留在当前设置项，并消费异步异常。 */
+  async function handleSave(): Promise<void> {
+    setSaveError(null);
+    try {
+      await Promise.resolve(onSave(draft));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSaveError(`${t("notice.saveSettingsFailed")}${detail}`);
+    }
+  }
+
   return (
     <>
       <SettingsGroup title={t("settings.searchTitle")}>
@@ -75,12 +89,13 @@ export function SearchSettings({
               type="button"
               className="settings-primary-btn"
               disabled={saving}
-              onClick={() => void onSave(draft)}
+              onClick={() => void handleSave()}
             >
               {saving ? t("settings.saving") : t("action.save")}
             </button>
           }
         />
+        {saveError && <p className="settings-action-error" role="alert">{saveError}</p>}
       </SettingsGroup>
     </>
   );

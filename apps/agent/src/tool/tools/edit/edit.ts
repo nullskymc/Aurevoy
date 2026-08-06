@@ -1,8 +1,9 @@
 import { Schema } from "effect"
-import { resolve } from "node:path"
+import { dirname } from "node:path"
 import { promises as fs } from "node:fs"
 import { diffLines } from "diff"
 import { make, type ContentPart } from "../../framework/definition.js"
+import { assertRealPathInside, resolveInWorkspace } from "../../filesystem/workspace-paths.js"
 
 const normalizeLineEndings = (text: string): string => text.replaceAll("\r\n", "\n")
 const detectLineEnding = (text: string): "\n" | "\r\n" =>
@@ -39,6 +40,8 @@ const Output = Schema.Struct({
   file: Schema.String,
   additions: Schema.Number,
   deletions: Schema.Number,
+  bytesBefore: Schema.Number,
+  bytesAfter: Schema.Number,
 })
 
 const previewLines = (value: string, prefix: "+" | "-"): string[] => {
@@ -62,7 +65,8 @@ export const editTool = make({
   input: Input,
   output: Output,
   execute: async (input, ctx) => {
-    const path = resolve(ctx.workspaceDir, input.path)
+    const path = resolveInWorkspace(input.path, ctx.workspaceDir, [])
+    await assertRealPathInside(path, ctx.workspaceDir, [])
 
     if (input.oldString === input.newString) {
       throw new Error("No changes: oldString and newString are identical.")
@@ -101,12 +105,15 @@ export const editTool = make({
       { additions: 0, deletions: 0 },
     )
 
+    await assertRealPathInside(dirname(path), ctx.workspaceDir, [])
     await fs.writeFile(path, replaced, "utf-8")
 
     return {
       replacements: occurrences,
       file: input.path,
       ...counts,
+      bytesBefore: Buffer.byteLength(source, "utf-8"),
+      bytesAfter: Buffer.byteLength(replaced, "utf-8"),
     }
   },
   toModelOutput: (input, output): ReadonlyArray<ContentPart> => [

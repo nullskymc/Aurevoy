@@ -42,8 +42,8 @@ interface TaskHistorySidebarProps {
   onOpenAutomations: () => void;
   onOpenSettings: () => void;
   onImportProject: () => void;
-  onDeleteProject: (projectId: string) => void;
-  onDeleteTask: (taskId: string) => void;
+  onDeleteProject: (projectId: string) => void | Promise<void>;
+  onDeleteTask: (taskId: string) => void | Promise<void>;
 }
 
 export function TaskHistorySidebar({
@@ -72,6 +72,16 @@ export function TaskHistorySidebar({
     return initial;
   });
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
+  const [deletePendingKey, setDeletePendingKey] = useState<string | null>(null);
+
+  /** 项目和对话删除共用一个 pending 锁，防止确认窗口关闭后重复提交。 */
+  function requestDelete(kind: "project" | "task", id: string): void {
+    const key = `${kind}:${id}`;
+    if (deletePendingKey) return;
+    setDeletePendingKey(key);
+    void Promise.resolve(kind === "project" ? onDeleteProject(id) : onDeleteTask(id))
+      .finally(() => setDeletePendingKey(null));
+  }
 
   const closeCtxMenu = useCallback(() => {
     setCtxMenu((prev) => ({ ...prev, open: false }));
@@ -162,7 +172,8 @@ export function TaskHistorySidebar({
         label: t("projects.delete"),
         icon: <IconTrash />,
         danger: true,
-        action: () => onDeleteProject(project.id),
+        disabled: deletePendingKey !== null,
+        action: () => requestDelete("project", project.id),
       },
     ];
     setCtxMenu({ open: true, point: contextMenuPoint(e), items });
@@ -188,7 +199,8 @@ export function TaskHistorySidebar({
         label: t("sidebar.deleteTask"),
         icon: <IconTrash />,
         danger: true,
-        action: () => onDeleteTask(task.id),
+        disabled: deletePendingKey !== null,
+        action: () => requestDelete("task", task.id),
       },
     ];
     setCtxMenu({ open: true, point: contextMenuPoint(e), items });
@@ -305,8 +317,10 @@ export function TaskHistorySidebar({
                       className="sidebar-icon-btn drawer-action is-danger"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onDeleteProject(project.id);
+                        requestDelete("project", project.id);
                       }}
+                      disabled={deletePendingKey !== null}
+                      aria-busy={deletePendingKey === `project:${project.id}`}
                       title={t("projects.delete")}
                       aria-label={t("projects.delete")}
                     >
@@ -318,7 +332,8 @@ export function TaskHistorySidebar({
                       tasks={projectTasks}
                       activeTaskId={activeTaskId}
                       onSelectTask={onSelectTask}
-                      onDeleteTask={onDeleteTask}
+                      pendingDeleteKey={deletePendingKey}
+                      onRequestDelete={requestDelete}
                       onContextMenuTask={handleTaskContextMenu}
                       nested
                     />
@@ -350,7 +365,8 @@ export function TaskHistorySidebar({
               tasks={tasksByProject.standalone}
               activeTaskId={activeTaskId}
               onSelectTask={onSelectTask}
-              onDeleteTask={onDeleteTask}
+              pendingDeleteKey={deletePendingKey}
+              onRequestDelete={requestDelete}
               onContextMenuTask={handleTaskContextMenu}
             />
           )}
@@ -383,14 +399,16 @@ function TaskList({
   tasks,
   activeTaskId,
   onSelectTask,
-  onDeleteTask,
+  pendingDeleteKey,
+  onRequestDelete,
   onContextMenuTask,
   nested = false,
 }: {
   tasks: TaskSummary[];
   activeTaskId?: string;
   onSelectTask: (task: TaskSummary) => void;
-  onDeleteTask: (taskId: string) => void;
+  pendingDeleteKey: string | null;
+  onRequestDelete: (kind: "project" | "task", id: string) => void;
   onContextMenuTask?: (e: React.MouseEvent, task: TaskSummary) => void;
   nested?: boolean;
 }) {
@@ -450,8 +468,10 @@ function TaskList({
               className="sidebar-icon-btn conv-delete-btn is-danger"
               onClick={(event) => {
                 event.stopPropagation();
-                onDeleteTask(task.id);
+                onRequestDelete("task", task.id);
               }}
+              disabled={pendingDeleteKey !== null}
+              aria-busy={pendingDeleteKey === `task:${task.id}`}
               title={t("sidebar.deleteTask")}
               aria-label={t("sidebar.deleteTask")}
             >

@@ -371,7 +371,9 @@ export function createArtifact(args: {
   type?: TaskArtifact['type'];
   mimeType?: string;
   sourceCallId?: string;
+  sourceTaskId?: string;
 }): TaskArtifact {
+  const now = new Date().toISOString();
   return {
     id: randomUUID(),
     type: args.type ?? 'text',
@@ -380,7 +382,10 @@ export function createArtifact(args: {
     mimeType: args.mimeType,
     sourceCallId: args.sourceCallId,
     status: 'draft',
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+    updatedAt: now,
+    sourceTaskId: args.sourceTaskId,
+    sizeBytes: Buffer.byteLength(args.content, 'utf8'),
   };
 }
 
@@ -392,7 +397,7 @@ export function updateArtifactStatus(
   const artifacts = task.artifacts ?? [];
   const index = artifacts.findIndex((item) => item.id === artifactId);
   if (index < 0) return undefined;
-  const next = { ...artifacts[index], status };
+  const next = { ...artifacts[index], status, updatedAt: new Date().toISOString() };
   artifacts[index] = next;
   task.artifacts = artifacts;
   return next;
@@ -409,6 +414,7 @@ export function markArtifactApplied(
   const next: TaskArtifact = {
     ...artifacts[index],
     status: 'applied',
+    updatedAt: new Date().toISOString(),
     appliedAt: new Date().toISOString(),
     appliedPath,
   };

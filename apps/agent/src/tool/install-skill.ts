@@ -40,7 +40,7 @@ export function registerInstallSkillTool(): void {
       additionalProperties: false,
     },
     riskLevel: 'caution',
-    executionPolicy: { parallelizable: false },
+    executionPolicy: { parallelizable: false, requiresExplicitApproval: true },
     source: { type: 'builtin' },
 
     async execute(args) {

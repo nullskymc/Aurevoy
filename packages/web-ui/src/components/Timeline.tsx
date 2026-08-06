@@ -10,11 +10,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, MotionConfig } from "framer-motion";
 import type {
   ContentBlock,
-  Message,
-  MessageToolCall,
-  PlanStep,
-  SubagentRole,
-  SubagentRun,
+  TaskRecallSummary,
 } from "@aurevoy/shared";
 import { MarkdownRenderer, StreamingMarkdownRenderer } from "./MarkdownRenderer";
 import { usePlatform } from "../platform/context";
@@ -28,7 +24,7 @@ import {
   contextMenuPoint,
   type ContextMenuState,
 } from "./contextMenuActions";
-import { getPlanStepStatusLabel, mapPlanStepGroupStatus, type PlanUiStatus } from "./planStatus";
+import { getPlanStepStatusLabel } from "./planStatus";
 import {
   IconAlertCircle,
   IconBan,
@@ -44,644 +40,37 @@ import {
 } from "../icons";
 import "./Timeline.css";
 
-/* ============ 类型定义 ============ */
+/* ============ 纯数据构建 ============ */
+import type {
+  AgentRoundData,
+  PlanStepGroupData,
+  TimelineStepData,
+} from "./timelineData";
+import {
+  flattenProcessActivityRows,
+  formatProcessedSummaryLabel,
+  formatProcessingSummaryLabel,
+} from "./timelineProcessData";
+import type { ProcessActivityRow, ProcessSegmentData } from "./timelineProcessData";
+import { useTimelineRoundViewModel } from "./useTimelineRoundViewModel";
 
-/** 步骤类型标签，用于 badge 区分 */
-export type StepKind =
-  | "command" | "file_read" | "file_write" | "search"
-  | "browse" | "think" | "api" | "edit" | "artifact" | "other";
-
-/** 单个 timeline 步骤（对应一个工具调用） */
-export interface TimelineStepData {
-  id: string;
-  kind: StepKind;
-  title: string;
-  /** 后端提供的状态无关动作摘要；存在时优先于前端参数猜测 */
-  summary?: string;
-  status: "pending" | "running" | "success" | "failed" | "cancelled";
-  planStepId?: string;
-  logs?: string;
-  output?: string;
-  error?: string;
-  args?: Record<string, unknown>;
-  toolName?: string;
-  rawOutput?: unknown;
-  progress?: {
-    message: string;
-    chunk?: { current: number; total: number };
-    percent?: number;
-  };
-}
-
-/** 按计划步骤分组的工具调用集合 */
-export interface PlanStepGroupData {
-  planStepId: string;
-  description: string;
-  status: PlanUiStatus;
-  /** Shown when plan step is blocked/paused */
-  blockedReason?: string;
-  steps: TimelineStepData[];
-}
-
-/** 一轮 Agent 回复的完整 timeline 呈现数据 */
-export interface AgentRoundData {
-  id: string;
-  planStepGroups: PlanStepGroupData[];
-  summary: string;
-  markdownOutput?: string;
-  contentBlocks?: ContentBlock[];
-  subagentRuns?: SubagentRun[];
-  status: "pending" | "running" | "completed" | "failed" | "blocked" | "cancelled";
-}
-
-/* ============ 工具函数 ============ */
-
-/**
- * 按稳定 ID 合并内嵌内容块。
- *
- * SSE 重放、历史恢复和实时尾巴可能在不同路径重复携带同一个块；
- * 渲染前统一收敛，避免 React key 冲突，同时保留最后一次 upsert 的内容。
- */
-export function dedupeContentBlocks(blocks: ContentBlock[] | undefined): ContentBlock[] {
-  if (!blocks || blocks.length < 2) return blocks ?? [];
-  const byId = new Map<string, ContentBlock>();
-  for (const block of blocks) {
-    byId.set(block.id, block);
-  }
-  return [...byId.values()];
-}
-
-/** 从工具名推断步骤类型 */
-export function detectStepKind(toolName: string): StepKind {
-  if (toolName === "execute_command" || toolName === "bash") return "command";
-  if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll" || toolName === "read") return "file_read";
-  if (toolName === "write_file" || toolName === "create_file" || toolName === "append_file" || toolName === "session_open" || toolName === "session_write" || toolName === "session_close" || toolName === "session_abort" || toolName === "write") return "file_write";
-  if (toolName === "edit_file" || toolName === "apply_diff" || toolName === "replace_lines" || toolName === "edit_lines" || toolName === "edit") return "edit";
-  if (toolName === "web_search" || toolName === "search_grep" || toolName === "search_files" || toolName === "grep" || toolName === "glob") return "search";
-  if (toolName === "web_fetch") return "browse";
-  if (toolName === "create_artifact" || toolName === "apply_artifact") return "artifact";
-  if (toolName.startsWith("browser_")) return "browse";
-  if (toolName.startsWith("mcp_")) return "api";
-  return "other";
-}
-
-function shouldHideToolFromWorkflow(toolName: string): boolean {
-  // 计划更新已有独立的计划进度条承载；再作为工具活动展示只会产生
-  // 无上下文的「已完成一步」卡片，干扰真正的执行过程。
-  return toolName === "attach_content"
-    || toolName === "present_ui"
-    || toolName === "delegate"
-    || toolName === "update_plan";
-}
-
-/** 生成聚合摘要文本 */
-export function computeSummaryFromSteps(steps: TimelineStepData[]): string {
-  const counts: Record<string, number> = {};
-  for (const step of steps) {
-    const key = step.kind === "command" ? "命令"
-      : step.kind === "file_read" ? "读取文件"
-      : step.kind === "file_write" ? "创建文件"
-      : step.kind === "edit" ? "编辑文件"
-      : step.kind === "search" ? "搜索"
-      : step.kind === "browse" ? "浏览网页"
-      : step.kind === "artifact" ? "生成产物"
-      : null;
-    if (key) counts[key] = (counts[key] ?? 0) + 1;
-  }
-  const parts: string[] = [];
-  for (const [label, count] of Object.entries(counts)) {
-    parts.push(`${count} 个${label}`);
-  }
-  if (parts.length === 0) return "";
-  return `执行了 ${parts.join("，")}`;
-}
-
-/** 将取消/重启时补写的悬空工具结果与真实工具失败区分开。 */
-function isCancelledToolError(error?: string): boolean {
-  return !!error && /返回前中断|任务(?:被|已)取消|父任务已取消|用户取消|\b(?:cancelled|canceled|aborted)\b/i.test(error);
-}
-
-/** 从 MessageToolCall 构建 TimelineStepData[] */
-function buildStepsFromToolCalls(
-  toolCalls: MessageToolCall[],
-  resultMap: Map<string, { ok: boolean; output?: unknown; error?: string }>,
-  phaseCancelled = false,
-): TimelineStepData[] {
-  return toolCalls.filter((tc) => !shouldHideToolFromWorkflow(tc.function.name)).map((tc) => {
-    const kind = detectStepKind(tc.function.name);
-    let args: Record<string, unknown> = {};
-    try {
-      args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-    } catch { /* ignore */ }
-    const title = buildStepTitle(tc.function.name, args);
-    const result = resultMap.get(tc.id);
-    const status: TimelineStepData["status"] = result
-      ? (result.ok ? "success" : isCancelledToolError(result.error) ? "cancelled" : "failed")
-      : phaseCancelled ? "cancelled" : "success";
-    const logs = extractLogContent(tc.function.name, result);
-    const error = result && !result.ok ? (result.error ?? "执行失败") : undefined;
-    return {
-      id: tc.id,
-      kind,
-      title,
-      summary: tc.function.summary,
-      status,
-      planStepId: tc.function.planStepId,
-      logs,
-      output: result?.output != null ? formatOutput(result.output) : undefined,
-      error,
-      toolName: tc.function.name,
-      rawOutput: result?.output,
-    };
-  });
-}
-
-/** 从步骤构建标题 */
-function buildStepTitle(toolName: string, args: Record<string, unknown>): string {
-  if (toolName === "execute_command" || toolName === "bash") {
-    const cmd = typeof args.command === "string" ? args.command : "";
-    const commandArgs = Array.isArray(args.args)
-      ? (args.args as unknown[]).map(String).join(" ")
-      : "";
-    return truncateTitle([cmd, commandArgs].filter(Boolean).join(" ")) || "";
-  }
-  if (toolName === "replace_lines" || toolName === "edit_lines" || toolName === "edit") {
-    const path = typeof args.path === "string" ? args.path : "";
-    const startLine = typeof args.start_line === "number" ? args.start_line : null;
-    const endLine = typeof args.end_line === "number" ? args.end_line : null;
-    if (path && startLine != null && endLine != null) {
-      return truncateTitle(`${path} L${startLine}-${endLine}`);
-    }
-    return truncateTitle(path) || "";
-  }
-  if (toolName === "write_file" || toolName === "write") {
-    const path = typeof args.path === "string" ? args.path : "";
-    return truncateTitle(path) || "";
-  }
-  if (toolName === "append_file") {
-    const path = typeof args.path === "string" ? args.path : "";
-    return truncateTitle(path) || "";
-  }
-  if (toolName === "session_open") {
-    const path = typeof args.path === "string" ? args.path : "";
-    return truncateTitle(path) || "";
-  }
-  if (toolName === "session_write" || toolName === "session_close" || toolName === "session_abort") {
-    const sid = typeof args.session_id === "string" ? args.session_id.slice(0, 8) : "";
-    return sid || "";
-  }
-  if (toolName === "open_file" || toolName === "read") {
-    const path = typeof args.path === "string" ? args.path : "";
-    const line = typeof args.line_number === "number" ? args.line_number : null;
-    if (path && line != null) return truncateTitle(`${path} :${line}`);
-    return truncateTitle(path) || "";
-  }
-  if (toolName === "scroll") {
-    const file = typeof args.file === "string" ? args.file : "";
-    const dir = typeof args.direction === "string" ? args.direction : "";
-    return file ? truncateTitle(`${file} ${dir}`) : "";
-  }
-  if (toolName === "search_grep") {
-    const pattern = typeof args.pattern === "string" ? args.pattern : "";
-    return pattern ? truncateTitle(pattern) : "";
-  }
-  const target =
-    (typeof args.TargetFile === "string" ? args.TargetFile :
-     typeof args.AbsolutePath === "string" ? args.AbsolutePath :
-     typeof args.path === "string" ? args.path :
-     typeof args.filePath === "string" ? args.filePath :
-     typeof args.query === "string" ? args.query :
-     typeof args.Query === "string" ? args.Query :
-     typeof args.pattern === "string" ? args.pattern :
-     typeof args.item_key === "string" ? args.item_key :
-     typeof args.itemKey === "string" ? args.itemKey :
-     typeof args.resource_id === "string" ? args.resource_id :
-     typeof args.resourceId === "string" ? args.resourceId :
-     typeof args.url === "string" ? args.url : null);
-  if (target) return truncateTitle(target);
-  if (toolName === "web_search") {
-    const query = typeof args.query === "string" ? args.query : typeof args.Query === "string" ? args.Query : "";
-    return query ? truncateTitle(query) : "";
-  }
-  if (toolName === "web_fetch") {
-    const url = typeof args.url === "string" ? args.url : "";
-    return url ? truncateTitle(url) : "";
-  }
-  return "";
-}
-
-function truncateTitle(s: string, max = 55): string {
-  return s.length > max ? s.slice(0, max - 2) + "…" : s;
-}
-
-/** 提取日志内容 */
-function extractLogContent(
-  toolName: string,
-  result?: { ok: boolean; output?: unknown; error?: string },
-): string | undefined {
-  if (!result) return undefined;
-  if (toolName === "execute_command") {
-    const out = result.output;
-    if (typeof out === "string") return out;
-    if (typeof out === "object" && out !== null) {
-      const record = out as Record<string, unknown>;
-      return [record.stdout, record.stderr].filter(Boolean).join("\n");
-    }
-    return undefined;
-  }
-  if (toolName === "read_file" || toolName === "open_file" || toolName === "scroll" || toolName === "read") {
-    const out = result.output;
-    if (typeof out === "string") return out.slice(0, 2000);
-    if (typeof out === "object" && out !== null) {
-      const record = out as Record<string, unknown>;
-      if (typeof record.text === "string") return record.text.slice(0, 2000);
-      if (typeof record.content === "string") return record.content.slice(0, 2000);
-    }
-    return undefined;
-  }
-  if (toolName === "search_grep" || toolName === "search_files" || toolName === "grep" || toolName === "glob") {
-    const out = result.output;
-    if (typeof out === "string") return out.slice(0, 2000);
-    if (typeof out === "object" && out !== null) {
-      const record = out as Record<string, unknown>;
-      const matches = record.matches;
-      if (Array.isArray(matches)) {
-        return matches.slice(0, 20).map((m: Record<string, unknown>) =>
-          `${m.file}:${m.line}: ${m.content}`).join("\n");
-      }
-    }
-    return undefined;
-  }
-  if (toolName === "replace_lines" || toolName === "edit_lines" || toolName === "write_file" || toolName === "append_file" || toolName === "edit_file" || toolName === "create_file" || toolName === "write") {
-    const out = result.output;
-    if (typeof out === "object" && out !== null) {
-      const record = out as Record<string, unknown>;
-      const parts: string[] = [];
-      if (typeof record.bytes_written === "number") parts.push(`写入 ${record.bytes_written} 字节`);
-      if (typeof record.replaced_lines === "number") parts.push(`替换 ${record.replaced_lines} 行 → ${record.new_lines_count} 行`);
-      if (typeof record.note === "string") parts.push(record.note);
-      if (record.preview && Array.isArray(record.preview)) {
-        const previewText = record.preview
-          .slice(0, 15)
-          .map((p: Record<string, unknown>) => `${p.changed ? "+ " : "  "}${String(p.lineNumber).padStart(5)} | ${p.content}`)
-          .join("\n");
-        parts.push(previewText);
-      }
-      if (parts.length > 0) return parts.join("\n");
-    }
-    return undefined;
-  }
-  return undefined;
-}
-
-function formatOutput(value: unknown): string {
-  if (typeof value === "string") return value;
-  try { return JSON.stringify(value, null, 2); }
-  catch { return String(value); }
-}
-
-function resolveHistoricalSubagentRuns(
-  toolCalls: MessageToolCall[],
-  resultMap: Map<string, { ok: boolean; output?: unknown; error?: string }>,
-  persistedRuns: SubagentRun[],
-  createdAt: string,
-  phaseCancelled = false,
-): SubagentRun[] {
-  const delegateCalls = toolCalls.filter((call) => call.function.name === "delegate");
-  const callIds = new Set(delegateCalls.map((call) => call.id));
-  const runs = persistedRuns.filter((run) => callIds.has(run.parentCallId));
-
-  for (const call of delegateCalls) {
-    if (runs.some((run) => run.parentCallId === call.id)) continue;
-    let args: Record<string, unknown> = {};
-    try {
-      const parsed = JSON.parse(call.function.arguments || "{}");
-      if (isRecord(parsed)) args = parsed;
-    } catch {
-      // 旧消息参数损坏时仍保留一个可诊断的委托卡片。
-    }
-    const result = resultMap.get(call.id);
-    const output = isRecord(result?.output) ? result.output : undefined;
-    const completed = output?.completed === true;
-    const cancelled = !completed && (isCancelledToolError(result?.error) || (phaseCancelled && !result));
-    const role = normalizeSubagentRole(output?.role ?? args.role);
-    const error = !completed
-      ? (typeof output?.result === "string" ? output.result : result?.error)
-      : undefined;
-    runs.push({
-      id: typeof output?.runId === "string" ? output.runId : `legacy-${call.id}`,
-      parentCallId: call.id,
-      role,
-      goal: typeof args.goal === "string" ? args.goal : "委托子任务",
-      status: completed ? "completed" : cancelled ? "cancelled" : "failed",
-      currentActivity: completed ? "已完成并返回结果" : cancelled ? "已取消" : error ?? "子代理运行失败",
-      activities: [],
-      iterations: typeof output?.iterations === "number" ? output.iterations : 0,
-      toolCallCount: typeof output?.toolCallCount === "number" ? output.toolCallCount : 0,
-      maxIterations: typeof args.maxIterations === "number" ? args.maxIterations : undefined,
-      stopReason: typeof output?.stopReason === "string"
-        ? output.stopReason as SubagentRun["stopReason"]
-        : completed ? "completed" : cancelled ? "cancelled" : "error",
-      result: completed && typeof output?.result === "string" ? output.result : undefined,
-      error,
-      truncated: output?.truncated === true,
-      durationMs: typeof output?.durationMs === "number" ? output.durationMs : undefined,
-      createdAt,
-      startedAt: createdAt,
-      completedAt: createdAt,
-    });
-  }
-  return runs;
-}
-
-function subagentRunFromLiveActivity(activity: {
-  id: string;
-  args: unknown;
-  status: string;
-  progress?: { message: string };
-}): SubagentRun {
-  const args = isRecord(activity.args) ? activity.args : {};
-  const now = new Date().toISOString();
-  const status: SubagentRun["status"] =
-    activity.status === "error"
-      ? "failed"
-      : activity.status === "ok"
-        ? "completed"
-        : activity.status === "cancelled"
-          ? "cancelled"
-        : activity.status === "running"
-          ? "running"
-          : "queued";
-  return {
-    id: `pending-${activity.id}`,
-    parentCallId: activity.id,
-    role: normalizeSubagentRole(args.role),
-    goal: typeof args.goal === "string" ? args.goal : "准备委托子任务",
-    status,
-    currentActivity:
-      activity.progress?.message
-      ?? (status === "running" ? "子智能体执行中" : status === "completed" ? "已完成" : status === "cancelled" ? "已取消" : "正在创建子智能体"),
-    activities: [],
-    iterations: 0,
-    toolCallCount: 0,
-    maxIterations: typeof args.maxIterations === "number" ? args.maxIterations : undefined,
-    error: activity.status === "error" ? "子代理未能启动" : undefined,
-    createdAt: now,
-    startedAt: now,
-  };
-}
-
-function normalizeSubagentRole(value: unknown): SubagentRole {
-  return value === "explore" || value === "research" || value === "coder"
-    || value === "shell" || value === "writer" || value === "general"
-    ? value
-    : "general";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/* ============ 数据构建函数 ============ */
-
-/** 从历史消息构建 AgentRoundData */
-export function buildAgentRoundFromMessage(
-  message: Message,
-  resultMap: Map<string, { ok: boolean; output?: unknown; error?: string }>,
-  planSteps: PlanStep[],
-  persistedSubagentRuns: SubagentRun[] = [],
-  phase?: string | null,
-): AgentRoundData {
-  const toolCalls = message.toolCalls ?? [];
-  const phaseCancelled = phase === "cancelled";
-  const steps = buildStepsFromToolCalls(toolCalls, resultMap, phaseCancelled);
-  const summary = computeSummaryFromSteps(steps);
-  const subagentRuns = resolveHistoricalSubagentRuns(
-    toolCalls,
-    resultMap,
-    persistedSubagentRuns,
-    message.createdAt,
-    phaseCancelled,
-  );
-
-  // 按 planStepId 分组
-  const groupsByPlanStepId = new Map<string, TimelineStepData[]>();
-  const unnamedSteps: TimelineStepData[] = [];
-  for (const step of steps) {
-    if (step.planStepId) {
-      const list = groupsByPlanStepId.get(step.planStepId) ?? [];
-      list.push(step);
-      groupsByPlanStepId.set(step.planStepId, list);
-    } else {
-      unnamedSteps.push(step);
-    }
-  }
-
-  const planStepGroups: PlanStepGroupData[] = [];
-
-  // 有 named group 时：按 task.plan 顺序遍历，填充步骤
-  if (groupsByPlanStepId.size > 0) {
-    const renderedPlanStepIds = new Set<string>();
-    for (const ps of planSteps) {
-      const stepsInGroup = groupsByPlanStepId.get(ps.id) ?? [];
-      if (stepsInGroup.length === 0) continue;
-      renderedPlanStepIds.add(ps.id);
-      const toolFailed = stepsInGroup.some((step) => step.status === "failed");
-      planStepGroups.push({
-        planStepId: ps.id,
-        description: ps.description,
-        status: mapPlanStepGroupStatus(ps.status, toolFailed, false, phaseCancelled),
-        blockedReason: ps.blockedReason,
-        steps: stepsInGroup,
-      });
-    }
-    for (const [planStepId, stepsInGroup] of groupsByPlanStepId) {
-      if (renderedPlanStepIds.has(planStepId)) continue;
-      planStepGroups.push({
-        planStepId,
-        description: "执行工具",
-        status: stepsInGroup.some((step) => step.status === "failed")
-          ? "failed"
-          : stepsInGroup.some((step) => step.status === "cancelled")
-            ? "cancelled"
-            : "completed",
-        steps: stepsInGroup,
-      });
-    }
-  }
-
-  // 回退：未分组步骤放一个默认组
-  if (unnamedSteps.length > 0) {
-    planStepGroups.push({
-      planStepId: "_default",
-      description: "执行任务",
-      status: unnamedSteps.some((step) => step.status === "failed")
-        ? "failed"
-        : unnamedSteps.some((step) => step.status === "cancelled")
-          ? "cancelled"
-          : "completed",
-      steps: unnamedSteps,
-    });
-  }
-
-  return {
-    id: `${message.id}-timeline`,
-    planStepGroups,
-    summary,
-    markdownOutput: message.content,
-    contentBlocks: message.contentBlocks,
-    subagentRuns,
-    status: steps.some((step) => step.status === "failed")
-      || subagentRuns.some((run) => run.status === "failed")
-      ? "failed"
-      : steps.some((step) => step.status === "cancelled")
-        || subagentRuns.some((run) => run.status === "cancelled")
-        ? "cancelled"
-        : "completed",
-  };
-}
-
-/** 从 SSE 实时数据 AgentRunningTimeline（即 ToolActivity[]）构建 AgentRoundData */
-export function buildLiveAgentRoundData(params: {
-  plan: PlanStep[];
-  liveToolActivity: { id: string; name: string; args: unknown; summary?: string; status: string; planStepId?: string; output?: unknown; error?: string; progress?: { message: string; chunk?: { current: number; total: number }; percent?: number } }[];
-  output?: string;
-  phase?: string | null;
-  contentBlocks?: ContentBlock[];
-  subagentRuns?: SubagentRun[];
-}): AgentRoundData {
-  const { plan, liveToolActivity, output, phase, contentBlocks, subagentRuns = [] } = params;
-  const isFailed = phase === "failed";
-  const isCancelled = phase === "cancelled";
-  const isActivePhase = phase === "thinking" || phase === "planning" || phase === "initializing";
-  const delegateActivities = liveToolActivity.filter((activity) => activity.name === "delegate");
-  // 子代理快照已独立持久化；delegate 收到 tool_result 后虽会离开实时工具列表，
-  // 但其对应的子代理行必须留在当前 live 过程，直到整个任务结束后统一收纳。
-  const visibleSubagentRuns = [...subagentRuns];
-  for (const activity of delegateActivities) {
-    if (visibleSubagentRuns.some((run) => run.parentCallId === activity.id)) continue;
-    visibleSubagentRuns.push(subagentRunFromLiveActivity(activity));
-  }
-  const steps: TimelineStepData[] = liveToolActivity.filter((act) => !shouldHideToolFromWorkflow(act.name)).map((act) => {
-    const kind = detectStepKind(act.name);
-    const args = typeof act.args === "object" && act.args !== null
-      ? act.args as Record<string, unknown>
-      : {};
-    const rawStatus = act.status;
-    const status: TimelineStepData["status"] =
-      rawStatus === "ok" ? "success"
-      : rawStatus === "error" ? (isCancelledToolError(act.error) ? "cancelled" : "failed")
-      : rawStatus === "cancelled" ? "cancelled"
-      : isCancelled ? "cancelled"
-      : rawStatus === "awaiting" ? "pending"
-      : "running";
-    return {
-      id: act.id,
-      kind,
-      title: buildStepTitle(act.name, args),
-      summary: act.summary,
-      status,
-      planStepId: act.planStepId,
-      logs: extractLogContent(act.name, act.status !== "running" ? { ok: act.status === "ok", output: act.output, error: act.error } : undefined),
-      error: act.error,
-      output: act.output != null ? formatOutput(act.output) : undefined,
-      rawOutput: act.output,
-      args,
-      toolName: act.name,
-      progress: act.progress,
-    };
-  });
-
-  const summary = computeSummaryFromSteps(steps) || "";
-
-  // 优先按 per-tool planStepId 分组，无 planStepId 时回退到按活跃 step 分组
-  const stepsByPlanStepId = new Map<string, TimelineStepData[]>();
-  const unnamedSteps: TimelineStepData[] = [];
-  for (const step of steps) {
-    if (step.planStepId) {
-      const list = stepsByPlanStepId.get(step.planStepId) ?? [];
-      list.push(step);
-      stepsByPlanStepId.set(step.planStepId, list);
-    } else {
-      unnamedSteps.push(step);
-    }
-  }
-
-  const planStepGroups: PlanStepGroupData[] = [];
-
-  if (stepsByPlanStepId.size > 0) {
-    const renderedPlanStepIds = new Set<string>();
-    for (const ps of plan) {
-      const stepsInGroup = stepsByPlanStepId.get(ps.id) ?? [];
-      if (stepsInGroup.length === 0) continue;
-      renderedPlanStepIds.add(ps.id);
-      const toolFailed = stepsInGroup.some((step) => step.status === "failed");
-      planStepGroups.push({
-        planStepId: ps.id,
-        description: ps.description,
-        status: mapPlanStepGroupStatus(ps.status, toolFailed, isFailed, isCancelled),
-        blockedReason: ps.blockedReason,
-        steps: stepsInGroup,
-      });
-    }
-    for (const [planStepId, stepsInGroup] of stepsByPlanStepId) {
-      if (renderedPlanStepIds.has(planStepId)) continue;
-      planStepGroups.push({
-        planStepId,
-        description: "执行工具",
-        status: isFailed ? "failed"
-          : isCancelled ? "cancelled"
-          : stepsInGroup.some((step) => step.status === "failed") ? "failed"
-          : stepsInGroup.some((step) => step.status === "cancelled") ? "cancelled"
-          : stepsInGroup.some((step) => step.status === "running" || step.status === "pending") ? "running"
-          : "completed",
-        steps: stepsInGroup,
-      });
-    }
-    if (unnamedSteps.length > 0) {
-      planStepGroups.push({
-        planStepId: "_live",
-        description: "执行工具",
-        status: isFailed ? "failed" : isCancelled ? "cancelled" : "running",
-        steps: unnamedSteps,
-      });
-    }
-  } else if (steps.length > 0) {
-    const activeIndex = plan.findIndex(
-      (s) => s.status === "running" || s.status === "blocked" || s.status === "paused",
-    );
-    const activeStepId = activeIndex >= 0 ? plan[activeIndex]?.id : undefined;
-    const currentPlanDesc = activeStepId
-      ? plan.find((s) => s.id === activeStepId)?.description ?? "执行工具"
-      : "执行工具";
-    planStepGroups.push({
-      planStepId: activeStepId ?? "_live",
-      description: currentPlanDesc,
-      status: isFailed ? "failed" : isCancelled ? "cancelled" : "running",
-      steps,
-    });
-  }
-
-  return {
-    id: "live-tail",
-    planStepGroups,
-    summary,
-    markdownOutput: output,
-    contentBlocks,
-    subagentRuns: visibleSubagentRuns,
-    status: isCancelled
-      ? "cancelled"
-      : isFailed || visibleSubagentRuns.some((run) => run.status === "failed")
-        ? "failed"
-        : visibleSubagentRuns.some((run) => run.status === "cancelled")
-          ? "cancelled"
-      : (steps.some((s) => s.status === "running")
-        || visibleSubagentRuns.some((run) => run.status === "running" || run.status === "queued")
-        || isActivePhase)
-        ? "running"
-        : "completed",
-  };
-}
+export {
+  buildAgentRoundFromMessage,
+  buildLiveAgentRoundData,
+  computeSummaryFromSteps,
+  dedupeContentBlocks,
+  truncateTitle,
+} from "./timelineData";
+export {
+  flattenProcessActivityRows,
+  formatProcessedSummaryLabel,
+  formatProcessingSummaryLabel,
+  mergeAgentRoundData,
+  normalizeLiveStatus,
+  resolveLiveStatusText,
+} from "./timelineProcessData";
+export type { AgentRoundData, PlanStepGroupData, StepKind, TimelineStepData } from "./timelineData";
+export type { ProcessActivityRow, ProcessSegmentData } from "./timelineProcessData";
 
 /* ============ 组件 ============ */
 
@@ -938,6 +327,7 @@ interface SearchPreviewResult {
 }
 
 interface SearchPreviewData {
+  untrusted: boolean;
   query: string;
   resultCount: number;
   results: SearchPreviewResult[];
@@ -955,13 +345,14 @@ function buildSearchPreview(step: TimelineStepData): SearchPreviewData | null {
     host: hostFromUrl(item.url),
   }));
   return {
+    untrusted: source.untrusted,
     query,
     resultCount: source.resultCount || source.results.length,
     results,
   };
 }
 
-function normalizeSearchOutput(value: unknown): { query: string; resultCount: number; results: SearchPreviewResult[] } | null {
+function normalizeSearchOutput(value: unknown): { untrusted: boolean; query: string; resultCount: number; results: SearchPreviewResult[] } | null {
   let parsed = value;
   if (typeof value === "string") {
     try {
@@ -989,6 +380,7 @@ function normalizeSearchOutput(value: unknown): { query: string; resultCount: nu
     })
     .filter((item): item is SearchPreviewResult => item !== null);
   return {
+    untrusted: record.untrusted === true,
     query: typeof record.query === "string" ? record.query : "",
     resultCount: typeof record.resultCount === "number" ? record.resultCount : results.length,
     results,
@@ -1009,6 +401,7 @@ function SearchPreviewView({ preview }: { preview: SearchPreviewData }) {
     <div className="timeline-search-preview">
       <div className="timeline-search-head">
         <span className="timeline-search-query">{preview.query || "web search"}</span>
+        {preview.untrusted ? <span className="timeline-search-untrusted">{t("timeline.externalUntrusted")}</span> : null}
         <span className="timeline-search-count">{preview.resultCount} result{preview.resultCount === 1 ? "" : "s"}</span>
       </div>
       {preview.results.length > 0 ? (
@@ -1039,6 +432,126 @@ function SearchPreviewView({ preview }: { preview: SearchPreviewData }) {
         <div className="timeline-search-empty">No results</div>
       )}
     </div>
+  );
+}
+
+interface KnowledgePreviewResult {
+  file: string;
+  snippet: string;
+  score: number;
+  chunkIndex?: number;
+}
+
+interface KnowledgePreviewData {
+  found: number;
+  citationCount: number;
+  results: KnowledgePreviewResult[];
+}
+
+function buildKnowledgePreview(step: TimelineStepData): KnowledgePreviewData | null {
+  if (step.toolName !== "recall") return null;
+  let value = step.rawOutput ?? step.output;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const results = (Array.isArray(record.results) ? record.results : [])
+    .map((item): KnowledgePreviewResult | null => {
+      if (!item || typeof item !== "object") return null;
+      const result = item as Record<string, unknown>;
+      const file = typeof result.file === "string"
+        ? result.file
+        : typeof result.filePath === "string" ? result.filePath : "";
+      const snippet = typeof result.snippet === "string"
+        ? result.snippet
+        : typeof result.content === "string" ? result.content : "";
+      if (!file || !snippet) return null;
+      return {
+        file,
+        snippet,
+        score: typeof result.score === "number" ? result.score : 0,
+        chunkIndex: typeof result.chunkIndex === "number" ? result.chunkIndex : undefined,
+      };
+    })
+    .filter((item): item is KnowledgePreviewResult => item !== null)
+    .slice(0, 8);
+  if (results.length === 0 && record.found !== 0) return null;
+  const citations = Array.isArray(record.citations) ? record.citations.length : 0;
+  return {
+    found: typeof record.found === "number" ? record.found : results.length,
+    citationCount: citations,
+    results,
+  };
+}
+
+function KnowledgePreviewView({
+  preview,
+  onOpenWorkspacePath,
+}: {
+  preview: KnowledgePreviewData;
+  onOpenWorkspacePath?: (path: string) => void;
+}) {
+  return (
+    <div className="timeline-knowledge-preview">
+      <div className="timeline-search-head">
+        <span className="timeline-search-query">{t("recall.knowledgeBase")}</span>
+        <span className="timeline-search-count">{preview.found} · {t("recall.citations")} {preview.citationCount}</span>
+      </div>
+      {preview.results.length > 0 ? (
+        <div className="timeline-knowledge-results">
+          {preview.results.map((result, index) => (
+            <div className="timeline-knowledge-result" key={`${result.file}-${result.chunkIndex ?? index}`}>
+              <button
+                type="button"
+                className="timeline-knowledge-file"
+                onClick={() => onOpenWorkspacePath?.(result.file)}
+                disabled={!onOpenWorkspacePath}
+                title={result.file}
+              >
+                {result.file}{result.chunkIndex != null ? `#${result.chunkIndex}` : ""}
+              </button>
+              <span className="timeline-knowledge-score">{result.score.toFixed(2)}</span>
+              <p>{result.snippet}</p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="timeline-search-empty">{t("recall.noneUsed")}</div>
+      )}
+    </div>
+  );
+}
+
+function ResearchSourcesView({
+  data,
+  onOpenWorkspacePath,
+}: {
+  data: AgentRoundData;
+  onOpenWorkspacePath?: (path: string) => void;
+}) {
+  const steps = data.planStepGroups.flatMap((group) => group.steps);
+  const entries = steps.flatMap((step) => {
+    const search = buildSearchPreview(step);
+    if (search) return [{ id: `${step.id}-search`, node: <SearchPreviewView preview={search} /> }];
+    const knowledge = buildKnowledgePreview(step);
+    if (knowledge) {
+      return [{ id: `${step.id}-knowledge`, node: <KnowledgePreviewView preview={knowledge} onOpenWorkspacePath={onOpenWorkspacePath} /> }];
+    }
+    return [];
+  });
+  if (entries.length === 0) return null;
+  return (
+    <details className="research-sources">
+      <summary>{t("recall.sources")}</summary>
+      <div className="research-sources-body">
+        {entries.map((entry) => <div key={entry.id}>{entry.node}</div>)}
+      </div>
+    </details>
   );
 }
 
@@ -1226,6 +739,7 @@ function ContentBlockView({
             <span className="content-block-name">
               {block.name || block.content.split("/").pop() || block.content}
             </span>
+            {block.untrusted ? <span className="timeline-search-untrusted">{t("timeline.externalUntrusted")}</span> : null}
             <span className="content-block-path">
               {feedback || block.content}
             </span>
@@ -1297,422 +811,6 @@ function ContentBlockView({
       return null;
   }
 }
-/* ============ 子代理元数据（扁平活动行用） ============ */
-
-const SUBAGENT_ROLE_META: Record<SubagentRole, { label: string }> = {
-  explore: { label: "侦查" },
-  research: { label: "调研" },
-  coder: { label: "编码" },
-  shell: { label: "验证" },
-  writer: { label: "写作" },
-  general: { label: "通用" },
-};
-
-function formatDuration(durationMs: number): string {
-  if (durationMs < 1000) return "<1s";
-  const seconds = Math.floor(durationMs / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${seconds % 60}s`;
-}
-
-/* ============ 过程呈现（Codex 语法：live 状态流 + 完成后扁平列表） ============ */
-
-export type ProcessActivityRow = {
-  id: string;
-  kind: "tool" | "subagent" | "group";
-  /** 展示用行为摘要（如「已搜索网页」），不是原始 tool 名 */
-  label: string;
-  status: "pending" | "running" | "success" | "failed" | "cancelled";
-  /** 工具原始 title / 命令预览 */
-  detail?: string;
-  /** 行图标语义：search / browse / command / file / edit / agent / other */
-  icon?: "search" | "browse" | "command" | "file" | "edit" | "agent" | "other";
-};
-
-/** 完成态中的有序过程段：保留 assistant 说明与其发起的工具活动之间的绑定。 */
-export interface ProcessSegmentData {
-  id: string;
-  narration?: string;
-  activityRows: ProcessActivityRow[];
-}
-
-/**
- * 将同一 conversation turn 内多条 assistant 过程 round 合并为一条，
- * 避免界面叠多个「已处理」。
- */
-export function mergeAgentRoundData(
-  rounds: AgentRoundData[],
-  mergedId = "turn-process",
-): AgentRoundData | null {
-  const nonempty = rounds.filter(
-    (round) =>
-      round.planStepGroups.some((g) => g.steps.length > 0) ||
-      (round.subagentRuns?.length ?? 0) > 0,
-  );
-  if (nonempty.length === 0) return null;
-
-  const planStepGroups: PlanStepGroupData[] = [];
-  const subagentRuns: SubagentRun[] = [];
-  const seenSubagentIds = new Set<string>();
-  const seenStepIds = new Set<string>();
-  let status: AgentRoundData["status"] = "completed";
-
-  for (const round of nonempty) {
-    for (const group of round.planStepGroups) {
-      const steps = group.steps.filter((step) => {
-        if (seenStepIds.has(step.id)) return false;
-        seenStepIds.add(step.id);
-        return true;
-      });
-      if (steps.length === 0) continue;
-      planStepGroups.push({
-        ...group,
-        planStepId: `${group.planStepId}__${planStepGroups.length}`,
-        steps,
-        status: group.status === "failed" || steps.some((s) => s.status === "failed")
-          ? "failed"
-          : group.status === "cancelled" || steps.some((s) => s.status === "cancelled")
-            ? "cancelled"
-            : steps.some((s) => s.status === "running" || s.status === "pending")
-              ? "running"
-              : "completed",
-      });
-    }
-    for (const run of round.subagentRuns ?? []) {
-      if (seenSubagentIds.has(run.id)) continue;
-      seenSubagentIds.add(run.id);
-      subagentRuns.push(run);
-    }
-    if (round.status === "failed") status = "failed";
-    else if (round.status === "cancelled" && status !== "failed") status = "cancelled";
-    else if (round.status === "running" && status !== "failed" && status !== "cancelled") status = "running";
-    else if (round.status === "pending" && status === "completed") status = "pending";
-  }
-
-  const allSteps = planStepGroups.flatMap((g) => g.steps);
-  if (allSteps.length === 0 && subagentRuns.length === 0) return null;
-
-  return {
-    id: mergedId,
-    planStepGroups,
-    summary: computeSummaryFromSteps(allSteps),
-    // 过程合并块不带交付正文（交付由 delivery 面单独渲染）
-    markdownOutput: undefined,
-    contentBlocks: undefined,
-    subagentRuns: subagentRuns.length > 0 ? subagentRuns : undefined,
-    status:
-      status === "failed" ||
-      allSteps.some((s) => s.status === "failed") ||
-      subagentRuns.some((r) => r.status === "failed")
-        ? "failed"
-        : status === "cancelled" ||
-          allSteps.some((s) => s.status === "cancelled") ||
-          subagentRuns.some((r) => r.status === "cancelled")
-          ? "cancelled"
-          : status === "running" || allSteps.some((s) => s.status === "running")
-            ? "running"
-            : "completed",
-  };
-}
-
-/** 将 AgentRoundData 压成扁平活动行（完成后列表 / 测试用）。 */
-export function flattenProcessActivityRows(data: AgentRoundData): ProcessActivityRow[] {
-  const rows: ProcessActivityRow[] = [];
-  const steps = data.planStepGroups.flatMap((group) => group.steps);
-  const commandSteps = steps.filter((s) => s.kind === "command" || s.toolName === "execute_command" || s.toolName === "bash");
-  const otherSteps = steps.filter((s) => !commandSteps.includes(s));
-
-  if (commandSteps.length > 1) {
-    rows.push({
-      id: `group-commands-${data.id}`,
-      kind: "group",
-      label: `运行了多个命令`,
-      status: commandSteps.some((s) => s.status === "failed")
-        ? "failed"
-        : commandSteps.some((s) => s.status === "cancelled")
-          ? "cancelled"
-        : commandSteps.some((s) => s.status === "running" || s.status === "pending")
-          ? "running"
-          : "success",
-    });
-    for (const step of commandSteps) {
-      rows.push(toolStepToActivityRow(step, true));
-    }
-  } else {
-    for (const step of commandSteps) {
-      rows.push(toolStepToActivityRow(step, false));
-    }
-  }
-
-  for (const step of otherSteps) {
-    if (step.toolName === "delegate") continue;
-    rows.push(toolStepToActivityRow(step, false));
-  }
-
-  for (const run of data.subagentRuns ?? []) {
-    rows.push(subagentToActivityRow(run));
-  }
-
-  return rows;
-}
-
-function toolStepToActivityRow(step: TimelineStepData, underGroup: boolean): ProcessActivityRow {
-  const title = step.title?.trim() || "";
-  const running = step.status === "running" || step.status === "pending";
-  const failed = step.status === "failed";
-  const cancelled = step.status === "cancelled";
-  const { label, icon } = step.summary?.trim()
-    ? describeBackendToolSummary(step.kind, step.summary, running, failed, cancelled)
-    : describeActivityStep(step.kind, title, running, failed, underGroup, step.toolName, cancelled);
-  return {
-    id: step.id,
-    kind: "tool",
-    label,
-    icon,
-    status: failed ? "failed" : cancelled ? "cancelled" : running ? "running" : step.status === "pending" ? "pending" : "success",
-    detail: title,
-  };
-}
-
-/** 将后端状态无关摘要转换成当前时态，避免前端再次理解每个工具的参数 schema。 */
-function describeBackendToolSummary(
-  kind: StepKind,
-  summary: string,
-  running: boolean,
-  failed: boolean,
-  cancelled: boolean,
-): { label: string; icon: ProcessActivityRow["icon"] } {
-  const detail = summary.trim();
-  const icon = activityIconForKind(kind);
-  if (failed) return { label: `${detail}失败`, icon };
-  if (cancelled) return { label: `${detail}已取消`, icon };
-  if (running) return { label: `正在${detail}`, icon };
-  return { label: `已${detail}`, icon };
-}
-
-function activityIconForKind(kind: StepKind): ProcessActivityRow["icon"] {
-  if (kind === "search") return "search";
-  if (kind === "browse") return "browse";
-  if (kind === "command") return "command";
-  if (kind === "file_read" || kind === "file_write") return "file";
-  if (kind === "edit") return "edit";
-  return "other";
-}
-
-/** 将工具步骤收成「一段时间的行为总结」文案（Codex：已搜索网页 / 已运行 cmd）。 */
-export function describeActivityStep(
-  kind: StepKind,
-  title: string,
-  running: boolean,
-  failed: boolean,
-  underGroup = false,
-  toolName?: string,
-  cancelled = false,
-): { label: string; icon: ProcessActivityRow["icon"] } {
-  const detail = title.trim();
-  const withDetail = (base: string) => (detail ? `${base} (${detail})` : base);
-
-  if (kind === "search") {
-    if (failed) return { label: withDetail("搜索网页失败"), icon: "search" };
-    if (cancelled) return { label: withDetail("搜索网页已取消"), icon: "search" };
-    if (running) return { label: detail ? `正在搜索网页 · ${detail}` : "正在搜索网页", icon: "search" };
-    return { label: withDetail("已搜索网页"), icon: "search" };
-  }
-  if (kind === "browse") {
-    if (failed) return { label: withDetail("浏览网页失败"), icon: "browse" };
-    if (cancelled) return { label: withDetail("浏览网页已取消"), icon: "browse" };
-    if (running) return { label: detail ? `正在浏览 · ${detail}` : "正在浏览网页", icon: "browse" };
-    return { label: withDetail("已浏览网页"), icon: "browse" };
-  }
-  if (kind === "command") {
-    if (failed) return { label: withDetail("命令失败"), icon: "command" };
-    if (cancelled) return { label: withDetail("命令已取消"), icon: "command" };
-    if (running) return { label: detail ? `正在运行 ${detail}` : "正在运行命令", icon: "command" };
-    if (underGroup) return { label: detail ? `已运行 ${detail}` : "已运行命令", icon: "command" };
-    return { label: detail ? `已运行 ${detail}` : "已运行命令", icon: "command" };
-  }
-  if (kind === "file_read") {
-    if (failed) return { label: withDetail("读取失败"), icon: "file" };
-    if (cancelled) return { label: withDetail("读取已取消"), icon: "file" };
-    if (running) return { label: detail ? `正在读取 ${detail}` : "正在读取文件", icon: "file" };
-    return { label: detail ? `已读取 ${detail}` : "已读取文件", icon: "file" };
-  }
-  if (kind === "file_write") {
-    if (failed) return { label: withDetail("写入失败"), icon: "file" };
-    if (cancelled) return { label: withDetail("写入已取消"), icon: "file" };
-    if (running) return { label: detail ? `正在写入 ${detail}` : "正在写入文件", icon: "file" };
-    return { label: detail ? `已写入 ${detail}` : "已写入文件", icon: "file" };
-  }
-  if (kind === "edit") {
-    if (failed) return { label: withDetail("编辑失败"), icon: "edit" };
-    if (cancelled) return { label: withDetail("编辑已取消"), icon: "edit" };
-    if (running) return { label: detail ? `正在编辑 ${detail}` : "正在编辑文件", icon: "edit" };
-    return { label: detail ? `已编辑 ${detail}` : "已编辑文件", icon: "edit" };
-  }
-  if (failed) return { label: withDetail("步骤失败"), icon: "other" };
-  if (cancelled) return { label: withDetail("步骤已取消"), icon: "other" };
-  if (running) return { label: detail ? `正在处理 · ${detail}` : "正在处理", icon: "other" };
-  const fallbackTool = toolName ? humanizeToolName(toolName) : "";
-  return { label: detail ? `已完成 · ${detail}` : fallbackTool ? `已运行 ${fallbackTool}` : "已完成一步", icon: "other" };
-}
-
-function humanizeToolName(toolName: string): string {
-  if (toolName.startsWith("mcp_")) {
-    const parts = toolName.slice(4).split("_");
-    const server = parts.shift() ?? "";
-    if (parts[0] === server) parts.shift();
-    const action = parts.join(" ");
-    return [server, action].filter(Boolean).join(" · ");
-  }
-  return toolName.replace(/[_-]+/g, " ").trim();
-}
-
-function subagentToActivityRow(run: SubagentRun): ProcessActivityRow {
-  const role = SUBAGENT_ROLE_META[run.role]?.label ?? run.role;
-  const running = run.status === "running" || run.status === "queued";
-  const failed = run.status === "failed";
-  const cancelled = run.status === "cancelled";
-  const goalShort = run.goal?.trim()
-    ? run.goal.trim().length > 40
-      ? `${run.goal.trim().slice(0, 40)}…`
-      : run.goal.trim()
-    : "";
-  // 一行一个子代理；live 与完成后抽屉共用同一套文案
-  let label: string;
-  if (running) {
-    if (run.currentActivity?.trim() && !/创建|准备委托|子智能体执行中/i.test(run.currentActivity)) {
-      label = goalShort
-        ? `${role} · ${truncateTitle(run.currentActivity.trim(), 36)}`
-        : run.currentActivity.trim();
-    } else {
-      label = goalShort ? `运行子智能体 · ${role}：${goalShort}` : `运行子智能体 · ${role}`;
-    }
-  } else if (failed) {
-    label = goalShort ? `子智能体失败 · ${role}：${goalShort}` : `子智能体失败 · ${role}`;
-  } else if (cancelled) {
-    label = goalShort ? `子智能体已取消 · ${role}：${goalShort}` : `子智能体已取消 · ${role}`;
-  } else {
-    label = goalShort ? `已创建子智能体 · ${role}：${goalShort}` : `已创建子智能体 · ${role}`;
-  }
-  const budgetBits = [
-    run.maxIterations ? `${run.iterations}/${run.maxIterations} 轮` : `${run.iterations} 轮`,
-    run.maxWallMs ? `${Math.round((run.durationMs ?? 0) / 1000)}/${Math.round(run.maxWallMs / 1000)}s` : undefined,
-    run.tokenUsage ? `${run.tokenUsage.toLocaleString()} tokens` : undefined,
-  ].filter(Boolean).join(" · ");
-  return {
-    id: run.id,
-    kind: "subagent",
-    label,
-    icon: "agent",
-    status: failed ? "failed" : cancelled ? "cancelled" : running ? "running" : "success",
-    detail: [run.currentActivity || run.goal, budgetBits].filter(Boolean).join(" · "),
-  };
-}
-
-/**
- * live 状态行：一段时间的行为摘要（灰字），不是工具卡标题。
- * 优先级：子代理活动 → 工具 progress / 行为文案 → phaseDetail（非 delegate 噪音）→ 正在思考
- */
-export function resolveLiveStatusText(params: {
-  phaseDetail?: string;
-  data: AgentRoundData;
-}): string {
-  const runningSubs = (params.data.subagentRuns ?? []).filter(
-    (r) => r.status === "running" || r.status === "queued",
-  );
-  if (runningSubs.length > 1) {
-    return `创建中 ${runningSubs.length} 个智能体`;
-  }
-  const runningSub = runningSubs[0];
-  if (runningSub) {
-    const role = SUBAGENT_ROLE_META[runningSub.role]?.label ?? runningSub.role;
-    if (runningSub.currentActivity?.trim()) {
-      const act = normalizeLiveStatus(runningSub.currentActivity) ?? runningSub.currentActivity.trim();
-      // 仍是创建阶段的文案时，带上角色
-      if (/创建|准备委托|子智能体执行中/i.test(act)) {
-        return runningSub.goal
-          ? `子智能体 · ${role}：${truncateTitle(runningSub.goal, 40)}`
-          : `子智能体 · ${role} 执行中`;
-      }
-      return act;
-    }
-    return runningSub.goal
-      ? `子智能体 · ${role}：${truncateTitle(runningSub.goal, 40)}`
-      : `子智能体 · ${role} 执行中`;
-  }
-
-  const runningStep = params.data.planStepGroups
-    .flatMap((g) => g.steps)
-    .find((s) => s.status === "running" || s.status === "pending");
-  if (runningStep) {
-    if (runningStep.progress?.message?.trim()) {
-      return normalizeLiveStatus(runningStep.progress.message) ?? runningStep.progress.message.trim();
-    }
-    const { label } = runningStep.summary?.trim()
-      ? describeBackendToolSummary(runningStep.kind, runningStep.summary, true, false, false)
-      : describeActivityStep(
-          runningStep.kind,
-          runningStep.title?.trim() || "",
-          true,
-          false,
-          false,
-          runningStep.toolName,
-        );
-    return label;
-  }
-
-  const phase = normalizeLiveStatus(params.phaseDetail);
-  // 忽略「调用工具 delegate」这类泄漏工具名的 phase 文案
-  if (phase && !isBareDelegatePhaseDetail(phase)) return phase;
-
-  // 流式 markdown 走打字机正文，不占用灰字状态行（避免与交付重复）
-  return "正在思考";
-}
-
-function isBareDelegatePhaseDetail(text: string): boolean {
-  return /^调用工具\s*delegate\b/i.test(text.trim())
-    || /^calling tool\s*delegate\b/i.test(text.trim());
-}
-
-/** 去掉 "Agent " 前缀等产品噪音，保留行为描述 */
-export function normalizeLiveStatus(raw?: string | null): string | null {
-  if (!raw) return null;
-  let text = raw.trim();
-  if (!text) return null;
-  text = text.replace(/^Agent\s+/i, "");
-  if (/^(thinking|模型思考|思考中)/i.test(text)) return "正在思考";
-  if (isBareDelegatePhaseDetail(text)) return null;
-  return text;
-}
-
-/**
- * 完成后摘要标签。无可靠 duration 时不编造秒数。
- * durationMs 仅在调用方确有真实计时数据时传入。
- */
-export function formatProcessedSummaryLabel(params: {
-  stepCount?: number;
-  subagentCount?: number;
-  durationMs?: number | null;
-  failed?: boolean;
-  cancelled?: boolean;
-}): string {
-  const parts: string[] = [params.cancelled ? t("status.cancelled") : t("timeline.processed")];
-  if (params.durationMs != null && params.durationMs > 0 && Number.isFinite(params.durationMs)) {
-    parts.push(formatDuration(params.durationMs));
-  }
-  return parts.join(" ");
-}
-
-/** 实时过程必须明确处于进行态；只有完成后的折叠摘要才使用“已处理”。 */
-function formatProcessingSummaryLabel(durationMs?: number | null): string {
-  const parts = [t("timeline.processing")];
-  if (durationMs != null && durationMs > 0 && Number.isFinite(durationMs)) {
-    parts.push(formatDuration(durationMs));
-  }
-  return parts.join(" ");
-}
-
 function ProcessActivityIcon({ icon }: { icon?: ProcessActivityRow["icon"] }) {
   if (icon === "search" || icon === "browse") {
     return <IconGlobe size={14} />;
@@ -1891,6 +989,41 @@ function CompletedProcess({
   );
 }
 
+/** 展示本轮自动召回的来源状态；只呈现计数和状态，不把隐藏正文混入对话。 */
+export function RecallSummaryView({ summary }: { summary?: TaskRecallSummary }) {
+  if (!summary) return null;
+  const sources = [
+    { key: "memory", label: t("recall.memory"), value: summary.memory },
+    { key: "knowledgeBase", label: t("recall.knowledgeBase"), value: summary.knowledgeBase },
+  ];
+  const enabledSources = sources.filter((source) => source.value.enabled);
+  if (enabledSources.length === 0) return null;
+  const usedCount = enabledSources.filter((source) => source.value.status === "used").length;
+  return (
+    <details className="recall-summary" data-used-count={usedCount}>
+      <summary>
+        <span>{t("recall.summary")}</span>
+        <span className="recall-summary-count">
+          {usedCount > 0 ? `${usedCount}/${enabledSources.length}` : t("recall.noneUsed")}
+        </span>
+      </summary>
+      <div className="recall-summary-body">
+        {sources.map((source) => (
+          <div className="recall-summary-row" key={source.key} data-status={source.value.status}>
+            <span className="recall-summary-label">{source.label}</span>
+            <span className="recall-summary-status">
+              {source.value.enabled ? t(`recall.status.${source.value.status}` as "recall.status.disabled") : t("recall.status.disabled")}
+              {source.value.enabled && source.value.count > 0 ? ` · ${source.value.count}` : ""}
+              {source.value.enabled && source.value.citationCount > 0 ? ` · ${t("recall.citations")} ${source.value.citationCount}` : ""}
+            </span>
+          </div>
+        ))}
+        <p className="recall-summary-hint">{t("recall.settingsHint")}</p>
+      </div>
+    </details>
+  );
+}
+
 /**
  * AgentRound — 单轮 Agent 呈现。
  * live：状态流（无工具卡时间轴）；完成后：可展开扁平活动列表 + 裸 Markdown 交付。
@@ -1922,20 +1055,13 @@ export function AgentRound({
   onOpenWorkspacePath?: (path: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const stepCount = data.planStepGroups.reduce((acc, g) => acc + g.steps.length, 0);
-  const subagentRuns = data.subagentRuns ?? [];
-  const hasProcess = stepCount > 0 || subagentRuns.length > 0;
-  const liveStatusText = resolveLiveStatusText({ phaseDetail, data });
-  const hasRunningTools = data.planStepGroups
-    .flatMap((g) => g.steps)
-    .some((s) => s.status === "running" || s.status === "pending");
-  const hasRunningSubagents = subagentRuns.some(
-    (r) => r.status === "running" || r.status === "queued",
-  );
-  // 工具/子代理进行中：只保留灰字行为摘要；空闲思考/收尾：打字机流式正文
-  const suppressBusyDelivery = busy && (hasRunningTools || hasRunningSubagents);
-  const streamText = data.markdownOutput?.trim() ?? "";
-  const showDelivery = showOutput && streamText.length > 0 && !suppressBusyDelivery;
+  const {
+    hasProcess,
+    showDelivery,
+    liveStatusText,
+    activityRows,
+    contentBlocks,
+  } = useTimelineRoundViewModel({ data, busy, showOutput, phaseDetail });
 
   const outputNode = showDelivery ? (
     <article className={`timeline-output process-delivery${busy ? " is-streaming" : ""}`}>
@@ -1947,7 +1073,6 @@ export function AgentRound({
     </article>
   ) : null;
 
-  const contentBlocks = dedupeContentBlocks(data.contentBlocks);
   const contentBlocksNode = showOutput && contentBlocks.length > 0 ? (
     <div className="content-blocks">
       {contentBlocks.map((block) => (
@@ -1960,8 +1085,9 @@ export function AgentRound({
     </div>
   ) : null;
 
-  // 与完成后抽屉同一套扁平行：每个子代理一行，工具行同列；live 全程展开
-  const activityRows = flattenProcessActivityRows(data);
+  const sourceNode = showOutput && !busy
+    ? <ResearchSourcesView data={data} onOpenWorkspacePath={onOpenWorkspacePath} />
+    : null;
 
   const processNode = showWorkflow ? (
     busy ? (
@@ -1994,6 +1120,7 @@ export function AgentRound({
       >
         {processNode}
         {outputNode}
+        {sourceNode}
         {contentBlocksNode}
       </div>
     </MotionConfig>

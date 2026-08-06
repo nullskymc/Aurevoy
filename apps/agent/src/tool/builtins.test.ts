@@ -18,4 +18,13 @@ describe('built-in Effect tool catalog', () => {
       expect(tool.inputJSONSchema, tool.name).toMatchObject({ type: 'object' });
     }
   });
+
+  it('marks host shell and deferred MCP execution as explicit-approval tools', () => {
+    expect(allTools.find((tool) => tool.name === 'bash')?.executionPolicy).toMatchObject({
+      requiresExplicitApproval: true,
+    });
+    expect(allTools.find((tool) => tool.name === 'tool_search')?.executionPolicy).toMatchObject({
+      requiresExplicitApproval: true,
+    });
+  });
 });

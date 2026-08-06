@@ -24,4 +24,13 @@ describe('buildToolCallSummary', () => {
   it('provides a useful fallback for unknown builtin tools', () => {
     expect(buildToolCallSummary('run_dreams', {})).toBe('运行 run dreams');
   });
+
+  it('uses distinct browser approval summaries without echoing form values', () => {
+    expect(buildToolCallSummary('mcp_playwright_browser_navigate', { url: 'https://example.com' }))
+      .toBe('导航到网页 · https://example.com');
+    expect(buildToolCallSummary('mcp_playwright_browser_take_screenshot', { url: 'https://example.com' }))
+      .toBe('截图网页 · https://example.com');
+    expect(buildToolCallSummary('mcp_playwright_browser_click', { url: 'https://example.com', value: 'secret' }))
+      .toBe('提交/交互页面 · https://example.com');
+  });
 });

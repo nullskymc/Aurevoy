@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { WorkspaceReadEntry } from "@aurevoy/shared";
 import { readWorkspaceEntry } from "../api";
 
-interface FileTreeNodeState {
+export interface FileTreeNodeState {
   entries: WorkspaceReadEntry[];
   open: boolean;
   loading: boolean;
   error: string | null;
   truncated: boolean;
+  next?: number;
 }
 
 const DEFAULT_NODE: FileTreeNodeState = {
@@ -29,8 +30,18 @@ const IGNORED_NAMES = new Set([
   ".turbo",
 ]);
 
+const DIRECTORY_PAGE_SIZE = 500;
+
 function visibleEntries(entries: WorkspaceReadEntry[]): WorkspaceReadEntry[] {
   return entries.filter((entry) => !IGNORED_NAMES.has(entry.name));
+}
+
+function appendUniqueEntries(
+  current: WorkspaceReadEntry[],
+  additions: WorkspaceReadEntry[],
+): WorkspaceReadEntry[] {
+  const seen = new Set(current.map((entry) => entry.path));
+  return [...current, ...additions.filter((entry) => !seen.has(entry.path))];
 }
 
 export function useFileTree(context: { taskId?: string; projectId?: string }) {
@@ -40,17 +51,29 @@ export function useFileTree(context: { taskId?: string; projectId?: string }) {
   );
   const [nodes, setNodes] = useState<Record<string, FileTreeNodeState>>({});
 
-  const loadDirectory = useCallback(async (path: string, open = true) => {
+  const loadDirectory = useCallback(async (
+    path: string,
+    open = true,
+    offset = 1,
+    append = false,
+  ) => {
     setNodes((current) => ({
       ...current,
-      [path]: { ...(current[path] ?? DEFAULT_NODE), loading: true, error: null, open },
+      [path]: {
+        ...(current[path] ?? DEFAULT_NODE),
+        loading: true,
+        error: null,
+        open,
+        ...(append ? {} : { truncated: false, next: undefined }),
+      },
     }));
     try {
       const result = await readWorkspaceEntry({
         path,
         taskId: context.taskId,
         projectId: context.projectId,
-        limit: 500,
+        offset,
+        limit: DIRECTORY_PAGE_SIZE,
       });
       if (result.type !== "directory") {
         throw new Error("Not a directory");
@@ -58,11 +81,15 @@ export function useFileTree(context: { taskId?: string; projectId?: string }) {
       setNodes((current) => ({
         ...current,
         [path]: {
-          entries: visibleEntries(result.entries),
+          ...(current[path] ?? DEFAULT_NODE),
+          entries: append
+            ? appendUniqueEntries(current[path]?.entries ?? [], visibleEntries(result.entries))
+            : visibleEntries(result.entries),
           open,
           loading: false,
           error: null,
           truncated: result.truncated,
+          ...(result.next !== undefined ? { next: result.next } : { next: undefined }),
         },
       }));
     } catch (err) {
@@ -91,9 +118,20 @@ export function useFileTree(context: { taskId?: string; projectId?: string }) {
     void loadDirectory(path, true);
   }, [loadDirectory, nodes]);
 
+  const loadMoreDirectory = useCallback((path: string) => {
+    const current = nodes[path];
+    if (!current || current.loading || current.next === undefined) return;
+    void loadDirectory(path, true, current.next, true);
+  }, [loadDirectory, nodes]);
+
+  const reloadRoot = useCallback(() => {
+    void loadDirectory(".", true);
+  }, [loadDirectory]);
+
   return {
     nodes,
-    reloadRoot: () => loadDirectory(".", true),
+    reloadRoot,
     toggleDirectory,
+    loadMoreDirectory,
   };
 }

@@ -139,6 +139,14 @@
   line-height: 1.55;
 }
 
+.memory-action-error {
+  margin: 0;
+  padding: 8px 14px;
+  color: var(--danger, #dc2626);
+  font-size: var(--ui-font-sm, 13px);
+  line-height: 1.5;
+}
+
 .memory-list {
   list-style: none;
   margin: 0;
@@ -250,6 +258,12 @@
 
 .memory-link:hover {
   text-decoration: underline;
+}
+
+.memory-link:disabled {
+  opacity: 0.5;
+  cursor: wait;
+  text-decoration: none;
 }
 
 .memory-link.danger {

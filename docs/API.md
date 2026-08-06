@@ -6,7 +6,7 @@
 ## 约定
 
 - JSON 请求/响应；SSE：`text/event-stream`，事件体为 `AgentEvent` JSON。图片附件以 data URL 随任务请求上传，单张上限 20MB；引擎落盘后任务历史只保存内部路径。
-- 鉴权：本机进程，无公网鉴权层。  
+- 鉴权：Agent 每次启动生成内存 Bearer token；受信任 Origin 先 GET `/api/auth/bootstrap` 获取本次会话令牌，后续 HTTP 与 SSE 均带 `Authorization: Bearer …`。默认 CORS 只允许 Tauri 与本地开发端口，外部 Web UI 必须显式设置 `AUREVOY_CORS_ORIGINS`。令牌不写入 SQLite、日志或诊断导出。
 - 改接口：先 shared → `build:shared` → agent / web-ui。
 
 ## 端点一览
@@ -16,18 +16,22 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | 在线探测；`provider` 如 `openai:model` 或 `unconfigured` |
+| GET | `/api/auth/bootstrap` | 仅允许配置 Origin；返回本次进程内存会话 token |
 | GET | `/api/health/diagnostics` | 本地诊断：LLM、SQLite、工作区、Embedding、sqlite-vec 与 KB 索引；不调用上游模型 |
 | GET | `/api/tools` | 已注册工具（含 MCP）；禁用仍列出但不可调 |
 | PATCH | `/api/tools/:name` | `{ enabled }` |
 | GET | `/api/skills` | Skill catalog（无 body） |
 | GET | `/api/skills/:name` | Skill 详情（含 SKILL.md body） |
 | POST | `/api/skills/reload` | 重扫 skill |
-| POST | `/api/skills/install` | 从 Git 安装 |
+| POST | `/api/skills/install` | 从 Git 安装；body 必须含 `repoUrl`、非空 `skillPaths` 和至少 20 字符的 `inspectionSummary`，可带 `inspectedSource` |
 | PATCH | `/api/skills/:name` | `{ enabled }` 启停 |
 | DELETE | `/api/skills/:name` | 卸载用户/系统 skill |
-| GET | `/api/mcp/status` | MCP 连接状态、错误与已注册工具数 |
+| GET | `/api/mcp/status` | MCP 连接状态、错误、已注册工具数及最近一次工具集合变化 |
+| POST | `/api/mcp/test` | 一次性连接并枚举工具，不保存或注册配置 |
 
-MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel` 优先）。配置经 `PATCH /api/settings` 保存后会重载：支持本地 `stdio`（`command`、`args`、可选 `cwd` / `env`）及远程 `streamable-http`（`url`、可选 `headers`）两种传输。单个服务器连接失败只标记该服务器不可用，不会阻断引擎启动。
+MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel` 优先）。配置经 `PATCH /api/settings` 保存后会重载：支持本地 `stdio`（`command`、`args`、可选 `cwd` / `env`）及远程 `streamable-http`（`url`、可选 `headers`）两种传输。浏览器命名的 MCP 可选 `browserPermissionProfile`：`read_only`（默认）、`download`、`login`、`submit`；profile 之外的浏览器工具不会注册。敏感 header/env 值会移入 SQLite 本机凭据表，设置 JSON 和导出只保留占位符；缺失凭据不会把占位符发送给上游。单个服务器连接失败只标记该服务器不可用，不会阻断引擎启动。连接测试只在用户明确点击时启动一次临时客户端。
+
+`/api/mcp/status` 中每个服务器可返回 `toolNames`、`toolRisks` 和 `changes`：`changes` 是最近一次初始化或重载相对上一份成功快照的 `added`、`removed`、`risk_changed` 工具差异。差异仅用于可观测性和设置页提示，不会自动启用、禁用或执行工具。
 
 ### 任务
 
@@ -65,6 +69,7 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 | PATCH | `/api/automations/:id` | 更新名称、目标、项目、预算、频率或启停；启用定时配方会生成 `nextRunAt` |
 | DELETE | `/api/automations/:id` | 删除配方；已经创建的任务保留 |
 | POST | `/api/automations/:id/run` | 立即触发一次；运行中重复触发返回 `409` |
+| POST | `/api/automations/test-run` | 保存前以真实普通任务试跑草稿，不创建配方或运行历史 |
 | GET | `/api/automations/:id/runs` | 最近运行记录及关联任务 |
 
 `cadence` 取 `manual`、`hourly`、`every_6_hours`、`daily`、`weekly`。定时运行只创建普通 `Task`，任务的 `automationId` 用于来源追踪；审批、预算、暂停、工具风险和 Pi session tree 仍由既有任务主链控制。Agent 重启后调度器读取 SQLite 中未到期配方和未收敛运行记录继续诊断。
@@ -105,7 +110,7 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/tasks/:id/artifacts/:artifactId` | 元数据/内容（实现以路由为准） |
+| GET | `/api/tasks/:id/artifacts/:artifactId` | 元数据/内容（含名称、类型、来源任务、更新时间、落盘位置） |
 | PATCH | `/api/tasks/:id/artifacts/:artifactId` | 确认/拒绝等状态 |
 
 ### 记忆 / 知识库 / 项目 / 工作区
@@ -125,10 +130,14 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 | GET | `/api/settings/models` | 当前激活 Provider 拉模型列表 |
 | GET | `/api/data` | DB/工作区/计数 |
 | GET | `/api/data/token-usage` | 用量汇总 |
+| GET | `/api/data/task-metrics` | 脱敏的任务完成/失败/恢复/介入/重试/耗时汇总与 token 用量 |
 | POST | `/api/data/export` | 下载脱敏 JSON；默认仅任务元数据，`{ includeTaskMessages: true }` 才附带消息正文 |
+| POST | `/api/data/database-backup` | 下载 SQLite 原生备份；备份生成后做 `quick_check`，磁盘不足返回 `507` |
 | POST | `/api/data/cleanup` | 清理旧终态任务，并级联删除轨迹、图片分片与 Pi 会话树；`olderThanDays` 范围为 1–3650 |
 
 数据导出由 `DataExportPayload` 明确投影：结构化字段不包含 API Key/OAuth、MCP JSON、代理地址、数据库/工作区/项目/附件路径、图片二进制、富内容 payload、工具参数或原始轨迹；用户目标、计划、记忆文本以及显式选择的任务消息仍可能包含用户隐私或路径，分享前应检查。
+
+SQLite schema 使用 `PRAGMA user_version` + `schema_migrations` 记录版本。启动升级在单事务内执行；检测到已有旧库时会在升级前生成带版本和时间戳的副本。独立备份恢复代码位于 `apps/agent/src/store/database-maintenance.ts`，恢复必须在引擎离线后执行，并在替换前后验证 `quick_check`。
 
 多 Provider：每槽位独立 key/baseUrl/model/列表；`PATCH` 切换 `provider` 会激活对应槽位。  
 `search.preferNative` 控制搜索策略：开启后，Responses wire protocol 使用

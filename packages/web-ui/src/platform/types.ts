@@ -11,6 +11,9 @@ export interface PlatformAdapter {
    *  Tauri: convertFileSrc() ；浏览器: 返回 null 走 HTML5 File API */
   filePathToUrl(filePath: string): string | null;
 
+  /** 用户明确选择工作区后，为 asset protocol 授予该目录的递归读取范围。 */
+  allowAssetDirectory?(path: string): Promise<void>;
+
   /** 打开外部链接（默认浏览器/自定义标签页） */
   openExternal?(url: string): void | Promise<void>;
 

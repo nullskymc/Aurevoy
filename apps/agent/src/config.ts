@@ -1,7 +1,12 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { AGENT_DEFAULT_HOST, AGENT_DEFAULT_PORT, type ToolRiskLevel } from '@aurevoy/shared';
+import {
+  AGENT_DEFAULT_HOST,
+  AGENT_DEFAULT_PORT,
+  type BrowserPermissionProfile,
+  type ToolRiskLevel,
+} from '@aurevoy/shared';
 
 /** MCP 本地进程（stdio）。 */
 export interface McpStdioServerConfig {
@@ -14,6 +19,8 @@ export interface McpStdioServerConfig {
   enabled: boolean;
   /** MCP 工具缺省风险等级；不填时按 tool annotations 推断，兜底为 caution。 */
   riskLevel?: ToolRiskLevel;
+  /** 浏览器 MCP 能力 profile；缺省为 read_only，禁止高风险工具注册。 */
+  browserPermissionProfile?: BrowserPermissionProfile;
   /** true=强制延迟加载, false=强制直接暴露, 缺省=工具数超阈值时自动延迟。 */
   deferTools?: boolean;
 }
@@ -30,10 +37,14 @@ export interface McpStreamableHttpServerConfig {
   headers?: Record<string, string>;
   enabled: boolean;
   riskLevel?: ToolRiskLevel;
+  browserPermissionProfile?: BrowserPermissionProfile;
   deferTools?: boolean;
 }
 
 export type McpServerConfig = McpStdioServerConfig | McpStreamableHttpServerConfig;
+
+/** shell 命令的 OS 隔离策略；auto 在平台支持时优先使用 OS sandbox。 */
+export type CommandIsolationMode = 'auto' | 'required' | 'process';
 
 /**
  * 运行时配置。
@@ -57,9 +68,18 @@ export const config = {
   port: Number(process.env.AUREVOY_PORT ?? AGENT_DEFAULT_PORT),
   dbPath: process.env.AUREVOY_DB_PATH ?? resolve(homedir(), '.aurevoy', 'aurevoy.sqlite'),
   workspaceDir: process.env.AUREVOY_WORKSPACE_DIR ?? resolve(homedir(), '.aurevoy', 'workspace'),
-  corsOrigins: (process.env.AUREVOY_CORS_ORIGINS ?? '*')
+  // 默认只允许产品桌面壳与本地开发页面；需要外部 Web UI 时显式配置 AUREVOY_CORS_ORIGINS。
+  corsOrigins: (process.env.AUREVOY_CORS_ORIGINS ?? [
+    'http://tauri.localhost',
+    'tauri://localhost',
+    'http://localhost:1420',
+    'http://127.0.0.1:1420',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+  ].join(','))
     .split(',')
-    .map((s) => s.trim()),
+    .map((s) => s.trim())
+    .filter(Boolean),
 
   /**
    * LLM 默认值（未配置设置时）。
@@ -121,6 +141,8 @@ export const config = {
   sandbox: {
     /** 默认关；由设置页启用 */
     commandExecutionEnabled: false,
+    /** required 用于发布/回归门；process 仅用于诊断兼容性。 */
+    commandIsolation: parseCommandIsolation(process.env.AUREVOY_COMMAND_ISOLATION, 'auto'),
     commandTimeoutMs: 30_000,
     commandOutputLimitBytes: 64 * 1024,
     commandEnvAllowlist: ['PATH', 'HOME', 'TMPDIR'],
@@ -192,6 +214,10 @@ export const config = {
 export function parseNumber(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
   return raw != null && raw !== '' && !Number.isNaN(n) ? n : fallback;
+}
+
+function parseCommandIsolation(raw: string | undefined, fallback: CommandIsolationMode): CommandIsolationMode {
+  return raw === 'auto' || raw === 'required' || raw === 'process' ? raw : fallback;
 }
 
 /**
@@ -273,6 +299,10 @@ if (process.env.AUREVOY_TEST_BOOTSTRAP === '1') {
     },
     sandbox: {
       commandExecutionEnabled: process.env.AUREVOY_ENABLE_COMMAND_EXECUTION === 'true',
+      commandIsolation: parseCommandIsolation(
+        process.env.AUREVOY_COMMAND_ISOLATION,
+        config.sandbox.commandIsolation,
+      ),
       commandTimeoutMs: parseNumber(process.env.AUREVOY_COMMAND_TIMEOUT_MS, config.sandbox.commandTimeoutMs),
       commandOutputLimitBytes: parseNumber(
         process.env.AUREVOY_COMMAND_OUTPUT_LIMIT_BYTES,
@@ -397,6 +427,7 @@ function parseMcpServerConfig(
       headers: readStringRecord(value.headers, `${name}.headers`),
       enabled: value.enabled !== false,
       riskLevel: readRiskLevel(value.riskLevel, `${name}.riskLevel`),
+      browserPermissionProfile: readBrowserPermissionProfile(value.browserPermissionProfile, `${name}.browserPermissionProfile`),
       deferTools: typeof value.deferTools === 'boolean' ? value.deferTools : undefined,
     };
   }
@@ -413,6 +444,7 @@ function parseMcpServerConfig(
     env: readStringRecord(value.env, `${name}.env`),
     enabled: value.enabled !== false,
     riskLevel: readRiskLevel(value.riskLevel, `${name}.riskLevel`),
+    browserPermissionProfile: readBrowserPermissionProfile(value.browserPermissionProfile, `${name}.browserPermissionProfile`),
     deferTools: typeof value.deferTools === 'boolean' ? value.deferTools : undefined,
   };
 }
@@ -457,6 +489,12 @@ function readRiskLevel(value: unknown, label: string): ToolRiskLevel | undefined
   if (value == null) return undefined;
   if (value === 'safe' || value === 'caution' || value === 'dangerous') return value;
   throw new Error(`MCP 配置 ${label} 必须是 safe/caution/dangerous`);
+}
+
+function readBrowserPermissionProfile(value: unknown, label: string): BrowserPermissionProfile | undefined {
+  if (value == null) return undefined;
+  if (value === 'read_only' || value === 'download' || value === 'login' || value === 'submit') return value;
+  throw new Error(`MCP 配置 ${label} 必须是 read_only/download/login/submit`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

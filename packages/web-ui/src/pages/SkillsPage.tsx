@@ -1,8 +1,15 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tabs from "@radix-ui/react-tabs";
 import { useEffect, useMemo, useState } from "react";
-import type { SkillDescriptor, SkillDetail, SkillInstallResponse } from "@aurevoy/shared";
-import { fetchSkillDetail } from "../api";
+import type {
+  BrowserRuntimeStatus,
+  BrowserRuntimeTestResponse,
+  SkillDescriptor,
+  SkillDetail,
+  SkillInstallRequest,
+  SkillInstallResponse,
+} from "@aurevoy/shared";
+import { fetchSkillDetail, getBrowserRuntimeStatus, testBrowserRuntime } from "../api";
 import { MarkdownRenderer } from "../components/MarkdownRenderer";
 import { t } from "../i18n";
 import { IconCheck, IconRefresh, IconSearch, IconX } from "../icons";
@@ -49,6 +56,7 @@ function formatOverflowLabel(overflow: SkillDescriptor[]): string {
 
 export function SkillsPage({
   skills,
+  error,
   installing,
   installError,
   reloading,
@@ -59,10 +67,11 @@ export function SkillsPage({
   onTrySkill,
 }: {
   skills: SkillDescriptor[];
+  error: string | null;
   installing: boolean;
   installError: string | null;
   reloading: boolean;
-  onInstall: (url: string) => Promise<SkillInstallResponse>;
+  onInstall: (request: SkillInstallRequest) => Promise<SkillInstallResponse>;
   onReload: () => Promise<void>;
   onToggle: (name: string, enabled: boolean) => Promise<void>;
   onUninstall: (name: string) => Promise<void>;
@@ -73,8 +82,61 @@ export function SkillsPage({
   const [sourceTab, setSourceTab] = useState<SourceTab>("personal");
   const [installOpen, setInstallOpen] = useState(false);
   const [url, setUrl] = useState("");
+  const [skillPaths, setSkillPaths] = useState("");
+  const [inspectedSource, setInspectedSource] = useState("");
+  const [inspectionSummary, setInspectionSummary] = useState("");
   const [lastResult, setLastResult] = useState<SkillInstallResponse | null>(null);
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [browserRuntime, setBrowserRuntime] = useState<BrowserRuntimeStatus | null>(null);
+  const [browserRuntimeLoading, setBrowserRuntimeLoading] = useState(true);
+  const [browserRuntimeTesting, setBrowserRuntimeTesting] = useState(false);
+  const [browserRuntimeError, setBrowserRuntimeError] = useState<string | null>(null);
+  const [browserRuntimeTestResult, setBrowserRuntimeTestResult] = useState<BrowserRuntimeTestResponse | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBrowserRuntimeLoading(true);
+    void getBrowserRuntimeStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setBrowserRuntime(status);
+          setBrowserRuntimeError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setBrowserRuntimeError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setBrowserRuntimeLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleBrowserRuntimeTest(): Promise<void> {
+    if (browserRuntimeTesting || !browserRuntime?.serverName) return;
+    setBrowserRuntimeTesting(true);
+    setBrowserRuntimeTestResult(null);
+    try {
+      const result = await testBrowserRuntime(browserRuntime.serverName);
+      setBrowserRuntimeTestResult(result);
+      const refreshed = await getBrowserRuntimeStatus();
+      setBrowserRuntime(refreshed);
+    } catch (error) {
+      setBrowserRuntimeTestResult({
+        ok: false,
+        connected: false,
+        registeredTools: 0,
+        latencyMs: 0,
+        state: "unhealthy",
+        serverName: browserRuntime.serverName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setBrowserRuntimeTesting(false);
+    }
+  }
 
   const filtered = useMemo(
     () => skills.filter((s) => matchesQuery(s, query.trim())),
@@ -89,11 +151,24 @@ export function SkillsPage({
 
   async function handleInstall() {
     const trimmed = url.trim();
-    if (!trimmed) return;
+    const paths = skillPaths
+      .split(/[\n,]/)
+      .map((path) => path.trim())
+      .filter(Boolean);
+    const summary = inspectionSummary.trim();
+    if (!trimmed || paths.length === 0 || summary.length < 20) return;
     try {
-      const result = await onInstall(trimmed);
+      const result = await onInstall({
+        repoUrl: trimmed,
+        skillPaths: paths,
+        inspectedSource: inspectedSource.trim() || undefined,
+        inspectionSummary: summary,
+      });
       setLastResult(result);
       setUrl("");
+      setSkillPaths("");
+      setInspectedSource("");
+      setInspectionSummary("");
       setInstallOpen(false);
     } catch {
       /* error via installError prop */
@@ -128,6 +203,8 @@ export function SkillsPage({
         </div>
       </header>
 
+      {error && <p className="skill-install-error" role="alert">{error}</p>}
+
       <div className="skills-search-shell">
         <SearchIcon />
         <input
@@ -142,7 +219,8 @@ export function SkillsPage({
 
       {installOpen && (
         <div className="skills-install-area">
-          <div className="skills-install-row">
+          <p className="skills-install-hint">{t("skillsPage.installTrustHint")}</p>
+          <div className="skills-install-fields">
             <input
               type="text"
               value={url}
@@ -151,16 +229,45 @@ export function SkillsPage({
                 setLastResult(null);
               }}
               placeholder={t("skillsPage.installPlaceholder")}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void handleInstall();
-              }}
               disabled={installing}
             />
+            <textarea
+              value={skillPaths}
+              onChange={(e) => {
+                setSkillPaths(e.target.value);
+                setLastResult(null);
+              }}
+              placeholder={t("skillsPage.installPathsPlaceholder")}
+              aria-label={t("skillsPage.installPathsLabel")}
+              rows={2}
+              disabled={installing}
+            />
+            <input
+              type="text"
+              value={inspectedSource}
+              onChange={(e) => setInspectedSource(e.target.value)}
+              placeholder={t("skillsPage.installSourcePlaceholder")}
+              aria-label={t("skillsPage.installSourceLabel")}
+              disabled={installing}
+            />
+            <textarea
+              value={inspectionSummary}
+              onChange={(e) => {
+                setInspectionSummary(e.target.value);
+                setLastResult(null);
+              }}
+              placeholder={t("skillsPage.installSummaryPlaceholder")}
+              aria-label={t("skillsPage.installSummaryLabel")}
+              rows={3}
+              disabled={installing}
+            />
+          </div>
+          <div className="skills-install-row">
             <button
               type="button"
               className="skills-install-submit"
               onClick={() => void handleInstall()}
-              disabled={installing || !url.trim()}
+              disabled={installing || !url.trim() || skillPaths.trim().length === 0 || inspectionSummary.trim().length < 20}
             >
               {installing ? t("skillsPage.installing") : t("skillsPage.install")}
             </button>
@@ -178,6 +285,15 @@ export function SkillsPage({
           )}
         </div>
       )}
+
+      <BrowserRuntimeCard
+        status={browserRuntime}
+        loading={browserRuntimeLoading}
+        testing={browserRuntimeTesting}
+        error={browserRuntimeError}
+        testResult={browserRuntimeTestResult}
+        onTest={() => void handleBrowserRuntimeTest()}
+      />
 
       {installed.length === 0 ? (
         <p className="skills-empty">{query ? t("skillsPage.emptySearch") : t("skillsPage.empty")}</p>
@@ -232,6 +348,81 @@ export function SkillsPage({
           onTrySkill={onTrySkill}
         />
       )}
+    </section>
+  );
+}
+
+function BrowserRuntimeCard({
+  status,
+  loading,
+  testing,
+  error,
+  testResult,
+  onTest,
+}: {
+  status: BrowserRuntimeStatus | null;
+  loading: boolean;
+  testing: boolean;
+  error: string | null;
+  testResult: BrowserRuntimeTestResponse | null;
+  onTest: () => void;
+}) {
+  const state = status?.state ?? "not_configured";
+  const stateLabel = {
+    ready: t("skillsPage.browserReady"),
+    not_configured: t("skillsPage.browserNotConfigured"),
+    disabled: t("skillsPage.browserDisabled"),
+    unhealthy: t("skillsPage.browserUnhealthy"),
+  }[state];
+
+  return (
+    <section className="browser-runtime-card" aria-labelledby="browser-runtime-title" data-state={state}>
+      <div className="browser-runtime-head">
+        <div>
+          <h2 id="browser-runtime-title">{t("skillsPage.browserTitle")}</h2>
+          <p>{t("skillsPage.browserDesc")}</p>
+        </div>
+        <span className="browser-runtime-state" role="status">{loading ? t("skillsPage.browserChecking") : stateLabel}</span>
+      </div>
+      {error ? <p className="browser-runtime-error" role="alert">{error}</p> : null}
+      {status?.serverName ? (
+        <p className="browser-runtime-meta">
+          {t("skillsPage.browserServer")}: <strong>{status.serverName}</strong> · {status.registeredTools} {t("skillsPage.browserTools")}
+          {status.blockedTools > 0 ? ` · ${status.blockedTools} ${t("skillsPage.browserBlockedTools")}` : ""}
+        </p>
+      ) : null}
+      {state === "ready" && status?.toolNames.length ? (
+        <p className="browser-runtime-tools" title={status.toolNames.join(", ")}>
+          {t("skillsPage.browserToolsAvailable")}: {status.toolNames.join(", ")}
+        </p>
+      ) : null}
+      {state === "not_configured" ? (
+        <div className="browser-runtime-setup">
+          <p>{t("skillsPage.browserInstallHint")}</p>
+          <code>{status?.installCommand ?? "npm install -g @anthropic/mcp-server-playwright"}</code>
+          <p>{t("skillsPage.browserConfigHint")}</p>
+          <code>{status?.configExample ?? "npx -y @anthropic/mcp-server-playwright"}</code>
+        </div>
+      ) : null}
+      {status?.error ? <p className="browser-runtime-error" role="alert">{status.error}</p> : null}
+      {testResult ? (
+        <p className={`browser-runtime-test-result${testResult.ok ? " is-ok" : " is-error"}`} role="status">
+          {testResult.ok
+            ? `${t("skillsPage.browserTestSuccess")} · ${testResult.registeredTools} ${t("skillsPage.browserTools")}${testResult.blockedTools ? ` · ${testResult.blockedTools} ${t("skillsPage.browserBlockedTools")}` : ""} · ${testResult.latencyMs}ms`
+            : `${t("skillsPage.browserTestFailed")} ${testResult.error ?? ""}`}
+        </p>
+      ) : null}
+      <div className="browser-runtime-actions">
+        <span>{t("skillsPage.browserApprovalHint")}</span>
+        <button
+          type="button"
+          className="skills-install-submit browser-runtime-test"
+          disabled={loading || testing || !status?.serverName}
+          onClick={onTest}
+        >
+          {testing ? t("skillsPage.browserTesting") : t("skillsPage.browserTest")}
+        </button>
+      </div>
     </section>
   );
 }
@@ -408,12 +599,40 @@ function SkillDetailModal({
           {display && (
             <div className="skills-modal-meta">
               <span className="skills-modal-pill">{display.sourcePath}</span>
+              {display.directory && (
+                <span className="skills-modal-pill" title={display.directory}>
+                  {t("skillsPage.directory")}: {display.directory}
+                </span>
+              )}
               {display.metadata?.version && (
                 <span className="skills-modal-pill">{display.metadata.version}</span>
+              )}
+              {display.allowedTools && display.allowedTools.length > 0 && (
+                <span
+                  className="skills-modal-pill"
+                  title={display.allowedTools.join(", ")}
+                >
+                  {t("skillsPage.allowedTools")}: {display.allowedTools.join(", ")}
+                </span>
+              )}
+              {display.license && (
+                <span className="skills-modal-pill" title={display.license}>
+                  {t("skillsPage.license")}: {display.license}
+                </span>
+              )}
+              {display.compatibility && (
+                <span className="skills-modal-pill" title={display.compatibility}>
+                  {t("skillsPage.compatibility")}: {display.compatibility}
+                </span>
               )}
               {display.installUrl && (
                 <span className="skills-modal-pill" title={display.installUrl}>
                   {t("skillsPage.installedFrom")}
+                </span>
+              )}
+              {display.lastLoadError && (
+                <span className="skills-modal-pill is-error" title={`${display.lastLoadError.message} · ${display.lastLoadError.at}`}>
+                  {t("skillsPage.recentLoadError")}
                 </span>
               )}
             </div>

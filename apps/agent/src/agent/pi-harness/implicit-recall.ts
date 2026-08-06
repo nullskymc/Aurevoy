@@ -80,24 +80,24 @@ export async function buildImplicitRecallPrompt(
     if (source === 'memory') {
       const recalled = result.value as MemorySystemMessage;
       const content = recalled.message?.content.trim();
-      if (!content) return;
-      sections.push(content);
       options.onSource?.({
         source,
         count: recalled.citations.length,
         citationCount: recalled.citations.length,
       });
+      if (!content) return;
+      sections.push(content);
       return;
     }
 
     const recalled = result.value as RecallKbResponse;
-    if (recalled.results.length === 0) return;
-    sections.push(formatKnowledgeSection(recalled));
     options.onSource?.({
       source,
       count: recalled.results.length,
       citationCount: recalled.citations.length,
     });
+    if (recalled.results.length === 0) return;
+    sections.push(formatKnowledgeSection(recalled));
   });
 
   return formatImplicitRecallSections(sections, options.maxChars ?? DEFAULT_IMPLICIT_RECALL_MAX_CHARS);

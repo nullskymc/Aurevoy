@@ -3,6 +3,7 @@ import { delimiter, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { config } from '../config.js';
 import { getPythonBinDir, isPythonInstalled } from '../runtime/python-runtime.js';
+import { detectOsIsolation, prepareIsolatedSpawn, type EffectiveCommandIsolation } from './os-isolation.js';
 
 export interface CommandExecutionPolicy {
   enabled: boolean;
@@ -10,7 +11,7 @@ export interface CommandExecutionPolicy {
   timeoutMs: number;
   outputLimitBytes: number;
   envAllowlist: string[];
-  isolation: 'disabled' | 'process' | 'container';
+  isolation: 'disabled' | EffectiveCommandIsolation;
 }
 
 export interface CommandExecutionRequest {
@@ -38,19 +39,23 @@ export interface CommandExecutor {
 }
 
 export function createCommandExecutionPolicy(): CommandExecutionPolicy {
+  const osIsolation = detectOsIsolation();
   return {
     enabled: config.sandbox.commandExecutionEnabled,
     workspaceDir: resolve(config.workspaceDir),
     timeoutMs: config.sandbox.commandTimeoutMs,
     outputLimitBytes: config.sandbox.commandOutputLimitBytes,
     envAllowlist: config.sandbox.commandEnvAllowlist,
-    isolation: config.sandbox.commandExecutionEnabled ? 'process' : 'disabled',
+    isolation: !config.sandbox.commandExecutionEnabled
+      ? 'disabled'
+      : config.sandbox.commandIsolation === 'process' || !osIsolation.available
+        ? 'process'
+        : osIsolation.mode,
   };
 }
 
 /**
- * 默认执行器只暴露权限边界，不执行任何命令。
- * 未来接入真实执行能力时，必须替换为隔离实现并接入审批/轨迹/回归。
+ * 兼容旧接口的禁用执行器；产品工具使用 Effect bash，并不绕过审批直接调用本类。
  */
 export class DisabledCommandExecutor implements CommandExecutor {
   get policy(): CommandExecutionPolicy {
@@ -83,6 +88,16 @@ export class ProcessCommandExecutor implements CommandExecutor {
     if (!request.command.trim()) throw new Error('command 必须是非空字符串');
     const cwd = resolveCommandCwd(request.cwd, workspaceOverride ?? policy.workspaceDir);
     const env = buildAllowedEnv(request.env, policy.envAllowlist);
+    const workspaceRoot = resolve(workspaceOverride ?? policy.workspaceDir);
+    const isolated = await prepareIsolatedSpawn({
+      program: request.command,
+      args: request.args ?? [],
+      cwd,
+      workspaceRoot,
+      externalPaths: trustedCommandRoots(),
+      env,
+      requested: config.sandbox.commandIsolation,
+    });
 
     return new Promise<CommandExecutionResult>((resolveResult, reject) => {
       let stdout = '';
@@ -91,17 +106,18 @@ export class ProcessCommandExecutor implements CommandExecutor {
       let timedOut = false;
       let settled = false;
 
-      const child = spawn(request.command, request.args ?? [], {
+      const child = spawn(isolated.program, isolated.args, {
         cwd,
-        env,
+        env: isolated.env,
         shell: false,
+        detached: process.platform !== 'win32',
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       const timeout = setTimeout(() => {
         timedOut = true;
-        child.kill('SIGTERM');
+        killChildProcess(child, 'SIGTERM');
       }, policy.timeoutMs);
 
       const finish = (result: CommandExecutionResult) => {
@@ -109,11 +125,11 @@ export class ProcessCommandExecutor implements CommandExecutor {
         settled = true;
         clearTimeout(timeout);
         signal?.removeEventListener('abort', onAbort);
-        resolveResult(result);
+        void isolated.cleanup().catch(() => {}).finally(() => resolveResult(result));
       };
 
       const onAbort = () => {
-        child.kill('SIGTERM');
+        killChildProcess(child, 'SIGTERM');
       };
 
       signal?.addEventListener('abort', onAbort, { once: true });
@@ -131,7 +147,7 @@ export class ProcessCommandExecutor implements CommandExecutor {
       child.on('error', (err) => {
         clearTimeout(timeout);
         signal?.removeEventListener('abort', onAbort);
-        reject(err);
+        void isolated.cleanup().catch(() => {}).finally(() => reject(err));
       });
       child.on('close', (exitCode) => {
         finish({
@@ -147,6 +163,28 @@ export class ProcessCommandExecutor implements CommandExecutor {
 }
 
 export const commandExecutor: CommandExecutor = new ProcessCommandExecutor();
+
+function trustedCommandRoots(): string[] {
+  const home = homedir();
+  return [
+    resolve(home, '.aurevoy'),
+    resolve(home, '.agents'),
+    resolve(home, '.claude'),
+    resolve(home, '.codex'),
+  ];
+}
+
+function killChildProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  if (process.platform !== 'win32' && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // 进程组可能已经退出，继续尝试杀主进程。
+    }
+  }
+  child.kill(signal);
+}
 
 function resolveCommandCwd(input: string | undefined, workspaceDir: string): string {
   const root = resolve(workspaceDir);

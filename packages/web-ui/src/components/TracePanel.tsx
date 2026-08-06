@@ -43,6 +43,7 @@ export function TracePanel({
                     {typeof trace.durationMs === "number" ? ` · ${trace.durationMs} ms` : ""}
                     {trace.provider && trace.model ? ` · ${trace.provider}:${trace.model}` : ""}
                   </span>
+                  {isSecurityTrace(trace) ? <span className="trace-row__security">{t("trace.promptInjection")}</span> : null}
                   {trace.errorMessage && <p>{trace.errorMessage}</p>}
                 </div>
               </article>
@@ -52,4 +53,8 @@ export function TracePanel({
       </Dialog.Portal>
     </Dialog.Root>
   );
+}
+
+function isSecurityTrace(trace: TaskTraceEntry): boolean {
+  return Boolean(trace.data && typeof trace.data === "object" && "promptInjectionDetected" in trace.data && trace.data.promptInjectionDetected === true);
 }

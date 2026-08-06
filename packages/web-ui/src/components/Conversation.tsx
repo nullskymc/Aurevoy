@@ -12,26 +12,30 @@ import type {
   Task,
   TaskPhase,
   TaskStatus,
-  ToolRiskLevel,
 } from "@aurevoy/shared";
 import { ImageViewer } from "./ImageViewer";
 import { MarkdownRenderer, StreamingMarkdownRenderer } from "./MarkdownRenderer";
 import type { LiveOutputStore } from "../app/liveOutputStore";
-import { t } from "../i18n";
+import { t, type TranslationKey } from "../i18n";
 import {
   AgentRound,
   buildAgentRoundFromMessage,
   buildLiveAgentRoundData,
-  dedupeContentBlocks,
   flattenProcessActivityRows,
   LiveProcessBlock,
   mergeAgentRoundData,
   ProcessActivityList,
+  RecallSummaryView,
   resolveLiveStatusText,
   type AgentRoundData,
   type ProcessSegmentData,
 } from "./Timeline";
 import { usePlatform } from "../platform/context";
+import {
+  buildBrowserManualHandoff,
+  classifyBrowserFailure,
+  type BrowserFailureKind,
+} from "./browserRecovery";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuItem } from "./ContextMenu";
 import {
@@ -43,10 +47,25 @@ import {
   type ContextMenuState,
 } from "./contextMenuActions";
 import {
-  buildConversationViewModel,
   shouldSuppressLiveOutput,
   type ConversationTurn,
 } from "./conversationWorkflow";
+import {
+  buildDeliveryMessages,
+  collectApprovalItems,
+  currentTurnSubagentRuns,
+  findFinalAssistantMessage,
+  getFailureInfo,
+  hasProcessNarration,
+  isPresentationOnlyAssistantMessage,
+  isProcessToolNarration,
+  resolveProcessStartMs,
+  standaloneToolActivityFromMessage,
+  stripPresentationBlocksForWorkflow,
+  type ToolActivity,
+  type ToolResultInfo,
+} from "./conversationData";
+import { useConversationViewModel } from "./useConversationViewModel";
 import { getRelativeTime } from "./status";
 import {
   IconAlertCircle,
@@ -62,27 +81,7 @@ import {
 } from "../icons";
 import "./Conversation.css";
 
-/** 一次工具调用在 UI 中的活动状态（由 App 从事件或消息派生） */
-export interface ToolActivity {
-  id: string;
-  name: string;
-  args: unknown;
-  /** 后端生成的状态无关动作摘要，例如“调用 zotero · search items · 关键词” */
-  summary?: string;
-  status: "awaiting" | "running" | "ok" | "error" | "cancelled";
-  riskLevel?: ToolRiskLevel;
-  planStepId?: string;
-  output?: unknown;
-  error?: string;
-  errorCode?: string;
-  progress?: {
-    message: string;
-    chunk?: { current: number; total: number };
-    percent?: number;
-  };
-}
-
-type ToolDecisionHandler = (callId: string, approved: boolean) => void;
+type ToolDecisionHandler = (callId: string, approved: boolean) => void | Promise<void>;
 
 interface ConversationProps {
   task: Task;
@@ -124,6 +123,8 @@ interface ConversationProps {
   onBranch?: (messageId: string) => void;
   /** 恢复中断的任务 */
   onResume?: () => void;
+  /** 从已完成对话打开自动化草稿；目标和项目会继承，但权限/预算仍需重新确认。 */
+  onCreateAutomation?: () => void;
   /** Agent 本轮通过 attach_content 的实时内容块 */
   liveContentBlocks?: ContentBlock[];
   /** 对话内文件引用 → 侧边工作台预览 */
@@ -137,131 +138,13 @@ interface ConversationProps {
   } | null;
 }
 
-interface ToolResultInfo {
-  ok: boolean;
-  output?: unknown;
-  error?: string;
-  errorCode?: string;
-}
-
-function parseToolResultContent(content: string): ToolResultInfo {
-  let parsed: unknown = content;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    /* 保留原文 */
-  }
-  if (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)) {
-    const record = parsed as Record<string, unknown>;
-    return {
-      ok: false,
-      error: String(record.error),
-      errorCode: typeof record.errorCode === "string" ? record.errorCode : undefined,
-    };
-  }
-  return { ok: true, output: parsed };
-}
-
-/** 扫描消息，建立 toolCallId → 工具结果 的映射 */
-function buildToolResultMap(messages: Message[]): Map<string, ToolResultInfo> {
-  const map = new Map<string, ToolResultInfo>();
-  for (const message of messages) {
-    if (message.role !== "tool" || !message.toolCallId) continue;
-    map.set(message.toolCallId, parseToolResultContent(message.content));
-  }
-  return map;
-}
-
-/** live 正文去重只需要当前用户轮次，避免每批 token 扫描整段历史。 */
-function currentTurnMessages(messages: Message[]): Message[] {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === "user") return messages.slice(index);
-  }
-  return messages;
-}
-
-/** 只把当前用户轮次创建的子代理保留在实时过程层，避免续跑时重放旧轮次。 */
-function currentTurnSubagentRuns(messages: Message[], subagentRuns: SubagentRun[]): SubagentRun[] {
-  const delegateCallIds = new Set(
-    messages.flatMap((message) => (message.toolCalls ?? [])
-      .filter((call) => call.function.name === "delegate")
-      .map((call) => call.id)),
-  );
-  return subagentRuns.filter((run) => delegateCallIds.has(run.parentCallId));
-}
-
-function standaloneToolActivityFromMessage(message: Message): ToolActivity {
-  const result = parseToolResultContent(message.content);
-  const shortId = (message.toolCallId ?? message.id).slice(0, 8);
-  return {
-    id: message.toolCallId ?? message.id,
-    name: `tool_result:${shortId}`,
-    args: {},
-    status: result.ok ? "ok" : "error",
-    output: result.output,
-    error: result.error,
-    errorCode: result.errorCode,
-  };
-}
-
-/** 把一条 assistant 消息携带的 toolCalls 派生为工具活动卡片数据 */
-function toolActivitiesFromAssistant(
-  message: Message,
-  resultMap: Map<string, ToolResultInfo>,
-): ToolActivity[] {
-  if (!message.toolCalls?.length) return [];
-  return message.toolCalls.map((tc) => {
-    let args: unknown = {};
-    try {
-      args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-    } catch {
-      args = tc.function.arguments;
-    }
-    const result = resultMap.get(tc.id);
-    return {
-      id: tc.id,
-      name: tc.function.name,
-      args,
-      summary: tc.function.summary,
-      status: result ? (result.ok ? "ok" : "error") : "running",
-      planStepId: tc.function.planStepId,
-      output: result?.output,
-      error: result?.error,
-      errorCode: result?.errorCode,
-    };
-  });
-}
-
-function collectApprovalItems(
-  liveToolActivity: ToolActivity[],
-  pendingApprovals: PendingToolApproval[],
-): ToolActivity[] {
-  const byId = new Map<string, ToolActivity>();
-  for (const item of liveToolActivity) {
-    if (item.status === "awaiting") byId.set(item.id, item);
-  }
-  for (const approval of pendingApprovals) {
-    const existing = byId.get(approval.call.id);
-    byId.set(approval.call.id, {
-      id: approval.call.id,
-      name: approval.call.toolName,
-      args: approval.call.args,
-      summary: approval.call.summary,
-      status: "awaiting",
-      riskLevel: approval.riskLevel,
-      planStepId: approval.call.planStepId,
-      ...existing,
-    });
-  }
-  return [...byId.values()];
-}
-
 const EMPTY_LIVE_OUTPUT_SUBSCRIBE = () => () => {};
 const EMPTY_LIVE_OUTPUT_SNAPSHOT = () => "";
 
 const CONVERSATION_TURN_ESTIMATE = 240;
 const CONVERSATION_TURN_GAP = 24;
 const CONVERSATION_OVERSCAN = 6;
+const CONVERSATION_SCROLL_END_THRESHOLD = 96;
 const conversationMeasurementCache = new Map<string, VirtualItem[]>();
 
 /** 虚拟 turn 重新测高时的唯一补偿规则，防止当前可见工具卡完成后把整段历史推移。 */
@@ -272,6 +155,14 @@ export function shouldAdjustConversationScrollPosition(params: {
 }): boolean {
   if (params.atEnd || params.firstVisibleIndex === undefined) return false;
   return params.itemIndex < params.firstVisibleIndex;
+}
+
+/** 用户主动上滚后才显示回到底部入口，阈值与虚拟器的自动跟随保持一致。 */
+export function shouldShowConversationJumpToLatest(
+  distanceFromEnd: number,
+  threshold = CONVERSATION_SCROLL_END_THRESHOLD,
+): boolean {
+  return distanceFromEnd > threshold;
 }
 
 export function Conversation({
@@ -294,6 +185,7 @@ export function Conversation({
   onUnrevert,
   onBranch,
   onResume,
+  onCreateAutomation,
   liveContentBlocks = [],
   onOpenWorkspacePath,
   compaction,
@@ -323,36 +215,22 @@ export function Conversation({
   }
 
   const messages = task.messages;
-  const resultMap = buildToolResultMap(messages);
-  const viewModel = buildConversationViewModel({
-    messages,
-    liveToolActivity,
-    // 高频 outputStore 由 live turn 的最小子树订阅；这里只兼容直接传 output 的调用方。
-    output: outputStore ? "" : output,
-    hasLiveTail,
-  });
-  const liveOutputMessages = currentTurnMessages(messages);
-  const liveTurnSubagentRuns = currentTurnSubagentRuns(
+  const {
+    resultMap,
+    viewModel,
     liveOutputMessages,
-    task.subagentRuns ?? [],
-  );
-  // 已落到历史消息上的 contentBlocks 不再塞进 live tail，避免「每条消息底部都挂同一文件卡」
-  const historicalContentBlockIds = new Set(
-    messages.flatMap((message) => dedupeContentBlocks(message.contentBlocks).map((block) => block.id)),
-  );
-  const liveOnlyContentBlocks = dedupeContentBlocks(liveContentBlocks).filter(
-    (block) => !historicalContentBlockIds.has(block.id),
-  );
-  const liveRoundData = hasLiveTail
-    ? buildLiveAgentRoundData({
-        plan,
-        liveToolActivity: viewModel.liveToolActivity,
-        output: viewModel.liveOutput,
-        phase,
-        contentBlocks: liveOnlyContentBlocks,
-        subagentRuns: liveTurnSubagentRuns,
-      })
-    : null;
+    liveRoundData,
+  } = useConversationViewModel({
+    messages,
+    subagentRuns: task.subagentRuns,
+    plan,
+    phase,
+    output,
+    outputStore,
+    liveToolActivity,
+    hasLiveTail,
+    liveContentBlocks,
+  });
 
   return (
     <div className="conversation">
@@ -361,6 +239,15 @@ export function Conversation({
           {t("agentStatus.resumedAfterRestart")}
         </div>
       )}
+      {task.status === "completed" && onCreateAutomation ? (
+        <div className="conversation-automation-banner" role="status">
+          <span>{t("conversation.automationHint")}</span>
+          <button type="button" className="conversation-automation-button" onClick={onCreateAutomation}>
+            {t("action.createAutomation")}
+          </button>
+        </div>
+      ) : null}
+      <RecallSummaryView summary={task.recallSummary} />
       <div className="conversation-thread">
         <VirtualConversationTurns
           key={task.id}
@@ -378,6 +265,8 @@ export function Conversation({
               subagentRuns={task.subagentRuns ?? []}
               defaultToolDetailsOpen={defaultToolDetailsOpen}
               onToolDecision={onToolDecision}
+              canResume={canResume}
+              onResume={onResume}
               onAgentContextMenu={handleAgentContextMenu}
               onUserMessageEdit={onUserMessageEdit}
               editDisabled={messageEditDisabled}
@@ -492,7 +381,7 @@ function VirtualConversationTurns({
     // 动态高度、追加 turn 与流式尾部统一由虚拟器维护底部锚点，避免与浏览器 anchoring/手动滚底竞争。
     anchorTo: "end",
     followOnAppend: "auto",
-    scrollEndThreshold: 96,
+    scrollEndThreshold: CONVERSATION_SCROLL_END_THRESHOLD,
     useAnimationFrameWithResizeObserver: true,
   });
 
@@ -501,7 +390,7 @@ function VirtualConversationTurns({
     return shouldAdjustConversationScrollPosition({
       itemIndex: item.index,
       firstVisibleIndex: instance.range?.startIndex,
-      atEnd: instance.isAtEnd(96),
+      atEnd: instance.isAtEnd(CONVERSATION_SCROLL_END_THRESHOLD),
     });
   };
 
@@ -541,6 +430,45 @@ function VirtualConversationTurns({
     return () => cancelAnimationFrame(frame);
   }, [pinLastTurn, scrollElement, turns.length, virtualizer]);
 
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+
+  const updateJumpToLatestVisibility = useCallback(() => {
+    const awayFromLatest =
+      turns.length > 0 &&
+      shouldShowConversationJumpToLatest(
+        virtualizer.getDistanceFromEnd(),
+        CONVERSATION_SCROLL_END_THRESHOLD,
+      );
+    setShowJumpToLatest((previous) => (previous === awayFromLatest ? previous : awayFromLatest));
+  }, [turns.length, virtualizer]);
+
+  // 用户上滚时停止“抢滚”，只在离开底部后显示回到最新按钮；回到底部后自动收起。
+  useEffect(() => {
+    if (!scrollElement) return;
+    const handleScroll = () => updateJumpToLatestVisibility();
+    scrollElement.addEventListener("scroll", handleScroll, { passive: true });
+    updateJumpToLatestVisibility();
+    return () => scrollElement.removeEventListener("scroll", handleScroll);
+  }, [scrollElement, updateJumpToLatestVisibility]);
+
+  // 任务追加新轮次或动态高度变化后，重新读取真实 scrollHeight，避免按钮状态滞后一帧。
+  useEffect(() => {
+    const frame = requestAnimationFrame(updateJumpToLatestVisibility);
+    return () => cancelAnimationFrame(frame);
+  }, [turns.length, updateJumpToLatestVisibility]);
+
+  function handleJumpToLatest(): void {
+    if (turns.length === 0) return;
+    const behavior: ScrollBehavior =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth";
+    virtualizer.scrollToEnd({ behavior });
+    setShowJumpToLatest(false);
+  }
+
   // 任务切换时保存已测量高度，新实例可直接恢复，避免历史消息先按估算高度跳动。
   useEffect(() => () => {
     const snapshot = virtualizer.takeSnapshot();
@@ -553,29 +481,41 @@ function VirtualConversationTurns({
   }, [taskId, virtualizer]);
 
   return (
-    <div
-      ref={bindCanvas}
-      className="conversation-virtual-canvas"
-      data-virtualized="true"
-      style={{ height: `${virtualizer.getTotalSize()}px` }}
-    >
-      {virtualizer.getVirtualItems().map((virtualTurn) => {
-        const turn = turns[virtualTurn.index];
-        if (!turn) return null;
-        return (
-          <div
-            key={virtualTurn.key}
-            ref={virtualizer.measureElement}
-            className="conversation-virtual-item"
-            data-index={virtualTurn.index}
-            data-turn-id={turn.id}
-            style={{ transform: `translateY(${virtualTurn.start - scrollMargin}px)` }}
-          >
-            {renderTurn(turn, virtualTurn.index)}
-          </div>
-        );
-      })}
-    </div>
+    <>
+      <div
+        ref={bindCanvas}
+        className="conversation-virtual-canvas"
+        data-virtualized="true"
+        style={{ height: `${virtualizer.getTotalSize()}px` }}
+      >
+        {virtualizer.getVirtualItems().map((virtualTurn) => {
+          const turn = turns[virtualTurn.index];
+          if (!turn) return null;
+          return (
+            <div
+              key={virtualTurn.key}
+              ref={virtualizer.measureElement}
+              className="conversation-virtual-item"
+              data-index={virtualTurn.index}
+              data-turn-id={turn.id}
+              style={{ transform: `translateY(${virtualTurn.start - scrollMargin}px)` }}
+            >
+              {renderTurn(turn, virtualTurn.index)}
+            </div>
+          );
+        })}
+      </div>
+      {showJumpToLatest && (
+        <button
+          type="button"
+          className="conversation-jump-latest"
+          aria-label={t("conversation.backToLatest")}
+          onClick={handleJumpToLatest}
+        >
+          {t("conversation.backToLatest")}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -588,6 +528,8 @@ function ConversationTurnView({
   subagentRuns,
   defaultToolDetailsOpen,
   onToolDecision,
+  canResume,
+  onResume,
   onAgentContextMenu,
   onUserMessageEdit,
   editDisabled,
@@ -609,6 +551,8 @@ function ConversationTurnView({
   subagentRuns: SubagentRun[];
   defaultToolDetailsOpen: boolean;
   onToolDecision: ToolDecisionHandler;
+  canResume: boolean;
+  onResume?: () => void;
   onAgentContextMenu: (event: React.MouseEvent, message: Message) => void;
   onUserMessageEdit?: (
     messageId: string,
@@ -705,7 +649,7 @@ function ConversationTurnView({
               onContextMenu={(event) => onAgentContextMenu(event, message)}
             >
               {getFailureInfo(message) ? (
-                <AgentFailureCard message={message} />
+                <AgentFailureCard message={message} canResume={canResume} onResume={onResume} />
               ) : (
                 <AgentRound
                   data={buildAgentRoundFromMessage(
@@ -732,76 +676,6 @@ function ConversationTurnView({
   );
 }
 
-/**
- * 组装本 turn 对用户可见的交付消息（正文 / 文件），保持与消息历史一致的时序。
- * - file_reference / image / link：跟发起 attach 的那条 assistant 消息走
- * - 过程旁白（含 list_dir/read 等非 presentation 工具的中间 assistant）**不进交付**
- */
-function buildDeliveryMessages(
-  assistantMessages: Message[],
-  finalMessage: Message | null,
-  options?: { excludeProcessNarration?: boolean },
-): Message[] {
-  const excludeProcess = options?.excludeProcessNarration !== false;
-
-  const primary = assistantMessages.filter((message) => {
-    if (excludeProcess && isProcessToolNarration(message)) return false;
-    if (getFailureInfo(message)) return true;
-    if (message.content.trim().length > 0) return true;
-    if ((message.contentBlocks?.length ?? 0) > 0) return true;
-    return false;
-  });
-
-  if (!finalMessage || (excludeProcess && isProcessToolNarration(finalMessage))) {
-    return primary;
-  }
-
-  const primaryIds = new Set(primary.map((message) => message.id));
-  if (!primaryIds.has(finalMessage.id) && isRenderableAssistantMessage(finalMessage)) {
-    return [...primary, finalMessage];
-  }
-  return primary;
-}
-
-function findFinalAssistantMessage(messages: Message[]): Message | null {
-  const presentationToolCallIds = collectPresentationToolCallIds(messages);
-  // 从后往前：跳过纯 attach_content 轮次，优先取带正文、无过程工具的 final 回复
-  let presentationOnlyFallback: Message | null = null;
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (message.role === "tool") {
-      if (message.toolCallId && presentationToolCallIds.has(message.toolCallId)) continue;
-      // 普通 tool 结果打断「尾部 final」搜索
-      break;
-    }
-    if (message.role !== "assistant") continue;
-    if ((message.toolCalls?.length ?? 0) === 0) {
-      if (message.content.trim().length > 0 || (message.contentBlocks?.length ?? 0) > 0) {
-        return message;
-      }
-      continue;
-    }
-    if (isPresentationOnlyAssistantMessage(message)) {
-      // 仅交付块的消息：若后面没有更好的正文 final，再回退用它
-      if (!presentationOnlyFallback) presentationOnlyFallback = message;
-      continue;
-    }
-    // 含非 presentation 工具的 assistant：不是用户可读 final
-    break;
-  }
-  return presentationOnlyFallback;
-}
-
-function getFailureInfo(message: Message): { message: string; category?: string } | null {
-  if (message.failure) return message.failure;
-  const legacyMatch = message.content.match(/^任务失败，原因：([\s\S]*?)(?:\n\n错误分类：([a-z_]+))?$/);
-  if (!legacyMatch) return null;
-  return {
-    message: legacyMatch[1]?.trim() || message.content,
-    category: legacyMatch[2],
-  };
-}
-
 function failureCategoryLabel(category?: string): string | null {
   if (!category) return null;
   switch (category) {
@@ -817,6 +691,10 @@ function failureCategoryLabel(category?: string): string | null {
       return t("failure.category.tool");
     case "permission":
       return t("failure.category.permission");
+    case "network":
+      return t("failure.category.network");
+    case "engine":
+      return t("failure.category.engine");
     case "cancelled":
       return t("failure.category.cancelled");
     case "parse":
@@ -826,13 +704,44 @@ function failureCategoryLabel(category?: string): string | null {
   }
 }
 
-function AgentFailureCard({ message }: { message: Message }) {
-  const failure = getFailureInfo(message);
-  if (!failure) return null;
+function AgentFailureCard({
+  message,
+  canResume = false,
+  onResume,
+}: {
+  message: Message;
+  canResume?: boolean;
+  onResume?: () => void;
+}) {
+  const platform = usePlatform();
+  const [handoffCopied, setHandoffCopied] = useState(false);
+  const failureInfo = getFailureInfo(message);
+  if (!failureInfo) return null;
+  const failure = failureInfo;
   const categoryLabel = failureCategoryLabel(failure.category);
   const isBudget =
     failure.category === "budget" ||
     /预算|budget|最大轮次|maxIterations/i.test(failure.message);
+  const browserRecovery = classifyBrowserFailure(failure.message);
+  const browserRecoveryHintKeys: Record<BrowserFailureKind, TranslationKey> = {
+    login_required: "browserRecovery.loginRequired",
+    page_changed: "browserRecovery.pageChanged",
+    element_unavailable: "browserRecovery.elementUnavailable",
+    download_failed: "browserRecovery.downloadFailed",
+    unknown: "browserRecovery.unknown",
+  };
+
+  async function copyBrowserHandoff(): Promise<void> {
+    if (!browserRecovery) return;
+    try {
+      await navigator.clipboard.writeText(buildBrowserManualHandoff(failure.message, browserRecovery));
+      setHandoffCopied(true);
+      window.setTimeout(() => setHandoffCopied(false), 2_000);
+    } catch {
+      setHandoffCopied(false);
+    }
+  }
+
   return (
     <section
       className="agent-failure-card"
@@ -853,48 +762,33 @@ function AgentFailureCard({ message }: { message: Message }) {
       {isBudget && (
         <p className="agent-failure-tip">{t("failure.budgetTip")}</p>
       )}
+      {browserRecovery && (
+        <div className="browser-recovery" data-kind={browserRecovery.kind}>
+          <strong>{t("browserRecovery.title")}</strong>
+          <p>{t(browserRecoveryHintKeys[browserRecovery.kind])}</p>
+          <div className="browser-recovery-actions">
+            {canResume && onResume && (
+              <button type="button" className="ghost-btn" onClick={onResume}>
+                {t("browserRecovery.retry")}
+              </button>
+            )}
+            {browserRecovery.url && (
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => void platform.openExternal?.(browserRecovery.url!)}
+              >
+                {t("browserRecovery.openPage")}
+              </button>
+            )}
+            <button type="button" className="ghost-btn" onClick={() => void copyBrowserHandoff()}>
+              {handoffCopied ? t("browserRecovery.copied") : t("browserRecovery.copyHandoff")}
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
-}
-
-/** 仅用于向用户交付附件的工具，不参与「工作流过程」叙事 */
-const PRESENTATION_TOOL_NAMES = new Set(["attach_content", "present_ui"]);
-
-function isPresentationToolName(name: string): boolean {
-  return PRESENTATION_TOOL_NAMES.has(name);
-}
-
-function isPresentationOnlyAssistantMessage(message: Message): boolean {
-  const toolCalls = message.toolCalls ?? [];
-  return toolCalls.length > 0 && toolCalls.every((toolCall) => isPresentationToolName(toolCall.function.name));
-}
-
-/** 含非 presentation 工具的 assistant：过程旁白/工具轮，正文不进交付区 */
-function isProcessToolNarration(message: Message): boolean {
-  const toolCalls = message.toolCalls ?? [];
-  if (toolCalls.length === 0) return false;
-  return toolCalls.some((toolCall) => !isPresentationToolName(toolCall.function.name));
-}
-
-function hasProcessNarration(message: Message): boolean {
-  return isProcessToolNarration(message) && message.content.trim().length > 0;
-}
-
-function isRenderableAssistantMessage(message: Message): boolean {
-  return !!message.failure || message.content.trim().length > 0 || (message.contentBlocks?.length ?? 0) > 0;
-}
-
-function collectPresentationToolCallIds(messages: Message[]): Set<string> {
-  const ids = new Set<string>();
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const toolCall of message.toolCalls ?? []) {
-      if (isPresentationToolName(toolCall.function.name)) {
-        ids.add(toolCall.id);
-      }
-    }
-  }
-  return ids;
 }
 
 /**
@@ -1251,24 +1145,6 @@ function LiveStreamingSegment({
       )}
     </section>
   );
-}
-
-function stripPresentationBlocksForWorkflow(message: Message, presentationMessageIds: Set<string>): Message {
-  // 交付面已单独渲染 contentBlocks；workflow 抽屉只保留工具过程，避免同一文件卡出现两次
-  if (presentationMessageIds.has(message.id) || (message.contentBlocks?.length ?? 0) > 0) {
-    return { ...message, contentBlocks: undefined };
-  }
-  return message;
-}
-
-/** live 计时：过旧的 createdAt（恢复会话）退回 Date.now()，避免「已处理 8000m」 */
-function resolveProcessStartMs(iso?: string): number {
-  const now = Date.now();
-  if (!iso) return now;
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return now;
-  if (now - t > 6 * 60 * 60 * 1000 || t > now + 60_000) return now;
-  return t;
 }
 
 function ClarificationCard({
@@ -1945,20 +1821,28 @@ function ApprovalInline({
   item: ToolActivity;
   onDecision: ToolDecisionHandler;
 }) {
-  const [decided, setDecided] = useState<"approve" | "reject" | null>(null);
+  const [decisionState, setDecisionState] = useState<
+    "awaiting" | "submitting" | "approve" | "reject" | "error"
+  >("awaiting");
   const commandPreview = toolApprovalLabel(item);
   const kindLabel = getToolKindLabel(item.name);
 
   function handleDecide(approved: boolean) {
-    setDecided(approved ? "approve" : "reject");
-    onDecision(item.id, approved);
+    if (decisionState === "submitting") return;
+    setDecisionState("submitting");
+    void Promise.resolve()
+      .then(() => onDecision(item.id, approved))
+      .then(
+        () => setDecisionState(approved ? "approve" : "reject"),
+        () => setDecisionState("error"),
+      );
   }
 
-  if (decided) {
+  if (decisionState === "approve" || decisionState === "reject") {
     return (
-      <section className="approval-card approval-card--decided" data-decision={decided}>
+      <section className="approval-card approval-card--decided" data-decision={decisionState}>
         <span className="approval-card-result">
-          {decided === "approve" ? "✓ 已批准" : "✕ 已拒绝"} · {commandPreview}
+          {decisionState === "approve" ? `✓ ${t("tool.approvalApproved")}` : `✕ ${t("tool.approvalRejected")}`} · {commandPreview}
         </span>
       </section>
     );
@@ -1976,13 +1860,29 @@ function ApprovalInline({
       : "";
 
   return (
-    <section className="approval-card gate-card" data-status="awaiting" aria-label={t("tool.approvalHint")}>
+    <section
+      className="approval-card gate-card"
+      data-status={decisionState}
+      aria-busy={decisionState === "submitting"}
+      aria-label={t("tool.approvalHint")}
+    >
       <header className="approval-card-head">
         <span className="approval-card-glyph" aria-hidden="true">
           <IconTerminal size={14} />
         </span>
         <span className="approval-card-title">{kindLabel}</span>
-        <span className="approval-card-meta">{t("tool.approvalPending")}</span>
+        {item.riskLevel && item.riskLevel !== "safe" ? (
+          <span className="approval-card-risk" data-risk={item.riskLevel}>
+            {item.riskLevel === "dangerous" ? t("tool.risk.dangerous") : t("tool.risk.caution")}
+          </span>
+        ) : null}
+        <span className="approval-card-meta">
+          {decisionState === "submitting"
+            ? t("tool.approvalSubmitting")
+            : decisionState === "error"
+              ? t("tool.approvalError")
+              : t("tool.approvalPending")}
+        </span>
       </header>
       {commandPreview ? (
         <pre className="approval-card-command">{commandPreview}</pre>
@@ -1992,10 +1892,14 @@ function ApprovalInline({
       {argsPreview && argsPreview !== "{}" && argsPreview.length < 280 && (
         <pre className="approval-card-args">{argsPreview}</pre>
       )}
+      {decisionState === "error" && (
+        <p className="approval-card-error" role="alert">{t("tool.approvalError")}</p>
+      )}
       <div className="approval-card-actions">
         <button
           type="button"
           className="approval-card-btn approval-card-btn--reject"
+          disabled={decisionState === "submitting"}
           onClick={() => handleDecide(false)}
         >
           {t("action.reject")}
@@ -2003,6 +1907,7 @@ function ApprovalInline({
         <button
           type="button"
           className="approval-card-btn approval-card-btn--allow"
+          disabled={decisionState === "submitting"}
           onClick={() => handleDecide(true)}
         >
           {t("action.approveOnce")}
@@ -2052,6 +1957,3 @@ export function ApprovalsDock({
     </div>
   );
 }
-
-// Keep references for unused type exports
-void toolActivitiesFromAssistant;

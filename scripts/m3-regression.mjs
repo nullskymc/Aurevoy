@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import { installRegressionAuth } from './regression-auth.mjs';
+
+installRegressionAuth();
 
 const rootDir = new URL('..', import.meta.url).pathname;
 const tempRoot = await mkdtemp(join(tmpdir(), 'aurevoy-m3-'));
@@ -126,7 +129,7 @@ async function caseHttpApproval() {
 }
 
 async function caseMcpTool() {
-  const result = await runTask('M3_MCP call mcp echo tool');
+  const result = await runTask('M3_MCP call mcp echo tool', { approve: true });
   assert(result.task.status === 'completed', 'MCP 工具任务未完成');
   assert(
     result.traces.some((trace) => trace.toolName === 'mcp_fixture_echo' && trace.kind === 'tool_result'),

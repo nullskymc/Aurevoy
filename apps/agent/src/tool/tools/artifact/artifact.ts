@@ -1,7 +1,28 @@
 import { Schema } from "effect"
 import { promises as fs } from "node:fs"
-import { dirname, resolve } from "node:path"
+import { dirname } from "node:path"
 import { make, type ContentPart } from "../../framework/definition.js"
+import { assertRealPathInside, pathExists, resolveInWorkspace } from "../../filesystem/workspace-paths.js"
+
+/**
+ * 将产物写入工作区，并在创建父目录前后都检查真实路径。
+ * 这样既拦截 `..` 越界，也避免已存在的符号链接把写入引向工作区外。
+ */
+export async function writeArtifactToWorkspace(workspaceDir: string, artifactPath: string, content: string): Promise<string> {
+  const target = resolveInWorkspace(artifactPath, workspaceDir, [])
+  await assertRealPathInside(target, workspaceDir, [])
+  await fs.mkdir(dirname(target), { recursive: true })
+  await assertRealPathInside(dirname(target), workspaceDir, [])
+  await fs.writeFile(target, content, "utf8")
+  return target
+}
+
+/** 在审批摘要/结果中说明目标是否会被覆盖；仍复用同一边界检查。 */
+export async function artifactTargetExists(workspaceDir: string, artifactPath: string): Promise<boolean> {
+  const target = resolveInWorkspace(artifactPath, workspaceDir, [])
+  await assertRealPathInside(target, workspaceDir, [])
+  return pathExists(target)
+}
 
 const Input = Schema.Struct({
   name: Schema.String.annotations({ description: "Artifact name." }),
@@ -19,6 +40,7 @@ const Output = Schema.Struct({
   path: Schema.String,
   status: Schema.optional(Schema.String),
   appliedPath: Schema.optional(Schema.String),
+  overwritesExisting: Schema.optional(Schema.Boolean),
 })
 
 export const createArtifactTool = make({
@@ -33,10 +55,9 @@ export const createArtifactTool = make({
     const id = `artifact-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const target = input.path ?? input.name
     if (input.path) {
-      const abs = resolve(ctx.workspaceDir, input.path)
-      await fs.mkdir(dirname(abs), { recursive: true })
-      await fs.writeFile(abs, input.content, "utf8")
-      return { artifactId: id, path: target, status: "applied", appliedPath: input.path }
+      const overwritesExisting = await artifactTargetExists(ctx.workspaceDir, input.path)
+      await writeArtifactToWorkspace(ctx.workspaceDir, input.path, input.content)
+      return { artifactId: id, path: target, status: "applied", appliedPath: input.path, overwritesExisting }
     }
     return { artifactId: id, path: target, status: "draft" }
   },
@@ -61,9 +82,15 @@ export const applyArtifactTool = make({
   output: Schema.Struct({
     applied: Schema.Boolean,
     path: Schema.String,
+    overwritesExisting: Schema.optional(Schema.Boolean),
   }),
-  execute: async (input) => {
-    return { applied: true, path: input.path }
+  execute: async (input, ctx) => {
+    const artifact = ctx.task?.artifacts?.find((item) => item.id === input.artifactId)
+    if (!artifact) throw new Error(`找不到产物：${input.artifactId}`)
+    if (artifact.status === "rejected") throw new Error(`产物已被拒绝，不能应用：${artifact.name}`)
+    const overwritesExisting = await artifactTargetExists(ctx.workspaceDir, input.path)
+    await writeArtifactToWorkspace(ctx.workspaceDir, input.path, artifact.content)
+    return { applied: true, path: input.path, overwritesExisting }
   },
   toModelOutput: (_in, out): ReadonlyArray<ContentPart> => [
     { type: "text", text: out.applied ? `Artifact applied to ${out.path}` : "Artifact not applied" },

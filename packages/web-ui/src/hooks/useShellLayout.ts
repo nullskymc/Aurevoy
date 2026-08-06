@@ -25,6 +25,7 @@ import {
   MIN_SIDEBAR_WIDTH,
   MIN_WORKBENCH_WIDTH,
   RESIZE_HANDLE_WIDTH,
+  SIDEBAR_COLLAPSED_KEY,
   TOOL_DETAILS_OPEN_KEY,
   UI_FONT_SIZE_KEY,
   WORK_MODE_KEY,
@@ -89,7 +90,9 @@ export function useShellLayout() {
   const [workbenchOpen, setWorkbenchOpenState] = useState(() =>
     readStoredBoolean(WORKBENCH_OPEN_KEY, true),
   );
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(() =>
+    readStoredBoolean(SIDEBAR_COLLAPSED_KEY, false),
+  );
   // Preferred widths (user drag / defaults). Effective widths are viewport-fitted.
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     readStoredNumber(SIDEBAR_WIDTH_KEY, DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
@@ -186,6 +189,10 @@ export function useShellLayout() {
   useEffect(() => {
     window.localStorage.setItem(WORKBENCH_OPEN_KEY, String(workbenchOpen));
   }, [workbenchOpen]);
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(leftCollapsed));
+  }, [leftCollapsed]);
 
   useEffect(() => {
     window.localStorage.setItem(CHAT_FONT_SIZE_KEY, String(chatFontSize));

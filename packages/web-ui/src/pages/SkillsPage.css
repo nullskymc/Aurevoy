@@ -132,8 +132,47 @@
   margin: -12px 0 24px;
 }
 
+.skills-install-hint {
+  max-width: 760px;
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+  font-size: calc(var(--ui-font-size) - 1px);
+  line-height: 1.45;
+}
+
+.skills-install-fields {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.skills-install-fields input,
+.skills-install-fields textarea {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--input-bg, var(--surface));
+  color: var(--text);
+  font: inherit;
+  line-height: 1.4;
+  outline: none;
+  resize: vertical;
+}
+
+.skills-install-fields textarea {
+  min-height: 72px;
+}
+
+.skills-install-fields input:focus,
+.skills-install-fields textarea:focus {
+  border-color: var(--border-strong);
+}
+
 .skills-install-row {
   display: flex;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -181,6 +220,141 @@
   margin: 8px 0 0;
   color: var(--success-soft-fg, #1a7f3c);
   font-size: calc(var(--ui-font-size) - 1px);
+}
+
+.browser-runtime-card {
+  margin: 0 0 32px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface, var(--card-bg));
+}
+
+.browser-runtime-card[data-state="ready"] {
+  border-color: color-mix(in srgb, var(--success-soft-fg, #1a7f3c) 34%, var(--border));
+}
+
+.browser-runtime-card[data-state="unhealthy"] {
+  border-color: color-mix(in srgb, var(--danger-soft-fg, #d14343) 38%, var(--border));
+}
+
+.browser-runtime-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.browser-runtime-head h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: calc(var(--ui-font-size) + 1px);
+  font-weight: 650;
+}
+
+.browser-runtime-head p,
+.browser-runtime-meta,
+.browser-runtime-tools,
+.browser-runtime-setup p,
+.browser-runtime-actions span {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: calc(var(--ui-font-size) - 1px);
+  line-height: 1.45;
+}
+
+.browser-runtime-state {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--surface-strong, var(--hover));
+  color: var(--text-secondary);
+  font-size: calc(var(--ui-font-size) - 2px);
+  font-weight: 650;
+}
+
+.browser-runtime-card[data-state="ready"] .browser-runtime-state {
+  background: var(--success-soft-bg, #e9f7ed);
+  color: var(--success-soft-fg, #1a7f3c);
+}
+
+.browser-runtime-card[data-state="unhealthy"] .browser-runtime-state {
+  background: var(--danger-soft-bg, #fff0f0);
+  color: var(--danger-soft-fg, #d14343);
+}
+
+.browser-runtime-meta strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.browser-runtime-tools {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-runtime-setup {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.browser-runtime-setup p {
+  margin-top: 0;
+}
+
+.browser-runtime-setup code {
+  overflow-x: auto;
+  color: var(--text);
+  font-family: var(--code-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: calc(var(--ui-font-size) - 2px);
+  white-space: nowrap;
+}
+
+.browser-runtime-error,
+.browser-runtime-test-result {
+  margin: 10px 0 0;
+  font-size: calc(var(--ui-font-size) - 1px);
+  line-height: 1.4;
+}
+
+.browser-runtime-error,
+.browser-runtime-test-result.is-error {
+  color: var(--danger-soft-fg, #d14343);
+}
+
+.browser-runtime-test-result.is-ok {
+  color: var(--success-soft-fg, #1a7f3c);
+}
+
+.browser-runtime-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.browser-runtime-test {
+  height: 34px;
+  padding: 0 12px;
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+@media (max-width: 640px) {
+  .browser-runtime-head,
+  .browser-runtime-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .browser-runtime-test {
+    width: 100%;
+  }
 }
 
 .skills-section {
@@ -441,6 +615,11 @@
 
 .skills-modal-head {
   padding: 4px 24px 16px;
+}
+
+.skills-modal-pill.is-error {
+  border-color: color-mix(in srgb, var(--danger, #c45252) 45%, var(--border));
+  color: var(--danger, #c45252);
 }
 
 .skills-modal-head h2 {

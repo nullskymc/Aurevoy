@@ -44,6 +44,7 @@ describe('parseMcpServers', () => {
         headers: { Authorization: 'Bearer x' },
         enabled: true,
         riskLevel: undefined,
+        browserPermissionProfile: undefined,
       },
     ]);
   });

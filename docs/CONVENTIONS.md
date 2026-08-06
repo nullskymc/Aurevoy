@@ -17,13 +17,13 @@ scripts/               回归
 ## TypeScript
 
 - `strict`；禁止裸 `any`（用 `unknown` 收窄）。  
-- 后端 NodeNext：相对导入带 `.js`。  
+- 后端 NodeNext：相对导入带 `.js`。
 - 跨进程类型只从 `@aurevoy/shared` 导入。  
 - 优先具名导出。
 
 ## 后端
 
-- `server.ts` 只做路由/I/O；业务在 `agent/`、`tool/`、`store/`。  
+- `server.ts` 只做 Fastify 生命周期、鉴权、启动恢复和路由组装；HTTP 适配在 `server-routes/`，业务在 `agent/`、`tool/`、`store/`。
 - 运维配置经 env（`HOST`/`PORT`/`DB_PATH`/日志等）；产品配置经 runtime settings / SQLite，不散落 `process.env`。  
 - 任务状态变更写 SQLite + 发 `AgentEvent`；轨迹写 `traceStore`。  
 - 命令/代码执行只经 `sandbox/`；默认关闭。  

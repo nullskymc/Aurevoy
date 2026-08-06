@@ -103,6 +103,58 @@
   padding: 4px 6px 8px;
 }
 
+.output-float-changes {
+  margin: 4px 2px 2px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
+}
+
+.output-float-changes h2 {
+  margin: 0 0 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .02em;
+}
+
+.output-float-changes ul {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.output-float-changes li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 6px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.output-float-change-operation {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.output-float-change-path {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output-float-change-stats {
+  grid-column: 2;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
 
 .output-float-empty {
   display: block;

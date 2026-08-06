@@ -18,6 +18,12 @@ import {
 import { unifiedToolRegistry } from './unified-registry.js';
 import { getLogger } from '../logging/logger.js';
 import { getPythonBinDir, isPythonInstalled } from '../runtime/python-runtime.js';
+import { diffMcpToolChanges } from './mcp-tool-diff.js';
+import {
+  browserToolTier,
+  isBrowserMcpServerName,
+  isBrowserMcpToolAllowed,
+} from './browser-permissions.js';
 
 const mcpLog = getLogger('mcp');
 
@@ -72,6 +78,7 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
   let registeredTools = 0;
   let failedServers = 0;
 
+  const previousStatuses = new Map(statuses);
   statuses.clear();
   for (const server of config.mcpServers) {
     statuses.set(server.name, {
@@ -89,8 +96,18 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
       connectedServers += 1;
 
       const tools = await listAllTools(client);
-      const shouldDefer = server.deferTools ?? (tools.length > DEFER_THRESHOLD);
-      for (const tool of tools) {
+      const allowedTools = tools.filter((tool) => isBrowserMcpToolAllowed(
+        server.name,
+        tool,
+        server.browserPermissionProfile,
+      ));
+      const blockedTools = tools.length - allowedTools.length;
+      const shouldDefer = server.deferTools ?? (allowedTools.length > DEFER_THRESHOLD);
+      const toolNames = allowedTools.map((tool) => tool.name).sort();
+      const toolRisks = Object.fromEntries(
+        allowedTools.map((tool) => [tool.name, inferRiskLevel(server, tool)]),
+      );
+      for (const tool of allowedTools) {
         const registeredName = makeRegistryToolName(server.name, tool.name, usedNames);
         usedNames.add(registeredName);
         unifiedToolRegistry.register(toRegistryTool(server, client, tool, registeredName));
@@ -111,10 +128,19 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
         name: server.name,
         enabled: true,
         connected: true,
-        registeredTools: tools.length,
+        registeredTools: allowedTools.length,
+        blockedTools,
+        toolNames,
+        toolRisks,
+        changes: diffMcpToolChanges(
+          previousStatuses.get(server.name)?.toolNames,
+          previousStatuses.get(server.name)?.toolRisks,
+          toolNames,
+          toolRisks,
+        ),
       });
       mcpLog.info(
-        { server: server.name, transport: server.transport, toolCount: tools.length },
+        { server: server.name, transport: server.transport, toolCount: allowedTools.length, blockedTools },
         'MCP server 已连接',
       );
     } catch (err) {
@@ -125,6 +151,15 @@ export async function initializeMcpTools(): Promise<McpInitSummary> {
         enabled: true,
         connected: false,
         registeredTools: 0,
+        blockedTools: 0,
+        toolNames: [],
+        toolRisks: {},
+        changes: diffMcpToolChanges(
+          previousStatuses.get(server.name)?.toolNames,
+          previousStatuses.get(server.name)?.toolRisks,
+          [],
+          {},
+        ),
         error,
       });
       mcpLog.warn(
@@ -154,6 +189,46 @@ export async function reloadMcpTools(): Promise<McpInitSummary> {
   return initializeMcpTools();
 }
 
+/** 连接测试只建立临时客户端并枚举工具，不注册到运行时，也不修改 MCP 设置。 */
+export async function testMcpServer(server: McpServerConfig): Promise<{
+  ok: boolean;
+  connected: boolean;
+  registeredTools: number;
+  blockedTools?: number;
+  latencyMs: number;
+  error?: string;
+}> {
+  const startedAt = Date.now();
+  let client: Client | undefined;
+  try {
+    client = await connectMcpServer(server);
+    const tools = await listAllTools(client);
+    const allowedTools = tools.filter((tool) => isBrowserMcpToolAllowed(
+      server.name,
+      tool,
+      server.browserPermissionProfile,
+    ));
+    return {
+      ok: true,
+      connected: true,
+      registeredTools: allowedTools.length,
+      blockedTools: tools.length - allowedTools.length,
+      latencyMs: Math.max(0, Date.now() - startedAt),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      connected: false,
+      registeredTools: 0,
+      blockedTools: 0,
+      latencyMs: Math.max(0, Date.now() - startedAt),
+      error: redactMcpError(error),
+    };
+  } finally {
+    await client?.close().catch(() => undefined);
+  }
+}
+
 export function getMcpStatuses(): McpServerStatus[] {
   return config.mcpServers.map(
     (server) =>
@@ -162,6 +237,9 @@ export function getMcpStatuses(): McpServerStatus[] {
         enabled: server.enabled,
         connected: false,
         registeredTools: 0,
+        blockedTools: 0,
+        toolNames: [],
+        toolRisks: {},
       },
   );
 }
@@ -269,6 +347,7 @@ function toRegistryTool(
     description: sanitizeMcpToolDescription(server, mcpTool),
     inputSchema: mcpTool.inputSchema,
     riskLevel: inferRiskLevel(server, mcpTool),
+    executionPolicy: { parallelizable: false, requiresExplicitApproval: true },
     source: { type: 'mcp' as const, serverName: server.name, originalName: mcpTool.name },
     async execute(args: Record<string, unknown>) {
       const result = await client.callTool({
@@ -277,6 +356,7 @@ function toRegistryTool(
       });
       if (isMcpErrorResult(result)) throw new Error(formatMcpToolError(result));
       return {
+        untrusted: true,
         server: server.name,
         tool: mcpTool.name,
         result,
@@ -287,6 +367,12 @@ function toRegistryTool(
 
 function inferRiskLevel(server: McpServerConfig, tool: McpSdkTool): ToolRiskLevel {
   if (server.riskLevel) return server.riskLevel;
+  if (isBrowserMcpServerName(server.name)) {
+    const tier = browserToolTier(tool);
+    if (tier === 'read_only') return 'safe';
+    if (tier === 'submit') return 'dangerous';
+    return 'caution';
+  }
   if (tool.annotations?.destructiveHint) return 'dangerous';
   if (tool.annotations?.readOnlyHint && !tool.annotations.openWorldHint) return 'safe';
   return 'caution';
@@ -345,6 +431,12 @@ function formatMcpToolError(result: unknown): string {
 
 function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function redactMcpError(err: unknown): string {
+  return formatError(err)
+    .replace(/((?:authorization|api[_-]?key|token|secret|password|cookie)\s*[:=]\s*)([^\s,;]+)/gi, '$1[REDACTED]')
+    .slice(0, 500);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

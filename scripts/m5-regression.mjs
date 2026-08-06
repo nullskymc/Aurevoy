@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
+import { installRegressionAuth } from './regression-auth.mjs';
+
+installRegressionAuth();
 
 const tempRoot = await mkdtemp(join(tmpdir(), 'aurevoy-m5-'));
 const workspaceDir = join(tempRoot, 'workspace-a');

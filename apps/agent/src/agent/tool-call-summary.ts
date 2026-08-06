@@ -1,3 +1,5 @@
+import { browserToolTier, isBrowserMcpServerName } from '../tool/browser-permissions.js';
+
 const SUMMARY_MAX_LENGTH = 96;
 
 /** 只从安全、简短的定位参数中选择摘要目标，避免泄露密钥或整段正文。 */
@@ -33,12 +35,30 @@ export function buildToolCallSummary(toolName: string, args: unknown): string {
   const target = firstSafeTarget(record);
   if (toolName.startsWith('mcp_')) {
     const { server, action } = splitMcpToolName(toolName);
+    if (isBrowserMcpServerName(server)) {
+      const browserTarget = firstStringArg(record, ['url', 'site', 'domain', 'ref', 'selector', 'element'])
+        ?? target;
+      const label = browserActionLabel(action);
+      return truncateSummary(browserTarget ? `${label} · ${browserTarget}` : label);
+    }
     const label = [displayMcpServer(server), humanizeMcpAction(action)].filter(Boolean).join(' · ');
     return truncateSummary(target ? `调用 ${label} · ${target}` : `调用 ${label || 'MCP 工具'}`);
   }
 
   const label = humanizeIdentifier(toolName) || '工具';
   return truncateSummary(target ? `运行 ${label} · ${target}` : `运行 ${label}`);
+}
+
+/** 浏览器审批摘要按动作分层，提交类只展示站点/定位字段，不回显表单值。 */
+function browserActionLabel(action: string): string {
+  const tier = browserToolTier({ name: action });
+  const normalized = action.replace(/[-\s]+/g, '_').toLowerCase();
+  if (tier === 'submit') return /click|fill|type|press|select|upload|submit|form/.test(normalized) ? '提交/交互页面' : '执行浏览器高风险操作';
+  if (tier === 'login') return '登录浏览器站点';
+  if (tier === 'download') return '下载网页文件';
+  if (/screenshot|screen|snapshot/.test(normalized)) return '截图网页';
+  if (/navigate|goto|open/.test(normalized)) return '导航到网页';
+  return '读取网页';
 }
 
 function summarizeKnownTool(toolName: string, args: Record<string, unknown>): string | undefined {

@@ -29,6 +29,7 @@ import { useProjects } from "./hooks/useProjects";
 import { useRuntimeController } from "./hooks/useRuntimeController";
 import { useSettingsController } from "./hooks/useSettingsController";
 import { useShellLayout } from "./hooks/useShellLayout";
+import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useSkills } from "./hooks/useSkills";
 import { useWorkbenchTabs } from "./hooks/useWorkbenchTabs";
 import { useTaskController } from "./hooks/useTaskController";
@@ -47,12 +48,20 @@ import { PlanFloatPanel } from "./components/PlanFloatPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { SearchPopover } from "./components/SearchPopover";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
-import { ToastNotice, type ToastTone } from "./components/ToastNotice";
+import { ToastNotice } from "./components/ToastNotice";
 import { SkillsPage } from "./pages/SkillsPage";
 import { AutomationsPage } from "./pages/AutomationsPage";
-import { SETTINGS_SECTION_IDS, type MainView, type SettingsSectionId } from "./app/types";
+import { SETTINGS_SECTION_IDS, type SettingsSectionId } from "./app/types";
+import { useAppShellState } from "./app/useAppShellState";
 import { formatContextK } from "./app/taskUtils";
+import { canResumeTask } from "./app/taskResume";
 import { buildTrayRecentItems, createTrayRecentSignature } from "./app/trayRecent";
+import {
+  getMainViewTitle,
+  normalizeSettingsSection,
+  shouldShowLiveTail,
+  shouldShowOutputRail,
+} from "./app/viewState";
 import { t } from "./i18n";
 import "./App.css";
 import { HeroSuggestionIcon } from "./icons";
@@ -63,7 +72,32 @@ function App() {
   useEffect(() => {
     platform.setupWindowDrag?.(".window-drag-region");
   }, [platform]);
-  const [activeView, setActiveView] = useState<MainView>("chat");
+  const {
+    activeView,
+    setActiveView,
+    automationSeed,
+    setAutomationSeed,
+    searchPopoverOpen,
+    setSearchPopoverOpen,
+    settingsInitialSection,
+    setSettingsInitialSection,
+    modelDrawerOpen,
+    setModelDrawerOpen,
+    sessionTreeOpen,
+    setSessionTreeOpen,
+    tracePanelOpen,
+    setTracePanelOpen,
+    online,
+    setOnline,
+    notice,
+    actionError,
+    setNotice,
+    setActionError,
+    draftProjectId,
+    setDraftProjectId,
+    outputRailOpen,
+    setOutputRailOpen,
+  } = useAppShellState();
   const [goal, setGoal] = useState("");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const {
@@ -99,24 +133,6 @@ function App() {
   });
   const [autoModeState, setAutoModeState] = useState<{ paused?: boolean; pausedReason?: string; autoApprovedCalls?: number } | null>(null);
   const [executionMode, setExecutionMode] = useState<AgentExecutionMode>("auto");
-  const [searchPopoverOpen, setSearchPopoverOpen] = useState(false);
-  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
-  const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
-  const [sessionTreeOpen, setSessionTreeOpen] = useState(false);
-  const [tracePanelOpen, setTracePanelOpen] = useState(false);
-  const [online, setOnline] = useState<boolean | null>(null);
-  const [notice, setNoticeState] = useState<{ message: string; tone: ToastTone } | null>(null);
-  const setNotice = (message: string | null, tone?: ToastTone) => {
-    if (!message) {
-      setNoticeState(null);
-      return;
-    }
-    const inferred: ToastTone =
-      tone
-      ?? (/失败|失敗|failed|error|错误|錯誤|無法|无法|못|에러/i.test(message) ? "error" : "info");
-    setNoticeState({ message, tone: inferred });
-  };
-
   // 启动后静默检查更新（仅桌面壳）；有新版本时 toast 提示，不自动安装
   useEffect(() => {
     if (!platform.checkForAppUpdate) return;
@@ -188,11 +204,13 @@ function App() {
     update: updateAutomationRecipe,
     remove: removeAutomationRecipe,
     run: runAutomationRecipe,
+    testRun: testAutomationRecipe,
     loadRuns: loadAutomationRuns,
   } = useAutomations();
   const { memories, setMemories } = useMemories();
   const {
     skills,
+    error: skillsError,
     refresh: refreshSkills,
     installing,
     installError,
@@ -219,6 +237,7 @@ function App() {
   const {
     handleCleanupData,
     handleExportData,
+    handleBackupDatabase,
     handleCreateMemory,
     handleDeleteMemory,
     handleEditMemory,
@@ -251,8 +270,6 @@ function App() {
     setSettingsSaving,
   });
 
-  const [draftProjectId, setDraftProjectId] = useState<string | undefined>();
-
   // Sync draftProjectId when a task is selected
   useEffect(() => {
     if (currentTask?.projectId) setDraftProjectId(currentTask.projectId);
@@ -268,6 +285,29 @@ function App() {
     () => projects.find((p) => p.id === activeWorkspaceProjectId)?.name,
     [projects, activeWorkspaceProjectId],
   );
+
+  const assetDirectories = useMemo(
+    () => Array.from(new Set([
+      runtimeSettings?.workspaceDir?.trim() ?? "",
+      ...projects.map((project) => project.path.trim()),
+    ].filter(Boolean))),
+    [projects, runtimeSettings?.workspaceDir],
+  );
+
+  useEffect(() => {
+    if (!platform.allowAssetDirectory || assetDirectories.length === 0) return;
+    let cancelled = false;
+    for (const path of assetDirectories) {
+      void platform.allowAssetDirectory(path).catch((error) => {
+        if (!cancelled) {
+          setNotice(`无法授权工作区预览：${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [assetDirectories, platform]);
 
   useEffect(() => {
     void bootstrapRuntime();
@@ -500,10 +540,7 @@ function App() {
   }
 
   function handleOpenSettings(section: SettingsSectionId | unknown = "general"): void {
-    const nextSection =
-      typeof section === "string" && SETTINGS_SECTION_IDS.includes(section as SettingsSectionId)
-        ? (section as SettingsSectionId)
-        : "general";
+    const nextSection = normalizeSettingsSection(section, SETTINGS_SECTION_IDS);
     setNotice(null);
     setSearchPopoverOpen(false);
     setModelDrawerOpen(false);
@@ -551,6 +588,23 @@ function App() {
     setModelDrawerOpen(false);
     setSearchPopoverOpen(false);
     setActiveView("automations");
+    setAutomationSeed(null);
+    setWorkbenchOpen(false);
+    void refreshAutomations();
+  }
+
+  /** 从成功对话进入自动化创建；只继承目标/项目，权限和预算在表单中重新确认。 */
+  function handleCreateAutomationFromTask(): void {
+    if (!currentTask || currentTask.status !== "completed") return;
+    setModelDrawerOpen(false);
+    setSearchPopoverOpen(false);
+    setAutomationSeed({
+      goal: currentTask.goal,
+      projectId: currentTask.projectId,
+      name: currentTask.title,
+      sourceTaskId: currentTask.id,
+    });
+    setActiveView("automations");
     setWorkbenchOpen(false);
     void refreshAutomations();
   }
@@ -588,6 +642,7 @@ function App() {
       if (!platform.openFileDialog) return;
       const selected = await platform.openFileDialog({ directory: true });
       if (!selected) return;
+      await platform.allowAssetDirectory?.(selected[0]);
       const project = await createProject({ path: selected[0] });
       setProjects(prev => [...prev, project]);
     } catch (err) {
@@ -625,23 +680,42 @@ function App() {
   }
 
   const showConversation = currentTask !== null;
-  const canResume =
-    !!currentTask &&
-    !busy &&
-    currentTask.status !== "completed" &&
-    currentTask.status !== "running" &&
-    currentTask.status !== "planning" &&
-    // 审批/追问由对应 UI 处理；预算触顶或完成门禁未通过时可直接续跑
-    (currentTask.status !== "paused" ||
-      currentTask.phase === "waiting_budget" ||
-      currentTask.phase === "waiting_completion");
+  const canResume = canResumeTask(currentTask, busy);
 
-  const hasLiveTail =
-    busy ||
-    derivedLive.length > 0 ||
-    phase === "waiting_approval";
+  const hasLiveTail = shouldShowLiveTail({
+    busy,
+    liveToolCount: derivedLive.length,
+    phase,
+  });
 
-  const [outputRailOpen, setOutputRailOpen] = useState(true);
+  useGlobalShortcuts({
+    searchOpen: searchPopoverOpen,
+    onToggleSearch: () => {
+      if (searchPopoverOpen) {
+        setSearchPopoverOpen(false);
+      } else {
+        handleOpenSearch();
+      }
+    },
+    onNewTask: handleNewTask,
+    onOpenSettings: () => handleOpenSettings(),
+  });
+
+  useEffect(() => {
+    const viewTitle = getMainViewTitle(activeView, {
+      chat: "Aurevoy",
+      skills: t("nav.skills"),
+      automations: t("nav.automations"),
+      settings: t("nav.settings"),
+    }, currentTask?.title);
+    document.title = `${viewTitle} · Aurevoy`;
+  }, [activeView, currentTask?.title, locale]);
+
+  function handleBackToChat(): void {
+    setAutomationSeed(null);
+    setWorkbenchOpen(false);
+    setActiveView("chat");
+  }
 
   function handleSessionTreeTaskChange(task: NonNullable<typeof currentTask>): void {
     clearLiveState();
@@ -657,8 +731,12 @@ function App() {
   }
 
   /** 输出栏与文件工作台互斥：对话中、工作台关、用户未手动关闭时占右侧列 */
-  const showOutputRail =
-    activeView === "chat" && showConversation && !workbenchOpen && outputRailOpen;
+  const showOutputRail = shouldShowOutputRail({
+    activeView,
+    hasConversation: showConversation,
+    workbenchOpen,
+    outputRailOpen,
+  });
 
   return (
     <div
@@ -730,12 +808,27 @@ function App() {
             });
           }}
           onToggleSidebar={() => setLeftCollapsed((collapsed) => !collapsed)}
+          onBackToChat={activeView === "chat" ? undefined : handleBackToChat}
         />
 
         <div className="main-stage">
+          {actionError ? (
+            <div className="app-action-error" role="alert" aria-live="assertive">
+              <span>{actionError}</span>
+              <button
+                type="button"
+                className="app-action-error-close"
+                aria-label={t("a11y.closeNotice")}
+                onClick={() => setActionError(null)}
+              >
+                ×
+              </button>
+            </div>
+          ) : null}
           {activeView === "skills" ? (
             <SkillsPage
               skills={skills}
+              error={skillsError}
               installing={installing}
               installError={installError}
               reloading={reloading}
@@ -758,9 +851,13 @@ function App() {
               onUpdate={updateAutomationRecipe}
               onDelete={removeAutomationRecipe}
               onRun={runAutomationRecipe}
+              onTestRun={testAutomationRecipe}
+              automationSeed={automationSeed}
+              onAutomationSeedConsumed={() => setAutomationSeed(null)}
               onLoadRuns={loadAutomationRuns}
               onOpenTask={handleOpenAutomationTask}
               onNotice={setNotice}
+              modelSummary={health?.llm.ready ? `${health.llm.provider}:${health.llm.model}` : undefined}
             />
           ) : activeView === "settings" ? (
             <SettingsPanel
@@ -782,6 +879,7 @@ function App() {
               onSaveConnection={handleSaveProviderConnection}
               onCleanup={handleCleanupData}
               onExportData={handleExportData}
+              onBackupDatabase={handleBackupDatabase}
               onRefresh={refreshSettings}
               onFetchModels={handleFetchModels}
               onFetchModelsForProvider={handleFetchModelsForProvider}
@@ -830,6 +928,7 @@ function App() {
                   onUnrevert={() => void handleUnrevert()}
                   onBranch={(messageId) => void handleBranch(messageId)}
                   onResume={() => void handleResumeTask()}
+                  onCreateAutomation={handleCreateAutomationFromTask}
                   onOpenWorkspacePath={(path) => {
                     workbenchTabs.openWorkspaceFile(path);
                     setWorkbenchOpen(true);
@@ -1025,6 +1124,15 @@ function App() {
         </aside>
       ) : null}
 
+      {workbenchOpen ? (
+        <button
+          type="button"
+          className="workbench-backdrop"
+          aria-label={t("workbench.hide")}
+          onClick={() => setWorkbenchOpen(false)}
+        />
+      ) : null}
+
       <WorkbenchPanel
         open={workbenchOpen}
         task={currentTask}
@@ -1034,6 +1142,7 @@ function App() {
         activeTabId={workbenchTabs.activeTabId}
         onSelectTab={workbenchTabs.setActiveTabId}
         onCloseTab={workbenchTabs.closeTab}
+        onClose={() => setWorkbenchOpen(false)}
         onOpenFile={(path) => {
           workbenchTabs.openWorkspaceFile(path);
           setActiveView("chat");
@@ -1067,7 +1176,6 @@ function App() {
           busy={busy}
           onOpenChange={setSessionTreeOpen}
           onTaskChange={handleSessionTreeTaskChange}
-          onNotice={setNotice}
         />
       )}
 

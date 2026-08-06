@@ -12,7 +12,6 @@ interface SessionTreeDialogProps {
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onTaskChange: (task: Task) => void;
-  onNotice: (message: string | null) => void;
 }
 
 export interface SessionTreeRow {
@@ -82,7 +81,6 @@ export function SessionTreeDialog({
   busy,
   onOpenChange,
   onTaskChange,
-  onNotice,
 }: SessionTreeDialogProps) {
   const [tree, setTree] = useState<PiSessionTreeResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -152,7 +150,6 @@ export function SessionTreeDialog({
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : String(reason);
       setError(detail);
-      onNotice(`${t("sessionTree.navigateFailed")}${detail}`);
     } finally {
       setNavigating(false);
     }
@@ -166,7 +163,6 @@ export function SessionTreeDialog({
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : String(reason);
       setError(detail);
-      onNotice(`${t("sessionTree.labelFailed")}${detail}`);
     }
   }
 
@@ -206,7 +202,7 @@ export function SessionTreeDialog({
             {loading ? (
               <div className="session-tree-state">{t("sessionTree.loading")}</div>
             ) : error && rows.length === 0 ? (
-              <div className="session-tree-state session-tree-state--error">{error}</div>
+              <div className="session-tree-state session-tree-state--error" role="alert">{error}</div>
             ) : rows.length === 0 ? (
               <div className="session-tree-state">{t("sessionTree.empty")}</div>
             ) : (

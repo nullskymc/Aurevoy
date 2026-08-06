@@ -7,14 +7,17 @@ import { SettingsGroup } from "./layout";
 export function KbSettings({
   settings,
   onRecallChange,
-}: {
-  settings: RuntimeSettings | null;
-  onRecallChange: (enabled: boolean) => void;
+  }: {
+    settings: RuntimeSettings | null;
+  onRecallChange: (enabled: boolean) => void | Promise<void>;
 }) {
   const [dirs, setDirs] = useState<KbDir[]>([]);
   const [status, setStatus] = useState<KbIndexStatus | null>(null);
   const [dirInput, setDirInput] = useState("");
   const [adding, setAdding] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [recallSaving, setRecallSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -22,6 +25,7 @@ export function KbSettings({
   }, []);
 
   async function loadData() {
+    setLoading(true);
     try {
       const { listKbDirs, getKbStatus } = await import("../../api");
       setDirs(await listKbDirs());
@@ -29,6 +33,8 @@ export function KbSettings({
       setError("");
     } catch {
       setError(t("kb.statusFailed"));
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -36,6 +42,7 @@ export function KbSettings({
     const trimmed = dirInput.trim();
     if (!trimmed) return;
     setAdding(true);
+    setError("");
     try {
       const { createKbDir } = await import("../../api");
       const dir = await createKbDir(trimmed);
@@ -49,12 +56,31 @@ export function KbSettings({
   }
 
   async function removeDir(id: string) {
+    if (removingId || adding) return;
+    setRemovingId(id);
+    setError("");
     try {
       const { deleteKbDir } = await import("../../api");
       await deleteKbDir(id);
       setDirs((prev) => prev.filter((d) => d.id !== id));
     } catch {
       setError(t("kb.deleteFailed"));
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
+  async function changeRecall(enabled: boolean): Promise<void> {
+    if (recallSaving) return;
+    setRecallSaving(true);
+    setError("");
+    try {
+      await Promise.resolve(onRecallChange(enabled));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setError(`${t("kb.actionFailed")}${detail}`);
+    } finally {
+      setRecallSaving(false);
     }
   }
 
@@ -69,7 +95,8 @@ export function KbSettings({
           <input
             type="checkbox"
             checked={settings?.kbRecallEnabled ?? false}
-            onChange={(event) => onRecallChange(event.target.checked)}
+            disabled={recallSaving}
+            onChange={(event) => void changeRecall(event.target.checked)}
           />
         </label>
       </SettingsGroup>
@@ -88,15 +115,17 @@ export function KbSettings({
             onClick={() => void addDir()}
             disabled={adding || !dirInput.trim()}
           >
-            {t("kb.addDir")}
+            {adding ? t("kb.adding") : t("kb.addDir")}
           </button>
         </div>
 
         {error && (
-          <p className="memory-empty" style={{ color: "var(--danger)" }}>{error}</p>
+          <p className="memory-empty" style={{ color: "var(--danger)" }} role="alert">{error}</p>
         )}
 
-        {dirs.length === 0 ? (
+        {loading ? (
+          <p className="memory-empty" aria-live="polite">{t("kb.loading")}</p>
+        ) : dirs.length === 0 ? (
           <p className="memory-empty">{t("kb.noDirs")}</p>
         ) : (
           <ul className="memory-list">
@@ -111,9 +140,10 @@ export function KbSettings({
                     <button
                       type="button"
                       className="memory-link danger"
+                      disabled={removingId !== null || adding}
                       onClick={() => void removeDir(dir.id)}
                     >
-                      {t("kb.removeDir")}
+                      {removingId === dir.id ? t("kb.removing") : t("kb.removeDir")}
                     </button>
                   </span>
                 </div>

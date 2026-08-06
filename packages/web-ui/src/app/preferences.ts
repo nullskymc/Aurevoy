@@ -24,6 +24,8 @@ export const LOCALE_KEY = "aurevoy.locale";
 export const WORK_MODE_KEY = "aurevoy.workMode";
 export const WORKBENCH_WIDTH_KEY = "aurevoy.workbenchWidth";
 export const WORKBENCH_OPEN_KEY = "aurevoy.workbenchOpen";
+export const SIDEBAR_COLLAPSED_KEY = "aurevoy.sidebarCollapsed";
+export const OUTPUT_RAIL_OPEN_KEY = "aurevoy.outputRailOpen";
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));

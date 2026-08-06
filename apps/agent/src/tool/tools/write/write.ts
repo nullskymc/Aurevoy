@@ -1,7 +1,8 @@
 import { Schema } from "effect"
-import { resolve } from "node:path"
+import { dirname } from "node:path"
 import { promises as fs } from "node:fs"
 import { make, type ContentPart } from "../../framework/definition.js"
+import { assertRealPathInside, resolveInWorkspace } from "../../filesystem/workspace-paths.js"
 
 const Input = Schema.Struct({
   path: Schema.String.annotations({
@@ -23,6 +24,7 @@ const Output = Schema.Struct({
   operation: Schema.Literal("created", "wrote", "appended"),
   resource: Schema.String,
   existed: Schema.Boolean,
+  bytes: Schema.Number,
   note: Schema.optional(Schema.String),
 })
 
@@ -38,7 +40,8 @@ export const writeTool = make({
   input: Input,
   output: Output,
   execute: async (input, ctx) => {
-    const path = resolve(ctx.workspaceDir, input.path)
+    const path = resolveInWorkspace(input.path, ctx.workspaceDir, [])
+    await assertRealPathInside(path, ctx.workspaceDir, [])
 
     let existed = false
     try {
@@ -79,10 +82,12 @@ export const writeTool = make({
     }
 
     const output = existingBom ? `\uFEFF${input.content}` : input.content
+    const bytes = Buffer.byteLength(output, "utf8")
+    await assertRealPathInside(dirname(path), ctx.workspaceDir, [])
 
     if (mode === "append") {
       await fs.appendFile(path, output, "utf-8")
-      return { operation: "appended" as const, resource: input.path, existed: true }
+      return { operation: "appended" as const, resource: input.path, existed: true, bytes }
     }
 
     await fs.writeFile(path, output, "utf-8")
@@ -90,6 +95,7 @@ export const writeTool = make({
       operation: existed ? "wrote" as const : "created" as const,
       resource: input.path,
       existed,
+      bytes,
       note:
         existed && mode === "overwrite"
           ? "Full file overwrite applied. Prefer edit for future small revisions of this path."

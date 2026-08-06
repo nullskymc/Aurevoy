@@ -29,10 +29,11 @@ docs/            协作文档
 └────────────────┬─────────────────────┘
                  │ HTTP + SSE
 ┌────────────────▼─────────────────────┐
-│  server.ts  → harness-controller     │
-│       → pi-harness (AgentHarness)    │
-│       → subagent / tools / memory    │
-│       → knowledge-base / store       │
+│  server.ts  → server-routes/*         │
+│       → harness-controller             │
+│       → pi-harness (AgentHarness)     │
+│       → subagent / tools / memory      │
+│       → knowledge-base / store         │
 │  events.ts  → SSE 推送               │
 └──────────────────────────────────────┘
 ```
@@ -52,7 +53,8 @@ UI 不持有业务真相：状态来自任务快照 + SSE。
 
 | 路径 | 职责 |
 |---|---|
-| `server.ts` | 路由与 SSE，无业务 |
+| `server.ts` | Fastify 生命周期、鉴权、启动恢复与路由组装 |
+| `server-routes/*` | 按 auth、task、SSE、workspace、settings、data、memory、KB 等域承载 HTTP 适配 |
 | `agent/harness-controller.ts` | 建任务、恢复、revert/branch/compact、续聊 |
 | `agent/pi-harness.ts` | Pi 适配与事件映射 |
 | `agent/subagent*.ts` | 隔离子代理、并发、进度快照 |
@@ -62,7 +64,8 @@ UI 不持有业务真相：状态来自任务快照 + SSE。
 | `tool/` | Effect 工具框架 + 领域工具 + MCP |
 | `memory/` · `knowledge-base/` · `embedding/` | 记忆向量、KB RAG |
 | `sandbox/` | 高风险命令边界（默认关） |
-| `store/db.ts` | SQLite 任务/轨迹/设置/记忆/KB |
+| `store/db.ts` | SQLite 连接、迁移和 repository 组装 |
+| `store/*-repository.ts` | 任务/轨迹、Pi 会话树、设置、记忆、项目、自动化和向量读写 |
 
 ### 契约
 

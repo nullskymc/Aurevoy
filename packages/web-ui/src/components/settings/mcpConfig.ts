@@ -1,3 +1,5 @@
+import type { BrowserPermissionProfile } from "@aurevoy/shared";
+
 /**
  * MCP settings JSON ↔ structured form state.
  * Supports stdio and streamable-http (matches agent parseMcpServers).
@@ -19,6 +21,7 @@ export interface McpServerDraft {
   headers: Array<{ key: string; value: string }>;
   enabled: boolean;
   riskLevel?: McpRiskLevel;
+  browserPermissionProfile?: BrowserPermissionProfile;
 }
 
 export function emptyMcpServerDraft(transport: McpTransport = "stdio"): McpServerDraft {
@@ -34,6 +37,48 @@ export function emptyMcpServerDraft(transport: McpTransport = "stdio"): McpServe
     enabled: true,
   };
 }
+
+/** 官方参考服务模板只负责预填配置，默认停用且不会绕过保存/测试/审批门。 */
+export const MCP_SERVER_TEMPLATES = [
+  {
+    id: "filesystem",
+    nameKey: "settings.mcpTemplateFilesystemName",
+    descriptionKey: "settings.mcpTemplateFilesystemDesc",
+    createDraft: (): McpServerDraft => ({
+      ...emptyMcpServerDraft("stdio"),
+      name: "filesystem",
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/workspace"],
+      riskLevel: "caution" as const,
+      enabled: false,
+    }),
+  },
+  {
+    id: "everything",
+    nameKey: "settings.mcpTemplateEverythingName",
+    descriptionKey: "settings.mcpTemplateEverythingDesc",
+    createDraft: (): McpServerDraft => ({
+      ...emptyMcpServerDraft("stdio"),
+      name: "everything",
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-everything"],
+      riskLevel: "caution" as const,
+      enabled: false,
+    }),
+  },
+  {
+    id: "streamable-http",
+    nameKey: "settings.mcpTemplateHttpName",
+    descriptionKey: "settings.mcpTemplateHttpDesc",
+    createDraft: (): McpServerDraft => ({
+      ...emptyMcpServerDraft("streamable-http"),
+      name: "remote-mcp",
+      url: "https://your-mcp.example.com/mcp",
+      riskLevel: "caution" as const,
+      enabled: false,
+    }),
+  },
+] as const;
 
 export function parseMcpServersJson(raw: string): McpServerDraft[] {
   const text = raw.trim();
@@ -56,7 +101,7 @@ export function stringifyMcpServersJson(servers: McpServerDraft[]): string {
   for (const server of servers) {
     const name = server.name.trim();
     if (!name) continue;
-    mcpServers[name] = draftToJsonBody(server);
+    mcpServers[name] = mcpDraftToJsonBody(server);
   }
   if (Object.keys(mcpServers).length === 0) return "";
   return JSON.stringify({ mcpServers }, null, 2);
@@ -92,6 +137,12 @@ export function mcpServerEndpointLabel(server: McpServerDraft): string {
   return args ? `${cmd} ${args}` : cmd || "stdio";
 }
 
+/** 浏览器 MCP 只按名称显示权限 profile；配置页不回显 command/header 等敏感字段。 */
+export function isBrowserMcpServerName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return normalized === "playwright" || normalized.includes("playwright") || normalized.includes("browser");
+}
+
 function validateDraft(next: McpServerDraft): void {
   if (next.transport === "streamable-http") {
     const url = next.url.trim();
@@ -110,7 +161,7 @@ function validateDraft(next: McpServerDraft): void {
   if (!next.command.trim()) throw new Error("启动命令不能为空");
 }
 
-function draftToJsonBody(server: McpServerDraft): Record<string, unknown> {
+export function mcpDraftToJsonBody(server: McpServerDraft): Record<string, unknown> {
   if (server.transport === "streamable-http") {
     const body: Record<string, unknown> = {
       transport: "streamable-http",
@@ -120,6 +171,7 @@ function draftToJsonBody(server: McpServerDraft): Record<string, unknown> {
     const headers = envPairsToRecord(server.headers);
     if (headers && Object.keys(headers).length > 0) body.headers = headers;
     if (server.riskLevel) body.riskLevel = server.riskLevel;
+    if (server.browserPermissionProfile) body.browserPermissionProfile = server.browserPermissionProfile;
     return body;
   }
 
@@ -133,6 +185,7 @@ function draftToJsonBody(server: McpServerDraft): Record<string, unknown> {
   const env = envPairsToRecord(server.env);
   if (env && Object.keys(env).length > 0) body.env = env;
   if (server.riskLevel) body.riskLevel = server.riskLevel;
+  if (server.browserPermissionProfile) body.browserPermissionProfile = server.browserPermissionProfile;
   return body;
 }
 
@@ -158,6 +211,13 @@ function parseOne(fallbackName: string | undefined, value: unknown): McpServerDr
     value.riskLevel === "safe" || value.riskLevel === "caution" || value.riskLevel === "dangerous"
       ? value.riskLevel
       : undefined;
+  const browserPermissionProfile =
+    value.browserPermissionProfile === "read_only"
+    || value.browserPermissionProfile === "download"
+    || value.browserPermissionProfile === "login"
+    || value.browserPermissionProfile === "submit"
+      ? value.browserPermissionProfile
+      : undefined;
 
   if (transport === "streamable-http") {
     const url = typeof value.url === "string" ? value.url.trim() : "";
@@ -174,6 +234,7 @@ function parseOne(fallbackName: string | undefined, value: unknown): McpServerDr
       headers,
       enabled: value.enabled !== false,
       riskLevel: risk,
+      browserPermissionProfile,
     };
   }
 
@@ -199,6 +260,7 @@ function parseOne(fallbackName: string | undefined, value: unknown): McpServerDr
     env,
     enabled: value.enabled !== false,
     riskLevel: risk,
+    browserPermissionProfile,
   };
 }
 

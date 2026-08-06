@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   emptyMcpServerDraft,
+  MCP_SERVER_TEMPLATES,
   parseMcpServersJson,
   removeMcpServer,
   setMcpServerEnabled,
@@ -50,6 +51,21 @@ describe("mcpConfig", () => {
     expect(list[0]?.transport).toBe("streamable-http");
     expect(list[0]?.url).toBe("https://mcp.example.com/mcp");
     expect(list[0]?.headers).toEqual([{ key: "Authorization", value: "Bearer tok" }]);
+  });
+
+  it("preserves browser permission profiles", () => {
+    const list = parseMcpServersJson(JSON.stringify({
+      mcpServers: {
+        playwright: {
+          transport: "stdio",
+          command: "npx",
+          args: ["-y", "@playwright/mcp"],
+          browserPermissionProfile: "download",
+        },
+      },
+    }));
+    expect(list[0]?.browserPermissionProfile).toBe("download");
+    expect(parseMcpServersJson(stringifyMcpServersJson(list))[0]?.browserPermissionProfile).toBe("download");
   });
 
   it("infers streamable-http from url-only config", () => {
@@ -120,5 +136,17 @@ describe("mcpConfig", () => {
         url: "  ",
       }),
     ).toThrow(/URL/);
+  });
+
+  it("keeps recommended templates disabled until the user confirms them", () => {
+    expect(MCP_SERVER_TEMPLATES).toHaveLength(3);
+    for (const template of MCP_SERVER_TEMPLATES) {
+      const draft = template.createDraft();
+      expect(draft.enabled).toBe(false);
+      expect(draft.riskLevel).toBe("caution");
+      expect(draft.name).toBeTruthy();
+    }
+    expect(MCP_SERVER_TEMPLATES[0]?.createDraft().args).toContain("@modelcontextprotocol/server-filesystem");
+    expect(MCP_SERVER_TEMPLATES[2]?.createDraft().transport).toBe("streamable-http");
   });
 });

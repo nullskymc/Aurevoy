@@ -43,6 +43,8 @@ function releaseSearchSlot(): void {
 }
 
 export interface WebFetchResult {
+  /** 网页正文是外部不可信输入，不能被当作系统/开发者指令。 */
+  untrusted: true;
   url: string;
   fetchedAt: string;
   status: number;
@@ -63,6 +65,7 @@ export interface WebSearchResult {
 }
 
 export interface WebSearchResponse {
+  untrusted: true;
   provider: 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom';
   query: string;
   resultCount: number;
@@ -83,6 +86,7 @@ export async function fetchWebContent(rawUrl: string): Promise<WebFetchResult> {
 
   if (!isTextContentType(contentType)) {
     return {
+      untrusted: true,
       ...metadata,
       binary: true,
       content: '',
@@ -96,10 +100,10 @@ export async function fetchWebContent(rawUrl: string): Promise<WebFetchResult> {
   const { body, truncated } = await readResponseText(fetched.res);
   if (isHtmlContentType(contentType) || /<html[\s>]/i.test(body)) {
     const cleaned = cleanHtml(body, fetched.url);
-    return { ...metadata, binary: false, truncated, content: cleaned.text, links: cleaned.links };
+    return { untrusted: true, ...metadata, binary: false, truncated, content: cleaned.text, links: cleaned.links };
   }
 
-  return { ...metadata, binary: false, truncated, content: body, links: [] };
+  return { untrusted: true, ...metadata, binary: false, truncated, content: body, links: [] };
 }
 
 export async function searchWeb(rawQuery: string): Promise<WebSearchResponse> {
@@ -124,6 +128,7 @@ export async function searchWeb(rawQuery: string): Promise<WebSearchResponse> {
         break;
     }
     return {
+      untrusted: true,
       provider: config.search.provider,
       query,
       resultCount: results.length,

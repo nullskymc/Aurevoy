@@ -65,19 +65,21 @@ export const tauriPlatformAdapter: PlatformAdapter = {
     }
   },
 
+  async allowAssetDirectory(path: string): Promise<void> {
+    await invoke('allow_asset_directory', { path });
+  },
+
   async openExternal(url: string): Promise<void> {
     const { openUrl } = await import('@tauri-apps/plugin-opener');
     await openUrl(url);
   },
 
   async openFile(path: string): Promise<void> {
-    const { openPath } = await import('@tauri-apps/plugin-opener');
-    await openPath(path);
+    await invoke('open_workspace_path', { path });
   },
 
   async revealFile(path: string): Promise<void> {
-    const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
-    await revealItemInDir(path);
+    await invoke('reveal_workspace_path', { path });
   },
 
   onFileDrop(callback: (paths: string[]) => void): (() => void) {
@@ -86,6 +88,9 @@ export const tauriPlatformAdapter: PlatformAdapter = {
     win
       .onDragDropEvent((event) => {
         if (event.payload.type === 'drop') {
+          void Promise.all(
+            event.payload.paths.map((path) => invoke('allow_asset_path', { path })),
+          ).catch(() => undefined);
           callback(event.payload.paths);
         }
       })
@@ -111,7 +116,11 @@ export const tauriPlatformAdapter: PlatformAdapter = {
         multiple: options?.multiple ?? false,
       });
       if (!selected) return null;
-      return Array.isArray(selected) ? selected : [selected];
+      const paths = Array.isArray(selected) ? selected : [selected];
+      await Promise.all(
+        paths.map((path) => invoke('allow_asset_path', { path }).catch(() => undefined)),
+      );
+      return paths;
     } catch {
       return null;
     }

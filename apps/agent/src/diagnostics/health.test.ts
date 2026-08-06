@@ -5,7 +5,7 @@ describe('buildHealthDiagnostics', () => {
   it('keeps the contract ordered and derives the LLM readiness check', () => {
     const result = buildHealthDiagnostics({
       generatedAt: '2026-08-05T00:00:00.000Z',
-      version: '0.6.15',
+      version: '0.7.0',
       uptimeMs: 42,
       llm: { state: 'no_credential', ready: false, provider: 'openai', model: 'fixture' },
       data: {
@@ -21,7 +21,7 @@ describe('buildHealthDiagnostics', () => {
       knowledgeBase: { status: 'warning', summary: 'No knowledge-base directory is configured' },
     });
 
-    expect(result.version).toBe('0.6.15');
+    expect(result.version).toBe('0.7.0');
     expect(result.checks.map((check) => check.id)).toEqual([
       'llm', 'database', 'workspace', 'embedding', 'vector_store', 'knowledge_base',
     ]);

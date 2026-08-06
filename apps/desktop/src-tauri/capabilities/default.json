@@ -8,20 +8,14 @@
     "core:window:allow-start-dragging",
     "core:window:allow-toggle-maximize",
     "core:window:allow-set-size",
-    "opener:allow-reveal-item-in-dir",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://*" },
         { "url": "http://*" },
-        { "url": "file://*" },
         { "url": "mailto:*" },
         { "url": "tel:*" }
       ]
-    },
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "**" }]
     },
     "dialog:default",
     "updater:default",

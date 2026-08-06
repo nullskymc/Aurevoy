@@ -9,7 +9,8 @@ import type {
   TaskBudget,
   UpdateRuntimeSettingsRequest,
 } from '@aurevoy/shared';
-import { config, parseMcpServers, parseNumber } from '../config.js';
+import { config, parseNumber } from '../config.js';
+import { secureMcpServersJson } from '../mcp-credential-store.js';
 import {
   listBuiltinModelIds,
   listPiProviderCatalog,
@@ -149,7 +150,13 @@ export function loadPersistedSettings(): void {
     entries[SETTING_KEYS.commandExecutionEnabled] === undefined
       ? config.sandbox.commandExecutionEnabled
       : entries[SETTING_KEYS.commandExecutionEnabled] === 'true';
-  if (mcpJson !== undefined) config.mcpServers = parseMcpServers(mcpJson);
+  if (mcpJson !== undefined) {
+    const secured = secureMcpServersJson(mcpJson);
+    config.mcpServers = secured.servers;
+    if (secured.persistedJson !== mcpJson.trim()) {
+      settingsStore.set(SETTING_KEYS.mcpServersJson, secured.persistedJson);
+    }
+  }
 
   // LLM：正式表为真相源（含从旧 app_settings 的一次性迁移）
   ensureLlmSchemaMigrated();
@@ -493,9 +500,9 @@ export function updateRuntimeSettings(body: UpdateRuntimeSettingsRequest): Setti
   }
 
   if (body.mcpServersJson !== undefined) {
-    const parsed = parseMcpServers(body.mcpServersJson);
-    config.mcpServers = parsed;
-    settingsStore.set(SETTING_KEYS.mcpServersJson, body.mcpServersJson.trim());
+    const secured = secureMcpServersJson(body.mcpServersJson);
+    config.mcpServers = secured.servers;
+    settingsStore.set(SETTING_KEYS.mcpServersJson, secured.persistedJson);
     mcpChanged = true;
   }
 

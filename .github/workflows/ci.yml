@@ -43,3 +43,90 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Windows Job Object isolation regression
+        if: matrix.os == 'windows-latest'
+        run: npm run regression:shell-isolation:strict
+
+  quality:
+    name: Unit, build and security regressions
+    needs: typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build shared, web UI and agent
+        run: |
+          npm run build:shared
+          npm run build:web-ui
+          npm run build -w @aurevoy/agent
+
+      - name: M7 tool, approval and MCP regression
+        run: npm run regression:m7
+
+      - name: API auth and Origin boundary regression
+        run: npm run regression:auth
+
+      - name: Deterministic Agent usability eval
+        run: npm run eval:agent-usability
+
+      - name: Version and release package audit
+        run: npm run audit:release -- --manifest /tmp/aurevoy-dependency-manifest.json
+
+  desktop-smoke:
+    name: Real Tauri WebView smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli
+
+      - name: Run strict WebView smoke (macOS)
+        if: matrix.os == 'macos-latest'
+        run: npm run regression:tauri-webview:strict -- --report "$RUNNER_TEMP/aurevoy-tauri-webview.json"
+
+      - name: Run strict WebView smoke (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: npm run regression:tauri-webview:strict -- --report "$env:RUNNER_TEMP\aurevoy-tauri-webview.json"
+
+      - name: Upload WebView smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurevoy-tauri-webview-${{ matrix.os }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/aurevoy-tauri-webview.json

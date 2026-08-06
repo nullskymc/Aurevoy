@@ -4,8 +4,9 @@ import type {
   HealthDiagnosticCheck,
   HealthDiagnosticsResponse,
   RuntimeSettings,
+  TaskObservabilityReport,
 } from "@aurevoy/shared";
-import { getHealthDiagnostics } from "../../api";
+import { getHealthDiagnostics, getTaskObservabilityReport } from "../../api";
 import { t } from "../../i18n";
 import { SettingsActionRow, SettingsGroup, SettingsInfoRow, SettingsNoteRow } from "./layout";
 import "./DataSettings.css";
@@ -16,6 +17,7 @@ export function DataSettings({
   settings,
   onCleanup,
   onExportData,
+  onBackupDatabase,
   onCleanupDaysChange,
 }: {
   cleanupDays: number;
@@ -23,13 +25,18 @@ export function DataSettings({
   settings: RuntimeSettings | null;
   onCleanup: (olderThanDays: number) => void | Promise<void>;
   onExportData: (includeTaskMessages: boolean) => void | Promise<void>;
+  onBackupDatabase: () => void | Promise<void>;
   onCleanupDaysChange: (days: number) => void;
 }) {
   const [diagnostics, setDiagnostics] = useState<HealthDiagnosticsResponse | null>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  const [taskMetrics, setTaskMetrics] = useState<TaskObservabilityReport | null>(null);
+  const [taskMetricsLoading, setTaskMetricsLoading] = useState(false);
+  const [taskMetricsError, setTaskMetricsError] = useState<string | null>(null);
   const [includeTaskMessages, setIncludeTaskMessages] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
 
   const refreshDiagnostics = useCallback(async () => {
@@ -48,12 +55,37 @@ export function DataSettings({
     void refreshDiagnostics();
   }, [refreshDiagnostics]);
 
+  const refreshTaskMetrics = useCallback(async () => {
+    setTaskMetricsLoading(true);
+    setTaskMetricsError(null);
+    try {
+      setTaskMetrics(await getTaskObservabilityReport());
+    } catch (error) {
+      setTaskMetricsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setTaskMetricsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshTaskMetrics();
+  }, [refreshTaskMetrics]);
+
   async function handleExport(): Promise<void> {
     setExporting(true);
     try {
       await onExportData(includeTaskMessages);
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function handleBackup(): Promise<void> {
+    setBackingUp(true);
+    try {
+      await onBackupDatabase();
+    } finally {
+      setBackingUp(false);
     }
   }
 
@@ -116,6 +148,28 @@ export function DataSettings({
         />
       </SettingsGroup>
 
+      <SettingsGroup title={t("settings.taskMetricsTitle")}>
+        <SettingsNoteRow title={t("settings.taskMetricsDesc")} description={t("settings.taskMetricsPrivacy")} />
+        <div className="settings-task-metrics" aria-live="polite">
+          {taskMetricsLoading ? <p>{t("settings.taskMetricsLoading")}</p> : null}
+          {taskMetricsError ? <p className="settings-diagnostics-error">{t("settings.taskMetricsUnavailable")}</p> : null}
+          {taskMetrics ? (
+            <>
+              <SettingsInfoRow
+                title={t("settings.taskMetricsSuccess")}
+                description={taskMetrics.successRate == null ? "—" : `${Math.round(taskMetrics.successRate * 100)}% (${taskMetrics.completedTasks}/${taskMetrics.terminalTasks})`}
+              />
+              <SettingsInfoRow title={t("settings.taskMetricsInterventions")} description={String(taskMetrics.userInterventions)} />
+              <SettingsInfoRow title={t("settings.taskMetricsRecoveryRetries")} description={`${taskMetrics.recoveredTasks} / ${taskMetrics.retries}`} />
+              <SettingsInfoRow title={t("settings.taskMetricsDuration")} description={formatMetricDuration(taskMetrics.averageDurationMs, taskMetrics.p95DurationMs)} />
+            </>
+          ) : null}
+          <button type="button" className="settings-secondary-btn" onClick={() => void refreshTaskMetrics()} disabled={taskMetricsLoading}>
+            {taskMetricsLoading ? t("settings.taskMetricsLoading") : t("settings.refresh")}
+          </button>
+        </div>
+      </SettingsGroup>
+
       <SettingsGroup title={t("settings.dataExport")}>
         <SettingsNoteRow title={t("settings.exportSafeTitle")} description={t("settings.exportSafeDesc")} />
         <SettingsActionRow
@@ -127,6 +181,11 @@ export function DataSettings({
           title={t("settings.exportTitle")}
           description={t("settings.exportDesc")}
           control={<button type="button" className="settings-secondary-btn" onClick={() => void handleExport()} disabled={exporting}>{exporting ? t("settings.exporting") : t("settings.export")}</button>}
+        />
+        <SettingsActionRow
+          title={t("settings.databaseBackupTitle")}
+          description={t("settings.databaseBackupDesc")}
+          control={<button type="button" className="settings-secondary-btn" onClick={() => void handleBackup()} disabled={backingUp}>{backingUp ? t("settings.databaseBackingUp") : t("settings.databaseBackup")}</button>}
         />
       </SettingsGroup>
 
@@ -189,4 +248,9 @@ function overallLabel(status: "ok" | "warning" | "error"): string {
   if (status === "ok") return t("settings.diagnosticsOverallOk");
   if (status === "error") return t("settings.diagnosticsOverallError");
   return t("settings.diagnosticsOverallWarning");
+}
+
+function formatMetricDuration(averageMs: number | null, p95Ms: number | null): string {
+  if (averageMs == null || p95Ms == null) return "—";
+  return `avg ${Math.round(averageMs)}ms · p95 ${Math.round(p95Ms)}ms`;
 }

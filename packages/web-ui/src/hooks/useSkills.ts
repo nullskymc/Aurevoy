@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { SkillDescriptor, SkillInstallResponse } from "@aurevoy/shared";
+import type { SkillDescriptor, SkillInstallRequest, SkillInstallResponse } from "@aurevoy/shared";
 import { fetchSkills, installSkill, reloadSkills, toggleSkill as toggleSkillApi, uninstallSkill } from "../api";
 
 interface UseSkillsResult {
@@ -9,7 +9,7 @@ interface UseSkillsResult {
   refresh: () => void;
   installing: boolean;
   installError: string | null;
-  install: (url: string) => Promise<SkillInstallResponse>;
+  install: (request: SkillInstallRequest) => Promise<SkillInstallResponse>;
   uninstall: (name: string) => Promise<void>;
   reloading: boolean;
   reload: () => Promise<void>;
@@ -51,11 +51,11 @@ export function useSkills(): UseSkillsResult {
     load();
   }, [load]);
 
-  const install = useCallback(async (url: string): Promise<SkillInstallResponse> => {
+  const install = useCallback(async (request: SkillInstallRequest): Promise<SkillInstallResponse> => {
     setInstalling(true);
     setInstallError(null);
     try {
-      const result = await installSkill(url);
+      const result = await installSkill(request);
       await loadAsync();
       return result;
     } catch (err) {
@@ -101,6 +101,8 @@ export function useSkills(): UseSkillsResult {
       setSkills((prev) => prev.map((s) => (s.name === name ? { ...s, enabled: updated.enabled } : s)));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      // 让详情弹窗知道动作失败，以便回滚本地乐观状态；列表错误仍由 hook 统一保留。
+      throw err;
     }
   }, []);
 

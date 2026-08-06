@@ -3,6 +3,7 @@ import type { Project, TaskSummary } from "@aurevoy/shared";
 import { taskDisplayTitle } from "@aurevoy/shared";
 import { IconFolder, IconPencil, IconSearch } from "../icons";
 import { t } from "../i18n";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import "./SearchPopover.css";
 
 interface SearchPopoverProps {
@@ -26,6 +27,7 @@ export function SearchPopover({
   onSearchFiles,
 }: SearchPopoverProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const popoverRef = useFocusTrap<HTMLElement>(true);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const projectNames = useMemo(
@@ -102,7 +104,14 @@ export function SearchPopover({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <section className="search-popover" role="dialog" aria-modal="true" aria-labelledby="search-popover-title">
+      <section
+        ref={popoverRef}
+        className="search-popover"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="search-popover-title"
+        tabIndex={-1}
+      >
         <div className="search-popover-input-wrap">
           <input
             ref={inputRef}

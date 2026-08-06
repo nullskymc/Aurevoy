@@ -10,6 +10,9 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
+import { installRegressionAuth } from './regression-auth.mjs';
+
+installRegressionAuth();
 import { randomUUID } from 'node:crypto';
 
 const tempRoot = await mkdtemp(join(tmpdir(), 'aurevoy-m8-'));
@@ -61,7 +64,7 @@ function readBody(req) {
 async function request(method, path, body) {
   const url = new URL(path, baseUrl);
   return new Promise((resolve, reject) => {
-    const options = { method, hostname: url.hostname, port: url.port, path: url.pathname, headers: {} };
+    const options = { method, hostname: url.hostname, port: url.port, path: url.pathname, headers: { Authorization: 'Bearer aurevoy-regression-token' } };
     if (body !== undefined) {
       options.headers['Content-Type'] = 'application/json';
     }

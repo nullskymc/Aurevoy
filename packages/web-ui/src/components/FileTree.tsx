@@ -1,6 +1,8 @@
-import { useCallback, useState, type CSSProperties } from "react";
+import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import type { WorkspaceReadEntry } from "@aurevoy/shared";
 import type { useFileTree } from "../hooks/useFileTree";
+import { buildVisibleFileTreeRows, type FileTreeRowModel } from "./fileTreeRows";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { contextMenuPoint, type ContextMenuState } from "./contextMenuActions";
 import { deleteWorkspacePath, renameWorkspacePath } from "../api";
@@ -8,6 +10,10 @@ import { IconHideTree, IconRefresh } from "./workbenchIcons";
 import { t } from "../i18n";
 
 type FileTreeState = ReturnType<typeof useFileTree>;
+type FileTreeVirtualizer = Virtualizer<HTMLDivElement, Element>;
+
+const FILE_TREE_ROW_ESTIMATE = 30;
+const FILE_TREE_OVERSCAN = 12;
 
 interface FileTreeProps {
   tree: FileTreeState;
@@ -31,6 +37,7 @@ export function FileTree({
   onCloseExplorer,
 }: FileTreeProps) {
   const [filter, setFilter] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState>({ open: false, items: [] });
 
   const handleContext = useCallback(
@@ -71,13 +78,15 @@ export function FileTree({
           id: "rename",
           label: t("workbench.ctxRename"),
           action: async () => {
+            setActionError(null);
             const newName = window.prompt(t("workbench.renamePrompt"), entry.name);
             if (!newName || newName === entry.name) return;
             try {
               await renameWorkspacePath({ path: entry.path, newName, taskId, projectId });
               tree.reloadRoot();
             } catch (err) {
-              window.alert(err instanceof Error ? err.message : String(err));
+              // 需要用户处理的文件操作错误留在工作台，不打断当前对话。
+              setActionError(err instanceof Error ? err.message : String(err));
             }
           },
         },
@@ -88,11 +97,13 @@ export function FileTree({
           danger: true,
           action: async () => {
             if (!window.confirm(t("workbench.deleteConfirm").replace("{name}", entry.name))) return;
+            setActionError(null);
             try {
               await deleteWorkspacePath({ path: entry.path, taskId, projectId });
               tree.reloadRoot();
             } catch (err) {
-              window.alert(err instanceof Error ? err.message : String(err));
+              // 删除失败保持在文件树上下文中，避免 Toast 掩盖具体操作位置。
+              setActionError(err instanceof Error ? err.message : String(err));
             }
           },
         },
@@ -100,6 +111,11 @@ export function FileTree({
       setCtxMenu({ open: true, point: contextMenuPoint(event), items });
     },
     [onOpenFile, onAttachToChat, taskId, projectId, tree],
+  );
+
+  const rows = useMemo(
+    () => buildVisibleFileTreeRows(tree.nodes, filter),
+    [filter, tree.nodes],
   );
 
   return (
@@ -138,17 +154,18 @@ export function FileTree({
             </button>
           </div>
         </div>
-        <div className="file-tree-list">
-          <DirectoryRows
-            path="."
-            depth={0}
-            tree={tree}
-            filter={filter}
-            selectedPath={selectedPath}
-            onOpenFile={onOpenFile}
-            onContext={handleContext}
-          />
-        </div>
+        {actionError ? (
+          <p className="file-tree-action-error" role="alert">
+            {actionError}
+          </p>
+        ) : null}
+        <VirtualFileTreeList
+          rows={rows}
+          tree={tree}
+          selectedPath={selectedPath}
+          onOpenFile={onOpenFile}
+          onContext={handleContext}
+        />
       </section>
 
       <ContextMenu
@@ -161,55 +178,80 @@ export function FileTree({
   );
 }
 
-function DirectoryRows({
-  path,
-  depth,
+/**
+ * 文件树采用固定行高估算、真实行高测量和 overscan，目录展开后只挂载视口附近的节点。
+ * 虚拟列表仍保留真实 button，因此右键菜单、焦点样式和方向键语义不变。
+ */
+function VirtualFileTreeList({
+  rows,
   tree,
-  filter,
   selectedPath,
   onOpenFile,
   onContext,
 }: {
-  path: string;
-  depth: number;
+  rows: FileTreeRowModel[];
   tree: FileTreeState;
-  filter: string;
   selectedPath?: string | null;
   onOpenFile: (path: string) => void;
   onContext: (event: React.MouseEvent, entry: WorkspaceReadEntry) => void;
 }) {
-  const node = tree.nodes[path];
-  if (!node) return <p className="file-tree-empty">{t("workbench.loading")}</p>;
-  if (node.error) return <p className="file-tree-error">{node.error}</p>;
-  if (node.loading && node.entries.length === 0) {
-    return <p className="file-tree-empty">{t("workbench.loading")}</p>;
-  }
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => listRef.current,
+    getItemKey: (index) => fileTreeRowKey(rows[index], index),
+    estimateSize: () => FILE_TREE_ROW_ESTIMATE,
+    overscan: FILE_TREE_OVERSCAN,
+    initialRect: { width: 260, height: 500 },
+    useAnimationFrameWithResizeObserver: true,
+  });
 
-  const normalizedFilter = filter.trim().toLowerCase();
-  const entries = normalizedFilter
-    ? node.entries.filter(
-        (entry) =>
-          entry.name.toLowerCase().includes(normalizedFilter) ||
-          entry.path.toLowerCase().includes(normalizedFilter),
-      )
-    : node.entries;
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      handleTreeKeyDown(event, tree, rows, virtualizer, listRef.current);
+    },
+    [rows, tree, virtualizer],
+  );
 
   return (
-    <>
-      {entries.map((entry) => (
-        <FileTreeRow
-          key={entry.path}
-          entry={entry}
-          depth={depth}
-          tree={tree}
-          filter={filter}
-          selectedPath={selectedPath}
-          onOpenFile={onOpenFile}
-          onContext={onContext}
-        />
-      ))}
-      {node.truncated && <p className="file-tree-empty">{t("workbench.truncated")}</p>}
-    </>
+    <div
+      ref={listRef}
+      className="file-tree-list"
+      role="tree"
+      aria-label={t("workbench.fileTree")}
+      onKeyDown={handleKeyDown}
+    >
+      <div className="file-tree-virtual-canvas" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const row = rows[virtualRow.index];
+          if (!row) return null;
+          return (
+            <div
+              key={virtualRow.key}
+              ref={virtualizer.measureElement}
+              className="file-tree-virtual-item"
+              data-index={virtualRow.index}
+              style={{ transform: `translateY(${virtualRow.start}px)` }}
+            >
+              {row.kind === "entry" ? (
+                <FileTreeRow
+                  entry={row.entry}
+                  depth={row.depth}
+                  tree={tree}
+                  selectedPath={selectedPath}
+                  onOpenFile={onOpenFile}
+                  onContext={onContext}
+                  rowIndex={virtualRow.index}
+                  rowCount={rows.length}
+                />
+              ) : (
+                <FileTreeStatusRow row={row} tree={tree} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -217,57 +259,160 @@ function FileTreeRow({
   entry,
   depth,
   tree,
-  filter,
   selectedPath,
   onOpenFile,
   onContext,
+  rowIndex,
+  rowCount,
 }: {
   entry: WorkspaceReadEntry;
   depth: number;
   tree: FileTreeState;
-  filter: string;
   selectedPath?: string | null;
   onOpenFile: (path: string) => void;
   onContext: (event: React.MouseEvent, entry: WorkspaceReadEntry) => void;
+  rowIndex: number;
+  rowCount: number;
 }) {
   const isDirectory = entry.type === "directory";
   const node = tree.nodes[entry.path];
   const selected = !isDirectory && selectedPath != null && pathsEqual(selectedPath, entry.path);
   const ext = entry.name.split(".").pop()?.toLowerCase() ?? "";
   return (
-    <>
+    <button
+      type="button"
+      className="file-tree-row"
+      role="treeitem"
+      data-kind={isDirectory ? "directory" : "file"}
+      data-ext={isDirectory ? "dir" : ext}
+      data-path={entry.path}
+      data-selected={selected ? "true" : undefined}
+      aria-expanded={isDirectory ? node?.open === true : undefined}
+      aria-posinset={rowIndex + 1}
+      aria-setsize={rowCount}
+      style={{ "--tree-depth": depth } as CSSProperties}
+      onClick={() => (isDirectory ? tree.toggleDirectory(entry.path) : onOpenFile(entry.path))}
+      onContextMenu={(e) => onContext(e, entry)}
+      title={entry.path}
+    >
+      <span className="file-tree-chevron" data-open={node?.open === true} aria-hidden="true">
+        {isDirectory ? "›" : ""}
+      </span>
+      <span className="file-tree-icon" aria-hidden="true">
+        {iconForEntry(entry)}
+      </span>
+      <span className="file-tree-name">{entry.name}</span>
+    </button>
+  );
+}
+
+function FileTreeStatusRow({ row, tree }: { row: Extract<FileTreeRowModel, { kind: "message" }>; tree: FileTreeState }) {
+  if (row.status === "load-more") {
+    const node = tree.nodes[row.path];
+    return (
       <button
         type="button"
-        className="file-tree-row"
-        data-kind={isDirectory ? "directory" : "file"}
-        data-ext={isDirectory ? "dir" : ext}
-        data-selected={selected ? "true" : undefined}
-        style={{ "--tree-depth": depth } as CSSProperties}
-        onClick={() => (isDirectory ? tree.toggleDirectory(entry.path) : onOpenFile(entry.path))}
-        onContextMenu={(e) => onContext(e, entry)}
-        title={entry.path}
+        className="file-tree-load-more"
+        style={{ "--tree-depth": row.depth } as CSSProperties}
+        onClick={() => tree.loadMoreDirectory(row.path)}
+        disabled={node?.loading === true}
       >
-        <span className="file-tree-chevron" data-open={node?.open === true} aria-hidden="true">
-          {isDirectory ? "›" : ""}
-        </span>
-        <span className="file-tree-icon" aria-hidden="true">
-          {iconForEntry(entry)}
-        </span>
-        <span className="file-tree-name">{entry.name}</span>
+        {node?.loading ? t("workbench.loading") : t("workbench.loadMore")}
       </button>
-      {isDirectory && node?.open && (
-        <DirectoryRows
-          path={entry.path}
-          depth={depth + 1}
-          tree={tree}
-          filter={filter}
-          selectedPath={selectedPath}
-          onOpenFile={onOpenFile}
-          onContext={onContext}
-        />
-      )}
-    </>
+    );
+  }
+
+  return (
+    <p
+      className={`file-tree-empty${row.status === "error" ? " file-tree-error" : ""}`}
+      style={{ "--tree-depth": row.depth } as CSSProperties}
+      role={row.status === "error" ? "alert" : "status"}
+    >
+      {row.status === "error" ? row.message : row.status === "truncated" ? t("workbench.truncated") : t("workbench.loading")}
+    </p>
   );
+}
+
+/** 虚拟化后方向键可能要先滚动，使用短轮询等候目标 button 挂载，再把焦点交给它。 */
+function handleTreeKeyDown(
+  event: React.KeyboardEvent<HTMLDivElement>,
+  tree: FileTreeState,
+  rows: FileTreeRowModel[],
+  virtualizer: FileTreeVirtualizer,
+  list: HTMLDivElement | null,
+): void {
+  if (!["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement) || !target.classList.contains("file-tree-row")) return;
+  const currentIndex = Number(target.closest<HTMLElement>("[data-index]")?.dataset.index);
+  if (!Number.isInteger(currentIndex) || currentIndex < 0) return;
+
+  const focusIndex = (index: number): void => {
+    if (index < 0 || index >= rows.length) return;
+    const selector = `[data-index="${index}"] .file-tree-row`;
+    const current = list?.querySelector<HTMLButtonElement>(selector);
+    if (current) {
+      current.focus();
+      return;
+    }
+    virtualizer.scrollToIndex(index, { align: "auto" });
+    let attempts = 0;
+    const focusAfterRender = () => {
+      const next = list?.querySelector<HTMLButtonElement>(selector);
+      if (next) {
+        next.focus();
+        return;
+      }
+      if (attempts < 4) {
+        attempts += 1;
+        requestAnimationFrame(focusAfterRender);
+      }
+    };
+    requestAnimationFrame(focusAfterRender);
+  };
+
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    focusIndex(event.key === "ArrowDown" ? currentIndex + 1 : currentIndex - 1);
+    return;
+  }
+
+  const row = rows[currentIndex];
+  if (!row || row.kind !== "entry") return;
+  const node = tree.nodes[row.entry.path];
+  if (event.key === "ArrowRight" && row.entry.type === "directory") {
+    event.preventDefault();
+    if (!node?.open) tree.toggleDirectory(row.entry.path);
+    else focusIndex(currentIndex + 1);
+    return;
+  }
+
+  if (event.key === "ArrowLeft") {
+    if (row.entry.type === "directory" && node?.open) {
+      event.preventDefault();
+      tree.toggleDirectory(row.entry.path);
+      return;
+    }
+    const parent = parentTreePath(row.entry.path);
+    const parentIndex = rows.findIndex(
+      (candidate) => candidate.kind === "entry" && candidate.entry.path === parent,
+    );
+    if (parentIndex >= 0) {
+      event.preventDefault();
+      focusIndex(parentIndex);
+    }
+  }
+}
+
+function fileTreeRowKey(row: FileTreeRowModel | undefined, index: number): string {
+  if (!row) return `missing:${index}`;
+  return row.kind === "entry" ? `entry:${row.entry.path}` : `message:${row.path}:${row.status}`;
+}
+
+function parentTreePath(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  const separator = normalized.lastIndexOf("/");
+  return separator <= 0 ? "." : normalized.slice(0, separator);
 }
 
 function pathsEqual(a: string, b: string): boolean {

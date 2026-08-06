@@ -94,3 +94,13 @@
     flex-direction: column;
   }
 }
+.settings-task-metrics {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-task-metrics > p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--ui-font-sm);
+}

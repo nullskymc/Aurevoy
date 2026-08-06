@@ -1,11 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import type { Automation, AutomationRun, Task } from '@aurevoy/shared';
+import type { Automation, AutomationRun, Task, TaskBudget } from '@aurevoy/shared';
 import { createTask, runHarnessTask } from '../agent/harness-controller.js';
 import { automationStore, taskStore, traceStore } from '../store/db.js';
-import { nextAutomationRunAt } from './cadence.js';
+import { automationCadenceMs, nextScheduledAutomationRunAt } from './cadence.js';
 
 const DEFAULT_TICK_MS = 15_000;
 const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const ACTIVE_AUTOMATION_STATUSES = new Set([
+  'running',
+  'waiting_approval',
+  'waiting_clarification',
+  'waiting_budget',
+  'waiting_completion',
+]);
 
 export interface AutomationStartResult {
   automation: Automation;
@@ -38,6 +45,7 @@ export class AutomationScheduler {
 
   start(): void {
     if (this.timer) return;
+    automationStore.recoverOrphanedClaims();
     this.timer = setInterval(() => {
       void this.tick();
     }, this.tickMs);
@@ -55,15 +63,49 @@ export class AutomationScheduler {
     return this.startAutomation(automationId, true);
   }
 
+  /** 保存前试跑仍复用普通 harness；试跑不创建 automation 配方或运行历史。 */
+  async testDraft(draft: {
+    goal: string;
+    projectId?: string;
+    executionMode?: 'auto' | 'plan';
+    budget?: TaskBudget;
+    lifetimeBudget?: TaskBudget;
+  }): Promise<Task> {
+    const task = this.createTaskFn(
+      draft.goal,
+      draft.budget,
+      draft.projectId,
+      undefined,
+      draft.lifetimeBudget,
+      draft.executionMode,
+    );
+    void this.runTaskFn(task).catch(() => {
+      // harness 自身负责持久化失败状态；这里仅避免未处理 Promise 污染服务器。
+    });
+    return task;
+  }
+
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
     try {
       this.reconcileRunningRuns();
+      const now = Date.now();
       for (const automation of automationStore.list()) {
         if (!automation.enabled || automation.cadence === 'manual') continue;
-        if (automation.lastStatus === 'running') continue;
+        if (automation.lastStatus && ACTIVE_AUTOMATION_STATUSES.has(automation.lastStatus)) continue;
         if (!automation.nextRunAt || automation.nextRunAt > new Date().toISOString()) continue;
+        const interval = automationCadenceMs(automation.cadence);
+        const scheduledAt = Date.parse(automation.nextRunAt);
+        // 明确的跳过策略：停机超过两个周期时记录 missed，并只推进到下一个未来周期。
+        if (interval !== undefined && Number.isFinite(scheduledAt) && now - scheduledAt > interval * 2) {
+          automationStore.markMissed(
+            automation.id,
+            nextScheduledAutomationRunAt(automation.cadence, automation.nextRunAt, now),
+            `错过调度：引擎离线约 ${Math.round((now - scheduledAt) / 60_000)} 分钟，已跳过过期周期`,
+          );
+          continue;
+        }
         try {
           await this.startAutomation(automation.id, false);
         } catch {
@@ -108,7 +150,7 @@ export class AutomationScheduler {
         automationStore.finishRun(
           run.id,
           'failed',
-          current ? nextAutomationRunAt(current.cadence) : undefined,
+          current ? nextScheduledAutomationRunAt(current.cadence, current.nextRunAt) : undefined,
           message,
         );
       });
@@ -123,7 +165,7 @@ export class AutomationScheduler {
       automationStore.failClaim(
         automation.id,
         message,
-        current ? nextAutomationRunAt(current.cadence) : undefined,
+        current ? nextScheduledAutomationRunAt(current.cadence, current.nextRunAt) : undefined,
       );
       throw error;
     }
@@ -136,7 +178,11 @@ export class AutomationScheduler {
         automationStore.finishRun(run.id, 'failed', undefined, '自动化任务记录不存在');
         continue;
       }
-      if (!TERMINAL_TASK_STATUSES.has(task.status)) continue;
+      if (!TERMINAL_TASK_STATUSES.has(task.status)) {
+        const waitingStatus = automationWaitingStatus(task.phase);
+        automationStore.setRunStatus(run.id, waitingStatus ?? 'running');
+        continue;
+      }
       const lastError = task.status === 'failed'
         ? traceStore.list(task.id).slice().reverse().find((trace) => trace.errorMessage)?.errorMessage
         : undefined;
@@ -144,9 +190,17 @@ export class AutomationScheduler {
       automationStore.finishRun(
         run.id,
         task.status as 'completed' | 'failed' | 'cancelled',
-        automation?.enabled ? nextAutomationRunAt(automation.cadence) : undefined,
+        automation?.enabled ? nextScheduledAutomationRunAt(automation.cadence, automation.nextRunAt) : undefined,
         lastError,
       );
     }
   }
+}
+
+function automationWaitingStatus(taskPhase: Task['phase']): 'waiting_approval' | 'waiting_clarification' | 'waiting_budget' | 'waiting_completion' | undefined {
+  if (taskPhase === 'waiting_approval') return 'waiting_approval';
+  if (taskPhase === 'waiting_clarification') return 'waiting_clarification';
+  if (taskPhase === 'waiting_budget') return 'waiting_budget';
+  if (taskPhase === 'waiting_completion') return 'waiting_completion';
+  return undefined;
 }

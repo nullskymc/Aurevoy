@@ -84,6 +84,7 @@ export interface SettingsPanelProps {
   onSaveConnection: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
   onCleanup: (olderThanDays: number) => void | Promise<void>;
   onExportData: (includeTaskMessages: boolean) => void | Promise<void>;
+  onBackupDatabase: () => void | Promise<void>;
   onRefresh: () => void;
   onFetchModels: () => void;
   onFetchModelsForProvider: (provider: string, options?: { silent?: boolean }) => void;
@@ -102,10 +103,10 @@ export interface SettingsPanelProps {
   onWorkModeChange: (mode: WorkMode) => void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onLocaleChange: (locale: Locale) => void;
-  onCreateMemory: (content: string, category: MemoryCategory) => void;
-  onToggleMemory: (id: string, enabled: boolean) => void;
-  onEditMemory: (id: string, content: string, category: MemoryCategory) => void;
-  onDeleteMemory: (id: string) => void;
+  onCreateMemory: (content: string, category: MemoryCategory) => void | Promise<void>;
+  onToggleMemory: (id: string, enabled: boolean) => void | Promise<void>;
+  onEditMemory: (id: string, content: string, category: MemoryCategory) => void | Promise<void>;
+  onDeleteMemory: (id: string) => void | Promise<void>;
   onConnectionChange?: () => void;
   /** 全局 Toast 提示（OAuth 成功/失败等）；tone 可选，默认按文案推断 */
   onNotice?: (message: string, tone?: "info" | "success" | "error") => void;

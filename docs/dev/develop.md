@@ -33,7 +33,15 @@ npm run typecheck        # 全仓类型检查
 npm run build            # shared → web-ui → agent → desktop
 npm run build:shared     # 修改 packages/shared 后必做
 npm run regression:m3    # 其余 m4–m8 见 package.json
+npm run regression:mcp   # stdio / Streamable HTTP MCP 连接、重载与故障恢复 fixture
+npm run regression:browser # 本地 Puppeteer 页面上的只读研究与表单审批 smoke
+npm run regression:shell-isolation # macOS/Linux/Windows OS 隔离能力；不支持时记录明确 process 回退
+npm run regression:shell-isolation:strict # 发布/平台门：没有 OS 隔离时失败
+npm run regression:tauri-webview # macOS WKWebView / Windows WebView2 真实桌面窗口与控件 smoke
+npm run regression:ui-e2e # 真实 UI 输入、审批、文件/图片/HTML 预览与刷新/重启恢复
 ```
+
+Windows 分发与签名预审见 [windows-signing.md](./windows-signing.md)。方案比较不等于已完成 Windows 签名发布，真实 runner 验收仍是发布门。
 
 ### 文档站
 

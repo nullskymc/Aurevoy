@@ -21,7 +21,11 @@ vi.mock("./MarkdownRenderer", async () => {
   };
 });
 
-import { Conversation, shouldAdjustConversationScrollPosition } from "./Conversation";
+import {
+  Conversation,
+  shouldAdjustConversationScrollPosition,
+  shouldShowConversationJumpToLatest,
+} from "./Conversation";
 
 const noop = () => {};
 const CONVERSATION_TEST_TURN_HEIGHT = 240;
@@ -59,6 +63,13 @@ describe("Conversation streaming render boundary", () => {
     // 用户上滑后，可见 turn 自身变化保持视口稳定，只有窗口上方的历史高度变化需要补偿。
     expect(shouldAdjustConversationScrollPosition({ itemIndex: 36, firstVisibleIndex: 36, atEnd: false })).toBe(false);
     expect(shouldAdjustConversationScrollPosition({ itemIndex: 12, firstVisibleIndex: 36, atEnd: false })).toBe(true);
+  });
+
+  it("只在离开自动跟随阈值后显示回到最新入口", () => {
+    expect(shouldShowConversationJumpToLatest(0)).toBe(false);
+    expect(shouldShowConversationJumpToLatest(96)).toBe(false);
+    expect(shouldShowConversationJumpToLatest(97)).toBe(true);
+    expect(shouldShowConversationJumpToLatest(12, 8)).toBe(true);
   });
 
   it("只挂载虚拟窗口内的历史 turn，并固定保留实时最后一轮", () => {

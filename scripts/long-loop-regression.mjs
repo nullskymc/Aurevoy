@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
 import pino from 'pino';
+import { installRegressionAuth } from './regression-auth.mjs';
+
+installRegressionAuth();
 
 const LOOP_COUNT = 36;
 const STREAM_TIMEOUT_MS = 60_000;

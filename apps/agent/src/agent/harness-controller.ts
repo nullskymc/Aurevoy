@@ -125,6 +125,7 @@ function markTaskInterruptedForManualResume(task: Task, autoResumeEnabled: boole
   const previousPhase = task.phase;
   task.status = 'failed';
   task.phase = 'failed';
+  task.resumedAfterRestart = false;
   task.pendingApprovals = [];
   task.plan = task.plan.map((step) =>
     step.status === 'completed' ? step : { ...step, status: 'failed' },
@@ -154,6 +155,8 @@ export function prepareTaskForResume(task: Task): Task {
   }
   task.status = 'pending';
   task.phase = 'initializing';
+  // 手动 resume 不应继续显示上一次自动恢复提示；启动自动恢复会在本函数返回后重新置 true。
+  task.resumedAfterRestart = false;
   task.pendingApprovals = [];
   task.budgetExceeded = undefined;
   // run 用量在 runPiHarnessTask 入口 beginRunBudget 清零
