@@ -255,6 +255,45 @@ export interface TaskBudget {
   maxOutputBytes?: number;
 }
 
+/** 本地自动化任务的运行频率；manual 只允许用户显式触发。 */
+export type AutomationCadence = 'manual' | 'hourly' | 'every_6_hours' | 'daily' | 'weekly';
+
+/** 自动化最近一次运行的持久化状态。 */
+export type AutomationRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+/** 可复用的本地 Agent 任务配方。 */
+export interface Automation {
+  id: string;
+  name: string;
+  goal: string;
+  projectId?: string;
+  executionMode: AgentExecutionMode;
+  budget?: TaskBudget;
+  lifetimeBudget?: TaskBudget;
+  cadence: AutomationCadence;
+  enabled: boolean;
+  nextRunAt?: string;
+  lastRunAt?: string;
+  lastTaskId?: string;
+  lastStatus?: AutomationRunStatus;
+  lastError?: string;
+  runCount: number;
+  failureCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 自动化与任务之间的可审计运行记录。 */
+export interface AutomationRun {
+  id: string;
+  automationId: string;
+  taskId: string;
+  status: AutomationRunStatus;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+}
+
 /** 预算消耗计数；run 与 lifetime 各持一份。 */
 export interface BudgetUsage {
   iterations: number;
@@ -511,6 +550,8 @@ export interface Task {
   parentTaskId?: string;
   /** 所属项目 ID（缺省为独立对话） */
   projectId?: string;
+  /** 由本地自动化配方创建时记录来源；普通对话不设置。 */
+  automationId?: string;
   /** 自动模式运行时统计与状态 */
   autoModeState?: AutoModeState;
   /** 当前会话执行模式；plan 只读，用户可在输入框切换为 auto 后继续同一任务。 */
@@ -531,6 +572,7 @@ export interface TaskSummary {
   titleSource?: TaskTitleSource;
   status: TaskStatus;
   projectId?: string;
+  automationId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -543,6 +585,7 @@ export function taskSummaryFromTask(task: Task): TaskSummary {
     titleSource: task.titleSource,
     status: task.status,
     projectId: task.projectId,
+    automationId: task.automationId,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
@@ -901,6 +944,45 @@ export interface CreateTaskRequest {
   attachments?: MessageAttachment[];
 }
 
+/** POST /api/automations — 创建本地任务配方。 */
+export interface CreateAutomationRequest {
+  name: string;
+  goal: string;
+  projectId?: string;
+  executionMode?: AgentExecutionMode;
+  budget?: TaskBudget;
+  lifetimeBudget?: TaskBudget;
+  cadence?: AutomationCadence;
+  enabled?: boolean;
+}
+
+/** PATCH /api/automations/:id — 更新配方；未提供字段保持原值。 */
+export interface UpdateAutomationRequest {
+  name?: string;
+  goal?: string;
+  projectId?: string | null;
+  executionMode?: AgentExecutionMode;
+  budget?: TaskBudget;
+  lifetimeBudget?: TaskBudget;
+  cadence?: AutomationCadence;
+  enabled?: boolean;
+}
+
+export interface AutomationListResponse {
+  automations: Automation[];
+}
+
+export interface AutomationRunListResponse {
+  runs: AutomationRun[];
+}
+
+export interface RunAutomationResponse {
+  automation: Automation;
+  run: AutomationRun;
+  task: Task;
+  streamUrl: string;
+}
+
 /**
  * POST /api/tasks/:id/budget/continue — 预算触顶后续跑。
  * 引擎会在寿命预算不足时自动扩容一份额度，并重新进入 harness。
@@ -1022,6 +1104,34 @@ export interface HealthResponse {
   contextCharBudget?: number;
   /** Agent 上下文 token 预算（用于前端展示 token 使用率） */
   contextTokenBudget?: number;
+}
+
+/** 健康诊断项的结果级别；warning 表示可继续运行但能力已降级。 */
+export type HealthDiagnosticStatus = 'ok' | 'warning' | 'error';
+
+export type HealthDiagnosticId =
+  | 'llm'
+  | 'database'
+  | 'workspace'
+  | 'embedding'
+  | 'vector_store'
+  | 'knowledge_base';
+
+/** GET /api/health/diagnostics — 可操作的本地运行时诊断项。 */
+export interface HealthDiagnosticCheck {
+  id: HealthDiagnosticId;
+  status: HealthDiagnosticStatus;
+  /** 稳定的后端摘要；前端可按 id/status 做本地化展示。 */
+  summary: string;
+  details?: Record<string, string | number | boolean | null>;
+}
+
+export interface HealthDiagnosticsResponse {
+  generatedAt: string;
+  version: string;
+  uptimeMs: number;
+  checks: HealthDiagnosticCheck[];
+  data: DataStatusResponse;
 }
 
 /** POST /api/tasks/:id/approvals — 对一次工具调用做出审批决策 */
@@ -1784,6 +1894,158 @@ export interface CleanupDataRequest {
 export interface CleanupDataResponse {
   deletedTasks: number;
   deletedTraces: number;
+  /** 与任务级联删除的独立图片分片数量。 */
+  deletedMessageParts: number;
+  /** 与任务级联删除的 Pi 会话树快照数量。 */
+  deletedSessionTrees: number;
+}
+
+export interface DataExportRequest {
+  /** 是否把当前任务与归档消息正文一并写入导出；默认 false。 */
+  includeTaskMessages?: boolean;
+}
+
+export interface DataExportProviderSlot {
+  provider: string;
+  model: string;
+  availableModels: string[];
+  enabledModels: string[];
+  imageInputModels: string[];
+  apiKeyConfigured: boolean;
+  oauthConfigured: boolean;
+}
+
+/** 导出专用设置投影：显式排除密钥、MCP JSON、代理地址与本地路径。 */
+export interface DataExportSettings {
+  llm: {
+    provider: string;
+    model: string;
+    availableModels: string[];
+    enabledModels: string[];
+    imageInputModels: string[];
+    temperature: number;
+    timeoutMs: number;
+    maxTokens: number;
+    apiKeyConfigured: boolean;
+    oauthConfigured: boolean;
+    providers: DataExportProviderSlot[];
+  };
+  workspaceConfigured: boolean;
+  commandExecutionEnabled: boolean;
+  cleanupPolicyDays: number;
+  autoModeSafetyEnabled: boolean;
+  agentThinkingLevel: AgentThinkingLevel;
+  agentToolExecution: AgentToolExecutionMode;
+  agentCacheRetention: AgentCacheRetention;
+  agentAutoCompact: boolean;
+  autoResumeInterruptedTasks: boolean;
+  memoryRecallEnabled: boolean;
+  kbRecallEnabled: boolean;
+  budget: RuntimeSettings['budget'];
+  embedding: {
+    provider: 'openai' | 'off';
+    model: string;
+    apiKeyConfigured: boolean;
+  };
+  search: {
+    preferNative: boolean;
+    provider: 'duckduckgo_lite' | 'tavily' | 'searxng' | 'custom';
+    apiKeyConfigured: boolean;
+  };
+  logging: {
+    level: LogLevel;
+  };
+  proxyEnabled: boolean;
+}
+
+export interface DataExportProject {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DataExportToolCall {
+  id: string;
+  name: string;
+  summary?: string;
+  planStepId?: string;
+  providerExecuted?: boolean;
+}
+
+export interface DataExportMessage {
+  id: string;
+  role: MessageRole;
+  content: string;
+  createdAt: string;
+  failure?: Message['failure'];
+  toolCalls?: DataExportToolCall[];
+  toolCallId?: string;
+  providerExecuted?: boolean;
+  delivery?: Message['delivery'];
+  /** 只保留附件元数据，不保留绝对路径、data URL 或图片二进制。 */
+  attachments?: Array<Omit<MessageAttachment, 'path' | 'dataUrl'>>;
+  /** 只保留富内容块元数据，不导出 URL、文件路径或 canvas HTML。 */
+  contentBlocks?: Array<{
+    id: string;
+    type: ContentBlockType;
+    name?: string;
+    mimeType?: string;
+    size?: number;
+    kind?: UiComponentKind;
+  }>;
+}
+
+export type DataExportArtifact = Omit<TaskArtifact, 'content' | 'appliedPath'>;
+
+export interface DataExportTask {
+  id: string;
+  goal: string;
+  title: string;
+  titleSource?: TaskTitleSource;
+  status: TaskStatus;
+  phase: TaskPhase | null;
+  plan: PlanStep[];
+  artifacts: DataExportArtifact[];
+  tokenUsage?: AggregatedTokenUsage;
+  budget?: TaskBudget;
+  budgetUsage?: BudgetUsage;
+  lifetimeBudget?: TaskBudget;
+  lifetimeUsage?: BudgetUsage;
+  projectId?: string;
+  automationId?: string;
+  parentTaskId?: string;
+  executionMode?: AgentExecutionMode;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  archivedMessageCount: number;
+  messages?: DataExportMessage[];
+  archivedMessages?: DataExportMessage[];
+}
+
+export interface DataExportKnowledgeBaseDir {
+  id: string;
+  recursive: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DataExportPayload {
+  schemaVersion: 1;
+  exportedAt: string;
+  appVersion: string;
+  /** 导出边界清单，便于用户在分享前判断风险。 */
+  redactions: string[];
+  settings: DataExportSettings;
+  projects: DataExportProject[];
+  memories: MemoryEntry[];
+  tasks: DataExportTask[];
+  knowledgeBase: {
+    dirs: DataExportKnowledgeBaseDir[];
+    status: KbIndexStatus;
+  };
 }
 
 // ============================================================

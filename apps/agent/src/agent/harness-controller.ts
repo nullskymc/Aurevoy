@@ -605,6 +605,7 @@ export function createTask(
   lifetimeBudget?: TaskBudget,
   executionMode?: AutoModeLevel,
   imageParts?: MessageImagePart[],
+  automationId?: string,
 ): Task {
   const now = new Date().toISOString();
   const parsed = parseSlashCommand(goal);
@@ -638,6 +639,7 @@ export function createTask(
     lifetimeUsage: initialBudgetUsage(),
     tokenUsage: { available: false, provider: config.llm.provider, model: config.llm.model },
     projectId: projectId ?? undefined,
+    automationId: automationId ?? undefined,
     executionMode: autoModeLevel,
     autoModeState: createInitialAutoModeState(autoModeLevel),
     createdAt: now,
@@ -652,6 +654,7 @@ export function createTask(
       autoModeLevel,
       budget: budgets.budget,
       lifetimeBudget: budgets.lifetimeBudget,
+      automationId,
     },
   });
   return task;

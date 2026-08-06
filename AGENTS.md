@@ -6,7 +6,7 @@
 
 Aurevoy 是**本地个人 AI Agent 桌面应用**：用户用自然语言给目标，引擎规划、调工具、持续执行直至完成。
 
-- 版本：v0.6.8（已发布 tag `v0.6.8`；上一版 `v0.6.7`）
+- 版本：v0.6.15（当前提交对应发布 tag `v0.6.15`；上一版 `v0.6.14`）
 - 形态：支持 macOS、Windows 和 Linux 桌面端；各平台通过 Tauri 构建对应安装包与更新产物
 - 原则：真实链路、可恢复、可审计；禁止 Mock / 假能力
 
@@ -69,6 +69,8 @@ npm run regression:m5    # 项目工作区切换
 npm run regression:m6    # 记忆/Session Tree（记忆改动 → m6+m8）
 npm run regression:m7    # agent 循环/工具 schema/MCP/审批（通用联动）
 npm run regression:m8    # 知识库/向量检索（KB 改动 → m6+m8）
+npm run regression:m9    # 健康诊断/脱敏导出/数据清理（数据管理改动）
+npm run regression:m10   # 自动化配方/调度/运行历史（自动化改动）
 npm run regression:*     # 提交前按影响面选跑；全套留给发布/合并前
 npm run docs:dev         # 文档站本地预览
 ```
@@ -81,6 +83,6 @@ npm run docs:dev         # 文档站本地预览
 内联编辑重试/分支/压缩、子代理（并发与工作组 UI）、Skill、网页搜索、多模态、项目工作区、  
 双层预算、记忆向量 + KB RAG、设置/数据管理、CI。
 
-**进行中：** macOS Apple 签名与公证、隐式 KB 召回、评测与发布体验。  
+**进行中：** macOS Apple 签名与公证、评测与发布体验。
 **已交付（分发）：** GitHub Releases 自动更新（Tauri updater + `latest.json`）。维护见 [docs/dev/auto-update.md](./docs/dev/auto-update.md)。  
 清单与验收见 [ROADMAP](./docs/ROADMAP.md)。

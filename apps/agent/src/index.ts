@@ -10,6 +10,7 @@ import { startSkillWatcher } from './skills/reload.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { initializeUnifiedToolFramework } from './tool/index.js';
+import { AutomationScheduler } from './automation/scheduler.js';
 
 async function main() {
   mkdirSync(dirname(config.dbPath), { recursive: true });
@@ -39,10 +40,12 @@ async function main() {
 
   const mcp = await initializeMcpTools();
 
-  const app = await buildServer(rootLogger);
+  const automationScheduler = new AutomationScheduler();
+  const app = await buildServer(rootLogger, automationScheduler);
 
   const shutdown = async () => {
     log.info('正在关闭...');
+    automationScheduler.stop();
     stopSkillWatcher();
     await closeMcpTools();
     await app.close();
@@ -53,6 +56,7 @@ async function main() {
   try {
     await app.listen({ host: config.host, port: config.port });
     log.info(`Aurevoy Agent 引擎已启动: http://${config.host}:${config.port}`);
+    automationScheduler.start();
 
     if (isPythonInstalled()) {
       log.info({ python: getPythonPath(), version: getPythonVersion() }, 'Python 运行时就绪');

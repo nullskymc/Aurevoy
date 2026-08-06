@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { accessSync, constants as fsConstants, statSync, promises as fs } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import Fastify from 'fastify';
 import pino, { type Logger } from 'pino';
@@ -22,6 +22,10 @@ import type {
   UpdateTaskModelRequest,
   UpdateTaskModelResponse,
   AgentThinkingLevel,
+  Automation,
+  AutomationListResponse,
+  AutomationRunListResponse,
+  AutomationCadence,
   ContinueBudgetRequest,
   ContinueBudgetResponse,
   ContinueTaskRequest,
@@ -30,9 +34,13 @@ import type {
   CreateProjectRequest,
   CreateTaskRequest,
   CreateTaskResponse,
+  CreateAutomationRequest,
+  DataExportPayload,
+  DataExportRequest,
   DataStatusResponse,
   DeleteTaskResponse,
   HealthResponse,
+  HealthDiagnosticsResponse,
   MemoryCategory,
   MemoryEntry,
   MemoryListResponse,
@@ -47,6 +55,7 @@ import type {
   PiSessionTreeLabelRequest,
   ProjectListResponse,
   ResumeTaskResponse,
+  RunAutomationResponse,
   RevertTaskRequest,
   RevertTaskResponse,
   SkillDescriptor,
@@ -59,6 +68,7 @@ import type {
   TaskTraceListResponse,
   TokenUsageReport,
   UpdateProjectRequest,
+  UpdateAutomationRequest,
   UpdateTaskArtifactRequest,
   UpdateRuntimeSettingsRequest,
   UpdateToolRequest,
@@ -95,7 +105,7 @@ import {
   setPiSessionTreeLabel,
 } from './agent/pi-harness/session-tree.js';
 import { buildTokenUsageReport } from './agent/token-usage.js';
-import { taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore, invalidateMemorySummary } from './store/db.js';
+import { db, isVecLoaded, taskStore, traceStore, memoryStore, toolSettingsStore, skillSettingsStore, projectStore, invalidateMemorySummary } from './store/db.js';
 import { unifiedToolRegistry } from './tool/unified-registry.js';
 import { createToolContext, initializeUnifiedToolFramework } from './tool/index.js';
 import { skillRegistry } from './skills/registry.js';
@@ -116,11 +126,156 @@ import {
   readRuntimeSettings,
   updateRuntimeSettings,
 } from './runtime/settings.js';
+import { buildDataExportPayload } from './data/export.js';
+import { buildHealthDiagnostics, type HealthDiagnosticProbe } from './diagnostics/health.js';
+import { getKbIndexStatus, listKbDirs } from './knowledge-base/index.js';
+import { APP_VERSION } from './version.js';
+import { automationStore } from './store/db.js';
+import { AutomationScheduler } from './automation/scheduler.js';
 
 const startedAt = Date.now();
 const IMAGE_UPLOAD_BODY_LIMIT = Math.ceil(MAX_UPLOADED_IMAGE_BYTES * 4 / 3) + 1024 * 1024;
 
-export async function buildServer(externalLogger?: Logger) {
+function readDataStatus(): DataStatusResponse {
+  return {
+    dbPath: config.dbPath,
+    workspaceDir: config.workspaceDir,
+    cleanupPolicyDays: readCleanupPolicyDays(),
+    counts: {
+      tasks: taskStore.count(),
+      traces: traceStore.count(),
+      memories: memoryStore.count(),
+      projects: projectStore.count(),
+    },
+  };
+}
+
+function probeDatabase(): HealthDiagnosticProbe {
+  try {
+    const result = db.prepare('PRAGMA quick_check(1)').get() as { quick_check?: string } | undefined;
+    const passed = result?.quick_check === 'ok';
+    return {
+      status: passed ? 'ok' : 'error',
+      summary: passed ? 'SQLite quick check passed' : 'SQLite quick check returned an unexpected result',
+      details: { quickCheck: result?.quick_check ?? null },
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      summary: 'SQLite quick check failed',
+      details: { error: error instanceof Error ? error.message : String(error) },
+    };
+  }
+}
+
+function probeWorkspace(): HealthDiagnosticProbe {
+  try {
+    const stat = statSync(config.workspaceDir);
+    if (!stat.isDirectory()) {
+      return { status: 'error', summary: 'Workspace path is not a directory', details: { exists: true, writable: false } };
+    }
+    accessSync(config.workspaceDir, fsConstants.R_OK | fsConstants.W_OK);
+    return { status: 'ok', summary: 'Workspace directory is readable and writable', details: { exists: true, writable: true } };
+  } catch (error) {
+    return {
+      status: 'error',
+      summary: 'Workspace directory is unavailable or not writable',
+      details: { exists: false, writable: false, error: error instanceof Error ? error.message : String(error) },
+    };
+  }
+}
+
+function probeEmbedding(): HealthDiagnosticProbe {
+  const provider = config.embedding.provider;
+  const configured = provider !== 'off' && config.embedding.apiKey.trim().length > 0;
+  if (provider === 'off') {
+    return {
+      status: 'warning',
+      summary: 'Embedding is disabled; semantic recall will fall back to keywords',
+      details: { provider, model: config.embedding.model, apiKeyConfigured: false },
+    };
+  }
+  return {
+    status: configured ? 'ok' : 'warning',
+    summary: configured ? 'Embedding configuration is present' : 'Embedding provider has no configured API key',
+    details: { provider, model: config.embedding.model, apiKeyConfigured: configured },
+  };
+}
+
+function probeVectorStore(): HealthDiagnosticProbe {
+  const loaded = isVecLoaded();
+  return {
+    status: loaded ? 'ok' : 'warning',
+    summary: loaded ? 'sqlite-vec extension is loaded' : 'sqlite-vec is unavailable; vector search is degraded',
+    details: { loaded },
+  };
+}
+
+function probeKnowledgeBase(): HealthDiagnosticProbe {
+  try {
+    const dirs = listKbDirs();
+    const status = getKbIndexStatus();
+    if (dirs.length === 0) {
+      return {
+        status: 'warning',
+        summary: 'No knowledge-base directory is configured',
+        details: { configuredDirs: 0, totalFiles: status.totalFiles, totalChunks: status.totalChunks },
+      };
+    }
+    if (status.totalChunks === 0) {
+      return {
+        status: 'warning',
+        summary: 'Knowledge-base directories exist but no chunks are indexed',
+        details: { configuredDirs: dirs.length, totalFiles: status.totalFiles, totalChunks: 0 },
+      };
+    }
+    return {
+      status: 'ok',
+      summary: 'Knowledge base has indexed content',
+      details: { configuredDirs: dirs.length, totalFiles: status.totalFiles, totalChunks: status.totalChunks },
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      summary: 'Knowledge-base status could not be read',
+      details: { error: error instanceof Error ? error.message : String(error) },
+    };
+  }
+}
+
+function readKnowledgeBaseSnapshot(): {
+  dirs: ReturnType<typeof listKbDirs>;
+  status: ReturnType<typeof getKbIndexStatus>;
+} {
+  try {
+    return { dirs: listKbDirs(), status: getKbIndexStatus() };
+  } catch {
+    // 旧数据库或 sqlite-vec 降级时，导出仍应能带走任务/记忆等主数据。
+    return { dirs: [], status: { totalFiles: 0, totalChunks: 0, lastIndexed: null } };
+  }
+}
+
+function exportFilename(exportedAt: string): string {
+  const stamp = exportedAt.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z').replace('T', '-');
+  return `aurevoy-data-${stamp}.json`;
+}
+
+function parseAutomationCadence(value: unknown): AutomationCadence | undefined {
+  if (value === undefined || value === null || value === '') return 'manual';
+  if (value === 'manual' || value === 'hourly' || value === 'every_6_hours' || value === 'daily' || value === 'weekly') {
+    return value;
+  }
+  return undefined;
+}
+
+function nextAutomationSchedule(enabled: boolean, cadence: AutomationCadence): string | undefined {
+  return enabled && cadence !== 'manual' ? new Date().toISOString() : undefined;
+}
+
+export async function buildServer(
+  externalLogger?: Logger,
+  automationScheduler = new AutomationScheduler(),
+) {
   const log = externalLogger ?? pino({ level: 'info' }, pino.destination(1));
   // 默认关闭 access log：/api/health 与 UI 轮询会占日志大半；需要时设 AUREVOY_LOG_HTTP=1
   const app = Fastify({
@@ -173,13 +328,29 @@ export async function buildServer(externalLogger?: Logger) {
     const llm = getLlmReadiness();
     return {
       status: 'ok',
-      version: '0.6.6',
+      version: APP_VERSION,
       uptimeMs: Date.now() - startedAt,
       provider: getPiProviderName(),
       llm,
       contextCharBudget: config.agent.contextCharBudget,
       contextTokenBudget: config.agent.contextTokenBudget,
     };
+  });
+
+  app.get('/api/health/diagnostics', async (): Promise<HealthDiagnosticsResponse> => {
+    const llm = getLlmReadiness();
+    return buildHealthDiagnostics({
+      generatedAt: new Date().toISOString(),
+      version: APP_VERSION,
+      uptimeMs: Date.now() - startedAt,
+      llm,
+      data: readDataStatus(),
+      database: probeDatabase(),
+      workspace: probeWorkspace(),
+      embedding: probeEmbedding(),
+      vectorStore: probeVectorStore(),
+      knowledgeBase: probeKnowledgeBase(),
+    });
   });
 
   app.get<{
@@ -527,25 +698,141 @@ export async function buildServer(externalLogger?: Logger) {
   );
 
   app.get('/api/data', async (): Promise<DataStatusResponse> => {
-    return {
-      dbPath: config.dbPath,
-      workspaceDir: config.workspaceDir,
-      cleanupPolicyDays: readCleanupPolicyDays(),
-      counts: {
-        tasks: taskStore.count(),
-        traces: traceStore.count(),
-        memories: memoryStore.count(),
-        projects: projectStore.count(),
-      },
+    return readDataStatus();
+  });
+
+  // ---- 本地自动化：持久化配方仍通过普通任务进入 Pi harness ----
+  app.get('/api/automations', async (): Promise<AutomationListResponse> => ({
+    automations: automationStore.list(),
+  }));
+
+  app.post<{ Body: CreateAutomationRequest }>('/api/automations', async (req, reply) => {
+    const name = req.body?.name?.trim();
+    const goal = req.body?.goal?.trim();
+    if (!name || !goal) return reply.code(400).send({ error: 'name and goal are required' });
+    if (name.length > 120) return reply.code(400).send({ error: 'name is too long' });
+    const cadence = parseAutomationCadence(req.body?.cadence);
+    if (!cadence) return reply.code(400).send({ error: 'invalid cadence' });
+    if (req.body?.projectId && !projectStore.get(req.body.projectId)) {
+      return reply.code(404).send({ error: 'project not found' });
+    }
+    const now = new Date().toISOString();
+    const enabled = req.body?.enabled === true;
+    const automation: Automation = {
+      id: randomUUID(),
+      name,
+      goal,
+      projectId: req.body?.projectId,
+      executionMode: req.body?.executionMode === 'plan' ? 'plan' : 'auto',
+      budget: req.body?.budget,
+      lifetimeBudget: req.body?.lifetimeBudget,
+      cadence,
+      enabled,
+      nextRunAt: nextAutomationSchedule(enabled, cadence),
+      runCount: 0,
+      failureCount: 0,
+      createdAt: now,
+      updatedAt: now,
     };
+    return reply.code(201).send(automationStore.create(automation));
+  });
+
+  app.get<{ Params: { id: string } }>('/api/automations/:id', async (req, reply) => {
+    const automation = automationStore.get(req.params.id);
+    return automation ? reply.send(automation) : reply.code(404).send({ error: 'automation not found' });
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
+    '/api/automations/:id/runs',
+    async (req, reply): Promise<AutomationRunListResponse | unknown> => {
+      if (!automationStore.get(req.params.id)) return reply.code(404).send({ error: 'automation not found' });
+      const parsedLimit = Number.parseInt(req.query?.limit ?? '30', 10);
+      return { runs: automationStore.listRuns(req.params.id, Number.isFinite(parsedLimit) ? parsedLimit : 30) };
+    },
+  );
+
+  app.patch<{ Params: { id: string }; Body: UpdateAutomationRequest }>(
+    '/api/automations/:id',
+    async (req, reply) => {
+      const current = automationStore.get(req.params.id);
+      if (!current) return reply.code(404).send({ error: 'automation not found' });
+      const cadence = req.body?.cadence === undefined
+        ? current.cadence
+        : parseAutomationCadence(req.body.cadence);
+      if (!cadence) return reply.code(400).send({ error: 'invalid cadence' });
+      if (req.body?.name !== undefined && !req.body.name.trim()) return reply.code(400).send({ error: 'name cannot be empty' });
+      if (req.body?.goal !== undefined && !req.body.goal.trim()) return reply.code(400).send({ error: 'goal cannot be empty' });
+      if (req.body?.projectId && !projectStore.get(req.body.projectId)) {
+        return reply.code(404).send({ error: 'project not found' });
+      }
+      const enabled = req.body?.enabled ?? current.enabled;
+      const cadenceChanged = req.body?.cadence !== undefined && req.body.cadence !== current.cadence;
+      const enabledChanged = req.body?.enabled !== undefined && req.body.enabled !== current.enabled;
+      const scheduleChanged = cadenceChanged || enabledChanged;
+      const nextRunAt = enabled && cadence !== 'manual'
+        ? (current.lastStatus === 'running' && !scheduleChanged
+          ? current.nextRunAt
+          : (scheduleChanged ? new Date().toISOString() : current.nextRunAt ?? new Date().toISOString()))
+        : undefined;
+      const patch: Parameters<typeof automationStore.update>[1] = {
+        name: req.body?.name?.trim(),
+        goal: req.body?.goal?.trim(),
+        executionMode: req.body?.executionMode,
+        budget: req.body?.budget,
+        lifetimeBudget: req.body?.lifetimeBudget,
+        cadence,
+        enabled,
+        nextRunAt: nextRunAt ?? null,
+      };
+      if (req.body?.projectId !== undefined) patch.projectId = req.body.projectId;
+      return reply.send(automationStore.update(req.params.id, patch));
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>('/api/automations/:id', async (req, reply) => {
+    if (!automationStore.delete(req.params.id)) return reply.code(404).send({ error: 'automation not found' });
+    return reply.send({ deleted: true });
+  });
+
+  app.post<{ Params: { id: string } }>('/api/automations/:id/run', async (req, reply): Promise<RunAutomationResponse | unknown> => {
+    if (!automationStore.get(req.params.id)) return reply.code(404).send({ error: 'automation not found' });
+    try {
+      const result = await automationScheduler.runNow(req.params.id);
+      return reply.code(202).send({ ...result, streamUrl: `/api/tasks/${result.task.id}/stream` });
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post<{ Body: DataExportRequest }>('/api/data/export', async (req, reply): Promise<DataExportPayload | unknown> => {
+    const exportedAt = new Date().toISOString();
+    const knowledgeBase = readKnowledgeBaseSnapshot();
+    const payload = buildDataExportPayload({
+      appVersion: APP_VERSION,
+      exportedAt,
+      settings: readRuntimeSettings(),
+      projects: projectStore.list(),
+      memories: memoryStore.list(),
+      tasks: taskStore.list(),
+      kbDirs: knowledgeBase.dirs,
+      kbStatus: knowledgeBase.status,
+      includeTaskMessages: req.body?.includeTaskMessages === true,
+    });
+    return reply
+      .header('Content-Disposition', `attachment; filename="${exportFilename(exportedAt)}"`)
+      .type('application/json; charset=utf-8')
+      .send(payload);
   });
 
   app.get('/api/data/token-usage', async (): Promise<TokenUsageReport> => {
     return buildTokenUsageReport(taskStore.list());
   });
 
-  app.post<{ Body: CleanupDataRequest }>('/api/data/cleanup', async (req): Promise<CleanupDataResponse> => {
+  app.post<{ Body: CleanupDataRequest }>('/api/data/cleanup', async (req, reply): Promise<CleanupDataResponse | unknown> => {
     const olderThanDays = req.body?.olderThanDays ?? readCleanupPolicyDays();
+    if (!Number.isFinite(olderThanDays) || olderThanDays < 1 || olderThanDays > 3650) {
+      return reply.code(400).send({ error: 'olderThanDays must be between 1 and 3650' });
+    }
     return taskStore.cleanupTerminal(olderThanDays);
   });
 

@@ -14,16 +14,16 @@
 | 子代理 | 多角色 `delegate`、并发闸门、进度 SSE、Timeline 工作组 |
 | 记忆与知识 | 长期记忆 CRUD、sqlite-vec 混合检索、Dreams、KB 索引/recall、设置面板 |
 | 交付面 | 追问、产物、双层预算、token usage、checkpoint、工作台、多模态、Skill |
-| 工程 | 轨迹日志、M3–M8 回归、跨平台 CI、i18n、模型多 Provider 槽位 |
+| 工程 | 轨迹日志、M3–M10 回归、跨平台 CI、i18n、模型多 Provider 槽位 |
 
 验证：
 
 ```bash
 npm run typecheck && npm run build
-npm run regression:m3   # … m8 见 package.json
+npm run regression:m3   # … m10 见 package.json
 ```
 
-## 当前能力快照（v0.6.9）
+## 当前能力快照（v0.6.15）
 
 除下列未竟项外，桌面端主链路已可用：本地 Agent 引擎、Pi runtime、工具审批与恢复、
 多 Provider / OAuth、Skill、子代理、记忆 / KB、工作台、系统托盘，以及三平台构建、
@@ -31,6 +31,9 @@ npm run regression:m3   # … m8 见 package.json
 
 近期已交付：
 
+- [x] 健康诊断与数据管理闭环：设置页可检查本地运行时依赖，下载显式脱敏 JSON，按保留期限安全清理终态任务及其级联资源；新增 M9 HTTP 回归。
+- [x] Agent Operations：自动化控制台支持保存任务配方、手动/定时运行、暂停、运行历史和失败计数；调度器重启后从 SQLite 恢复，且不绕过 Pi 的审批、预算与工具安全门；新增 M10 HTTP 回归。
+- [x] 隐式召回可靠性：任务起点并行召回长期记忆与知识库；单来源失败独立降级，合并结果受总字符预算约束，并写入可审计轨迹。
 - [x] 首次设置引导：引擎状态、Provider 凭证与模型选择的分步引导；未就绪时禁止误发送。
 - [x] MCP 完整接入：本地 stdio 与远程 Streamable HTTP、请求头、风险等级、连接/工具状态、
   增删改启停和运行时重载。
@@ -53,7 +56,7 @@ npm run regression:m3   # … m8 见 package.json
 **KB / RAG**
 
 - [x] 索引目录、增量索引、KNN `recall`、Embedding 配置、设置 UI  
-- [ ] 隐式自动召回（任务开始时注入 KB 上下文）
+- [x] 隐式自动召回（任务开始时注入 KB 上下文；记忆/KB 分来源失败可恢复）
 
 **评测**
 
@@ -70,7 +73,8 @@ npm run regression:m3   # … m8 见 package.json
 **发布**
 
 - [x] 首次启动向导（引擎 / 凭证 / 模型的分步引导）
-- [ ] 健康页、数据导出/清理体验
+- [x] 健康诊断、脱敏数据导出/清理体验（M9）
+- [x] 本地自动化任务配方、定时调度与运行历史（M10）
 - [x] GitHub Releases 多平台安装包 + updater 通道（`latest.json`）  
 - [ ] macOS 公证安装体验、Windows 签名安装体验
 

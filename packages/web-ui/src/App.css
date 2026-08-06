@@ -313,7 +313,8 @@ button:disabled {
 .main-stage > .page-panel,
 .main-stage > .hero,
 .main-stage > .main-chat,
-.main-stage > .settings-shell {
+.main-stage > .settings-shell,
+.main-stage > .automations-page {
   flex: 1;
   min-height: 0;
   min-width: 0;

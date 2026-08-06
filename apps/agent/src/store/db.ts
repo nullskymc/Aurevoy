@@ -2,7 +2,20 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import { formatTaskTitle, type MemoryEntry, type Message, type MessageImagePart, type Project, type Task, type TaskSummary, type TaskTraceEntry } from '@aurevoy/shared';
+import {
+  formatTaskTitle,
+  type Automation,
+  type AutomationCadence,
+  type AutomationRun,
+  type AutomationRunStatus,
+  type MemoryEntry,
+  type Message,
+  type MessageImagePart,
+  type Project,
+  type Task,
+  type TaskSummary,
+  type TaskTraceEntry,
+} from '@aurevoy/shared';
 import { config } from '../config.js';
 
 /**
@@ -49,6 +62,7 @@ db.exec(`
     token_usage TEXT,
     auto_mode_state TEXT,
     subagent_runs TEXT NOT NULL DEFAULT '[]',
+    automation_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -149,6 +163,46 @@ db.exec(`
 
   CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_path
     ON projects(path);
+
+  CREATE TABLE IF NOT EXISTS automations (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    goal           TEXT NOT NULL,
+    project_id     TEXT,
+    execution_mode TEXT NOT NULL DEFAULT 'auto',
+    budget         TEXT,
+    lifetime_budget TEXT,
+    cadence        TEXT NOT NULL DEFAULT 'manual',
+    enabled        INTEGER NOT NULL DEFAULT 0,
+    next_run_at    TEXT,
+    last_run_at    TEXT,
+    last_task_id   TEXT,
+    last_status    TEXT,
+    last_error     TEXT,
+    run_count      INTEGER NOT NULL DEFAULT 0,
+    failure_count  INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE SET NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_automations_due
+    ON automations(enabled, next_run_at);
+
+  CREATE TABLE IF NOT EXISTS automation_runs (
+    id            TEXT PRIMARY KEY,
+    automation_id TEXT NOT NULL,
+    task_id       TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    started_at    TEXT NOT NULL,
+    finished_at   TEXT,
+    error         TEXT,
+    FOREIGN KEY(automation_id) REFERENCES automations(id) ON DELETE CASCADE,
+    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_automation_runs_automation
+    ON automation_runs(automation_id, started_at DESC);
 `);
 
 const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
@@ -180,6 +234,7 @@ const taskColumnMigrations: Array<{ name: string; sql: string }> = [
   { name: 'title', sql: 'ALTER TABLE tasks ADD COLUMN title TEXT' },
   { name: 'title_source', sql: 'ALTER TABLE tasks ADD COLUMN title_source TEXT' },
   { name: 'subagent_runs', sql: "ALTER TABLE tasks ADD COLUMN subagent_runs TEXT NOT NULL DEFAULT '[]'" },
+  { name: 'automation_id', sql: 'ALTER TABLE tasks ADD COLUMN automation_id TEXT' },
 ];
 for (const migration of taskColumnMigrations) {
   if (!taskColumns.some((column) => column.name === migration.name)) {
@@ -336,6 +391,7 @@ interface TaskRow {
   auto_mode_state: string | null;
   context_tokens: number | null;
   subagent_runs: string;
+  automation_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -370,6 +426,7 @@ interface TaskSummaryRow {
   title_source: string | null;
   status: string;
   project_id: string | null;
+  automation_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -382,6 +439,7 @@ function rowToTaskSummary(row: TaskSummaryRow): TaskSummary {
     titleSource: row.title_source === 'llm' ? 'llm' : 'truncated',
     status: row.status as Task['status'],
     projectId: row.project_id ?? undefined,
+    automationId: row.automation_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -415,6 +473,7 @@ function rowToTask(row: TaskRow): Task {
     archivedMessages,
     parentTaskId: row.parent_task_id ?? undefined,
     projectId: row.project_id ?? undefined,
+    automationId: row.automation_id ?? undefined,
     executionMode: row.plan_mode === 'plan' ? 'plan' : 'auto',
     autoModeState: (parseJsonColumn(row.auto_mode_state) as Task['autoModeState']) ?? undefined,
     contextTokens: row.context_tokens ?? undefined,
@@ -538,13 +597,13 @@ export const taskStore = {
       `INSERT INTO tasks (
          id, goal, title, title_source, status, phase, plan, messages, artifacts, clarifications, pending_approvals, checkpoints,
          budget, budget_usage, lifetime_budget, lifetime_usage, budget_exceeded, token_usage, archived_messages, parent_task_id, project_id,
-         plan_mode, auto_mode_state, context_tokens, subagent_runs, created_at, updated_at
+         automation_id, plan_mode, auto_mode_state, context_tokens, subagent_runs, created_at, updated_at
        )
        VALUES (
          @id, @goal, @title, @titleSource, @status, @phase, @plan, @messages, @artifacts, @clarifications,
          @pendingApprovals, @checkpoints, @budget, @budgetUsage, @lifetimeBudget, @lifetimeUsage, @budgetExceeded,
          @tokenUsage, @archivedMessages, @parentTaskId,
-         @projectId, @planMode, @autoModeState, @contextTokens, @subagentRuns, @createdAt, @updatedAt
+         @projectId, @automationId, @planMode, @autoModeState, @contextTokens, @subagentRuns, @createdAt, @updatedAt
        )
        ON CONFLICT(id) DO UPDATE SET
          goal=excluded.goal, title=excluded.title, title_source=excluded.title_source,
@@ -557,6 +616,7 @@ export const taskStore = {
          budget_exceeded=excluded.budget_exceeded,
          token_usage=excluded.token_usage, archived_messages=excluded.archived_messages,
          parent_task_id=excluded.parent_task_id, project_id=excluded.project_id,
+         automation_id=excluded.automation_id,
          plan_mode=excluded.plan_mode,
          auto_mode_state=excluded.auto_mode_state,
          context_tokens=excluded.context_tokens,
@@ -584,6 +644,7 @@ export const taskStore = {
       archivedMessages: serializeMessages(task.archivedMessages ?? []),
       parentTaskId: task.parentTaskId ?? null,
       projectId: task.projectId ?? null,
+      automationId: task.automationId ?? null,
       planMode: task.executionMode ?? 'auto',
       autoModeState: task.autoModeState === undefined ? null : JSON.stringify(task.autoModeState),
       contextTokens: task.contextTokens ?? null,
@@ -691,7 +752,7 @@ export const taskStore = {
   },
 
   listSummaries(projectId?: string | null): TaskSummary[] {
-    const columns = 'id, goal, title, title_source, status, project_id, created_at, updated_at';
+    const columns = 'id, goal, title, title_source, status, project_id, automation_id, created_at, updated_at';
     const rows = projectId === undefined
       ? db.prepare(`SELECT ${columns} FROM tasks ORDER BY updated_at DESC`).all()
       : projectId === null
@@ -705,7 +766,12 @@ export const taskStore = {
     return row.count;
   },
 
-  cleanupTerminal(olderThanDays: number): { deletedTasks: number; deletedTraces: number } {
+  cleanupTerminal(olderThanDays: number): {
+    deletedTasks: number;
+    deletedTraces: number;
+    deletedMessageParts: number;
+    deletedSessionTrees: number;
+  } {
     const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
     const ids = db
       .prepare(
@@ -714,16 +780,22 @@ export const taskStore = {
            AND status IN ('completed', 'failed', 'cancelled')`,
       )
       .all(cutoff) as Array<{ id: string }>;
-    if (ids.length === 0) return { deletedTasks: 0, deletedTraces: 0 };
+    if (ids.length === 0) {
+      return { deletedTasks: 0, deletedTraces: 0, deletedMessageParts: 0, deletedSessionTrees: 0 };
+    }
 
     const deleteOne = db.transaction((taskIds: string[]) => {
       let deletedTraces = 0;
+      let deletedMessageParts = 0;
+      let deletedSessionTrees = 0;
       let deletedTasks = 0;
       for (const id of taskIds) {
         deletedTraces += db.prepare('DELETE FROM task_traces WHERE task_id = ?').run(id).changes;
+        deletedMessageParts += db.prepare('DELETE FROM message_parts WHERE task_id = ?').run(id).changes;
+        deletedSessionTrees += db.prepare('DELETE FROM pi_session_trees WHERE task_id = ?').run(id).changes;
         deletedTasks += db.prepare('DELETE FROM tasks WHERE id = ?').run(id).changes;
       }
-      return { deletedTasks, deletedTraces };
+      return { deletedTasks, deletedTraces, deletedMessageParts, deletedSessionTrees };
     });
     return deleteOne(ids.map((row) => row.id));
   },
@@ -1483,3 +1555,258 @@ export const projectStore = {
     return row.count;
   },
 };
+
+interface AutomationRow {
+  id: string;
+  name: string;
+  goal: string;
+  project_id: string | null;
+  execution_mode: string;
+  budget: string | null;
+  lifetime_budget: string | null;
+  cadence: string;
+  enabled: number;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_task_id: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  run_count: number;
+  failure_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AutomationRunRow {
+  id: string;
+  automation_id: string;
+  task_id: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  error: string | null;
+}
+
+function rowToAutomation(row: AutomationRow): Automation {
+  return {
+    id: row.id,
+    name: row.name,
+    goal: row.goal,
+    projectId: row.project_id ?? undefined,
+    executionMode: row.execution_mode === 'plan' ? 'plan' : 'auto',
+    budget: (parseJsonColumn(row.budget) as Automation['budget']) ?? undefined,
+    lifetimeBudget: (parseJsonColumn(row.lifetime_budget) as Automation['lifetimeBudget']) ?? undefined,
+    cadence: normalizeAutomationCadence(row.cadence),
+    enabled: row.enabled === 1,
+    nextRunAt: row.next_run_at ?? undefined,
+    lastRunAt: row.last_run_at ?? undefined,
+    lastTaskId: row.last_task_id ?? undefined,
+    lastStatus: (row.last_status as Automation['lastStatus']) ?? undefined,
+    lastError: row.last_error ?? undefined,
+    runCount: row.run_count,
+    failureCount: row.failure_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToAutomationRun(row: AutomationRunRow): AutomationRun {
+  return {
+    id: row.id,
+    automationId: row.automation_id,
+    taskId: row.task_id,
+    status: normalizeAutomationRunStatus(row.status),
+    startedAt: row.started_at,
+    finishedAt: row.finished_at ?? undefined,
+    error: row.error ?? undefined,
+  };
+}
+
+function normalizeAutomationCadence(value: string): AutomationCadence {
+  return value === 'hourly' || value === 'every_6_hours' || value === 'daily' || value === 'weekly'
+    ? value
+    : 'manual';
+}
+
+function normalizeAutomationRunStatus(value: string): AutomationRunStatus {
+  return value === 'pending' || value === 'running' || value === 'completed' || value === 'failed' || value === 'cancelled'
+    ? value
+    : 'failed';
+}
+
+export const automationStore = {
+  create(automation: Automation): Automation {
+    db.prepare(
+      `INSERT INTO automations (
+        id, name, goal, project_id, execution_mode, budget, lifetime_budget, cadence,
+        enabled, next_run_at, last_run_at, last_task_id, last_status, last_error,
+        run_count, failure_count, created_at, updated_at
+      ) VALUES (
+        @id, @name, @goal, @projectId, @executionMode, @budget, @lifetimeBudget, @cadence,
+        @enabled, @nextRunAt, @lastRunAt, @lastTaskId, @lastStatus, @lastError,
+        @runCount, @failureCount, @createdAt, @updatedAt
+      )`,
+    ).run(automationParams(automation));
+    return automation;
+  },
+
+  get(id: string): Automation | undefined {
+    const row = db.prepare('SELECT * FROM automations WHERE id = ?').get(id) as AutomationRow | undefined;
+    return row ? rowToAutomation(row) : undefined;
+  },
+
+  list(): Automation[] {
+    const rows = db.prepare('SELECT * FROM automations ORDER BY updated_at DESC').all() as AutomationRow[];
+    return rows.map(rowToAutomation);
+  },
+
+  update(
+    id: string,
+    patch: Partial<Pick<Automation, 'name' | 'goal' | 'executionMode' | 'budget' | 'lifetimeBudget' | 'cadence' | 'enabled'>> & { projectId?: string | null; nextRunAt?: string | null },
+  ): Automation | undefined {
+    const current = this.get(id);
+    if (!current) return undefined;
+    const next: Automation = {
+      ...current,
+      name: patch.name ?? current.name,
+      goal: patch.goal ?? current.goal,
+      executionMode: patch.executionMode ?? current.executionMode,
+      cadence: patch.cadence ?? current.cadence,
+      enabled: patch.enabled ?? current.enabled,
+      projectId: patch.projectId === null ? undefined : (patch.projectId ?? current.projectId),
+      budget: patch.budget !== undefined ? patch.budget : current.budget,
+      lifetimeBudget: patch.lifetimeBudget !== undefined ? patch.lifetimeBudget : current.lifetimeBudget,
+      nextRunAt: patch.nextRunAt !== undefined ? (patch.nextRunAt ?? undefined) : current.nextRunAt,
+      updatedAt: new Date().toISOString(),
+    };
+    db.prepare(
+      `UPDATE automations SET
+        name=@name, goal=@goal, project_id=@projectId, execution_mode=@executionMode,
+        budget=@budget, lifetime_budget=@lifetimeBudget, cadence=@cadence, enabled=@enabled,
+        next_run_at=@nextRunAt, updated_at=@updatedAt
+       WHERE id=@id`,
+    ).run(automationParams(next));
+    return next;
+  },
+
+  delete(id: string): boolean {
+    return db.prepare('DELETE FROM automations WHERE id = ?').run(id).changes > 0;
+  },
+
+  /** 原子地占用一个到期配方，避免 scheduler tick 重入产生重复任务。 */
+  claimForRun(id: string, now: string, force = false): Automation | undefined {
+    const current = this.get(id);
+    if (!current || current.lastStatus === 'running') return undefined;
+    if (!force && (!current.enabled || current.cadence === 'manual')) return undefined;
+    if (!force && current.nextRunAt && current.nextRunAt > now) return undefined;
+    const result = db.prepare(
+      `UPDATE automations SET
+         last_run_at=@now, last_status='running', last_error=NULL,
+         run_count=run_count + 1, updated_at=@now
+       WHERE id=@id AND last_status IS NOT 'running'`,
+    ).run({ id, now });
+    return result.changes > 0 ? this.get(id) : undefined;
+  },
+
+  setLastTask(id: string, taskId: string): Automation | undefined {
+    db.prepare('UPDATE automations SET last_task_id = ?, updated_at = ? WHERE id = ?')
+      .run(taskId, new Date().toISOString(), id);
+    return this.get(id);
+  },
+
+  failClaim(id: string, error: string, nextRunAt: string | undefined): Automation | undefined {
+    const now = new Date().toISOString();
+    db.prepare(
+      `UPDATE automations SET last_status='failed', last_error=?, next_run_at=?,
+       failure_count=failure_count + 1, updated_at=? WHERE id=?`,
+    ).run(error, nextRunAt ?? null, now, id);
+    return this.get(id);
+  },
+
+  finishRun(
+    runId: string,
+    status: AutomationRunStatus,
+    nextRunAt: string | undefined,
+    error?: string,
+  ): Automation | undefined {
+    const now = new Date().toISOString();
+    const run = db.prepare('SELECT automation_id FROM automation_runs WHERE id = ?').get(runId) as { automation_id: string } | undefined;
+    if (!run) return undefined;
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE automation_runs SET status=@status, finished_at=@finishedAt, error=@error WHERE id=@id`,
+      ).run({ id: runId, status, finishedAt: now, error: error ?? null });
+      db.prepare(
+        `UPDATE automations SET
+           last_status=@status, last_error=@error, next_run_at=@nextRunAt,
+           failure_count=failure_count + @failure, updated_at=@updatedAt
+         WHERE id=@id`,
+      ).run({
+        id: run.automation_id,
+        status,
+        error: error ?? null,
+        nextRunAt: nextRunAt ?? null,
+        failure: status === 'failed' || status === 'cancelled' ? 1 : 0,
+        updatedAt: now,
+      });
+    })();
+    return this.get(run.automation_id);
+  },
+
+  createRun(run: AutomationRun): AutomationRun {
+    db.prepare(
+      `INSERT INTO automation_runs (id, automation_id, task_id, status, started_at, finished_at, error)
+       VALUES (@id, @automationId, @taskId, @status, @startedAt, @finishedAt, @error)`,
+    ).run({
+      id: run.id,
+      automationId: run.automationId,
+      taskId: run.taskId,
+      status: run.status,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt ?? null,
+      error: run.error ?? null,
+    });
+    return run;
+  },
+
+  getRun(id: string): AutomationRun | undefined {
+    const row = db.prepare('SELECT * FROM automation_runs WHERE id = ?').get(id) as AutomationRunRow | undefined;
+    return row ? rowToAutomationRun(row) : undefined;
+  },
+
+  listRuns(automationId: string, limit = 30): AutomationRun[] {
+    const rows = db.prepare(
+      'SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY started_at DESC LIMIT ?',
+    ).all(automationId, Math.max(1, Math.min(100, limit))) as AutomationRunRow[];
+    return rows.map(rowToAutomationRun);
+  },
+
+  listRunningRuns(): AutomationRun[] {
+    const rows = db.prepare("SELECT * FROM automation_runs WHERE status = 'running' ORDER BY started_at ASC")
+      .all() as AutomationRunRow[];
+    return rows.map(rowToAutomationRun);
+  },
+};
+
+function automationParams(automation: Automation): Record<string, unknown> {
+  return {
+    id: automation.id,
+    name: automation.name,
+    goal: automation.goal,
+    projectId: automation.projectId ?? null,
+    executionMode: automation.executionMode,
+    budget: automation.budget === undefined ? null : JSON.stringify(automation.budget),
+    lifetimeBudget: automation.lifetimeBudget === undefined ? null : JSON.stringify(automation.lifetimeBudget),
+    cadence: automation.cadence,
+    enabled: automation.enabled ? 1 : 0,
+    nextRunAt: automation.nextRunAt ?? null,
+    lastRunAt: automation.lastRunAt ?? null,
+    lastTaskId: automation.lastTaskId ?? null,
+    lastStatus: automation.lastStatus ?? null,
+    lastError: automation.lastError ?? null,
+    runCount: automation.runCount,
+    failureCount: automation.failureCount,
+    createdAt: automation.createdAt,
+    updatedAt: automation.updatedAt,
+  };
+}

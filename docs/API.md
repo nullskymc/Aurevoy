@@ -16,6 +16,7 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | 在线探测；`provider` 如 `openai:model` 或 `unconfigured` |
+| GET | `/api/health/diagnostics` | 本地诊断：LLM、SQLite、工作区、Embedding、sqlite-vec 与 KB 索引；不调用上游模型 |
 | GET | `/api/tools` | 已注册工具（含 MCP）；禁用仍列出但不可调 |
 | PATCH | `/api/tools/:name` | `{ enabled }` |
 | GET | `/api/skills` | Skill catalog（无 body） |
@@ -53,6 +54,20 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 | POST | `/api/tasks/:id/unrevert` | 撤销截断（仅归档仍在时） |
 | POST | `/api/tasks/:id/branch` | 分叉新任务 |
 | POST | `/api/tasks/:id/compact` | 消息范围压成摘要 |
+
+### 自动化任务配方
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/automations` | 列出本地任务配方 |
+| POST | `/api/automations` | 创建配方；body 为 `name`、`goal`，可选 `projectId`、`executionMode`、预算、`cadence`、`enabled` |
+| GET | `/api/automations/:id` | 获取配方状态 |
+| PATCH | `/api/automations/:id` | 更新名称、目标、项目、预算、频率或启停；启用定时配方会生成 `nextRunAt` |
+| DELETE | `/api/automations/:id` | 删除配方；已经创建的任务保留 |
+| POST | `/api/automations/:id/run` | 立即触发一次；运行中重复触发返回 `409` |
+| GET | `/api/automations/:id/runs` | 最近运行记录及关联任务 |
+
+`cadence` 取 `manual`、`hourly`、`every_6_hours`、`daily`、`weekly`。定时运行只创建普通 `Task`，任务的 `automationId` 用于来源追踪；审批、预算、暂停、工具风险和 Pi session tree 仍由既有任务主链控制。Agent 重启后调度器读取 SQLite 中未到期配方和未收敛运行记录继续诊断。
 
 **常见状态码：** `404` 不存在；`409` 冲突（运行中不可 revert 等）；`400` 参数；创建/续聊成功多为 `201`/`202`。
 
@@ -110,7 +125,10 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 | GET | `/api/settings/models` | 当前激活 Provider 拉模型列表 |
 | GET | `/api/data` | DB/工作区/计数 |
 | GET | `/api/data/token-usage` | 用量汇总 |
-| POST | `/api/data/cleanup` | 清理旧终态任务 |
+| POST | `/api/data/export` | 下载脱敏 JSON；默认仅任务元数据，`{ includeTaskMessages: true }` 才附带消息正文 |
+| POST | `/api/data/cleanup` | 清理旧终态任务，并级联删除轨迹、图片分片与 Pi 会话树；`olderThanDays` 范围为 1–3650 |
+
+数据导出由 `DataExportPayload` 明确投影：结构化字段不包含 API Key/OAuth、MCP JSON、代理地址、数据库/工作区/项目/附件路径、图片二进制、富内容 payload、工具参数或原始轨迹；用户目标、计划、记忆文本以及显式选择的任务消息仍可能包含用户隐私或路径，分享前应检查。
 
 多 Provider：每槽位独立 key/baseUrl/model/列表；`PATCH` 切换 `provider` 会激活对应槽位。  
 `search.preferNative` 控制搜索策略：开启后，Responses wire protocol 使用
@@ -120,7 +138,7 @@ MCP 工具名：`mcp_<server>_<tool>`（净化/截断描述；本地 `riskLevel`
 Provider 托管搜索会标准化为普通 `tool_call` / `tool_result` 事件，并以
 `Message.toolCalls[].providerExecuted=true` 和配对 tool 消息持久化；恢复上下文时不会交给本地执行器重放。
 `enabledModels` 必含当前 active model。
-`memoryRecallEnabled` / `kbRecallEnabled` 控制任务 run 起点的有界隐式召回；关闭时不注入。
+`memoryRecallEnabled` / `kbRecallEnabled` 控制任务 run 起点的有界隐式召回；关闭时不注入。启用多个来源时并行执行，记忆或 KB 单独失败只跳过该来源，另一来源仍可注入；合并后的召回提示有总字符上限，避免两个来源分别截断后共同挤占上下文。
 
 ## SSE：`GET /api/tasks/:id/stream`
 

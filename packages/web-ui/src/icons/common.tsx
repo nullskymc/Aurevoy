@@ -244,6 +244,15 @@ export function IconClock(props: AppIconProps = {}) {
   );
 }
 
+export function IconBell(props: AppIconProps = {}) {
+  return (
+    <svg {...strokeIconAttrs({ size: 17, viewBox: "0 0 20 20", ...props })}>
+      <path d="M5.2 9a4.8 4.8 0 019.6 0v2.4l1.5 2.2H3.7l1.5-2.2V9z" />
+      <path d="M8 15.2a2.2 2.2 0 004 0M10 2.2v1" />
+    </svg>
+  );
+}
+
 export function IconTerminal(props: AppIconProps = {}) {
   return (
     <svg {...strokeIconAttrs({ size: 14, ...props })}>

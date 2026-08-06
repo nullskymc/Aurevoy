@@ -19,6 +19,7 @@ export { PlatformContext, usePlatform, browserPlatform } from './platform';
 // API 客户端
 export {
   checkHealth,
+  getHealthDiagnostics,
   createTask,
   listTasks,
   getTask,
@@ -46,6 +47,7 @@ export {
   listProviderModels,
   getMcpStatus,
   getDataStatus,
+  downloadDataExport,
   cleanupData,
   listMemories,
   createMemory,
@@ -55,6 +57,12 @@ export {
   createProject,
   updateProject,
   deleteProject,
+  listAutomations,
+  createAutomation,
+  updateAutomation,
+  deleteAutomation,
+  listAutomationRuns,
+  runAutomation,
 } from './api';
 
 // Hooks
@@ -66,3 +74,4 @@ export { useSkills } from './hooks/useSkills';
 export { useArtifacts } from './hooks/useArtifacts';
 export { useMemories } from './hooks/useMemories';
 export { useProjects } from './hooks/useProjects';
+export { useAutomations } from './hooks/useAutomations';

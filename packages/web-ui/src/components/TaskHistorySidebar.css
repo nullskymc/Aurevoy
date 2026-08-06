@@ -71,6 +71,12 @@
   padding: 0 0 12px;
 }
 
+.sidebar-nav-primary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 2px;
+}
+
 .sidebar-action {
   display: flex;
   align-items: center;
@@ -115,6 +121,15 @@
 .sidebar-action:disabled {
   color: var(--text-tertiary);
   cursor: default;
+}
+
+/* 搜索改为侧栏小入口，打开后由弹窗承载历史会话检索。 */
+.sidebar-search-trigger {
+  width: 32px;
+  min-height: 32px;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
 }
 
 /* ---- Scroll + sections ---- */

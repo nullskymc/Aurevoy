@@ -1,6 +1,6 @@
 {
   "name": "aurevoy",
-  "version": "0.6.14",
+  "version": "0.6.15",
   "private": true,
   "description": "Aurevoy — 让每个人都拥有属于自己的 AI Agent。通用个人 AI Agent 桌面产品。",
   "workspaces": [
@@ -25,6 +25,8 @@
     "regression:m6": "node scripts/m6-regression.mjs",
     "regression:m7": "node scripts/m7-regression.mjs",
     "regression:m8": "node scripts/m8-regression.mjs",
+    "regression:m9": "npm run build:shared && npm run build -w @aurevoy/agent && node scripts/m9-regression.mjs",
+    "regression:m10": "npm run build:shared && npm run build -w @aurevoy/agent && node scripts/m10-regression.mjs",
     "regression:long-loop": "npm run build:shared && npm run build:web-ui && npm run build -w @aurevoy/agent && vitest run packages/web-ui/src/components/conversationWorkflow.test.ts packages/web-ui/src/components/Timeline.test.tsx && tsx scripts/long-loop-regression.mjs",
     "typecheck": "npm run build:shared && npm run build:web-ui && npm run typecheck --workspaces --if-present",
     "clean": "rimraf \"packages/*/dist\" \"apps/*/dist\"",

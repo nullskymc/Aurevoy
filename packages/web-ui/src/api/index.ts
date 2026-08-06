@@ -1,5 +1,9 @@
 import {
   AGENT_DEFAULT_BASE_URL,
+  type Automation,
+  type AutomationListResponse,
+  type AutomationRun,
+  type AutomationRunListResponse,
   type BranchTaskResponse,
   type ClarificationAnswerResponse,
   type CleanupDataResponse,
@@ -7,8 +11,11 @@ import {
   type CompactTaskResponse,
   type ContinueTaskResponse,
   type CreateMemoryRequest,
+  type CreateAutomationRequest,
   type CreateTaskResponse,
+  type DataExportRequest,
   type DataStatusResponse,
+  type HealthDiagnosticsResponse,
   type HealthResponse,
   type MemoryEntry,
   type MemoryListResponse,
@@ -22,6 +29,7 @@ import {
   type PiSessionTreeResponse,
   type PiSessionTreeNavigateResponse,
   type ResumeTaskResponse,
+  type RunAutomationResponse,
   type RevertMode,
   type RevertTaskResponse,
   type SkillDescriptor,
@@ -40,6 +48,7 @@ import {
   type ToolListResponse,
   type ToolDescriptor,
   type UpdateRuntimeSettingsRequest,
+  type UpdateAutomationRequest,
   type UpdateTaskModelRequest,
   type UpdateTaskModelResponse,
   type UpdateToolRequest,
@@ -98,6 +107,12 @@ async function throwApiError(res: Response, fallback: string): Promise<never> {
 export async function checkHealth(): Promise<HealthResponse> {
   const res = await fetch(`${BASE_URL}/api/health`);
   if (!res.ok) throw new Error(`health check failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getHealthDiagnostics(): Promise<HealthDiagnosticsResponse> {
+  const res = await fetch(`${BASE_URL}/api/health/diagnostics`);
+  if (!res.ok) await throwApiError(res, "health diagnostics failed");
   return res.json();
 }
 
@@ -621,6 +636,37 @@ export async function getDataStatus(): Promise<DataStatusResponse> {
   return res.json();
 }
 
+export async function downloadDataExport(
+  includeTaskMessages = false,
+): Promise<{ filename: string; size: number }> {
+  const body: DataExportRequest = { includeTaskMessages };
+  const res = await fetch(`${BASE_URL}/api/data/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await throwApiError(res, "export data failed");
+
+  const blob = await res.blob();
+  const header = res.headers.get('content-disposition') ?? '';
+  const match = header.match(/filename="([^"]+)"/i);
+  const filename = match?.[1] ?? `aurevoy-data-${new Date().toISOString().slice(0, 10)}.json`;
+
+  // 内置 WebView 与普通浏览器都走同一下载路径；无 document 的单测环境仍返回 Blob 大小。
+  if (typeof document !== 'undefined') {
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  }
+  return { filename, size: blob.size };
+}
+
 export async function getTokenUsageReport(): Promise<TokenUsageReport> {
   const res = await fetch(`${BASE_URL}/api/data/token-usage`);
   if (!res.ok) throw new Error(`get token usage report failed: ${res.status}`);
@@ -751,4 +797,51 @@ export async function updateProject(id: string, body: UpdateProjectRequest): Pro
 export async function deleteProject(id: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/projects/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`delete project failed: ${res.status}`);
+}
+
+// ===== 自动化任务 (Automations) =====
+
+export async function listAutomations(): Promise<Automation[]> {
+  const res = await fetch(`${BASE_URL}/api/automations`);
+  if (!res.ok) throw new Error(`list automations failed: ${res.status}`);
+  const body = (await res.json()) as AutomationListResponse;
+  return body.automations;
+}
+
+export async function createAutomation(body: CreateAutomationRequest): Promise<Automation> {
+  const res = await fetch(`${BASE_URL}/api/automations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`create automation failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateAutomation(id: string, body: UpdateAutomationRequest): Promise<Automation> {
+  const res = await fetch(`${BASE_URL}/api/automations/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`update automation failed: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteAutomation(id: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/automations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`delete automation failed: ${res.status}`);
+}
+
+export async function listAutomationRuns(id: string, limit = 30): Promise<AutomationRun[]> {
+  const res = await fetch(`${BASE_URL}/api/automations/${encodeURIComponent(id)}/runs?limit=${limit}`);
+  if (!res.ok) throw new Error(`list automation runs failed: ${res.status}`);
+  const body = (await res.json()) as AutomationRunListResponse;
+  return body.runs;
+}
+
+export async function runAutomation(id: string): Promise<RunAutomationResponse> {
+  const res = await fetch(`${BASE_URL}/api/automations/${encodeURIComponent(id)}/run`, { method: 'POST' });
+  if (!res.ok) throw new Error(`run automation failed: ${res.status}`);
+  return res.json();
 }

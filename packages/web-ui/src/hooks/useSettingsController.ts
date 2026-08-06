@@ -11,6 +11,7 @@ import {
   cleanupData,
   createMemory,
   deleteMemory,
+  downloadDataExport,
   getDataStatus,
   getMcpStatus,
   getSettings,
@@ -377,13 +378,23 @@ export function useSettingsController({
       .finally(() => setSettingsSaving(false));
   }
 
-  function handleCleanupData(olderThanDays: number): void {
-    void cleanupData(olderThanDays)
-      .then((result) => {
-        setNotice(`${t("notice.cleanedPrefix")} ${result.deletedTasks} ${t("notice.cleanedMid")}${result.deletedTraces} ${t("notice.cleanedSuffix")}`);
-        return refreshSettings();
-      })
-      .catch((err) => setNotice(`${t("notice.cleanupFailed")}${err instanceof Error ? err.message : String(err)}`));
+  async function handleCleanupData(olderThanDays: number): Promise<void> {
+    try {
+      const result = await cleanupData(olderThanDays);
+      setNotice(`${t("notice.cleanedPrefix")} ${result.deletedTasks} ${t("notice.cleanedMid")}${result.deletedTraces} ${t("notice.cleanedSuffix")}${t("notice.cleanedPartsPrefix")}${result.deletedMessageParts}${t("notice.cleanedPartsMid")}${result.deletedSessionTrees}${t("notice.cleanedPartsSuffix")}`);
+      await refreshSettings();
+    } catch (err) {
+      setNotice(`${t("notice.cleanupFailed")}${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handleExportData(includeTaskMessages: boolean): Promise<void> {
+    try {
+      const result = await downloadDataExport(includeTaskMessages);
+      setNotice(`${t("notice.exportedDataPrefix")}${result.filename}${t("notice.exportedDataSuffix")}`);
+    } catch (err) {
+      setNotice(`${t("notice.exportDataFailed")}${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   function handleCreateMemory(content: string, category: MemoryCategory): void {
@@ -413,6 +424,7 @@ export function useSettingsController({
   return {
     handleActivateProviderModel,
     handleCleanupData,
+    handleExportData,
     handleCreateMemory,
     handleDeleteMemory,
     handleEditMemory,

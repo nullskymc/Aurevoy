@@ -70,6 +70,7 @@ export {
   IconGlobe,
   IconLoader,
   IconClock,
+  IconBell,
   IconTerminal,
   IconBot,
   IconCompass,

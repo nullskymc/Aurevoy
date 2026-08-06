@@ -107,7 +107,7 @@ onBeforeUnmount(() => revealObserver?.disconnect())
         <div class="hero-content">
           <a class="release-pill" href="https://github.com/nullskymc/Aurevoy/releases">
             <span class="live-dot"></span>
-            Aurevoy v0.6.8 已发布
+            Aurevoy v0.6.15 已发布
             <b>查看更新</b>
             <i>→</i>
           </a>
@@ -137,7 +137,7 @@ onBeforeUnmount(() => revealObserver?.disconnect())
         <div id="product" class="product-showcase">
           <div class="showcase-halo" aria-hidden="true"></div>
           <div class="actual-app-frame">
-            <div class="actual-app-chrome"><div class="traffic-lights"><i></i><i></i><i></i></div><span>真实 Aurevoy 应用界面</span><b>v0.6.9</b></div>
+            <div class="actual-app-chrome"><div class="traffic-lights"><i></i><i></i><i></i></div><span>真实 Aurevoy 应用界面</span><b>v0.6.15</b></div>
             <img
               src="/aurevoy-app-home@2x.png"
               width="1440"

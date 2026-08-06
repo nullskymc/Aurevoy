@@ -10,8 +10,8 @@ function SidebarIcon({ collapsed }: { collapsed: boolean }) {
 }
 
 function getMainViewTitle(view: MainView): string {
-  if (view === "search") return t("nav.search");
   if (view === "skills") return t("nav.skills");
+  if (view === "automations") return t("nav.automations");
   if (view === "settings") return t("nav.settings");
   return t("nav.conversations");
 }

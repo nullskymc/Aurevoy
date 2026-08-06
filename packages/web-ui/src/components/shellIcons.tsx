@@ -12,4 +12,5 @@ export {
   IconTrash,
   IconEye,
   IconChevron,
+  IconClock,
 } from "../icons";

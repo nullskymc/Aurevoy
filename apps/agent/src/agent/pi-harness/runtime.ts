@@ -54,6 +54,7 @@ import {
   joinSystemPromptParts,
   totalTokens,
 } from '../context.js';
+import { buildImplicitRecallPrompt as composeImplicitRecallPrompt } from './implicit-recall.js';
 import { createInlineAutoCompactor, summarizePiMessages } from './auto-compaction.js';
 import { ActivePiTaskController } from './active-controller.js';
 import { createAurevoyPiModels } from './models.js';
@@ -728,53 +729,39 @@ async function buildPiSystemPrompt(task: Task, workspaceDir: string): Promise<st
 
 /**
  * 在任务 run 起点隐式召回长期记忆与本地知识库。
- * 结果只进入本次固定 system prompt，并以字符上限约束上下文占用。
+ * 编排细节由独立模块负责；这里仅把产品配置与轨迹写入适配进去。
  */
 async function buildImplicitRecallPrompt(task: Task): Promise<string> {
-  if (!config.agent.memoryRecallEnabled && !config.agent.kbRecallEnabled) return '';
-  const sections: string[] = [];
-  const query = [...task.messages].reverse().find((message) => message.role === 'user')?.content || task.goal;
-  try {
-    if (config.agent.memoryRecallEnabled) {
-      const recalled = await buildMemorySystemMessage(memoryStore.list(), query);
-      if (recalled.message?.content) {
-        sections.push(recalled.message.content.slice(0, 6_000));
-        writePiTrace(task, 'phase', {
-          ok: true,
-          phase: task.phase,
-          summary: `隐式召回 ${recalled.citations.length} 条长期记忆`,
-          data: { source: 'memory', citationCount: recalled.citations.length },
-        });
-      }
-    }
-    if (config.agent.kbRecallEnabled) {
+  return composeImplicitRecallPrompt(task, {
+    memoryEnabled: config.agent.memoryRecallEnabled,
+    kbEnabled: config.agent.kbRecallEnabled,
+    memoryRecall: (query) => buildMemorySystemMessage(memoryStore.list(), query),
+    kbRecall: async (query, topK) => {
       const { recallKb } = await import('../../knowledge-base/index.js');
-      const recalled = await recallKb(query, 4);
-      if (recalled.results.length > 0) {
-        sections.push([
-          '[相关知识库片段]',
-          '以下内容由本地知识库自动召回；若与当前用户输入冲突，以当前输入为准：',
-          ...recalled.results.map((item) =>
-            `- ${item.filePath}#${item.chunkIndex}: ${item.content.slice(0, 1_200)}`),
-        ].join('\n').slice(0, 6_000));
-        writePiTrace(task, 'phase', {
-          ok: true,
-          phase: task.phase,
-          summary: `隐式召回 ${recalled.results.length} 个知识库片段`,
-          data: { source: 'knowledge_base', citationCount: recalled.citations.length },
-        });
-      }
-    }
-  } catch (error) {
-    writePiTrace(task, 'error', {
-      ok: false,
-      phase: task.phase,
-      errorCategory: 'unknown',
-      errorMessage: error instanceof Error ? error.message : String(error),
-      summary: '隐式记忆/知识库召回失败，已降级为无召回继续运行',
-    });
-  }
-  return sections.join('\n\n');
+      return recallKb(query, topK);
+    },
+    onSource: ({ source, count, citationCount }) => {
+      const label = source === 'memory' ? '长期记忆' : '知识库片段';
+      writePiTrace(task, 'phase', {
+        ok: true,
+        phase: task.phase,
+        summary: `隐式召回 ${count} 条${label}`,
+        data: { source, citationCount },
+      });
+    },
+    onError: ({ source, error }) => {
+      const label = source === 'memory' ? '记忆' : '知识库';
+      const message = error instanceof Error ? error.message : String(error);
+      writePiTrace(task, 'error', {
+        ok: false,
+        phase: task.phase,
+        errorCategory: 'unknown',
+        errorMessage: message,
+        summary: `隐式${label}召回失败，已跳过该来源继续运行`,
+        data: { source },
+      });
+    },
+  });
 }
 
 /** 首个 run 固化任务级模型快照；之后全局设置变更不影响本对话 resume 的模型（P1-2）。 */

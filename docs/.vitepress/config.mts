@@ -100,7 +100,7 @@ const jsonLd = {
       description: siteDescription,
       url: siteUrl + '/',
       downloadUrl: `${repo}/releases`,
-      softwareVersion: '0.6.8',
+      softwareVersion: '0.6.15',
       offers: {
         '@type': 'Offer',
         price: '0',

@@ -1,4 +1,4 @@
-export type MainView = "chat" | "search" | "skills" | "settings";
+export type MainView = "chat" | "skills" | "automations" | "settings";
 export type SettingsSectionId =
   | "general"
   | "appearance"

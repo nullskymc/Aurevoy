@@ -82,7 +82,8 @@ export interface SettingsPanelProps {
   onSave: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
   /** Provider 连接专用：只保存 key / baseUrl / maxTokens；silent 时不弹「已保存」toast（OAuth 成功路径用） */
   onSaveConnection: (draft: SettingsDraft, options?: { silent?: boolean }) => void | Promise<void>;
-  onCleanup: (olderThanDays: number) => void;
+  onCleanup: (olderThanDays: number) => void | Promise<void>;
+  onExportData: (includeTaskMessages: boolean) => void | Promise<void>;
   onRefresh: () => void;
   onFetchModels: () => void;
   onFetchModelsForProvider: (provider: string, options?: { silent?: boolean }) => void;

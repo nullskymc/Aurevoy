@@ -1,0 +1,96 @@
+.settings-diagnostics-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0 12px;
+}
+
+.settings-diagnostics-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: calc(var(--ui-font-size) - 1px);
+  font-weight: 600;
+}
+
+.settings-diagnostics-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.settings-diagnostics-ok .settings-diagnostics-dot,
+.settings-diagnostics-badge.settings-diagnostics-ok {
+  background: #2f9e6f;
+}
+
+.settings-diagnostics-warning .settings-diagnostics-dot,
+.settings-diagnostics-badge.settings-diagnostics-warning {
+  background: #c58a2c;
+}
+
+.settings-diagnostics-error .settings-diagnostics-dot,
+.settings-diagnostics-badge.settings-diagnostics-error {
+  background: #c65353;
+}
+
+.settings-diagnostics-list {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--border);
+}
+
+.settings-diagnostic-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  background: var(--card-bg);
+  padding: 9px 10px;
+}
+
+.settings-diagnostic-badge {
+  min-width: 42px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 7px;
+  text-align: center;
+}
+
+.settings-diagnostic-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.settings-diagnostic-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-diagnostic-copy small,
+.settings-diagnostics-error {
+  color: var(--text-tertiary);
+  font-size: calc(var(--ui-font-size) - 3px);
+  line-height: 1.45;
+}
+
+.settings-diagnostics-error {
+  margin: 0 0 10px;
+}
+
+@media (max-width: 620px) {
+  .settings-diagnostics-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

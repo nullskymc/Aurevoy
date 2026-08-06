@@ -39,6 +39,7 @@ export function SettingsPanel({
   onSave,
   onSaveConnection,
   onCleanup,
+  onExportData,
   onRefresh,
   onFetchModels: _onFetchModels,
   onFetchModelsForProvider,
@@ -215,6 +216,7 @@ export function SettingsPanel({
               dataStatus={dataStatus}
               settings={settings}
               onCleanup={onCleanup}
+              onExportData={onExportData}
               onCleanupDaysChange={setCleanupDays}
             />
           )}

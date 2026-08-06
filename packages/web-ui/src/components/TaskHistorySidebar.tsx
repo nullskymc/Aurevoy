@@ -15,6 +15,7 @@ import {
 import {
   IconChat,
   IconChevron,
+  IconClock,
   IconFolder,
   IconPlus,
   IconSearch,
@@ -24,11 +25,12 @@ import {
 } from "./shellIcons";
 import "./TaskHistorySidebar.css";
 
-type MainView = "chat" | "search" | "skills" | "settings";
+type MainView = "chat" | "skills" | "automations" | "settings";
 
 interface TaskHistorySidebarProps {
   activeTaskId?: string;
   activeView: MainView;
+  searchOpen: boolean;
   tasks: TaskSummary[];
   projects: Project[];
   selectedProjectId?: string;
@@ -37,6 +39,7 @@ interface TaskHistorySidebarProps {
   onSelectProject: (projectId: string) => void;
   onOpenSearch: () => void;
   onOpenSkills: () => void;
+  onOpenAutomations: () => void;
   onOpenSettings: () => void;
   onImportProject: () => void;
   onDeleteProject: (projectId: string) => void;
@@ -46,6 +49,7 @@ interface TaskHistorySidebarProps {
 export function TaskHistorySidebar({
   activeTaskId,
   activeView,
+  searchOpen,
   tasks,
   projects,
   selectedProjectId,
@@ -54,6 +58,7 @@ export function TaskHistorySidebar({
   onSelectProject,
   onOpenSearch,
   onOpenSkills,
+  onOpenAutomations,
   onOpenSettings,
   onImportProject,
   onDeleteProject,
@@ -198,24 +203,27 @@ export function TaskHistorySidebar({
       </div>
 
       <nav className="sidebar-nav" aria-label={t("sidebar.label")}>
-        <button
-          type="button"
-          className="sidebar-action"
-          data-active={activeView === "chat" && !activeTaskId}
-          onClick={() => onNewTask()}
-        >
-          <IconPlus />
-          <span>{t("nav.newChat")}</span>
-        </button>
-        <button
-          type="button"
-          className="sidebar-action"
-          data-active={activeView === "search"}
-          onClick={onOpenSearch}
-        >
-          <IconSearch />
-          <span>{t("nav.search")}</span>
-        </button>
+        <div className="sidebar-nav-primary">
+          <button
+            type="button"
+            className="sidebar-action"
+            data-active={activeView === "chat" && !activeTaskId}
+            onClick={() => onNewTask()}
+          >
+            <IconPlus />
+            <span>{t("nav.newChat")}</span>
+          </button>
+          <button
+            type="button"
+            className="sidebar-action sidebar-search-trigger"
+            data-active={searchOpen}
+            onClick={onOpenSearch}
+            title={t("nav.search")}
+            aria-label={t("nav.search")}
+          >
+            <IconSearch />
+          </button>
+        </div>
         <button
           type="button"
           className="sidebar-action"
@@ -224,6 +232,15 @@ export function TaskHistorySidebar({
         >
           <IconSkills />
           <span>{t("nav.skills")}</span>
+        </button>
+        <button
+          type="button"
+          className="sidebar-action"
+          data-active={activeView === "automations"}
+          onClick={onOpenAutomations}
+        >
+          <IconClock />
+          <span>{t("nav.automations")}</span>
         </button>
       </nav>
 

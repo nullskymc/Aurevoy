@@ -89,7 +89,8 @@ pub fn ensure_agent_process(
         .args(&spec.args)
         .current_dir(&spec.cwd)
         .env("AUREVOY_HOST", AGENT_HOST)
-        .env("AUREVOY_PORT", AGENT_PORT.to_string());
+        .env("AUREVOY_PORT", AGENT_PORT.to_string())
+        .env("AUREVOY_VERSION", env!("CARGO_PKG_VERSION"));
     for (key, value) in &spec.env {
         command.env(key, value);
     }

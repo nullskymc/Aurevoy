@@ -3,6 +3,7 @@ import type {
   AgentExecutionMode,
   HealthResponse,
   MessageAttachment,
+  TaskSummary,
 } from "@aurevoy/shared";
 import {
   clearTaskQueue,
@@ -18,6 +19,7 @@ import {
 import { usePlatform } from "./platform/context";
 import { useAgentEventHandler } from "./hooks/useAgentEventHandler";
 import { useArtifacts } from "./hooks/useArtifacts";
+import { useAutomations } from "./hooks/useAutomations";
 import { useAttachments } from "./hooks/useAttachments";
 import { useMemories } from "./hooks/useMemories";
 import { useSSEStream } from "./hooks/useSSEStream";
@@ -43,10 +45,11 @@ import { WorkbenchPanel } from "./components/WorkbenchPanel";
 import { OutputFloatPanel } from "./components/OutputFloatPanel";
 import { PlanFloatPanel } from "./components/PlanFloatPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { SearchPopover } from "./components/SearchPopover";
 import { TaskHistorySidebar } from "./components/TaskHistorySidebar";
 import { ToastNotice, type ToastTone } from "./components/ToastNotice";
-import { SearchPage } from "./pages/SearchPage";
 import { SkillsPage } from "./pages/SkillsPage";
+import { AutomationsPage } from "./pages/AutomationsPage";
 import { SETTINGS_SECTION_IDS, type MainView, type SettingsSectionId } from "./app/types";
 import { formatContextK } from "./app/taskUtils";
 import { buildTrayRecentItems, createTrayRecentSignature } from "./app/trayRecent";
@@ -96,7 +99,7 @@ function App() {
   });
   const [autoModeState, setAutoModeState] = useState<{ paused?: boolean; pausedReason?: string; autoApprovedCalls?: number } | null>(null);
   const [executionMode, setExecutionMode] = useState<AgentExecutionMode>("auto");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchPopoverOpen, setSearchPopoverOpen] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>("general");
   const [modelDrawerOpen, setModelDrawerOpen] = useState(false);
   const [sessionTreeOpen, setSessionTreeOpen] = useState(false);
@@ -177,6 +180,16 @@ function App() {
     setFetchingModels,
   } = useSettings();
   const { projects, setProjects } = useProjects();
+  const {
+    automations,
+    loading: automationsLoading,
+    refresh: refreshAutomations,
+    create: createAutomationRecipe,
+    update: updateAutomationRecipe,
+    remove: removeAutomationRecipe,
+    run: runAutomationRecipe,
+    loadRuns: loadAutomationRuns,
+  } = useAutomations();
   const { memories, setMemories } = useMemories();
   const {
     skills,
@@ -205,6 +218,7 @@ function App() {
   });
   const {
     handleCleanupData,
+    handleExportData,
     handleCreateMemory,
     handleDeleteMemory,
     handleEditMemory,
@@ -491,6 +505,7 @@ function App() {
         ? (section as SettingsSectionId)
         : "general";
     setNotice(null);
+    setSearchPopoverOpen(false);
     setModelDrawerOpen(false);
     setSettingsInitialSection(nextSection);
     setActiveView("settings");
@@ -501,12 +516,14 @@ function App() {
 
   function handleCloseSettings(): void {
     setNotice(null);
+    setSearchPopoverOpen(false);
     setWorkbenchOpen(false);
     setActiveView("chat");
   }
 
   function handleOpenModelSelector(): void {
     setNotice(null);
+    setSearchPopoverOpen(false);
     setModelDrawerOpen(true);
     setWorkbenchOpen(false);
     if (!runtimeSettings) void refreshSettings();
@@ -519,15 +536,51 @@ function App() {
 
   function handleOpenSearch(): void {
     setModelDrawerOpen(false);
-    setActiveView("search");
-    setWorkbenchOpen(false);
+    setSearchPopoverOpen(true);
   }
 
   function handleOpenSkills(): void {
     setModelDrawerOpen(false);
+    setSearchPopoverOpen(false);
     setActiveView("skills");
     setWorkbenchOpen(false);
     void refreshRuntime();
+  }
+
+  function handleOpenAutomations(): void {
+    setModelDrawerOpen(false);
+    setSearchPopoverOpen(false);
+    setActiveView("automations");
+    setWorkbenchOpen(false);
+    void refreshAutomations();
+  }
+
+  function handleOpenAutomationTask(taskId: string): void {
+    setSearchPopoverOpen(false);
+    void getTask(taskId)
+      .then((task) => handleSelectTask(task))
+      .catch((error) => setNotice(`打开自动化任务失败：${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  function handleSearchTaskSelect(task: TaskSummary): void {
+    setSearchPopoverOpen(false);
+    handleSelectTask(task);
+  }
+
+  function handleSearchNewTask(): void {
+    setSearchPopoverOpen(false);
+    handleNewTask();
+  }
+
+  function handleSearchOpenFolder(): void {
+    setSearchPopoverOpen(false);
+    void handleImportProject();
+  }
+
+  function handleSearchFiles(): void {
+    setSearchPopoverOpen(false);
+    handleNewTask();
+    setGoal(t("search.filePrompt"));
   }
 
   async function handleImportProject(): Promise<void> {
@@ -620,6 +673,7 @@ function App() {
       <TaskHistorySidebar
         activeTaskId={currentTask?.id}
         activeView={activeView}
+        searchOpen={searchPopoverOpen}
         tasks={tasks}
         projects={projects}
         selectedProjectId={draftProjectId ?? currentTask?.projectId}
@@ -628,11 +682,24 @@ function App() {
         onSelectProject={setDraftProjectId}
         onOpenSearch={handleOpenSearch}
         onOpenSkills={handleOpenSkills}
+        onOpenAutomations={handleOpenAutomations}
         onOpenSettings={handleOpenSettings}
         onImportProject={handleImportProject}
         onDeleteProject={handleDeleteProject}
         onDeleteTask={handleDeleteTask}
       />
+
+      {searchPopoverOpen ? (
+        <SearchPopover
+          tasks={tasks}
+          projects={projects}
+          onClose={() => setSearchPopoverOpen(false)}
+          onSelectTask={handleSearchTaskSelect}
+          onNewTask={handleSearchNewTask}
+          onOpenFolder={handleSearchOpenFolder}
+          onSearchFiles={handleSearchFiles}
+        />
+      ) : null}
 
       <div
         className="resize-handle resize-handle-left"
@@ -666,14 +733,7 @@ function App() {
         />
 
         <div className="main-stage">
-          {activeView === "search" ? (
-            <SearchPage
-              query={searchQuery}
-              tasks={tasks}
-              onQueryChange={setSearchQuery}
-              onSelectTask={handleSelectTask}
-            />
-          ) : activeView === "skills" ? (
+          {activeView === "skills" ? (
             <SkillsPage
               skills={skills}
               installing={installing}
@@ -687,6 +747,20 @@ function App() {
                 handleNewTask();
                 setGoal(t("skillsPage.tryPrompt").replace("{name}", name));
               }}
+            />
+          ) : activeView === "automations" ? (
+            <AutomationsPage
+              automations={automations}
+              projects={projects}
+              loading={automationsLoading}
+              onRefresh={refreshAutomations}
+              onCreate={createAutomationRecipe}
+              onUpdate={updateAutomationRecipe}
+              onDelete={removeAutomationRecipe}
+              onRun={runAutomationRecipe}
+              onLoadRuns={loadAutomationRuns}
+              onOpenTask={handleOpenAutomationTask}
+              onNotice={setNotice}
             />
           ) : activeView === "settings" ? (
             <SettingsPanel
@@ -707,6 +781,7 @@ function App() {
               onSave={handleSaveSettings}
               onSaveConnection={handleSaveProviderConnection}
               onCleanup={handleCleanupData}
+              onExportData={handleExportData}
               onRefresh={refreshSettings}
               onFetchModels={handleFetchModels}
               onFetchModelsForProvider={handleFetchModelsForProvider}

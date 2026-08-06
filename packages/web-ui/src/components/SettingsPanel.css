@@ -28,7 +28,6 @@
 }
 
 .page-scroll,
-.page-list,
 .skill-page-grid,
 .settings-grid {
   width: min(100%, 980px);
@@ -37,71 +36,6 @@
 
 .page-scroll {
   min-height: 0;
-}
-
-.page-search-input {
-  display: block;
-  width: min(100%, 980px);
-  height: 42px;
-  margin: 0 auto 16px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  background: var(--input-bg-focus);
-  color: var(--text);
-  font-size: var(--ui-font-size);
-  padding: 0 14px;
-  outline: none;
-}
-
-.page-search-input:focus {
-  border-color: var(--text-tertiary);
-}
-
-.page-list {
-  display: grid;
-  gap: 8px;
-}
-
-.page-list-row {
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--card-bg);
-  color: var(--text);
-  padding: 12px 14px;
-  text-align: left;
-}
-
-.page-list-row:hover {
-  border-color: var(--border-strong);
-  background: var(--surface);
-}
-
-.page-list-title {
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  font-size: var(--ui-font-size);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.page-list-row {
-  min-width: 0;
-}
-
-.page-list-meta,
-.page-empty {
-  color: var(--text-tertiary);
-  font-size: calc(var(--ui-font-size) - 2px);
-}
-
-.page-empty {
-  margin: 24px 0;
-  text-align: center;
 }
 
 .skill-page-grid {
